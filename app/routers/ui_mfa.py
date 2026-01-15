@@ -28,7 +28,7 @@ async def ui_totp_verify(req: Request, body: TotpVerifyReq, user_sub: str = Depe
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     if "totp" not in (chal.get("required_factors") or []):
         raise HTTPException(400, "TOTP not required")
-    dev = totp_verify_any_enabled(user_sub, body.code)
+    dev = totp_verify_any_enabled(user_sub, body.totp_code)
     if not dev:
         audit_event("mfa_totp_verify", user_sub, req, outcome="failure", challenge_id=body.challenge_id)
         raise HTTPException(401, "Bad TOTP")
@@ -49,10 +49,11 @@ async def ui_sms_begin(req: Request, body: SmsBeginReq, user_sub: str = Depends(
         raise HTTPException(429, "Rate limited")
     rate_limit_or_429(user_sub, "sms_login")
     # Send to all enabled numbers
-    for n in nums[:S.sms_device_limit]:
+    send_to = nums[:S.sms_device_limit]
+    for n in send_to:
         twilio_start_sms(n)
     audit_event("mfa_sms_begin", user_sub, req, outcome="success", challenge_id=body.challenge_id)
-    return {"status":"sent","sent_to": len(nums[:S.sms_device_limit])}
+    return {"status":"sent","sent_to": send_to}
 
 @router.post("/sms/verify")
 async def ui_sms_verify(req: Request, body: SmsVerifyReq, user_sub: str = Depends(get_authenticated_user_sub)):
@@ -93,10 +94,11 @@ async def ui_email_begin(req: Request, body: EmailBeginReq, user_sub: str = Depe
     # store hashed code on the challenge item (best effort)
     from app.core.crypto import sha256_str
     T.sessions.update_item(Key={"user_sub": user_sub, "session_id": body.challenge_id}, UpdateExpression="SET email_code_hash=:h, email_code_sent_at=:t, email_code_attempts=:z", ExpressionAttributeValues={":h": sha256_str(code), ":t": now_ts(), ":z": 0})
-    for e in emails[:S.email_device_limit]:
+    send_to = emails[:S.email_device_limit]
+    for e in send_to:
         send_email_code(e, "login", code)
     audit_event("mfa_email_begin", user_sub, req, outcome="success", challenge_id=body.challenge_id)
-    return {"status":"sent","sent_to": len(emails[:S.email_device_limit])}
+    return {"status":"sent","sent_to": send_to}
 
 @router.post("/email/verify")
 async def ui_email_verify(req: Request, body: EmailVerifyReq, user_sub: str = Depends(get_authenticated_user_sub)):
@@ -128,7 +130,7 @@ async def ui_recovery_factor(req: Request, factor: str, body: RecoveryReq, user_
         raise HTTPException(400, "Invalid factor")
     if factor not in (chal.get("required_factors") or []):
         raise HTTPException(400, "Factor not required")
-    consume_recovery_code(user_sub, factor, body.code)
+    consume_recovery_code(user_sub, factor, body.recovery_code)
     mark_factor_passed(user_sub, body.challenge_id, factor)
     sid = maybe_finalize(req, user_sub, body.challenge_id)
     audit_event("mfa_recovery", user_sub, req, outcome="success", challenge_id=body.challenge_id, factor=factor)

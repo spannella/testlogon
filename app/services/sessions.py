@@ -135,6 +135,33 @@ def create_stepup_challenge(req: Request, user_sub: str, required_factors: List[
     }, ttl_epoch=expires))
     return challenge_id
 
+def create_action_challenge(
+    req: Request,
+    user_sub: str,
+    purpose: str,
+    send_to: List[str],
+    payload: Dict[str, Any],
+    ttl_seconds: int = 300,
+) -> str:
+    challenge_id = f"{purpose}_" + uuid.uuid4().hex
+    ts = now_ts()
+    expires = ts + ttl_seconds
+    item: Dict[str, Any] = {
+        "user_sub": user_sub,
+        "session_id": challenge_id,
+        "created_at": ts,
+        "expires_at": expires,
+        "revoked": False,
+        "pending_auth": True,
+        "purpose": purpose,
+        "send_to": send_to,
+        "ip": client_ip_from_request(req),
+        "user_agent": (req.headers.get("user-agent", "")[:512]),
+    }
+    item.update(payload or {})
+    T.sessions.put_item(Item=with_ttl(item, ttl_epoch=expires))
+    return challenge_id
+
 def maybe_finalize(req: Request, user_sub: str, challenge_id: str) -> Optional[str]:
     chal = load_challenge_or_401(user_sub, challenge_id)
     if not challenge_done(chal):

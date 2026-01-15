@@ -98,12 +98,16 @@ def totp_begin_enroll(user_sub: str, label: Optional[str]) -> Dict[str, Any]:
     secret_b32 = pyotp.random_base32()
     secret_ct = kms_encrypt(secret_b32)
     ts = now_ts()
-    T.totp.put_item(Item={"user_sub": user_sub, "device_id": device_id, "label": (label or "")[:64], "secret_ct_b64": secret_ct, "enabled": False, "created_at": ts})
+    T.totp.put_item(Item={"user_sub": user_sub, "device_id": device_id, "label": (label or "")[:64], "secret_ct_b64": secret_ct, "enabled": False, "created_at": ts, "last_used_at": 0})
     issuer = "YourApp"
     name = f"{user_sub[:8]}@{issuer}"
     otpauth_uri = pyotp.TOTP(secret_b32).provisioning_uri(name=name, issuer_name=issuer)
-    codes = new_recovery_codes(10)
-    store_recovery_codes(user_sub, "totp", codes)
+    r = T.totp.query(KeyConditionExpression=Key("user_sub").eq(user_sub))
+    enabled_count = sum(1 for d in r.get("Items", []) if d.get("enabled", False))
+    codes: List[str] = []
+    if enabled_count == 0:
+        codes = new_recovery_codes(10)
+        store_recovery_codes(user_sub, "totp", codes)
     return {"device_id": device_id, "otpauth_uri": otpauth_uri, "recovery_codes": codes}
 
 def totp_confirm_enroll(user_sub: str, device_id: str, totp_code: str) -> None:
@@ -119,6 +123,15 @@ def totp_confirm_enroll(user_sub: str, device_id: str, totp_code: str) -> None:
 def uuid4_hex() -> str:
     import uuid
     return uuid.uuid4().hex
+
+def verify_code_any_sms(send_to: Sequence[str], code: str) -> bool:
+    for n in send_to:
+        try:
+            if twilio_check_sms(n, code):
+                return True
+        except Exception:
+            continue
+    return False
 
 def sms_begin_enroll(user_sub: str, phone_e164: str, label: Optional[str]) -> Dict[str, Any]:
     phone = normalize_phone(phone_e164)

@@ -13,6 +13,7 @@ from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 from app.services.rate_limit import can_send_alert_channel
+from app.services.push import send_push_for_alert
 from app.services.ttl import with_ttl
 
 ALERT_EVENT_TYPES: List[str] = [
@@ -253,6 +254,7 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
         title = pretty.get(event, event.replace("_", " "))
         wr = write_alert(user_sub, event=event, outcome=outcome, title=title, details={**payload, "alert_type": alert_type})
         alert_id = (wr or {}).get("alert_id", "")
+        send_push_for_alert(user_sub, alert_type, title, f"{event} ({outcome})", alert_id or "")
     except Exception:
         alert_id = ""
 
