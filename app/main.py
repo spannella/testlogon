@@ -8,6 +8,8 @@ from app.routers.ui_mfa import router as ui_mfa_router
 from app.routers.mfa_devices import router as mfa_devices_router
 from app.routers.api_keys import router as api_keys_router
 from app.routers.alerts import router as alerts_router
+from app.routers.push import router as push_router
+from app.routers.recovery import router as recovery_router
 from app.routers.misc import router as misc_router
 
 def create_app() -> FastAPI:
@@ -26,6 +28,8 @@ def create_app() -> FastAPI:
     app.include_router(mfa_devices_router)
     app.include_router(api_keys_router)
     app.include_router(alerts_router)
+    app.include_router(push_router)
+    app.include_router(recovery_router)
     app.include_router(misc_router)
 
     return app

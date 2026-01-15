@@ -7,9 +7,11 @@ from boto3.dynamodb.conditions import Key
 
 from app.auth.deps import get_authenticated_user_sub
 from app.models import UiSessionFinalizeReq, UiSessionStartReq, UiSessionStartResp
+from app.core.normalize import client_ip_from_request
 from app.services.alerts import audit_event
 from app.services.sessions import (
     compute_required_factors,
+    create_real_session,
     create_stepup_challenge,
     load_challenge_or_401,
     maybe_finalize,
@@ -23,9 +25,13 @@ router = APIRouter(prefix="/ui", tags=["ui-session"])
 @router.post("/session/start", response_model=UiSessionStartResp)
 async def ui_session_start(req: Request, body: UiSessionStartReq, user_sub: str = Depends(get_authenticated_user_sub)):
     required = compute_required_factors(user_sub)
+    if not required:
+        sid = create_real_session(req, user_sub)
+        audit_event("ui_session_start", user_sub, req, outcome="success", session_id=sid)
+        return UiSessionStartResp(auth_required=False, session_id=sid, required_factors=[])
     challenge_id = create_stepup_challenge(req, user_sub, required_factors=required)
     audit_event("ui_session_start", user_sub, req, outcome="info", required_factors=required, challenge_id=challenge_id)
-    return UiSessionStartResp(status="challenge_created", challenge_id=challenge_id, required_factors=required)
+    return UiSessionStartResp(auth_required=True, challenge_id=challenge_id, required_factors=required)
 
 @router.post("/session/finalize")
 async def ui_session_finalize(req: Request, body: UiSessionFinalizeReq, user_sub: str = Depends(get_authenticated_user_sub)):
@@ -38,11 +44,13 @@ async def ui_session_finalize(req: Request, body: UiSessionFinalizeReq, user_sub
     return {"status": "pending", "required_factors": chal.get("required_factors", []), "passed": chal.get("passed", {})}
 
 @router.get("/me")
-async def ui_me(ctx: Dict[str, str] = Depends(require_ui_session)):
-    return {"user_sub": ctx["user_sub"], "session_id": ctx["session_id"]}
+async def ui_me(req: Request, ctx: Dict[str, str] = Depends(require_ui_session)):
+    return {"user_sub": ctx["user_sub"], "session_id": ctx["session_id"], "ip": client_ip_from_request(req)}
 
 @router.get("/sessions")
-async def ui_sessions(user_sub: str = Depends(get_authenticated_user_sub)):
+async def ui_sessions(ctx: Dict[str, str] = Depends(require_ui_session)):
+    user_sub = ctx["user_sub"]
+    cur = ctx["session_id"]
     r = T.sessions.query(KeyConditionExpression=Key("user_sub").eq(user_sub), Limit=200)
     out = []
     for it in r.get("Items", []):
@@ -51,11 +59,13 @@ async def ui_sessions(user_sub: str = Depends(get_authenticated_user_sub)):
             continue
         out.append({
             "session_id": sid,
+            "is_current": sid == cur,
             "created_at": it.get("created_at",0),
             "last_seen_at": it.get("last_seen_at",0),
             "ip": it.get("ip",""),
             "user_agent": it.get("user_agent",""),
             "revoked": it.get("revoked",False),
+            "revoked_at": it.get("revoked_at",0),
         })
     out.sort(key=lambda x: x.get("created_at",0), reverse=True)
     return {"sessions": out}

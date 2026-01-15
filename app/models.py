@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 class UiSessionStartReq(BaseModel):
     # You can include client metadata; auth is handled separately.
@@ -9,9 +10,10 @@ class UiSessionStartReq(BaseModel):
     challenge_context: Dict[str, Any] = Field(default_factory=dict)
 
 class UiSessionStartResp(BaseModel):
-    status: str
-    challenge_id: str
-    required_factors: List[str]
+    auth_required: bool
+    challenge_id: Optional[str] = None
+    required_factors: List[str] = Field(default_factory=list)
+    session_id: Optional[str] = None
 
 class UiSessionFinalizeReq(BaseModel):
     challenge_id: str
@@ -23,8 +25,9 @@ class UiSessionFinalizeResp(BaseModel):
     passed: Dict[str, bool] = Field(default_factory=dict)
 
 class TotpVerifyReq(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     challenge_id: str
-    code: str
+    totp_code: str = Field(validation_alias=AliasChoices("totp_code", "code"))
 
 class SmsBeginReq(BaseModel):
     challenge_id: str
@@ -41,20 +44,23 @@ class EmailVerifyReq(BaseModel):
     code: str
 
 class RecoveryReq(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     challenge_id: str
-    code: str
+    recovery_code: str = Field(validation_alias=AliasChoices("recovery_code", "code"))
     factor: str = "totp"  # totp|sms|email
 
 class CreateApiKeyReq(BaseModel):
-    label: str = ""
-    ip_rules: List[str] = Field(default_factory=list)
+    label: Optional[str] = None
 
 class RevokeApiKeyReq(BaseModel):
-    api_key_id: str
+    model_config = ConfigDict(populate_by_name=True)
+    key_id: str = Field(validation_alias=AliasChoices("key_id", "api_key_id"))
 
 class ApiKeyIpRulesReq(BaseModel):
-    api_key_id: str
-    ip_rules: List[str] = Field(default_factory=list)
+    model_config = ConfigDict(populate_by_name=True)
+    key_id: str = Field(validation_alias=AliasChoices("key_id", "api_key_id"))
+    allow_cidrs: List[str] = Field(default_factory=list)
+    deny_cidrs: List[str] = Field(default_factory=list)
 
 class RevokeSessionReq(BaseModel):
     session_id: str
@@ -62,45 +68,77 @@ class RevokeSessionReq(BaseModel):
 class MarkReadReq(BaseModel):
     alert_ids: List[str] = Field(default_factory=list)
 
-class AlertPrefsReq(BaseModel):
-    event_types: List[str] = Field(default_factory=list)
+class AlertEmailPrefsReq(BaseModel):
+    email_event_types: List[str] = Field(default_factory=list)
 
-class AlertContactBeginReq(BaseModel):
-    email: Optional[str] = None
-    phone_e164: Optional[str] = None
+class AlertSmsPrefsReq(BaseModel):
+    sms_event_types: List[str] = Field(default_factory=list)
 
-class AlertContactConfirmReq(BaseModel):
-    token: str  # out-of-band confirmation token / code
+class AlertToastPrefsReq(BaseModel):
+    toast_event_types: List[str] = Field(default_factory=list)
+
+class AlertPushPrefsReq(BaseModel):
+    push_event_types: List[str] = Field(default_factory=list)
+
+class AlertEmailBeginReq(BaseModel):
+    email: str
+
+class AlertEmailConfirmReq(BaseModel):
+    challenge_id: str
+    code: str
 
 class TotpDeviceBeginReq(BaseModel):
     label: Optional[str] = None
 
 class TotpDeviceConfirmReq(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     device_id: str
-    code: str
+    totp_code: str = Field(validation_alias=AliasChoices("totp_code", "code"))
+
+class TotpDeviceRemoveReq(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    totp_code: str = Field(validation_alias=AliasChoices("totp_code", "code"))
 
 class SmsDeviceBeginReq(BaseModel):
     phone_e164: str
     label: Optional[str] = None
 
 class SmsDeviceConfirmReq(BaseModel):
-    sms_device_id: str
-
-class SmsDeviceRemoveBeginReq(BaseModel):
-    sms_device_id: str
+    challenge_id: str
+    code: str
 
 class SmsDeviceRemoveConfirmReq(BaseModel):
-    sms_device_id: str
+    challenge_id: str
+    code: str
 
 class EmailDeviceBeginReq(BaseModel):
     email: str
     label: Optional[str] = None
 
 class EmailDeviceConfirmReq(BaseModel):
-    email_device_id: str
-
-class EmailDeviceRemoveBeginReq(BaseModel):
-    email_device_id: str
+    challenge_id: str
+    code: str
 
 class EmailDeviceRemoveConfirmReq(BaseModel):
-    email_device_id: str
+    challenge_id: str
+    code: str
+
+class AlertSmsBeginReq(BaseModel):
+    phone: str
+
+class AlertSmsConfirmReq(BaseModel):
+    challenge_id: str
+    code: str
+
+class AlertSmsRemoveReq(BaseModel):
+    phone: str
+
+class AlertEmailRemoveReq(BaseModel):
+    email: str
+
+class PushRegisterReq(BaseModel):
+    token: str
+    platform: str
+
+class PushRevokeReq(BaseModel):
+    device_id: str
