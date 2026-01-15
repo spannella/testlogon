@@ -23,6 +23,14 @@ code.mono, pre.mono, .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Mona
 .list-item-muted { opacity:0.6; }
 .grow { flex:1; }
 .section { margin-top:14px; }
+.hidden { display: none; }
+.primary { background:#111; color:#fff; border-color:#111; }
+
+.billing-grid { display:grid; grid-template-columns: minmax(240px, 1fr) minmax(320px, 1.4fr); gap:16px; }
+.billing-panel { border:1px solid #eee; border-radius:12px; padding:12px; background:#fafafa; }
+.billing-amount { font-size:20px; margin-bottom:6px; }
+.card-element { padding:10px; border:1px solid #ddd; border-radius:10px; background:#fff; margin-top:10px; }
+.billing-pane.hidden { display:none; }
 
 /* Modal */
 .modal-backdrop { position:fixed; inset:0; background: rgba(0,0,0,0.35); display:flex; align-items:center; justify-content:center; padding:18px; z-index:9999; }

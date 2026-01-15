@@ -89,5 +89,11 @@ class Settings:
 
     audit_log_enabled: bool = os.environ.get("AUDIT_LOG_ENABLED", "1") not in ("0","false","False")
 
+    # Stripe / Billing
+    stripe_secret_key: str = os.environ.get("STRIPE_SECRET_KEY", "")
+    stripe_webhook_secret: str = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+    stripe_publishable_key: str = os.environ.get("STRIPE_PUBLISHABLE_KEY", "")
+    billing_table_name: str = os.environ.get("BILLING_TABLE_NAME", "billing")
+
 
 S = Settings()
