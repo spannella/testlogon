@@ -4,3 +4,4 @@ boto3==1.34.20
 pydantic==2.6.4
 pyotp==2.9.0
 twilio==9.0.5
+stripe==8.5.0

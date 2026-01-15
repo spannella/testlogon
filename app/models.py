@@ -142,3 +142,8 @@ class PushRegisterReq(BaseModel):
 
 class PushRevokeReq(BaseModel):
     device_id: str
+
+class BillingCheckoutReq(BaseModel):
+    amount_cents: int
+    currency: Optional[str] = None
+    description: Optional[str] = None
