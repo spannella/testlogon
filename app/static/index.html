@@ -1,0 +1,192 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Security Control Panel</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+
+<div class="topbar">
+  <div>
+    <div><b>Control Panel</b></div>
+    <div class="muted" id="whoami">Not logged in</div>
+  </div>
+  <div class="toolbar">
+    <button id="btnRefreshAll">Refresh</button>
+    <button id="btnSetTokens">Set tokens</button>
+    <button id="btnClearSession">Logout UI session</button>
+    <button id="btnClearTokens">Clear tokens</button>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <h3>API Key IP Allowlist</h3>
+    <div class="muted">CIDR or IP. If empty → all IPs allowed.</div>
+    <div class="muted">Selected key: <code class="mono" id="allowKeyId">none</code></div>
+    <div class="row-inline" style="margin-top:8px;">
+      <input id="allowAddVal" placeholder="1.2.3.4 or 1.2.3.0/24" style="margin-top:0; flex:1;" />
+      <button id="allowAddBtn">Add</button>
+    </div>
+    <table id="allowTbl">
+      <thead><tr><th>IP/CIDR</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>API Keys</h3>
+    <div class="muted">Manage API keys and IP rules.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <button id="keysRefreshBtn">Refresh</button>
+      <button id="keysCreateBtn">Create key</button>
+    </div>
+    <div id="keysList" class="list"></div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <h3>TOTP Devices</h3>
+    <div class="row-inline" style="margin-top:10px;">
+      <button id="totpAddBtn">Add device</button>
+      <button id="totpRefreshBtn">Refresh</button>
+    </div>
+    <div class="muted">Any one device can satisfy TOTP factor. Adding/removing requires a TOTP code.</div>
+    <table id="totpTbl">
+      <thead><tr><th>Label</th><th>Enabled</th><th>Last Used</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>SMS Devices</h3>
+    <div class="muted">Up to 3 phone numbers. Login SMS codes are sent to all enabled numbers.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <button id="smsRefreshBtn">Refresh</button>
+      <button id="smsAddBtn">Add phone</button>
+    </div>
+    <table id="smsTbl">
+      <thead><tr><th>Phone</th><th>Label</th><th>Enabled</th><th>Last Used</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <h3>Email Devices</h3>
+    <div class="muted">Up to 5 emails. Login email codes are sent to all enabled emails.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <button id="emailRefreshBtn">Refresh</button>
+      <button id="emailAddBtn">Add email</button>
+    </div>
+    <table id="emailTbl">
+      <thead><tr><th>Email</th><th>Label</th><th>Enabled</th><th>Last Used</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>Web UI Sessions</h3>
+    <div class="muted">Your active UI sessions (this browser will show as “current”).</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <button id="sessRefreshBtn">Refresh</button>
+      <button id="sessRevokeOthersBtn">Revoke all other sessions</button>
+    </div>
+    <div id="sessList" class="list"></div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <h3>Alert Recipients</h3>
+    <div class="section">
+      <b>Email recipients</b>
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="alertEmailInput" placeholder="security@example.com" />
+        <button id="alertEmailAddBtn">Add</button>
+      </div>
+      <div id="alertEmailList" class="list"></div>
+    </div>
+    <div class="section">
+      <b>SMS recipients</b>
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="alertSmsInput" placeholder="+15551234567 or 5551234567" />
+        <button id="alertSmsAddBtn">Add</button>
+      </div>
+      <div id="alertSmsList" class="list"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Alert Preferences</h3>
+    <div class="section">
+      <b>Email alert types</b>
+      <div class="muted">Checked types will send email when those events occur.</div>
+      <div id="alertTypeChecklist" class="list" style="margin-top:8px;"></div>
+      <div class="row-inline" style="margin-top:10px;">
+        <button id="alertTypesSaveBtn">Save</button>
+      </div>
+      <div id="alertTypesMsg" class="muted"></div>
+    </div>
+    <div class="section">
+      <b>SMS alert types</b>
+      <div class="muted">Checked types will send SMS when those events occur.</div>
+      <div id="alertSmsTypeChecklist" class="list" style="margin-top:8px;"></div>
+      <div class="row-inline" style="margin-top:10px;">
+        <button id="alertSmsTypesSaveBtn">Save</button>
+      </div>
+      <div id="alertSmsTypesMsg" class="muted"></div>
+    </div>
+    <div class="section">
+      <b>Toast alert types</b>
+      <div class="muted">Checked types will show a toast notification on all active web sessions.</div>
+      <div id="alertToastTypeChecklist" class="list" style="margin-top:8px;"></div>
+      <div class="row-inline" style="margin-top:10px;">
+        <button id="alertToastTypesSaveBtn">Save</button>
+      </div>
+      <div id="alertToastTypesMsg" class="muted"></div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <h3>Push Notifications</h3>
+    <div class="muted">Register this browser for push alerts.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <button id="btnEnablePush">Enable push on this browser</button>
+      <button id="btnPushTest">Send test push</button>
+    </div>
+    <div id="pushMsg" class="muted"></div>
+    <div class="section">
+      <b>Push alert types</b>
+      <div id="alertPushTypeChecklist" class="list" style="margin-top:8px;"></div>
+      <div class="row-inline" style="margin-top:10px;">
+        <button id="alertPushTypesSaveBtn">Save</button>
+      </div>
+      <div id="alertPushTypesMsg" class="muted"></div>
+    </div>
+    <div class="section">
+      <b>Registered push devices</b>
+      <div id="pushDevicesList" class="list"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Recent Alerts</h3>
+    <div class="muted">Latest alerts for this account.</div>
+    <div id="alertsList" class="list"></div>
+  </div>
+</div>
+
+<div class="err" id="globalErr" style="margin-top:12px;"></div>
+
+<div id="toastContainer" class="toast-container"></div>
+
+<script src="/static/main.js"></script>
+</body>
+</html>
