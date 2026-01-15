@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.routers.ui_session import router as ui_session_router
 from app.routers.ui_mfa import router as ui_mfa_router
@@ -14,6 +18,13 @@ from app.routers.misc import router as misc_router
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Security Backend (refactored)", version="0.1.0")
+    static_dir = Path(__file__).resolve().parent / "static"
+
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    @app.get("/")
+    async def index():
+        return FileResponse(static_dir / "index.html")
 
     app.add_middleware(
         CORSMiddleware,
