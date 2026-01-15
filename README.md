@@ -1,5 +1,9 @@
 Refactored FastAPI security backend (split from the original single-file server).
 
+## Documentation
+- [File reference](docs/file-reference.md)
+- [Run and deploy](docs/run-deploy.md)
+
 ## Run
 ```bash
 python -m venv .venv
