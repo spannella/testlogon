@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Billing (CCBill)</title>
+
+  <!-- CCBill Advanced Widget -->
+  <link rel="preload" href="https://js.ccbill.com/v1.12.2/ccbill-advanced-widget.js" as="script" />
+  <script src="https://js.ccbill.com/v1.12.2/ccbill-advanced-widget.js"></script>
+  <!-- The widget exposes createPaymentToken() and emits tokenCreated custom event. :contentReference[oaicite:2]{index=2} -->
+
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 24px; max-width: 1100px; }
+    h1 { margin: 0 0 16px; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .card { border: 1px solid #ddd; border-radius: 10px; padding: 14px; flex: 1 1 420px; }
+    label { display: block; font-size: 12px; color: #555; margin-top: 10px; }
+    input, select, button, textarea { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid #ccc; }
+    button { cursor: pointer; }
+    button.primary { border-color: #0a58ca; }
+    code { background: #f6f8fa; padding: 2px 6px; border-radius: 6px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border-top: 1px solid #eee; padding: 8px; text-align: left; vertical-align: top; }
+    th { font-size: 12px; color: #666; }
+    .muted { color: #666; font-size: 12px; }
+    .ok { color: #0a7; }
+    .bad { color: #c22; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #f3f4f6; font-size: 12px; }
+    .right { text-align: right; }
+    .btnrow { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+    .stack { display: grid; gap: 10px; }
+    textarea { width: 100%; min-height: 110px; }
+  </style>
+</head>
+
+<body>
+  <h1>Billing (CCBill)</h1>
+  <p class="muted">
+    Flow: CCBill widget creates a <code>paymentTokenId</code> → we save it to backend → backend charges token for one-time or subscription.
+    Token creation uses <code>createPaymentToken()</code> and the <code>tokenCreated</code> event. :contentReference[oaicite:3]{index=3}
+  </p>
+
+  <div class="row">
+    <div class="card">
+      <h3>Connection</h3>
+
+      <label>Backend base URL</label>
+      <input id="baseUrl" value="" placeholder="e.g. https://api.example.com" />
+
+      <label>X-User-Id</label>
+      <input id="userId" value="demo_user_1" />
+
+      <div class="btnrow">
+        <button class="primary" onclick="refreshAll()">Refresh all</button>
+        <button onclick="clearLog()">Clear log</button>
+      </div>
+
+      <div class="muted" style="margin-top:10px">
+        Tip: leave base URL empty if you serve this from the same origin as FastAPI.
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Status</h3>
+      <div class="stack">
+        <div><span class="pill">Settings</span> <span id="settingsOut" class="mono"></span></div>
+        <div><span class="pill">Balance</span> <span id="balanceOut" class="mono"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:16px">
+    <div class="card">
+      <h3>1) Add Card (Create Payment Token)</h3>
+      <p class="muted">
+        Fill the form and click <b>Create token</b>. We call backend to get a frontend OAuth token, then call
+        <code>createPaymentToken(authToken, clientAccnum, clientSubacc, ...)</code>. :contentReference[oaicite:4]{index=4}
+      </p>
+
+      <div id="configBox" class="muted mono"></div>
+
+      <form id="payment-form">
+        <!-- CCBill widget reads fields based on data-ccbill attributes -->
+        <div class="row">
+          <div style="flex:1 1 260px">
+            <label>Cardholder Name</label>
+            <input data-ccbill="customerName" placeholder="Jane Doe" autocomplete="cc-name" required />
+          </div>
+          <div style="flex:1 1 260px">
+            <label>Email</label>
+            <input data-ccbill="email" placeholder="jane@example.com" autocomplete="email" required />
+          </div>
+        </div>
+
+        <div class="row">
+          <div style="flex:1 1 260px">
+            <label>Card Number</label>
+            <input data-ccbill="cardNumber" placeholder="4111111111111111" autocomplete="cc-number" required />
+          </div>
+          <div style="flex:1 1 120px">
+            <label>Exp Month</label>
+            <input data-ccbill="expMonth" placeholder="12" autocomplete="cc-exp-month" required />
+          </div>
+          <div style="flex:1 1 120px">
+            <label>Exp Year</label>
+            <input data-ccbill="expYear" placeholder="2030" autocomplete="cc-exp-year" required />
+          </div>
+          <div style="flex:1 1 120px">
+            <label>CVV</label>
+            <input data-ccbill="cvv" placeholder="123" autocomplete="cc-csc" required />
+          </div>
+        </div>
+
+        <div class="row">
+          <div style="flex:1 1 260px">
+            <label>Address</label>
+            <input data-ccbill="address1" placeholder="123 Main St" autocomplete="address-line1" />
+          </div>
+          <div style="flex:1 1 180px">
+            <label>City</label>
+            <input data-ccbill="city" placeholder="New York" autocomplete="address-level2" />
+          </div>
+          <div style="flex:1 1 120px">
+            <label>State</label>
+            <input data-ccbill="state" placeholder="NY" autocomplete="address-level1" />
+          </div>
+          <div style="flex:1 1 140px">
+            <label>Postal Code</label>
+            <input data-ccbill="postalCode" placeholder="10001" autocomplete="postal-code" />
+          </div>
+          <div style="flex:1 1 160px">
+            <label>Country</label>
+            <input data-ccbill="country" placeholder="US" autocomplete="country" />
+          </div>
+        </div>
+
+        <div class="btnrow">
+          <button type="button" class="primary" onclick="createToken()">Create token</button>
+          <label style="margin:0; display:flex; align-items:center; gap:8px;">
+            <input type="checkbox" id="makeDefault" checked />
+            Make default
+          </label>
+        </div>
+
+        <div class="muted" style="margin-top:10px">
+          After token is created, we auto-save it via <code>/api/billing/payment-methods/ccbill-token</code>.
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>2) Payment Methods</h3>
+      <div class="btnrow">
+        <button onclick="loadPaymentMethods()">Refresh methods</button>
+      </div>
+
+      <div style="overflow:auto; margin-top:10px">
+        <table>
+          <thead>
+            <tr>
+              <th>Token</th>
+              <th>Label</th>
+              <th>Priority</th>
+              <th class="right">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="pmTbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:16px">
+    <div class="card">
+      <h3>3) Subscribe (Monthly)</h3>
+      <label>Monthly price (cents)</label>
+      <input id="monthlyCents" value="999" />
+      <label>Plan ID</label>
+      <input id="planId" value="monthly" />
+      <div class="btnrow">
+        <button class="primary" onclick="subscribeMonthly()">Start subscription</button>
+      </div>
+      <div class="muted" style="margin-top:10px">
+        Uses <code>/api/billing/subscribe-monthly</code>.
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>4) One-time Charge / Pay Balance</h3>
+      <label>One-time amount (cents)</label>
+      <input id="oneTimeCents" value="500" />
+      <div class="btnrow">
+        <button class="primary" onclick="chargeOnce()">Charge once</button>
+        <button onclick="payBalance()">Pay settled balance</button>
+      </div>
+      <div class="muted" style="margin-top:10px">
+        Uses <code>/api/billing/charge-once</code> and <code>/api/billing/pay-balance</code>.
+      </div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:16px">
+    <div class="card">
+      <h3>Debug Views</h3>
+      <div class="btnrow">
+        <button onclick="loadSubscriptions()">Subscriptions</button>
+        <button onclick="loadPayments()">Payments</button>
+        <button onclick="loadLedger()">Ledger</button>
+      </div>
+      <textarea id="debugOut" class="mono" readonly></textarea>
+    </div>
+
+    <div class="card">
+      <h3>Log</h3>
+      <textarea id="log" class="mono" readonly></textarea>
+    </div>
+  </div>
+
+<script>
+  // ------------------------------------------------------------
+  // Utilities
+  // ------------------------------------------------------------
+  function baseUrl() {
+    const v = document.getElementById('baseUrl').value.trim();
+    return v ? v.replace(/\/+$/,'') : '';
+  }
+  function userId() {
+    return document.getElementById('userId').value.trim();
+  }
+  function hdrs(extra={}) {
+    return Object.assign({
+      'Content-Type': 'application/json',
+      'X-User-Id': userId(),
+    }, extra);
+  }
+  function log(msg, obj=null) {
+    const el = document.getElementById('log');
+    const line = `[${new Date().toISOString()}] ${msg}` + (obj ? `\n${JSON.stringify(obj,null,2)}\n` : '\n');
+    el.value = line + el.value;
+  }
+  function clearLog() { document.getElementById('log').value = ''; }
+
+  async function api(path, opts={}) {
+    const url = baseUrl() + path;
+    const res = await fetch(url, opts);
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+    if (!res.ok) {
+      log(`API ${path} failed: ${res.status}`, data);
+      throw new Error(`HTTP ${res.status}: ${text}`);
+    }
+    return data;
+  }
+
+  function fmtCents(c) {
+    const n = Number(c || 0);
+    return `$${(n/100).toFixed(2)}`;
+  }
+
+  // ------------------------------------------------------------
+  // Loaders
+  // ------------------------------------------------------------
+  let cachedConfig = null;
+
+  async function loadConfig() {
+    cachedConfig = await api('/api/billing/config', { method: 'GET', headers: hdrs() });
+    document.getElementById('configBox').textContent =
+      `clientAccnum=${cachedConfig.clientAccnum} clientSubacc=${cachedConfig.clientSubacc} currency=${cachedConfig.default_currency}`;
+    log('Loaded config', cachedConfig);
+  }
+
+  async function loadSettings() {
+    const s = await api('/api/billing/settings', { method: 'GET', headers: hdrs() });
+    document.getElementById('settingsOut').textContent = JSON.stringify(s);
+    log('Loaded settings', s);
+  }
+
+  async function loadBalance() {
+    const b = await api('/api/billing/balance', { method: 'GET', headers: hdrs() });
+    const view = {
+      currency: b.currency,
+      owed_pending: fmtCents(b.owed_pending_cents),
+      owed_settled: fmtCents(b.owed_settled_cents),
+      payments_pending: fmtCents(b.payments_pending_cents),
+      payments_settled: fmtCents(b.payments_settled_cents),
+      due_settled: fmtCents(b.due_settled_cents),
+      due_if_all_settles: fmtCents(b.due_if_all_settles_cents),
+      updated_at: b.updated_at,
+    };
+    document.getElementById('balanceOut').textContent = JSON.stringify(view);
+    log('Loaded balance', b);
+  }
+
+  async function refreshAll() {
+    await loadConfig();
+    await loadSettings();
+    await loadBalance();
+    await loadPaymentMethods();
+  }
+
+  // ------------------------------------------------------------
+  // Payment methods table
+  // ------------------------------------------------------------
+  async function loadPaymentMethods() {
+    const pms = await api('/api/billing/payment-methods', { method: 'GET', headers: hdrs() });
+    const tbody = document.getElementById('pmTbody');
+    tbody.innerHTML = '';
+    for (const pm of pms) {
+      const tr = document.createElement('tr');
+
+      const tdTok = document.createElement('td');
+      tdTok.className = 'mono';
+      tdTok.textContent = pm.payment_token_id;
+      tr.appendChild(tdTok);
+
+      const tdLabel = document.createElement('td');
+      tdLabel.textContent = pm.label || '';
+      tr.appendChild(tdLabel);
+
+      const tdPri = document.createElement('td');
+      tdPri.textContent = pm.priority;
+      tr.appendChild(tdPri);
+
+      const tdAct = document.createElement('td');
+      tdAct.className = 'right';
+
+      const btnDefault = document.createElement('button');
+      btnDefault.textContent = 'Set default';
+      btnDefault.onclick = async () => {
+        await api('/api/billing/payment-methods/default', {
+          method: 'POST',
+          headers: hdrs(),
+          body: JSON.stringify({ payment_token_id: pm.payment_token_id })
+        });
+        log('Set default token', pm);
+        await loadSettings();
+      };
+
+      const btnPri = document.createElement('button');
+      btnPri.textContent = 'Set priority';
+      btnPri.style.marginLeft = '8px';
+      btnPri.onclick = async () => {
+        const p = prompt('New priority (lower = earlier):', String(pm.priority));
+        if (p == null) return;
+        await api('/api/billing/payment-methods/priority', {
+          method: 'POST',
+          headers: hdrs(),
+          body: JSON.stringify({ payment_token_id: pm.payment_token_id, priority: Number(p) })
+        });
+        log('Set priority', { token: pm.payment_token_id, priority: p });
+        await loadPaymentMethods();
+      };
+
+      const btnDel = document.createElement('button');
+      btnDel.textContent = 'Remove';
+      btnDel.style.marginLeft = '8px';
+      btnDel.onclick = async () => {
+        if (!confirm('Remove this payment method?')) return;
+        await api(`/api/billing/payment-methods/${encodeURIComponent(pm.payment_token_id)}`, {
+          method: 'DELETE',
+          headers: hdrs()
+        });
+        log('Removed token', pm);
+        await refreshAll();
+      };
+
+      tdAct.appendChild(btnDefault);
+      tdAct.appendChild(btnPri);
+      tdAct.appendChild(btnDel);
+      tr.appendChild(tdAct);
+
+      tbody.appendChild(tr);
+    }
+    log('Loaded payment methods', pms);
+  }
+
+  // ------------------------------------------------------------
+  // Token creation via CCBill widget
+  // ------------------------------------------------------------
+  async function createToken() {
+    if (!cachedConfig) await loadConfig();
+
+    // 1) Get frontend OAuth token from backend
+    const t = await api('/api/billing/ccbill/frontend-oauth', {
+      method: 'POST',
+      headers: hdrs(),
+      body: JSON.stringify({})
+    });
+    log('Got frontend OAuth', { got: !!t.access_token });
+
+    // 2) Call CCBill widget createPaymentToken()
+    // Signature per method reference: createPaymentToken(authToken, clientAccnum, clientSubacc, clearPaymentInfo?, clearCustomerInfo?, timeToLive?, numberOfUse?) :contentReference[oaicite:5]{index=5}
+    try {
+      await window.createPaymentToken(
+        t.access_token,
+        cachedConfig.clientAccnum,
+        cachedConfig.clientSubacc,
+        true,  // clearPaymentInfo
+        false, // clearCustomerInfo
+        3600,  // TTL seconds
+        999    // numberOfUse (high for reuse)
+      );
+      log('createPaymentToken() invoked');
+    } catch (e) {
+      log('createPaymentToken() threw', { error: String(e) });
+      alert('Tokenization failed: ' + e);
+    }
+  }
+
+  // tokenCreated event: “detail” carries the data (including paymentTokenId). :contentReference[oaicite:6]{index=6}
+  window.addEventListener('tokenCreated', async (ev) => {
+    try {
+      const detail = ev.detail || {};
+      log('tokenCreated event', detail);
+
+      const tokenId = detail.paymentTokenId || detail.paymentToken || detail.payment_token_id;
+      if (!tokenId) {
+        alert('Token created but token id not found in event.detail');
+        return;
+      }
+
+      const label = detail.cardType && detail.last4
+        ? `${detail.cardType} ****${detail.last4}`
+        : (detail.paymentType ? String(detail.paymentType) : null);
+
+      // 3) Save token in backend
+      await api('/api/billing/payment-methods/ccbill-token', {
+        method: 'POST',
+        headers: hdrs(),
+        body: JSON.stringify({
+          payment_token_id: tokenId,
+          label: label,
+          make_default: document.getElementById('makeDefault').checked
+        })
+      });
+
+      log('Saved payment token to backend', { tokenId, label });
+      await refreshAll();
+      alert('Payment method saved!');
+    } catch (e) {
+      log('tokenCreated handler failed', { error: String(e) });
+      alert('Failed to save token: ' + e);
+    }
+  });
+
+  // ------------------------------------------------------------
+  // Subscription + charges
+  // ------------------------------------------------------------
+  async function subscribeMonthly() {
+    const monthly = Number(document.getElementById('monthlyCents').value);
+    const planId = document.getElementById('planId').value.trim() || 'monthly';
+    const resp = await api('/api/billing/subscribe-monthly', {
+      method: 'POST',
+      headers: hdrs(),
+      body: JSON.stringify({ plan_id: planId, monthly_price_cents: monthly })
+    });
+    log('subscribe-monthly response', resp);
+    await refreshAll();
+    alert(resp.approved ? 'Subscription started (approved).' : 'Subscription failed.');
+  }
+
+  async function chargeOnce() {
+    const amount = Number(document.getElementById('oneTimeCents').value);
+    const resp = await api('/api/billing/charge-once', {
+      method: 'POST',
+      headers: hdrs(),
+      body: JSON.stringify({ amount_cents: amount })
+    });
+    log('charge-once response', resp);
+    await refreshAll();
+    alert(resp.approved ? 'Charge approved.' : 'Charge failed.');
+  }
+
+  async function payBalance() {
+    const resp = await api('/api/billing/pay-balance', {
+      method: 'POST',
+      headers: hdrs(),
+      body: JSON.stringify({})
+    });
+    log('pay-balance response', resp);
+    await refreshAll();
+    alert('Pay balance result: ' + JSON.stringify(resp));
+  }
+
+  // ------------------------------------------------------------
+  // Debug views
+  // ------------------------------------------------------------
+  async function loadSubscriptions() {
+    const data = await api('/api/billing/subscriptions', { method: 'GET', headers: hdrs() });
+    document.getElementById('debugOut').value = JSON.stringify(data, null, 2);
+    log('Loaded subscriptions', data);
+  }
+  async function loadPayments() {
+    const data = await api('/api/billing/payments', { method: 'GET', headers: hdrs() });
+    document.getElementById('debugOut').value = JSON.stringify(data, null, 2);
+    log('Loaded payments', data);
+  }
+  async function loadLedger() {
+    const data = await api('/api/billing/ledger', { method: 'GET', headers: hdrs() });
+    document.getElementById('debugOut').value = JSON.stringify(data, null, 2);
+    log('Loaded ledger', data);
+  }
+
+  // boot
+  (async () => {
+    try { await refreshAll(); }
+    catch (e) { log('Initial refresh failed', { error: String(e) }); }
+  })();
+</script>
+</body>
+</html>

@@ -1,0 +1,498 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Billing</title>
+  <script src="https://js.stripe.com/v3/"></script>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;margin:24px;max-width:1100px}
+    h2{margin:0 0 12px 0}
+    .muted{color:#666;font-size:13px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .card{border:1px solid #ddd;border-radius:10px;padding:16px;background:#fff}
+    .row{display:flex;gap:10px;align-items:center;margin:8px 0;flex-wrap:wrap}
+    .row > *{flex:0 0 auto}
+    input,select{padding:8px 10px;border:1px solid #ccc;border-radius:8px}
+    button{padding:8px 12px;border:1px solid #999;border-radius:8px;background:#f7f7f7;cursor:pointer}
+    button.primary{background:#111;color:#fff;border-color:#111}
+    button.danger{background:#fff5f5;border-color:#f0b4b4}
+    code{background:#f6f6f6;padding:2px 6px;border-radius:6px}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid #ddd;font-size:12px}
+    .pill.ok{border-color:#b8e0c2;background:#effaf2}
+    .pill.warn{border-color:#f2d29b;background:#fff7e8}
+    .pill.bad{border-color:#f0b4b4;background:#fff0f0}
+    .hr{height:1px;background:#eee;margin:12px 0}
+    .list{display:flex;flex-direction:column;gap:8px}
+    .item{border:1px solid #eee;border-radius:10px;padding:10px}
+    .right{margin-left:auto}
+    .w100{width:100%}
+    .hidden{display:none}
+    #card-element{padding:10px;border:1px solid #ccc;border-radius:8px;width:360px}
+  </style>
+</head>
+<body>
+  <h2>Billing</h2>
+  <div class="muted">
+    Assumes login is handled. This UI sends <code>X-User-Id</code> on each request.
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <div class="row">
+      <label class="muted">User ID</label>
+      <input id="uid" placeholder="u_123" style="width:280px"/>
+      <button class="primary" onclick="refreshAll()">Refresh</button>
+      <span id="status" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="grid" style="margin-top:16px">
+    <div class="card">
+      <h3 style="margin:0 0 8px 0">Balance</h3>
+      <div class="row">
+        <div>
+          <div class="muted">Due (settled)</div>
+          <div class="mono" style="font-size:22px" id="due_settled">—</div>
+        </div>
+        <div style="width:24px"></div>
+        <div>
+          <div class="muted">Due (if pending settles)</div>
+          <div class="mono" style="font-size:22px" id="due_all">—</div>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="row">
+        <div class="muted">Owed pending:</div><div class="mono" id="owed_pending">—</div>
+        <div class="muted">Owed settled:</div><div class="mono" id="owed_settled">—</div>
+      </div>
+      <div class="row">
+        <div class="muted">Payments pending:</div><div class="mono" id="pay_pending">—</div>
+        <div class="muted">Payments settled:</div><div class="mono" id="pay_settled">—</div>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="row">
+        <button class="primary" onclick="paySettledBalance()">Pay settled balance</button>
+        <input id="pay_amount" placeholder="amount (optional, cents)" style="width:220px"/>
+        <span id="pay_result" class="muted"></span>
+      </div>
+
+      <div class="row">
+        <label class="muted">Autopay</label>
+        <input type="checkbox" id="autopay" onchange="setAutopay()"/>
+        <span class="muted">Webhook-driven settlement; autopay scheduling is backend/worker responsibility.</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin:0 0 8px 0">Payment methods</h3>
+
+      <div class="row">
+        <button onclick="showPane('add_card')">Add card</button>
+        <button onclick="showPane('add_bank')">Add checking (ACH)</button>
+        <button onclick="showPane('verify_bank')">Verify microdeposits</button>
+        <button onclick="showPane('list_methods')" class="primary">List</button>
+      </div>
+
+      <div class="hr"></div>
+
+      <!-- Add card -->
+      <div id="pane_add_card" class="pane">
+        <div class="muted">Add a credit/debit card (saved for future off-session payments).</div>
+        <div style="margin-top:10px" id="card-element"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="primary" onclick="addCard()">Save card</button>
+          <span id="add_card_result" class="muted"></span>
+        </div>
+      </div>
+
+      <!-- Add bank -->
+      <div id="pane_add_bank" class="pane hidden">
+        <div class="muted">
+          Add a US checking account via ACH. Microdeposit verification may be required.
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input id="bank_name" placeholder="Name (for mandate)" style="width:260px"/>
+          <input id="bank_email" placeholder="Email (optional)" style="width:260px"/>
+        </div>
+        <div class="row">
+          <button class="primary" onclick="addBankAccount()">Start ACH setup</button>
+          <span id="add_bank_result" class="muted"></span>
+        </div>
+        <div id="bank_next" class="muted" style="margin-top:10px"></div>
+      </div>
+
+      <!-- Verify microdeposits -->
+      <div id="pane_verify_bank" class="pane hidden">
+        <div class="muted">
+          If the SetupIntent requires microdeposit verification, paste the SetupIntent ID below and verify by amounts or descriptor code.
+        </div>
+
+        <div class="row" style="margin-top:10px">
+          <input id="verify_si" placeholder="setup_intent_id (e.g. seti_...)" style="width:420px"/>
+          <button onclick="usePendingSetupIntent()">Use last pending from this browser</button>
+        </div>
+
+        <div class="row">
+          <input id="amt1" placeholder="amount1 (cents)" style="width:180px"/>
+          <input id="amt2" placeholder="amount2 (cents)" style="width:180px"/>
+          <button class="primary" onclick="verifyByAmounts()">Verify by amounts</button>
+        </div>
+
+        <div class="row">
+          <input id="desc" placeholder="descriptor code (optional)" style="width:300px"/>
+          <button class="primary" onclick="verifyByDescriptor()">Verify by code</button>
+        </div>
+
+        <div class="row">
+          <span id="verify_result" class="muted"></span>
+        </div>
+      </div>
+
+      <!-- List methods -->
+      <div id="pane_list_methods" class="pane hidden">
+        <div id="methods" class="list"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <h3 style="margin:0 0 8px 0">Ledger</h3>
+    <div class="row">
+      <button onclick="loadLedger()">Refresh ledger</button>
+      <input id="ledger_limit" placeholder="limit (default 50)" style="width:200px"/>
+      <span class="muted">Shows most recent first</span>
+    </div>
+    <div id="ledger" class="list" style="margin-top:10px"></div>
+  </div>
+
+<script>
+let stripe = null;
+let elements = null;
+let card = null;
+let lastPendingSetupIntentId = null;
+
+function fmtMoney(cents, currency='usd') {
+  const sign = cents < 0 ? "-" : "";
+  const v = Math.abs(cents) / 100.0;
+  return sign + v.toFixed(2) + " " + currency.toUpperCase();
+}
+
+function setStatus(msg) {
+  document.getElementById('status').innerText = msg || '';
+}
+
+async function api(path, opts={}) {
+  const uid = document.getElementById('uid').value.trim();
+  if (!uid) throw new Error("Set User ID first");
+  opts.headers = Object.assign({}, opts.headers||{}, {'X-User-Id': uid, 'Content-Type': 'application/json'});
+  const r = await fetch(path, opts);
+  const txt = await r.text();
+  if (!r.ok) throw new Error(txt || r.statusText);
+  return txt ? JSON.parse(txt) : null;
+}
+
+async function initStripe() {
+  const uid = document.getElementById('uid').value.trim();
+  if (!uid) return;
+
+  const cfg = await api('/api/billing/config');
+  stripe = Stripe(cfg.publishable_key);
+  elements = stripe.elements();
+  if (!card) {
+    card = elements.create('card');
+    card.mount('#card-element');
+  }
+}
+
+function showPane(which) {
+  const panes = ['add_card','add_bank','verify_bank','list_methods'];
+  for (const p of panes) {
+    document.getElementById('pane_' + p).classList.add('hidden');
+  }
+  document.getElementById('pane_' + which).classList.remove('hidden');
+}
+
+async function refreshAll() {
+  try {
+    setStatus("Loading...");
+    await initStripe();
+
+    const bal = await api('/api/billing/balance');
+    document.getElementById('due_settled').innerText = fmtMoney(bal.due_settled_cents, bal.currency);
+    document.getElementById('due_all').innerText = fmtMoney(bal.due_if_all_settles_cents, bal.currency);
+
+    document.getElementById('owed_pending').innerText = fmtMoney(bal.owed_pending_cents, bal.currency);
+    document.getElementById('owed_settled').innerText = fmtMoney(bal.owed_settled_cents, bal.currency);
+    document.getElementById('pay_pending').innerText = fmtMoney(bal.payments_pending_cents, bal.currency);
+    document.getElementById('pay_settled').innerText = fmtMoney(bal.payments_settled_cents, bal.currency);
+
+    const settings = await api('/api/billing/settings');
+    document.getElementById('autopay').checked = !!settings.autopay_enabled;
+
+    await loadPaymentMethods();
+    await loadLedger();
+
+    showPane('list_methods');
+    setStatus("OK");
+  } catch (e) {
+    setStatus("Error: " + e.message);
+  }
+}
+
+async function loadPaymentMethods() {
+  const cards = await api('/api/billing/payment-methods');
+  renderMethods(cards);
+}
+
+function pillForType(t) {
+  if (t === 'card') return '<span class="pill ok">CARD</span>';
+  if (t === 'us_bank_account') return '<span class="pill warn">BANK</span>';
+  return '<span class="pill">UNKNOWN</span>';
+}
+
+function renderMethods(methods) {
+  const wrap = document.getElementById('methods');
+  wrap.innerHTML = '';
+  methods.sort((a,b)=>a.priority-b.priority);
+
+  for (const m of methods) {
+    const div = document.createElement('div');
+    div.className = 'item';
+
+    const label = m.label || (m.method_type === 'card'
+      ? `${m.brand||''} ****${m.last4||''} exp ${m.exp_month||''}/${m.exp_year||''}`
+      : `****${m.last4||''}`);
+
+    div.innerHTML = `
+      <div class="row">
+        ${pillForType(m.method_type)}
+        <div class="mono"><code>${m.payment_method_id}</code></div>
+        <div>${label}</div>
+        <div class="right muted">priority</div>
+        <input value="${m.priority}" style="width:90px" onchange="setPriority('${m.payment_method_id}', this.value)"/>
+      </div>
+      <div class="row">
+        <button class="primary" onclick="setDefault('${m.payment_method_id}')">Set default</button>
+        <button class="danger" onclick="removePM('${m.payment_method_id}')">Remove</button>
+        <span class="muted" id="pm_msg_${m.payment_method_id}"></span>
+      </div>
+    `;
+    wrap.appendChild(div);
+  }
+
+  if (methods.length === 0) {
+    wrap.innerHTML = '<div class="muted">No payment methods yet.</div>';
+  }
+}
+
+async function setPriority(pm, prio) {
+  try {
+    await api('/api/billing/payment-methods/priority', {method:'POST', body: JSON.stringify({payment_method_id: pm, priority: parseInt(prio)})});
+    document.getElementById('pm_msg_' + pm).innerText = 'Saved';
+  } catch (e) {
+    document.getElementById('pm_msg_' + pm).innerText = 'Error: ' + e.message;
+  }
+}
+
+async function setDefault(pm) {
+  try {
+    await api('/api/billing/payment-methods/default', {method:'POST', body: JSON.stringify({payment_method_id: pm})});
+    document.getElementById('pm_msg_' + pm).innerText = 'Default set';
+  } catch (e) {
+    document.getElementById('pm_msg_' + pm).innerText = 'Error: ' + e.message;
+  }
+}
+
+async function removePM(pm) {
+  try {
+    await api('/api/billing/payment-methods/' + pm, {method:'DELETE'});
+    await loadPaymentMethods();
+  } catch (e) {
+    alert('Remove failed: ' + e.message);
+  }
+}
+
+async function addCard() {
+  document.getElementById('add_card_result').innerText = '';
+  try {
+    const si = await api('/api/billing/setup-intent/card', {method:'POST', body:'{}'});
+    const res = await stripe.confirmCardSetup(si.client_secret, {payment_method: {card}});
+    if (res.error) throw new Error(res.error.message);
+
+    document.getElementById('add_card_result').innerText = 'Saved. (Will appear after webhook)';
+    // Note: PM is stored on setup_intent.succeeded webhook; refresh shortly
+    setTimeout(refreshAll, 800);
+  } catch (e) {
+    document.getElementById('add_card_result').innerText = 'Error: ' + e.message;
+  }
+}
+
+async function addBankAccount() {
+  document.getElementById('add_bank_result').innerText = '';
+  document.getElementById('bank_next').innerText = '';
+  try {
+    const name = document.getElementById('bank_name').value || 'Customer';
+    const email = document.getElementById('bank_email').value || undefined;
+
+    const si = await api('/api/billing/setup-intent/us-bank', {method:'POST', body:'{}'});
+
+    // Collect routing/account + mandate
+    const collected = await stripe.collectBankAccountForSetup({
+      clientSecret: si.client_secret,
+      params: {
+        payment_method_type: 'us_bank_account',
+        payment_method_data: {
+          billing_details: { name, email }
+        }
+      }
+    });
+    if (collected.error) throw new Error(collected.error.message);
+
+    // Confirm the setup
+    const confirmed = await stripe.confirmUsBankAccountSetup(si.client_secret);
+    if (confirmed.error) throw new Error(confirmed.error.message);
+
+    const setupIntent = confirmed.setupIntent;
+    document.getElementById('add_bank_result').innerText = 'Submitted. Status: ' + setupIntent.status;
+
+    if (setupIntent.status === 'requires_action' &&
+        setupIntent.next_action &&
+        setupIntent.next_action.type === 'verify_with_microdeposits') {
+      lastPendingSetupIntentId = setupIntent.id;
+      document.getElementById('bank_next').innerHTML =
+        'Microdeposits required. SetupIntent: <code>' + setupIntent.id + '</code>. ' +
+        'Go to “Verify microdeposits” tab after deposits arrive.';
+      document.getElementById('verify_si').value = setupIntent.id;
+      showPane('verify_bank');
+    } else {
+      document.getElementById('bank_next').innerText = 'If it succeeded, it will appear after webhook.';
+      setTimeout(refreshAll, 800);
+    }
+  } catch (e) {
+    document.getElementById('add_bank_result').innerText = 'Error: ' + e.message;
+  }
+}
+
+function usePendingSetupIntent() {
+  if (lastPendingSetupIntentId) {
+    document.getElementById('verify_si').value = lastPendingSetupIntentId;
+  } else {
+    alert('No pending SetupIntent stored in this browser session.');
+  }
+}
+
+async function verifyByAmounts() {
+  document.getElementById('verify_result').innerText = '';
+  try {
+    const setup_intent_id = document.getElementById('verify_si').value.trim();
+    const a1 = parseInt(document.getElementById('amt1').value.trim());
+    const a2 = parseInt(document.getElementById('amt2').value.trim());
+    if (!setup_intent_id) throw new Error('Missing setup_intent_id');
+    if (!Number.isFinite(a1) || !Number.isFinite(a2)) throw new Error('Enter both amounts (cents)');
+
+    const res = await api('/api/billing/us-bank/verify-microdeposits', {
+      method:'POST',
+      body: JSON.stringify({setup_intent_id, amounts:[a1,a2]})
+    });
+
+    document.getElementById('verify_result').innerText = 'Verify result: ' + res.status + ' (PM will appear after webhook if succeeded)';
+    setTimeout(refreshAll, 800);
+  } catch (e) {
+    document.getElementById('verify_result').innerText = 'Error: ' + e.message;
+  }
+}
+
+async function verifyByDescriptor() {
+  document.getElementById('verify_result').innerText = '';
+  try {
+    const setup_intent_id = document.getElementById('verify_si').value.trim();
+    const descriptor_code = document.getElementById('desc').value.trim();
+    if (!setup_intent_id) throw new Error('Missing setup_intent_id');
+    if (!descriptor_code) throw new Error('Missing descriptor code');
+
+    const res = await api('/api/billing/us-bank/verify-microdeposits', {
+      method:'POST',
+      body: JSON.stringify({setup_intent_id, descriptor_code})
+    });
+
+    document.getElementById('verify_result').innerText = 'Verify result: ' + res.status + ' (PM will appear after webhook if succeeded)';
+    setTimeout(refreshAll, 800);
+  } catch (e) {
+    document.getElementById('verify_result').innerText = 'Error: ' + e.message;
+  }
+}
+
+async function setAutopay() {
+  try {
+    const enabled = document.getElementById('autopay').checked;
+    await api('/api/billing/autopay', {method:'POST', body: JSON.stringify({enabled})});
+  } catch (e) {
+    alert('Autopay update failed: ' + e.message);
+  }
+}
+
+async function paySettledBalance() {
+  document.getElementById('pay_result').innerText = '';
+  try {
+    const amtTxt = document.getElementById('pay_amount').value.trim();
+    const amount_cents = amtTxt ? parseInt(amtTxt) : null;
+
+    const payload = {};
+    if (amount_cents) payload.amount_cents = amount_cents;
+
+    const res = await api('/api/billing/pay-balance', {method:'POST', body: JSON.stringify(payload)});
+    document.getElementById('pay_result').innerText = 'PI status: ' + res.status + ' (' + (res.payment_intent_id || '') + ')';
+    setTimeout(refreshAll, 800);
+  } catch (e) {
+    document.getElementById('pay_result').innerText = 'Error: ' + e.message;
+  }
+}
+
+async function loadLedger() {
+  const wrap = document.getElementById('ledger');
+  wrap.innerHTML = '';
+  try {
+    const limitTxt = document.getElementById('ledger_limit').value.trim();
+    const limit = limitTxt ? parseInt(limitTxt) : 50;
+    const res = await api('/api/billing/ledger?limit=' + encodeURIComponent(limit));
+    const items = res.items || [];
+
+    for (const it of items) {
+      const div = document.createElement('div');
+      div.className = 'item';
+
+      let pill = '<span class="pill">' + (it.state || '') + '</span>';
+      if (it.state === 'settled') pill = '<span class="pill ok">settled</span>';
+      if (it.state === 'pending') pill = '<span class="pill warn">pending</span>';
+      if (it.state === 'reversed') pill = '<span class="pill bad">reversed</span>';
+
+      div.innerHTML = `
+        <div class="row">
+          ${pill}
+          <div class="muted">${new Date((it.ts||0)*1000).toISOString()}</div>
+          <div class="mono">${it.type}</div>
+          <div class="mono">${it.reason || ''}</div>
+          <div class="right mono">${it.amount_cents}</div>
+        </div>
+        <div class="muted mono w100">
+          ${it.stripe_payment_intent_id ? ('pi=' + it.stripe_payment_intent_id + ' ') : ''}
+          ${it.stripe_charge_id ? ('ch=' + it.stripe_charge_id + ' ') : ''}
+          ${it.entry_id ? ('entry=' + it.entry_id) : ''}
+        </div>
+      `;
+      wrap.appendChild(div);
+    }
+
+    if (items.length === 0) wrap.innerHTML = '<div class="muted">No ledger entries yet.</div>';
+  } catch (e) {
+    wrap.innerHTML = '<div class="muted">Error loading ledger: ' + e.message + '</div>';
+  }
+}
+</script>
+</body>
+</html>
