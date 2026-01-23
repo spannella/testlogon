@@ -30,6 +30,13 @@ from app.models import (
     PushRegisterReq,
     PushRevokeReq,
     RecoveryReq,
+    PasswordRecoveryChallengeReq,
+    PasswordRecoveryConfirmReq,
+    PasswordRecoveryEmailVerifyReq,
+    PasswordRecoveryRecoveryCodeReq,
+    PasswordRecoverySmsVerifyReq,
+    PasswordRecoveryStartReq,
+    PasswordRecoveryTotpVerifyReq,
     RevokeApiKeyReq,
     SmsBeginReq,
     SmsDeviceBeginReq,
@@ -43,7 +50,7 @@ from app.models import (
     UiSessionFinalizeReq,
     UiSessionStartReq,
 )
-from app.routers import alerts, api_keys, misc, mfa_devices, push, recovery, ui_mfa, ui_session
+from app.routers import alerts, api_keys, misc, mfa_devices, password_recovery, push, recovery, ui_mfa, ui_session
 
 
 def run_async(coro):
@@ -514,6 +521,177 @@ class TestRecoveryRoutes(unittest.TestCase):
         with patch.object(recovery, "load_challenge_or_401", return_value=chal):
             with self.assertRaises(HTTPException):
                 run_async(recovery.recovery_factor(req, "invalid", RecoveryReq(challenge_id="chal", recovery_code="code"), user_sub="user"))
+
+
+class TestPasswordRecoveryRoutes(unittest.TestCase):
+    def test_password_recovery_start_and_confirm(self):
+        req = build_request()
+        fake_tables = SimpleNamespace(sessions=Mock())
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(password_recovery, "S", SimpleNamespace(cognito_app_client_id="cid")))
+            stack.enter_context(patch.object(password_recovery, "cognito_forgot_password", return_value={"CodeDeliveryDetails": {"DeliveryMedium": "EMAIL", "Destination": "u***@e.com"}}))
+            stack.enter_context(patch.object(password_recovery, "compute_required_factors", return_value=["sms"]))
+            stack.enter_context(patch.object(password_recovery, "create_stepup_challenge", return_value="chal"))
+            stack.enter_context(patch.object(password_recovery, "audit_event"))
+            stack.enter_context(patch.object(password_recovery, "T", fake_tables))
+
+            resp = run_async(password_recovery.password_recovery_start(req, PasswordRecoveryStartReq(username="user")))
+            self.assertEqual(resp["challenge_id"], "chal")
+            self.assertEqual(resp["required_factors"], ["sms"])
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(password_recovery, "S", SimpleNamespace(cognito_app_client_id="cid")))
+            stack.enter_context(patch.object(password_recovery, "compute_required_factors", return_value=["sms"]))
+            stack.enter_context(patch.object(password_recovery, "load_challenge_or_401", return_value={"required_factors": ["sms"], "passed": {"sms": True}, "purpose": "password_recovery"}))
+            stack.enter_context(patch.object(password_recovery, "revoke_challenge"))
+            confirm = stack.enter_context(patch.object(password_recovery, "cognito_confirm_forgot_password"))
+            stack.enter_context(patch.object(password_recovery, "audit_event"))
+
+            resp = run_async(password_recovery.password_recovery_confirm(
+                req,
+                PasswordRecoveryConfirmReq(
+                    username="user",
+                    confirmation_code="123456",
+                    new_password="N3wPass!123",
+                    challenge_id="chal",
+                ),
+            ))
+            self.assertEqual(resp["status"], "ok")
+            confirm.assert_called_once()
+
+    def test_password_recovery_challenge_routes(self):
+        req = build_request()
+        chal = {"required_factors": ["totp", "sms", "email"], "purpose": "password_recovery"}
+        email_code = "123456"
+        email_chal = {
+            **chal,
+            "email_code_hash": sha256_str(email_code),
+            "email_code_attempts": 0,
+            "email_code_sent_at": 0,
+        }
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(password_recovery, "S", SimpleNamespace(
+                cognito_app_client_id="cid",
+                sms_device_limit=3,
+                email_device_limit=5,
+                email_code_max_attempts=5,
+                email_code_attempt_window_seconds=600,
+            )))
+            stack.enter_context(patch.object(password_recovery, "load_challenge_or_401", side_effect=[chal, chal, chal, chal, email_chal, chal]))
+            stack.enter_context(patch.object(password_recovery, "totp_verify_any_enabled", return_value="dev"))
+            stack.enter_context(patch.object(password_recovery, "mark_factor_passed"))
+            stack.enter_context(patch.object(password_recovery, "audit_event"))
+            stack.enter_context(patch.object(password_recovery, "list_enabled_sms_numbers", return_value=["+14155550100"]))
+            stack.enter_context(patch.object(password_recovery, "can_send_verification", return_value=True))
+            stack.enter_context(patch.object(password_recovery, "rate_limit_or_429"))
+            stack.enter_context(patch.object(password_recovery, "twilio_start_sms"))
+            stack.enter_context(patch.object(password_recovery, "twilio_check_sms", return_value=True))
+            stack.enter_context(patch.object(password_recovery, "list_enabled_emails", return_value=["user@example.com"]))
+            stack.enter_context(patch.object(password_recovery, "gen_numeric_code", return_value=email_code))
+            stack.enter_context(patch.object(password_recovery, "send_email_code"))
+            stack.enter_context(patch.object(password_recovery, "consume_recovery_code"))
+            stack.enter_context(patch.object(password_recovery, "now_ts", return_value=0))
+            stack.enter_context(patch.object(password_recovery, "T", SimpleNamespace(sessions=Mock())))
+
+            resp = run_async(password_recovery.password_recovery_totp_verify(req, PasswordRecoveryTotpVerifyReq(username="user", challenge_id="chal", totp_code="123456")))
+            self.assertEqual(resp["status"], "ok")
+
+            resp = run_async(password_recovery.password_recovery_sms_begin(req, PasswordRecoveryChallengeReq(username="user", challenge_id="chal")))
+            self.assertEqual(resp["status"], "sent")
+
+            resp = run_async(password_recovery.password_recovery_sms_verify(req, PasswordRecoverySmsVerifyReq(username="user", challenge_id="chal", code="123456")))
+            self.assertEqual(resp["status"], "ok")
+
+            resp = run_async(password_recovery.password_recovery_email_begin(req, PasswordRecoveryChallengeReq(username="user", challenge_id="chal")))
+            self.assertEqual(resp["status"], "sent")
+
+            resp = run_async(password_recovery.password_recovery_email_verify(req, PasswordRecoveryEmailVerifyReq(username="user", challenge_id="chal", code=email_code)))
+            self.assertEqual(resp["status"], "ok")
+
+            resp = run_async(password_recovery.password_recovery_code(req, PasswordRecoveryRecoveryCodeReq(username="user", challenge_id="chal", factor="sms", recovery_code="code")))
+            self.assertEqual(resp["status"], "ok")
+
+    def test_password_recovery_confirm_requires_completed_challenge(self):
+        req = build_request()
+        pending = {"required_factors": ["sms"], "passed": {"sms": False}, "purpose": "password_recovery"}
+        complete = {"required_factors": ["sms"], "passed": {"sms": True}, "purpose": "password_recovery"}
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(password_recovery, "S", SimpleNamespace(cognito_app_client_id="cid")))
+            stack.enter_context(patch.object(password_recovery, "compute_required_factors", return_value=["sms"]))
+            stack.enter_context(patch.object(password_recovery, "load_challenge_or_401", side_effect=[pending, complete]))
+            stack.enter_context(patch.object(password_recovery, "revoke_challenge"))
+            confirm = stack.enter_context(patch.object(password_recovery, "cognito_confirm_forgot_password"))
+            stack.enter_context(patch.object(password_recovery, "audit_event"))
+
+            with self.assertRaises(HTTPException):
+                run_async(password_recovery.password_recovery_confirm(
+                    req,
+                    PasswordRecoveryConfirmReq(
+                        username="user",
+                        confirmation_code="123456",
+                        new_password="N3wPass!123",
+                        challenge_id="chal",
+                    ),
+                ))
+
+            resp = run_async(password_recovery.password_recovery_confirm(
+                req,
+                PasswordRecoveryConfirmReq(
+                    username="user",
+                    confirmation_code="123456",
+                    new_password="N3wPass!123",
+                    challenge_id="chal",
+                ),
+            ))
+            self.assertEqual(resp["status"], "ok")
+            confirm.assert_called_once()
+
+    def test_password_recovery_rejects_wrong_purpose(self):
+        req = build_request()
+        wrong_purpose = {"required_factors": ["sms"], "passed": {"sms": True}, "purpose": "other"}
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(password_recovery, "S", SimpleNamespace(cognito_app_client_id="cid")))
+            stack.enter_context(patch.object(password_recovery, "compute_required_factors", return_value=["sms"]))
+            stack.enter_context(patch.object(password_recovery, "load_challenge_or_401", return_value=wrong_purpose))
+            stack.enter_context(patch.object(password_recovery, "audit_event"))
+            with self.assertRaises(HTTPException):
+                run_async(password_recovery.password_recovery_confirm(
+                    req,
+                    PasswordRecoveryConfirmReq(
+                        username="user",
+                        confirmation_code="123456",
+                        new_password="N3wPass!123",
+                        challenge_id="chal",
+                    ),
+                ))
+
+    def test_password_recovery_rejects_missing_challenge(self):
+        req = build_request()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(password_recovery, "S", SimpleNamespace(cognito_app_client_id="cid")))
+            stack.enter_context(patch.object(password_recovery, "compute_required_factors", return_value=["sms"]))
+            stack.enter_context(patch.object(password_recovery, "audit_event"))
+            with self.assertRaises(HTTPException):
+                run_async(password_recovery.password_recovery_confirm(
+                    req,
+                    PasswordRecoveryConfirmReq(
+                        username="user",
+                        confirmation_code="123456",
+                        new_password="N3wPass!123",
+                        challenge_id=None,
+                    ),
+                ))
+
+    def test_password_recovery_rejects_unrequired_factor(self):
+        req = build_request()
+        chal = {"required_factors": ["sms"], "purpose": "password_recovery"}
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(password_recovery, "load_challenge_or_401", return_value=chal))
+            with self.assertRaises(HTTPException):
+                run_async(password_recovery.password_recovery_totp_verify(
+                    req,
+                    PasswordRecoveryTotpVerifyReq(username="user", challenge_id="chal", totp_code="123456"),
+                ))
 
 
 class TestMiscRoutes(unittest.TestCase):

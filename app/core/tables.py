@@ -18,6 +18,8 @@ class Tables:
     alert_prefs: Any
     push_devices: Any
     billing: Any
+    account_state: Any
+    profile: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -30,4 +32,6 @@ T = Tables(
     alert_prefs=ddb.Table(S.alert_prefs_table_name),
     push_devices=ddb.Table(S.push_devices_table_name),
     billing=ddb.Table(S.billing_table_name),
+    account_state=ddb.Table(S.account_state_table_name),
+    profile=ddb.Table(S.profile_table_name),
 )

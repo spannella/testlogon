@@ -216,6 +216,25 @@ function apiPost(path, body, { includeSession = true } = {}) {
   return api(path, { method: "POST", body, includeSession });
 }
 
+async function apiPublic(path, { method = "GET", body = null } = {}) {
+  const headers = {};
+  if (body !== null) headers["Content-Type"] = "application/json";
+  const res = await fetch(API_BASE + path, {
+    method,
+    headers,
+    body: body !== null ? JSON.stringify(body) : undefined,
+  });
+  const txt = await res.text();
+  if (!res.ok) throw new Error(res.status + ": " + txt);
+  return txt ? JSON.parse(txt) : {};
+function apiPatch(path, body, { includeSession = true } = {}) {
+  return api(path, { method: "PATCH", body, includeSession });
+}
+
+function apiPut(path, body, { includeSession = true } = {}) {
+  return api(path, { method: "PUT", body, includeSession });
+}
+
 function parseHttpError(errStr){
   const m = String(errStr).match(/^(\d+):\s/);
   return m ? parseInt(m[1],10) : null;
@@ -235,7 +254,7 @@ function escapeHtml(str) {
 const billingState = { config: null };
 
 function billingLog(msg, obj=null) {
-  const el = document.getElementById("billingLog");
+  const el = document.getElementById("ccbillLog");
   if (!el) return;
   const line = `[${new Date().toISOString()}] ${msg}` + (obj ? `\n${JSON.stringify(obj,null,2)}\n` : "\n");
   el.value = line + el.value;
@@ -248,7 +267,7 @@ function billingFmtCents(c) {
 
 async function billingLoadConfig() {
   billingState.config = await apiGet("/api/billing/config");
-  const el = document.getElementById("billingConfigBox");
+  const el = document.getElementById("ccbillConfigBox");
   if (el) {
     el.textContent = `clientAccnum=${billingState.config.clientAccnum} clientSubacc=${billingState.config.clientSubacc} currency=${billingState.config.default_currency}`;
   }
@@ -257,7 +276,7 @@ async function billingLoadConfig() {
 
 async function billingLoadSettings() {
   const s = await apiGet("/api/billing/settings");
-  const el = document.getElementById("billingSettingsOut");
+  const el = document.getElementById("ccbillSettingsOut");
   if (el) el.textContent = JSON.stringify(s);
   billingLog("Loaded billing settings", s);
 }
@@ -274,13 +293,13 @@ async function billingLoadBalance() {
     due_if_all_settles: billingFmtCents(b.due_if_all_settles_cents),
     updated_at: b.updated_at,
   };
-  const el = document.getElementById("billingBalanceOut");
+  const el = document.getElementById("ccbillBalanceOut");
   if (el) el.textContent = JSON.stringify(view);
   billingLog("Loaded billing balance", b);
 }
 
 async function billingLoadPaymentMethods() {
-  const tbody = document.getElementById("billingPmTbody");
+  const tbody = document.getElementById("ccbillPmTbody");
   if (!tbody) return;
   const pms = await apiGet("/api/billing/payment-methods");
   tbody.innerHTML = "";
@@ -347,7 +366,7 @@ async function billingLoadPaymentMethods() {
 }
 
 async function billingRefreshAll() {
-  if (!document.getElementById("billingSection")) return;
+  if (!document.getElementById("ccbillSection")) return;
   await ensureUiSession();
   await billingLoadConfig();
   await billingLoadSettings();
@@ -377,8 +396,8 @@ async function billingCreateToken() {
 }
 
 async function billingSubscribeMonthly() {
-  const monthly = Number(document.getElementById("billingMonthlyCents").value);
-  const planId = document.getElementById("billingPlanId").value.trim() || "monthly";
+  const monthly = Number(document.getElementById("ccbillMonthlyCents").value);
+  const planId = document.getElementById("ccbillPlanId").value.trim() || "monthly";
   const resp = await apiPost("/api/billing/subscribe-monthly", { plan_id: planId, monthly_price_cents: monthly });
   billingLog("subscribe-monthly response", resp);
   await billingRefreshAll();
@@ -386,7 +405,7 @@ async function billingSubscribeMonthly() {
 }
 
 async function billingChargeOnce() {
-  const amount = Number(document.getElementById("billingOneTimeCents").value);
+  const amount = Number(document.getElementById("ccbillOneTimeCents").value);
   const resp = await apiPost("/api/billing/charge-once", { amount_cents: amount });
   billingLog("charge-once response", resp);
   await billingRefreshAll();
@@ -402,36 +421,36 @@ async function billingPayBalance() {
 
 async function billingLoadSubscriptions() {
   const data = await apiGet("/api/billing/subscriptions");
-  const el = document.getElementById("billingDebugOut");
+  const el = document.getElementById("ccbillDebugOut");
   if (el) el.value = JSON.stringify(data, null, 2);
   billingLog("Loaded subscriptions", data);
 }
 
 async function billingLoadPayments() {
   const data = await apiGet("/api/billing/payments");
-  const el = document.getElementById("billingDebugOut");
+  const el = document.getElementById("ccbillDebugOut");
   if (el) el.value = JSON.stringify(data, null, 2);
   billingLog("Loaded payments", data);
 }
 
 async function billingLoadLedger() {
   const data = await apiGet("/api/billing/ledger");
-  const el = document.getElementById("billingDebugOut");
+  const el = document.getElementById("ccbillDebugOut");
   if (el) el.value = JSON.stringify(data, null, 2);
   billingLog("Loaded ledger", data);
 }
 
 function initBillingUi() {
-  if (!document.getElementById("billingSection")) return;
-  document.getElementById("billingRefreshBtn").onclick = async () => { await billingRefreshAll(); };
-  document.getElementById("billingCreateTokenBtn").onclick = async () => { await ensureUiSession(); await billingCreateToken(); };
-  document.getElementById("billingRefreshMethodsBtn").onclick = async () => { await ensureUiSession(); await billingLoadPaymentMethods(); };
-  document.getElementById("billingSubscribeBtn").onclick = async () => { await ensureUiSession(); await billingSubscribeMonthly(); };
-  document.getElementById("billingChargeOnceBtn").onclick = async () => { await ensureUiSession(); await billingChargeOnce(); };
-  document.getElementById("billingPayBalanceBtn").onclick = async () => { await ensureUiSession(); await billingPayBalance(); };
-  document.getElementById("billingLoadSubscriptionsBtn").onclick = async () => { await ensureUiSession(); await billingLoadSubscriptions(); };
-  document.getElementById("billingLoadPaymentsBtn").onclick = async () => { await ensureUiSession(); await billingLoadPayments(); };
-  document.getElementById("billingLoadLedgerBtn").onclick = async () => { await ensureUiSession(); await billingLoadLedger(); };
+  if (!document.getElementById("ccbillSection")) return;
+  document.getElementById("ccbillRefreshBtn").onclick = async () => { await billingRefreshAll(); };
+  document.getElementById("ccbillCreateTokenBtn").onclick = async () => { await ensureUiSession(); await billingCreateToken(); };
+  document.getElementById("ccbillRefreshMethodsBtn").onclick = async () => { await ensureUiSession(); await billingLoadPaymentMethods(); };
+  document.getElementById("ccbillSubscribeBtn").onclick = async () => { await ensureUiSession(); await billingSubscribeMonthly(); };
+  document.getElementById("ccbillChargeOnceBtn").onclick = async () => { await ensureUiSession(); await billingChargeOnce(); };
+  document.getElementById("ccbillPayBalanceBtn").onclick = async () => { await ensureUiSession(); await billingPayBalance(); };
+  document.getElementById("ccbillLoadSubscriptionsBtn").onclick = async () => { await ensureUiSession(); await billingLoadSubscriptions(); };
+  document.getElementById("ccbillLoadPaymentsBtn").onclick = async () => { await ensureUiSession(); await billingLoadPayments(); };
+  document.getElementById("ccbillLoadLedgerBtn").onclick = async () => { await ensureUiSession(); await billingLoadLedger(); };
 
   window.addEventListener("tokenCreated", async (ev) => {
     try {
@@ -452,7 +471,7 @@ function initBillingUi() {
       await apiPost("/api/billing/payment-methods/ccbill-token", {
         payment_token_id: tokenId,
         label: label,
-        make_default: document.getElementById("billingMakeDefault").checked,
+        make_default: document.getElementById("ccbillMakeDefault").checked,
       });
 
       billingLog("Saved payment token to backend", { tokenId, label });
@@ -514,7 +533,7 @@ function renderAlertRow(a) {
 }
 
 function setBillingStatus(msg) {
-  const el = document.getElementById("billingStatus");
+  const el = document.getElementById("stripeStatus");
   if (el) el.textContent = msg || "";
 }
 
@@ -524,12 +543,12 @@ async function initStripeBilling() {
   stripe = Stripe(cfg.publishable_key);
   stripeElements = stripe.elements();
   stripeCard = stripeElements.create("card");
-  stripeCard.mount("#card-element");
+  stripeCard.mount("#stripe_card_element");
 }
 
-function showBillingPane(name) {
-  document.querySelectorAll(".pane").forEach(p => p.classList.add("hidden"));
-  const el = document.getElementById("pane_" + name);
+function showStripePane(name) {
+  document.querySelectorAll(".stripe-pane").forEach(p => p.classList.add("hidden"));
+  const el = document.getElementById("stripe_pane_" + name);
   if (el) el.classList.remove("hidden");
   if (name === "list_methods") {
     loadBillingPaymentMethods();
@@ -538,23 +557,23 @@ function showBillingPane(name) {
 
 async function loadBillingSettings() {
   const res = await apiGet("/api/billing/settings");
-  const chk = document.getElementById("autopay");
+  const chk = document.getElementById("stripe_autopay");
   if (chk) chk.checked = !!res.autopay_enabled;
 }
 
 async function loadBillingBalance() {
   const b = await apiGet("/api/billing/balance");
   const currency = b.currency || "usd";
-  document.getElementById("due_settled").innerText = fmtMoney(b.due_settled_cents || 0, currency);
-  document.getElementById("due_all").innerText = fmtMoney(b.due_if_all_settles_cents || 0, currency);
-  document.getElementById("owed_pending").innerText = fmtMoney(b.owed_pending_cents || 0, currency);
-  document.getElementById("owed_settled").innerText = fmtMoney(b.owed_settled_cents || 0, currency);
-  document.getElementById("pay_pending").innerText = fmtMoney(b.payments_pending_cents || 0, currency);
-  document.getElementById("pay_settled").innerText = fmtMoney(b.payments_settled_cents || 0, currency);
+  document.getElementById("stripe_due_settled").innerText = fmtMoney(b.due_settled_cents || 0, currency);
+  document.getElementById("stripe_due_all").innerText = fmtMoney(b.due_if_all_settles_cents || 0, currency);
+  document.getElementById("stripe_owed_pending").innerText = fmtMoney(b.owed_pending_cents || 0, currency);
+  document.getElementById("stripe_owed_settled").innerText = fmtMoney(b.owed_settled_cents || 0, currency);
+  document.getElementById("stripe_pay_pending").innerText = fmtMoney(b.payments_pending_cents || 0, currency);
+  document.getElementById("stripe_pay_settled").innerText = fmtMoney(b.payments_settled_cents || 0, currency);
 }
 
 async function loadBillingPaymentMethods() {
-  const wrap = document.getElementById("methods");
+  const wrap = document.getElementById("stripe_methods");
   wrap.innerHTML = "";
   const list = await apiGet("/api/billing/payment-methods");
   if (!list || list.length === 0) {
@@ -576,9 +595,9 @@ async function loadBillingPaymentMethods() {
       </div>
       <div class="row">
         <div class="muted">Priority:</div>
-        <input id="prio_${pm.payment_method_id}" value="${pm.priority}" style="width:90px"/>
+        <input id="stripe_prio_${pm.payment_method_id}" value="${pm.priority}" style="width:90px"/>
         <button type="button" data-action="priority" data-pm="${pm.payment_method_id}">Save priority</button>
-        <span id="pm_msg_${pm.payment_method_id}" class="muted"></span>
+        <span id="stripe_pm_msg_${pm.payment_method_id}" class="muted"></span>
       </div>
     `;
     wrap.appendChild(div);
@@ -600,20 +619,20 @@ async function loadBillingPaymentMethods() {
 
 async function updateBillingPriority(pm) {
   try {
-    const val = parseInt(document.getElementById("prio_" + pm).value, 10);
+    const val = parseInt(document.getElementById("stripe_prio_" + pm).value, 10);
     await apiPost("/api/billing/payment-methods/priority", { payment_method_id: pm, priority: val });
-    document.getElementById("pm_msg_" + pm).innerText = "Priority saved";
+    document.getElementById("stripe_pm_msg_" + pm).innerText = "Priority saved";
   } catch (e) {
-    document.getElementById("pm_msg_" + pm).innerText = "Error: " + String(e);
+    document.getElementById("stripe_pm_msg_" + pm).innerText = "Error: " + String(e);
   }
 }
 
 async function setBillingDefault(pm) {
   try {
     await apiPost("/api/billing/payment-methods/default", { payment_method_id: pm });
-    document.getElementById("pm_msg_" + pm).innerText = "Default set";
+    document.getElementById("stripe_pm_msg_" + pm).innerText = "Default set";
   } catch (e) {
-    document.getElementById("pm_msg_" + pm).innerText = "Error: " + String(e);
+    document.getElementById("stripe_pm_msg_" + pm).innerText = "Error: " + String(e);
   }
 }
 
@@ -627,25 +646,25 @@ async function removeBillingPM(pm) {
 }
 
 async function addBillingCard() {
-  document.getElementById("add_card_result").innerText = "";
+  document.getElementById("stripe_add_card_result").innerText = "";
   try {
     const si = await apiPost("/api/billing/setup-intent/card", {});
     const res = await stripe.confirmCardSetup(si.client_secret, { payment_method: { card: stripeCard } });
     if (res.error) throw new Error(res.error.message);
 
-    document.getElementById("add_card_result").innerText = "Saved. (Will appear after webhook)";
+    document.getElementById("stripe_add_card_result").innerText = "Saved. (Will appear after webhook)";
     setTimeout(refreshBillingAll, 800);
   } catch (e) {
-    document.getElementById("add_card_result").innerText = "Error: " + String(e);
+    document.getElementById("stripe_add_card_result").innerText = "Error: " + String(e);
   }
 }
 
 async function addBillingBankAccount() {
-  document.getElementById("add_bank_result").innerText = "";
-  document.getElementById("bank_next").innerText = "";
+  document.getElementById("stripe_add_bank_result").innerText = "";
+  document.getElementById("stripe_bank_next").innerText = "";
   try {
-    const name = document.getElementById("bank_name").value || "Customer";
-    const email = document.getElementById("bank_email").value || undefined;
+    const name = document.getElementById("stripe_bank_name").value || "Customer";
+    const email = document.getElementById("stripe_bank_email").value || undefined;
 
     const si = await apiPost("/api/billing/setup-intent/us-bank", {});
 
@@ -664,40 +683,40 @@ async function addBillingBankAccount() {
     if (confirmed.error) throw new Error(confirmed.error.message);
 
     const setupIntent = confirmed.setupIntent;
-    document.getElementById("add_bank_result").innerText = "Submitted. Status: " + setupIntent.status;
+    document.getElementById("stripe_add_bank_result").innerText = "Submitted. Status: " + setupIntent.status;
 
     if (setupIntent.status === "requires_action" &&
         setupIntent.next_action &&
         setupIntent.next_action.type === "verify_with_microdeposits") {
       lastPendingSetupIntentId = setupIntent.id;
-      document.getElementById("bank_next").innerHTML =
+      document.getElementById("stripe_bank_next").innerHTML =
         "Microdeposits required. SetupIntent: <code>" + setupIntent.id + "</code>. " +
         "Go to “Verify microdeposits” tab after deposits arrive.";
-      document.getElementById("verify_si").value = setupIntent.id;
-      showBillingPane("verify_bank");
+      document.getElementById("stripe_verify_si").value = setupIntent.id;
+      showStripePane("verify_bank");
     } else {
-      document.getElementById("bank_next").innerText = "If it succeeded, it will appear after webhook.";
+      document.getElementById("stripe_bank_next").innerText = "If it succeeded, it will appear after webhook.";
       setTimeout(refreshBillingAll, 800);
     }
   } catch (e) {
-    document.getElementById("add_bank_result").innerText = "Error: " + String(e);
+    document.getElementById("stripe_add_bank_result").innerText = "Error: " + String(e);
   }
 }
 
 function useBillingPendingSetupIntent() {
   if (lastPendingSetupIntentId) {
-    document.getElementById("verify_si").value = lastPendingSetupIntentId;
+    document.getElementById("stripe_verify_si").value = lastPendingSetupIntentId;
   } else {
     alert("No pending SetupIntent stored in this browser session.");
   }
 }
 
 async function verifyBillingByAmounts() {
-  document.getElementById("verify_result").innerText = "";
+  document.getElementById("stripe_verify_result").innerText = "";
   try {
-    const setup_intent_id = document.getElementById("verify_si").value.trim();
-    const a1 = parseInt(document.getElementById("amt1").value.trim(), 10);
-    const a2 = parseInt(document.getElementById("amt2").value.trim(), 10);
+    const setup_intent_id = document.getElementById("stripe_verify_si").value.trim();
+    const a1 = parseInt(document.getElementById("stripe_amt1").value.trim(), 10);
+    const a2 = parseInt(document.getElementById("stripe_amt2").value.trim(), 10);
     if (!setup_intent_id) throw new Error("Missing setup_intent_id");
     if (!Number.isFinite(a1) || !Number.isFinite(a2)) throw new Error("Enter both amounts (cents)");
 
@@ -706,18 +725,18 @@ async function verifyBillingByAmounts() {
       amounts: [a1, a2],
     });
 
-    document.getElementById("verify_result").innerText = "Verify result: " + res.status + " (PM will appear after webhook if succeeded)";
+    document.getElementById("stripe_verify_result").innerText = "Verify result: " + res.status + " (PM will appear after webhook if succeeded)";
     setTimeout(refreshBillingAll, 800);
   } catch (e) {
-    document.getElementById("verify_result").innerText = "Error: " + String(e);
+    document.getElementById("stripe_verify_result").innerText = "Error: " + String(e);
   }
 }
 
 async function verifyBillingByDescriptor() {
-  document.getElementById("verify_result").innerText = "";
+  document.getElementById("stripe_verify_result").innerText = "";
   try {
-    const setup_intent_id = document.getElementById("verify_si").value.trim();
-    const descriptor_code = document.getElementById("desc").value.trim();
+    const setup_intent_id = document.getElementById("stripe_verify_si").value.trim();
+    const descriptor_code = document.getElementById("stripe_desc").value.trim();
     if (!setup_intent_id) throw new Error("Missing setup_intent_id");
     if (!descriptor_code) throw new Error("Missing descriptor code");
 
@@ -726,16 +745,16 @@ async function verifyBillingByDescriptor() {
       descriptor_code,
     });
 
-    document.getElementById("verify_result").innerText = "Verify result: " + res.status + " (PM will appear after webhook if succeeded)";
+    document.getElementById("stripe_verify_result").innerText = "Verify result: " + res.status + " (PM will appear after webhook if succeeded)";
     setTimeout(refreshBillingAll, 800);
   } catch (e) {
-    document.getElementById("verify_result").innerText = "Error: " + String(e);
+    document.getElementById("stripe_verify_result").innerText = "Error: " + String(e);
   }
 }
 
 async function setBillingAutopay() {
   try {
-    const enabled = document.getElementById("autopay").checked;
+    const enabled = document.getElementById("stripe_autopay").checked;
     await apiPost("/api/billing/autopay", { enabled });
   } catch (e) {
     alert("Autopay update failed: " + String(e));
@@ -743,27 +762,27 @@ async function setBillingAutopay() {
 }
 
 async function payBillingSettledBalance() {
-  document.getElementById("pay_result").innerText = "";
+  document.getElementById("stripe_pay_result").innerText = "";
   try {
-    const amtTxt = document.getElementById("pay_amount").value.trim();
+    const amtTxt = document.getElementById("stripe_pay_amount").value.trim();
     const amount_cents = amtTxt ? parseInt(amtTxt, 10) : null;
 
     const payload = {};
     if (amount_cents) payload.amount_cents = amount_cents;
 
     const res = await apiPost("/api/billing/pay-balance", payload);
-    document.getElementById("pay_result").innerText = "PI status: " + res.status + " (" + (res.payment_intent_id || "") + ")";
+    document.getElementById("stripe_pay_result").innerText = "PI status: " + res.status + " (" + (res.payment_intent_id || "") + ")";
     setTimeout(refreshBillingAll, 800);
   } catch (e) {
-    document.getElementById("pay_result").innerText = "Error: " + String(e);
+    document.getElementById("stripe_pay_result").innerText = "Error: " + String(e);
   }
 }
 
 async function loadBillingLedger() {
-  const wrap = document.getElementById("ledger");
+  const wrap = document.getElementById("stripe_ledger");
   wrap.innerHTML = "";
   try {
-    const limitTxt = document.getElementById("ledger_limit").value.trim();
+    const limitTxt = document.getElementById("stripe_ledger_limit").value.trim();
     const limit = limitTxt ? parseInt(limitTxt, 10) : 50;
     const res = await apiGet("/api/billing/ledger?limit=" + encodeURIComponent(limit));
     const items = res.items || [];
@@ -810,6 +829,284 @@ async function refreshBillingAll() {
   } catch (e) {
     setBillingStatus(String(e));
   }
+}
+
+/* ===================== password recovery ===================== */
+const passwordRecoveryState = {
+  username: "",
+  challengeId: null,
+  required: [],
+  totpDone: false,
+  smsDone: false,
+  emailDone: false,
+  smsSentTo: [],
+  emailSentTo: [],
+  delivery: null,
+  lastErr: "",
+};
+
+function resetPasswordRecoveryState() {
+  passwordRecoveryState.challengeId = null;
+  passwordRecoveryState.required = [];
+  passwordRecoveryState.totpDone = false;
+  passwordRecoveryState.smsDone = false;
+  passwordRecoveryState.emailDone = false;
+  passwordRecoveryState.smsSentTo = [];
+  passwordRecoveryState.emailSentTo = [];
+  passwordRecoveryState.delivery = null;
+  passwordRecoveryState.lastErr = "";
+}
+
+function renderPasswordRecovery() {
+  const deliveryEl = document.getElementById("pwRecoveryDelivery");
+  const challengeEl = document.getElementById("pwRecoveryChallenge");
+  const challengesEl = document.getElementById("pwRecoveryChallenges");
+  const msgEl = document.getElementById("pwRecoveryMsg");
+  if (!deliveryEl || !challengeEl || !challengesEl || !msgEl) return;
+
+  if (passwordRecoveryState.delivery) {
+    deliveryEl.textContent = `Delivery: ${passwordRecoveryState.delivery}`;
+  } else {
+    deliveryEl.textContent = "";
+  }
+
+  if (passwordRecoveryState.challengeId) {
+    challengeEl.innerHTML = `Challenge: <code class="mono">${passwordRecoveryState.challengeId}</code>`;
+  } else if (passwordRecoveryState.required.length) {
+    challengeEl.textContent = "Challenge required but not started.";
+  } else {
+    challengeEl.textContent = "";
+  }
+
+  const req = passwordRecoveryState.required;
+  if (!req.length) {
+    challengesEl.innerHTML = "";
+  } else {
+    const badge = (done) => done ? `<span class="pill">✅ verified</span>` : `<span class="pill">required</span>`;
+    const totpSection = req.includes("totp") ? `
+      <div style="border:1px solid #eee; padding:10px; border-radius:10px; margin-top:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+          <div><b>TOTP</b> ${badge(passwordRecoveryState.totpDone)}</div>
+        </div>
+        <input id="pwRecoveryTotpCode" placeholder="123456" inputmode="numeric" autocomplete="one-time-code"
+               ${passwordRecoveryState.totpDone ? "disabled" : ""} />
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">
+          <button id="pwRecoveryTotpVerifyBtn" ${passwordRecoveryState.totpDone ? "disabled" : ""}>Verify TOTP</button>
+          <button id="pwRecoveryTotpRecoveryBtn" ${passwordRecoveryState.totpDone ? "disabled" : ""}>Use TOTP recovery</button>
+        </div>
+      </div>
+    ` : "";
+
+    const smsSection = req.includes("sms") ? `
+      <div style="border:1px solid #eee; padding:10px; border-radius:10px; margin-top:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+          <div><b>SMS</b> ${badge(passwordRecoveryState.smsDone)}</div>
+          <button id="pwRecoverySmsSendBtn" ${passwordRecoveryState.smsDone ? "disabled" : ""}>
+            ${passwordRecoveryState.smsSentTo.length ? "Resend SMS" : "Send SMS"}
+          </button>
+        </div>
+        <div style="margin-top:6px;">
+          ${passwordRecoveryState.smsSentTo.length
+            ? `<small>Sent to: ${passwordRecoveryState.smsSentTo.map(x=>`<code>${x}</code>`).join(" ")}</small>`
+            : `<small>We will text a code to all your enabled numbers.</small>`}
+        </div>
+        <input id="pwRecoverySmsCode" placeholder="SMS code" inputmode="numeric" autocomplete="one-time-code"
+               ${passwordRecoveryState.smsDone ? "disabled" : ""} />
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">
+          <button id="pwRecoverySmsVerifyBtn" ${passwordRecoveryState.smsDone ? "disabled" : ""}>Verify SMS</button>
+          <button id="pwRecoverySmsRecoveryBtn" ${passwordRecoveryState.smsDone ? "disabled" : ""}>Use SMS recovery</button>
+        </div>
+      </div>
+    ` : "";
+
+    const emailSection = req.includes("email") ? `
+      <div style="border:1px solid #eee; padding:10px; border-radius:10px; margin-top:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+          <div><b>Email</b> ${badge(passwordRecoveryState.emailDone)}</div>
+          <button id="pwRecoveryEmailSendBtn" ${passwordRecoveryState.emailDone ? "disabled" : ""}>
+            ${passwordRecoveryState.emailSentTo.length ? "Resend Email" : "Send Email"}
+          </button>
+        </div>
+        <div style="margin-top:6px;">
+          ${passwordRecoveryState.emailSentTo.length
+            ? `<small>Sent to: ${passwordRecoveryState.emailSentTo.map(x=>`<code>${x}</code>`).join(" ")}</small>`
+            : `<small>We will email a code to all your enabled addresses.</small>`}
+        </div>
+        <input id="pwRecoveryEmailCode" placeholder="Email code" inputmode="numeric" autocomplete="one-time-code"
+               ${passwordRecoveryState.emailDone ? "disabled" : ""} />
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">
+          <button id="pwRecoveryEmailVerifyBtn" ${passwordRecoveryState.emailDone ? "disabled" : ""}>Verify Email</button>
+          <button id="pwRecoveryEmailRecoveryBtn" ${passwordRecoveryState.emailDone ? "disabled" : ""}>Use Email recovery</button>
+        </div>
+      </div>
+    ` : "";
+
+    challengesEl.innerHTML = `${totpSection}${smsSection}${emailSection}`;
+  }
+
+  msgEl.textContent = passwordRecoveryState.lastErr || "";
+
+  const setError = (e) => {
+    passwordRecoveryState.lastErr = String(e);
+    renderPasswordRecovery();
+  };
+
+  if (req.includes("totp")) {
+    const verifyBtn = document.getElementById("pwRecoveryTotpVerifyBtn");
+    const recoveryBtn = document.getElementById("pwRecoveryTotpRecoveryBtn");
+    if (verifyBtn) verifyBtn.onclick = async () => {
+      try {
+        const code = (document.getElementById("pwRecoveryTotpCode").value || "").trim();
+        await apiPublic("/ui/password-recovery/challenge/totp/verify", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId, totp_code: code },
+        });
+        passwordRecoveryState.totpDone = true;
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+    if (recoveryBtn) recoveryBtn.onclick = async () => {
+      const rc = prompt("Enter a TOTP recovery code:") || "";
+      if (!rc.trim()) return;
+      try {
+        await apiPublic("/ui/password-recovery/challenge/recovery", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId, factor: "totp", recovery_code: rc.trim() },
+        });
+        passwordRecoveryState.totpDone = true;
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+  }
+
+  if (req.includes("sms")) {
+    const sendBtn = document.getElementById("pwRecoverySmsSendBtn");
+    const verifyBtn = document.getElementById("pwRecoverySmsVerifyBtn");
+    const recoveryBtn = document.getElementById("pwRecoverySmsRecoveryBtn");
+    if (sendBtn) sendBtn.onclick = async () => {
+      try {
+        const res = await apiPublic("/ui/password-recovery/challenge/sms/begin", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId },
+        });
+        passwordRecoveryState.smsSentTo = res.sent_to || [];
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+    if (verifyBtn) verifyBtn.onclick = async () => {
+      try {
+        const code = (document.getElementById("pwRecoverySmsCode").value || "").trim();
+        await apiPublic("/ui/password-recovery/challenge/sms/verify", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId, code },
+        });
+        passwordRecoveryState.smsDone = true;
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+    if (recoveryBtn) recoveryBtn.onclick = async () => {
+      const rc = prompt("Enter an SMS recovery code:") || "";
+      if (!rc.trim()) return;
+      try {
+        await apiPublic("/ui/password-recovery/challenge/recovery", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId, factor: "sms", recovery_code: rc.trim() },
+        });
+        passwordRecoveryState.smsDone = true;
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+  }
+
+  if (req.includes("email")) {
+    const sendBtn = document.getElementById("pwRecoveryEmailSendBtn");
+    const verifyBtn = document.getElementById("pwRecoveryEmailVerifyBtn");
+    const recoveryBtn = document.getElementById("pwRecoveryEmailRecoveryBtn");
+    if (sendBtn) sendBtn.onclick = async () => {
+      try {
+        const res = await apiPublic("/ui/password-recovery/challenge/email/begin", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId },
+        });
+        passwordRecoveryState.emailSentTo = res.sent_to || [];
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+    if (verifyBtn) verifyBtn.onclick = async () => {
+      try {
+        const code = (document.getElementById("pwRecoveryEmailCode").value || "").trim();
+        await apiPublic("/ui/password-recovery/challenge/email/verify", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId, code },
+        });
+        passwordRecoveryState.emailDone = true;
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+    if (recoveryBtn) recoveryBtn.onclick = async () => {
+      const rc = prompt("Enter an Email recovery code:") || "";
+      if (!rc.trim()) return;
+      try {
+        await apiPublic("/ui/password-recovery/challenge/recovery", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId, factor: "email", recovery_code: rc.trim() },
+        });
+        passwordRecoveryState.emailDone = true;
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+  }
+}
+
+async function startPasswordRecovery() {
+  const username = (document.getElementById("pwRecoveryUsername").value || "").trim();
+  if (!username) {
+    passwordRecoveryState.lastErr = "Username required.";
+    renderPasswordRecovery();
+    return;
+  }
+  resetPasswordRecoveryState();
+  passwordRecoveryState.username = username;
+  try {
+    const res = await apiPublic("/ui/password-recovery/start", {
+      method: "POST",
+      body: { username },
+    });
+    const delivery = [res.delivery_medium, res.delivery_destination].filter(Boolean).join(" • ");
+    passwordRecoveryState.delivery = delivery || null;
+    passwordRecoveryState.challengeId = res.challenge_id || null;
+    passwordRecoveryState.required = res.required_factors || [];
+    passwordRecoveryState.lastErr = "";
+  } catch (e) {
+    passwordRecoveryState.lastErr = String(e);
+  }
+  renderPasswordRecovery();
+}
+
+async function confirmPasswordRecovery() {
+  const username = (document.getElementById("pwRecoveryUsername").value || "").trim();
+  const code = (document.getElementById("pwRecoveryCode").value || "").trim();
+  const newPassword = (document.getElementById("pwRecoveryNewPassword").value || "").trim();
+  if (!username || !code || !newPassword) {
+    passwordRecoveryState.lastErr = "Username, confirmation code, and new password are required.";
+    renderPasswordRecovery();
+    return;
+  }
+  try {
+    await apiPublic("/ui/password-recovery/confirm", {
+      method: "POST",
+      body: {
+        username,
+        confirmation_code: code,
+        new_password: newPassword,
+        challenge_id: passwordRecoveryState.challengeId,
+      },
+    });
+    passwordRecoveryState.lastErr = "Password updated. You can now log in.";
+  } catch (e) {
+    passwordRecoveryState.lastErr = String(e);
+  }
+  renderPasswordRecovery();
 }
 
 /* ===================== session start ===================== */
@@ -1722,6 +2019,83 @@ async function refreshSessions() {
   });
 }
 
+/* ===================== Account Status ===================== */
+async function loadAccountStatus() {
+  await ensureUiSession();
+  return await apiGet("/ui/account/status");
+}
+
+async function requestAccountSuspension(reason) {
+  await ensureUiSession();
+  return await apiPost("/ui/account/suspend", { reason });
+}
+
+async function requestAccountReactivation(reason) {
+  await ensureUiSession();
+  return await apiPost("/ui/account/reactivate", { reason });
+}
+
+function renderAccountStatus(state) {
+  const pill = document.getElementById("accountStatusPill");
+  const meta = document.getElementById("accountStatusMeta");
+  const reasonEl = document.getElementById("accountStatusReason");
+  const suspendBtn = document.getElementById("accountSuspendBtn");
+  const reactivateBtn = document.getElementById("accountReactivateBtn");
+  if (!pill || !meta || !reasonEl || !suspendBtn || !reactivateBtn) return;
+
+  const status = (state && state.status) ? state.status : "active";
+  const statusMap = {
+    active: { label: "Active", pill: "ok", meta: "No pending suspension or reactivation requests." },
+    suspension_requested: { label: "Suspension requested", pill: "warn", meta: "Suspension request submitted." },
+    reactivation_requested: { label: "Reactivation requested", pill: "warn", meta: "Reactivation request submitted." },
+  };
+  const info = statusMap[status] || { label: status, pill: "warn", meta: "" };
+
+  pill.textContent = info.label;
+  pill.className = `pill ${info.pill}`;
+  const updatedAt = state && state.updated_at ? fmtTs(state.updated_at) : "";
+  meta.textContent = updatedAt ? `${info.meta} Last updated ${updatedAt}.` : info.meta;
+  reasonEl.textContent = state && state.reason ? `Reason: ${state.reason}` : "";
+
+  suspendBtn.disabled = status !== "active";
+  reactivateBtn.disabled = status === "active" || status === "reactivation_requested";
+}
+
+async function refreshAccountStatus() {
+  const msg = document.getElementById("accountStatusMsg");
+  if (msg) msg.textContent = "";
+  try {
+    const state = await loadAccountStatus();
+    renderAccountStatus(state);
+  } catch (e) {
+    if (msg) msg.textContent = String(e);
+  }
+}
+
+function openAccountActionModal({ title, confirmText, onConfirm }) {
+  modalShow({
+    title,
+    bodyHtml: `
+      <div class="muted">Add a short reason for this request (optional).</div>
+      <textarea id="accountActionReason" rows="3" placeholder="Reason (optional)"></textarea>
+      <div id="accountActionErr" class="err" style="margin-top:8px;"></div>
+    `,
+    actions: [
+      { text: "Cancel", onClick: modalClose },
+      { text: confirmText, onClick: async () => {
+          try {
+            const reason = document.getElementById("accountActionReason").value.trim();
+            await onConfirm(reason);
+            modalClose();
+            await refreshAccountStatus();
+          } catch (e) {
+            document.getElementById("accountActionErr").textContent = String(e);
+          }
+      }},
+    ]
+  });
+}
+
 /* ===================== TOTP add flow ===================== */
 async function totpBegin(label) {
   return await apiPost("/ui/mfa/totp/devices/begin", { label: label || "" });
@@ -2002,9 +2376,11 @@ async function refreshAll() {
       refreshEmailDevices(),
       refreshSessions(),
       refreshKeys(),
+      refreshAccountStatus(),
       refreshAlertEmailSettings(),
       refreshPushUI(),
       refreshAlerts(),
+      refreshProfile(),
       billingRefreshAll(),
     ]);
     await pollToastsOnce();
@@ -2094,6 +2470,223 @@ function openConfirmSmsModal(sentTo, challenge_id) {
       }},
     ]
   });
+}
+
+/* ===================== Profile ===================== */
+let profileLanguages = [];
+
+function setProfileStatus(msg) {
+  const el = document.getElementById("profileStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function setProfileAuditStatus(msg) {
+  const el = document.getElementById("profileAuditStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function readInput(id) {
+  const el = document.getElementById(id);
+  if (!el) return "";
+  return (el.value || "").trim();
+}
+
+function readInputOrNull(id) {
+  const v = readInput(id);
+  return v ? v : null;
+}
+
+function setInputValue(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.value = value || "";
+}
+
+function renderProfileLanguages() {
+  const el = document.getElementById("profileLangList");
+  if (!el) return;
+  el.innerHTML = "";
+  profileLanguages.forEach((lang) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `
+      <div class="grow"><b>${escapeHtml(lang.name || "")}</b><div class="muted">${escapeHtml(lang.level || "")}</div></div>
+      <div><button data-name="${escapeHtml(lang.name || "")}">Remove</button></div>
+    `;
+    row.querySelector("button").onclick = (ev) => {
+      const name = ev.target.getAttribute("data-name");
+      profileLanguages = profileLanguages.filter((l) => l.name !== name);
+      renderProfileLanguages();
+    };
+    el.appendChild(row);
+  });
+}
+
+function setProfileLanguages(langs) {
+  profileLanguages = Array.isArray(langs) ? langs : [];
+  renderProfileLanguages();
+}
+
+function setProfileForm(profile) {
+  setInputValue("profileDisplayName", profile.display_name);
+  setInputValue("profileFirstName", profile.first_name);
+  setInputValue("profileMiddleName", profile.middle_name);
+  setInputValue("profileLastName", profile.last_name);
+  setInputValue("profileTitle", profile.title);
+  setInputValue("profileDescription", profile.description);
+  setInputValue("profileBirthday", profile.birthday);
+  setInputValue("profileGender", profile.gender);
+  setInputValue("profileLocation", profile.location);
+  setInputValue("profileEmail", profile.displayed_email);
+  setInputValue("profilePhone", profile.displayed_telephone_number);
+
+  const addr = profile.mailing_address || {};
+  setInputValue("profileAddrLine1", addr.line1);
+  setInputValue("profileAddrLine2", addr.line2);
+  setInputValue("profileAddrCity", addr.city);
+  setInputValue("profileAddrState", addr.state);
+  setInputValue("profileAddrPostal", addr.postal_code);
+  setInputValue("profileAddrCountry", addr.country);
+
+  setProfileLanguages(profile.languages || []);
+
+  const profileUrl = profile.profile_photo_url || "";
+  const profileUrlEl = document.getElementById("profilePhotoUrl");
+  if (profileUrlEl) profileUrlEl.textContent = profileUrl;
+  const profileImg = document.getElementById("profilePhotoPreview");
+  if (profileImg) {
+    if (profileUrl) {
+      profileImg.src = profileUrl;
+      profileImg.classList.remove("hidden");
+    } else {
+      profileImg.classList.add("hidden");
+    }
+  }
+
+  const coverUrl = profile.cover_photo_url || "";
+  const coverUrlEl = document.getElementById("profileCoverUrl");
+  if (coverUrlEl) coverUrlEl.textContent = coverUrl;
+  const coverImg = document.getElementById("profileCoverPreview");
+  if (coverImg) {
+    if (coverUrl) {
+      coverImg.src = coverUrl;
+      coverImg.classList.remove("hidden");
+    } else {
+      coverImg.classList.add("hidden");
+    }
+  }
+}
+
+function resetProfileForm() {
+  setProfileForm({});
+  setProfileStatus("");
+  setProfileAuditStatus("");
+  const list = document.getElementById("profileAuditList");
+  if (list) list.innerHTML = "";
+}
+
+function buildProfilePayload({ includeEmpty }) {
+  const payload = {};
+  const fields = [
+    ["display_name", "profileDisplayName"],
+    ["first_name", "profileFirstName"],
+    ["middle_name", "profileMiddleName"],
+    ["last_name", "profileLastName"],
+    ["title", "profileTitle"],
+    ["description", "profileDescription"],
+    ["birthday", "profileBirthday"],
+    ["gender", "profileGender"],
+    ["location", "profileLocation"],
+    ["displayed_email", "profileEmail"],
+    ["displayed_telephone_number", "profilePhone"],
+  ];
+  fields.forEach(([key, id]) => {
+    const val = readInputOrNull(id);
+    if (includeEmpty || val) payload[key] = val;
+  });
+
+  const addr = {
+    line1: readInputOrNull("profileAddrLine1"),
+    line2: readInputOrNull("profileAddrLine2"),
+    city: readInputOrNull("profileAddrCity"),
+    state: readInputOrNull("profileAddrState"),
+    postal_code: readInputOrNull("profileAddrPostal"),
+    country: readInputOrNull("profileAddrCountry"),
+  };
+  const addrHasValue = Object.values(addr).some((v) => v);
+  if (includeEmpty) {
+    payload.mailing_address = addrHasValue ? addr : null;
+  } else if (addrHasValue) {
+    payload.mailing_address = addr;
+  }
+
+  if (includeEmpty || profileLanguages.length) {
+    payload.languages = profileLanguages;
+  }
+  return payload;
+}
+
+async function refreshProfile() {
+  await ensureUiSession();
+  const res = await apiGet("/ui/profile");
+  setProfileForm(res.profile || {});
+}
+
+async function saveProfile({ replace }) {
+  await ensureUiSession();
+  const payload = buildProfilePayload({ includeEmpty: replace });
+  const path = "/ui/profile";
+  const result = replace ? await apiPut(path, payload) : await apiPatch(path, payload);
+  setProfileForm(result.profile || {});
+}
+
+async function refreshProfileAudit() {
+  await ensureUiSession();
+  const res = await apiGet("/ui/profile/audit");
+  const list = document.getElementById("profileAuditList");
+  if (!list) return;
+  list.innerHTML = "";
+  (res.audit || []).forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `
+      <div class="grow">
+        <div><b>${escapeHtml(entry.field || "")}</b></div>
+        <div class="muted">${escapeHtml(JSON.stringify(entry.to ?? null))}</div>
+      </div>
+      <div class="muted">${fmtTs(entry.ts)}</div>
+    `;
+    list.appendChild(row);
+  });
+}
+
+async function apiUpload(path, file) {
+  const tok = accessToken();
+  if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(API_BASE + path, {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + tok,
+      "X-SESSION-ID": sid,
+    },
+    body: form,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return await res.json();
+}
+
+async function uploadProfilePhoto(kind, fileInputId) {
+  const input = document.getElementById(fileInputId);
+  if (!input || !input.files || !input.files.length) return;
+  const file = input.files[0];
+  await ensureUiSession();
+  const res = await apiUpload(`/ui/profile/photos/${kind}/upload`, file);
+  setProfileForm(res.profile || {});
+  input.value = "";
 }
 
 /* ===================== Push (FCM Web) =====================
@@ -2420,8 +3013,101 @@ document.getElementById("smsAddBtn").onclick = async () => { await ensureUiSessi
 
 document.getElementById("emailRefreshBtn").onclick = async () => { await ensureUiSession(); await refreshEmailDevices(); };
 document.getElementById("emailAddBtn").onclick = async () => { await ensureUiSession(); openEmailAddModal(); };
+document.getElementById("pwRecoveryStartBtn").onclick = startPasswordRecovery;
+document.getElementById("pwRecoveryConfirmBtn").onclick = confirmPasswordRecovery;
+
+document.getElementById("profileLoadBtn").onclick = async () => {
+  try {
+    setProfileStatus("Loading...");
+    await refreshProfile();
+    setProfileStatus("Loaded.");
+  } catch (e) {
+    setProfileStatus(String(e));
+  }
+};
+document.getElementById("profileSavePatchBtn").onclick = async () => {
+  try {
+    setProfileStatus("Saving...");
+    await saveProfile({ replace: false });
+    setProfileStatus("Saved.");
+  } catch (e) {
+    setProfileStatus(String(e));
+  }
+};
+document.getElementById("profileSaveReplaceBtn").onclick = async () => {
+  try {
+    setProfileStatus("Saving...");
+    await saveProfile({ replace: true });
+    setProfileStatus("Saved.");
+  } catch (e) {
+    setProfileStatus(String(e));
+  }
+};
+document.getElementById("profileResetBtn").onclick = () => {
+  resetProfileForm();
+};
+document.getElementById("profileLangAddBtn").onclick = () => {
+  const name = readInput("profileLangName");
+  if (!name) return;
+  const level = readInput("profileLangLevel") || "basic";
+  const existing = profileLanguages.find((l) => l.name === name);
+  if (existing) {
+    existing.level = level;
+  } else {
+    profileLanguages.push({ name, level });
+  }
+  setInputValue("profileLangName", "");
+  renderProfileLanguages();
+};
+document.getElementById("profilePhotoUploadBtn").onclick = async () => {
+  try {
+    setProfileStatus("Uploading profile photo...");
+    await uploadProfilePhoto("profile", "profilePhotoFile");
+    setProfileStatus("Profile photo updated.");
+  } catch (e) {
+    setProfileStatus(String(e));
+  }
+};
+document.getElementById("profileCoverUploadBtn").onclick = async () => {
+  try {
+    setProfileStatus("Uploading cover photo...");
+    await uploadProfilePhoto("cover", "profileCoverFile");
+    setProfileStatus("Cover photo updated.");
+  } catch (e) {
+    setProfileStatus(String(e));
+  }
+};
+document.getElementById("profileAuditRefreshBtn").onclick = async () => {
+  try {
+    setProfileAuditStatus("Refreshing...");
+    await refreshProfileAudit();
+    setProfileAuditStatus("");
+  } catch (e) {
+    setProfileAuditStatus(String(e));
+  }
+};
+
+document.getElementById("accountSuspendBtn").onclick = () => {
+  openAccountActionModal({
+    title: "Start account suspension",
+    confirmText: "Submit suspension request",
+    onConfirm: async (reason) => {
+      await requestAccountSuspension(reason);
+    },
+  });
+};
+document.getElementById("accountReactivateBtn").onclick = () => {
+  openAccountActionModal({
+    title: "Start account reactivation",
+    confirmText: "Submit reactivation request",
+    onConfirm: async (reason) => {
+      await requestAccountReactivation(reason);
+    },
+  });
+};
 
 initBillingUi();
+renderPasswordRecovery();
 document.getElementById("billingRefreshBtn").onclick = refreshBillingAll;
 document.getElementById("paySettledBalanceBtn").onclick = payBillingSettledBalance;
 document.getElementById("autopay").onchange = setBillingAutopay;
@@ -2435,6 +3121,19 @@ document.getElementById("usePendingSetupIntentBtn").onclick = useBillingPendingS
 document.getElementById("verifyByAmountsBtn").onclick = verifyBillingByAmounts;
 document.getElementById("verifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
 document.getElementById("loadLedgerBtn").onclick = loadBillingLedger;
+document.getElementById("stripeRefreshBtn").onclick = refreshBillingAll;
+document.getElementById("stripePaySettledBalanceBtn").onclick = payBillingSettledBalance;
+document.getElementById("stripe_autopay").onchange = setBillingAutopay;
+document.getElementById("stripePaneAddCardBtn").onclick = () => showStripePane("add_card");
+document.getElementById("stripePaneAddBankBtn").onclick = () => showStripePane("add_bank");
+document.getElementById("stripePaneVerifyBankBtn").onclick = () => showStripePane("verify_bank");
+document.getElementById("stripePaneListMethodsBtn").onclick = () => showStripePane("list_methods");
+document.getElementById("stripeAddCardBtn").onclick = addBillingCard;
+document.getElementById("stripeAddBankAccountBtn").onclick = addBillingBankAccount;
+document.getElementById("stripeUsePendingSetupIntentBtn").onclick = useBillingPendingSetupIntent;
+document.getElementById("stripeVerifyByAmountsBtn").onclick = verifyBillingByAmounts;
+document.getElementById("stripeVerifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
+document.getElementById("stripeLoadLedgerBtn").onclick = loadBillingLedger;
 
 /* ===================== boot ===================== */
 if (!accessToken()) { openTokenModal(); } else { refreshAll(); }
