@@ -124,6 +124,7 @@ class Settings:
     stripe_success_url: str = os.environ.get("STRIPE_SUCCESS_URL", "")
     stripe_cancel_url: str = os.environ.get("STRIPE_CANCEL_URL", "")
     billing_table_name: str = os.environ.get("BILLING_TABLE_NAME", "billing")
+    account_state_table_name: str = os.environ.get("ACCOUNT_STATE_TABLE_NAME", "account_state")
 
     # Profile
     profile_table_name: str = os.environ.get("PROFILE_TABLE_NAME", "profiles")

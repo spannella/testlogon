@@ -1718,6 +1718,83 @@ async function refreshSessions() {
   });
 }
 
+/* ===================== Account Status ===================== */
+async function loadAccountStatus() {
+  await ensureUiSession();
+  return await apiGet("/ui/account/status");
+}
+
+async function requestAccountSuspension(reason) {
+  await ensureUiSession();
+  return await apiPost("/ui/account/suspend", { reason });
+}
+
+async function requestAccountReactivation(reason) {
+  await ensureUiSession();
+  return await apiPost("/ui/account/reactivate", { reason });
+}
+
+function renderAccountStatus(state) {
+  const pill = document.getElementById("accountStatusPill");
+  const meta = document.getElementById("accountStatusMeta");
+  const reasonEl = document.getElementById("accountStatusReason");
+  const suspendBtn = document.getElementById("accountSuspendBtn");
+  const reactivateBtn = document.getElementById("accountReactivateBtn");
+  if (!pill || !meta || !reasonEl || !suspendBtn || !reactivateBtn) return;
+
+  const status = (state && state.status) ? state.status : "active";
+  const statusMap = {
+    active: { label: "Active", pill: "ok", meta: "No pending suspension or reactivation requests." },
+    suspension_requested: { label: "Suspension requested", pill: "warn", meta: "Suspension request submitted." },
+    reactivation_requested: { label: "Reactivation requested", pill: "warn", meta: "Reactivation request submitted." },
+  };
+  const info = statusMap[status] || { label: status, pill: "warn", meta: "" };
+
+  pill.textContent = info.label;
+  pill.className = `pill ${info.pill}`;
+  const updatedAt = state && state.updated_at ? fmtTs(state.updated_at) : "";
+  meta.textContent = updatedAt ? `${info.meta} Last updated ${updatedAt}.` : info.meta;
+  reasonEl.textContent = state && state.reason ? `Reason: ${state.reason}` : "";
+
+  suspendBtn.disabled = status !== "active";
+  reactivateBtn.disabled = status === "active" || status === "reactivation_requested";
+}
+
+async function refreshAccountStatus() {
+  const msg = document.getElementById("accountStatusMsg");
+  if (msg) msg.textContent = "";
+  try {
+    const state = await loadAccountStatus();
+    renderAccountStatus(state);
+  } catch (e) {
+    if (msg) msg.textContent = String(e);
+  }
+}
+
+function openAccountActionModal({ title, confirmText, onConfirm }) {
+  modalShow({
+    title,
+    bodyHtml: `
+      <div class="muted">Add a short reason for this request (optional).</div>
+      <textarea id="accountActionReason" rows="3" placeholder="Reason (optional)"></textarea>
+      <div id="accountActionErr" class="err" style="margin-top:8px;"></div>
+    `,
+    actions: [
+      { text: "Cancel", onClick: modalClose },
+      { text: confirmText, onClick: async () => {
+          try {
+            const reason = document.getElementById("accountActionReason").value.trim();
+            await onConfirm(reason);
+            modalClose();
+            await refreshAccountStatus();
+          } catch (e) {
+            document.getElementById("accountActionErr").textContent = String(e);
+          }
+      }},
+    ]
+  });
+}
+
 /* ===================== TOTP add flow ===================== */
 async function totpBegin(label) {
   return await apiPost("/ui/mfa/totp/devices/begin", { label: label || "" });
@@ -1998,6 +2075,7 @@ async function refreshAll() {
       refreshEmailDevices(),
       refreshSessions(),
       refreshKeys(),
+      refreshAccountStatus(),
       refreshAlertEmailSettings(),
       refreshPushUI(),
       refreshAlerts(),
@@ -2683,6 +2761,25 @@ document.getElementById("profileAuditRefreshBtn").onclick = async () => {
   } catch (e) {
     setProfileAuditStatus(String(e));
   }
+};
+
+document.getElementById("accountSuspendBtn").onclick = () => {
+  openAccountActionModal({
+    title: "Start account suspension",
+    confirmText: "Submit suspension request",
+    onConfirm: async (reason) => {
+      await requestAccountSuspension(reason);
+    },
+  });
+};
+document.getElementById("accountReactivateBtn").onclick = () => {
+  openAccountActionModal({
+    title: "Start account reactivation",
+    confirmText: "Submit reactivation request",
+    onConfirm: async (reason) => {
+      await requestAccountReactivation(reason);
+    },
+  });
 };
 
 initBillingUi();

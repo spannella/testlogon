@@ -306,3 +306,7 @@ class AddChargeReq(BaseModel):
     amount_cents: int = Field(ge=1)
     state: str = Field(pattern="^(pending|settled)$")
     reason: str = "usage"
+
+
+class AccountStatusReq(BaseModel):
+    reason: Optional[str] = None
