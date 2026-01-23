@@ -229,6 +229,240 @@ function escapeHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
+/* ===================== billing (CCBill) ===================== */
+const billingState = { config: null };
+
+function billingLog(msg, obj=null) {
+  const el = document.getElementById("billingLog");
+  if (!el) return;
+  const line = `[${new Date().toISOString()}] ${msg}` + (obj ? `\n${JSON.stringify(obj,null,2)}\n` : "\n");
+  el.value = line + el.value;
+}
+
+function billingFmtCents(c) {
+  const n = Number(c || 0);
+  return `$${(n/100).toFixed(2)}`;
+}
+
+async function billingLoadConfig() {
+  billingState.config = await apiGet("/api/billing/config");
+  const el = document.getElementById("billingConfigBox");
+  if (el) {
+    el.textContent = `clientAccnum=${billingState.config.clientAccnum} clientSubacc=${billingState.config.clientSubacc} currency=${billingState.config.default_currency}`;
+  }
+  billingLog("Loaded billing config", billingState.config);
+}
+
+async function billingLoadSettings() {
+  const s = await apiGet("/api/billing/settings");
+  const el = document.getElementById("billingSettingsOut");
+  if (el) el.textContent = JSON.stringify(s);
+  billingLog("Loaded billing settings", s);
+}
+
+async function billingLoadBalance() {
+  const b = await apiGet("/api/billing/balance");
+  const view = {
+    currency: b.currency,
+    owed_pending: billingFmtCents(b.owed_pending_cents),
+    owed_settled: billingFmtCents(b.owed_settled_cents),
+    payments_pending: billingFmtCents(b.payments_pending_cents),
+    payments_settled: billingFmtCents(b.payments_settled_cents),
+    due_settled: billingFmtCents(b.due_settled_cents),
+    due_if_all_settles: billingFmtCents(b.due_if_all_settles_cents),
+    updated_at: b.updated_at,
+  };
+  const el = document.getElementById("billingBalanceOut");
+  if (el) el.textContent = JSON.stringify(view);
+  billingLog("Loaded billing balance", b);
+}
+
+async function billingLoadPaymentMethods() {
+  const tbody = document.getElementById("billingPmTbody");
+  if (!tbody) return;
+  const pms = await apiGet("/api/billing/payment-methods");
+  tbody.innerHTML = "";
+  for (const pm of pms) {
+    const tr = document.createElement("tr");
+
+    const tdTok = document.createElement("td");
+    tdTok.className = "mono";
+    tdTok.textContent = pm.payment_token_id;
+    tr.appendChild(tdTok);
+
+    const tdLabel = document.createElement("td");
+    tdLabel.textContent = pm.label || "";
+    tr.appendChild(tdLabel);
+
+    const tdPri = document.createElement("td");
+    tdPri.textContent = pm.priority;
+    tr.appendChild(tdPri);
+
+    const tdAct = document.createElement("td");
+    tdAct.className = "right";
+
+    const btnDefault = document.createElement("button");
+    btnDefault.textContent = "Set default";
+    btnDefault.onclick = async () => {
+      await apiPost("/api/billing/payment-methods/default", { payment_token_id: pm.payment_token_id });
+      billingLog("Set default token", pm);
+      await billingLoadSettings();
+    };
+
+    const btnPri = document.createElement("button");
+    btnPri.textContent = "Set priority";
+    btnPri.style.marginLeft = "8px";
+    btnPri.onclick = async () => {
+      const p = prompt("New priority (lower = earlier):", String(pm.priority));
+      if (p == null) return;
+      await apiPost("/api/billing/payment-methods/priority", {
+        payment_token_id: pm.payment_token_id,
+        priority: Number(p),
+      });
+      billingLog("Set priority", { token: pm.payment_token_id, priority: p });
+      await billingLoadPaymentMethods();
+    };
+
+    const btnDel = document.createElement("button");
+    btnDel.textContent = "Remove";
+    btnDel.style.marginLeft = "8px";
+    btnDel.onclick = async () => {
+      if (!confirm("Remove this payment method?")) return;
+      await api("/api/billing/payment-methods/" + encodeURIComponent(pm.payment_token_id), {
+        method: "DELETE",
+      });
+      billingLog("Removed token", pm);
+      await billingRefreshAll();
+    };
+
+    tdAct.appendChild(btnDefault);
+    tdAct.appendChild(btnPri);
+    tdAct.appendChild(btnDel);
+    tr.appendChild(tdAct);
+    tbody.appendChild(tr);
+  }
+  billingLog("Loaded payment methods", pms);
+}
+
+async function billingRefreshAll() {
+  if (!document.getElementById("billingSection")) return;
+  await ensureUiSession();
+  await billingLoadConfig();
+  await billingLoadSettings();
+  await billingLoadBalance();
+  await billingLoadPaymentMethods();
+}
+
+async function billingCreateToken() {
+  if (!billingState.config) await billingLoadConfig();
+  const t = await apiPost("/api/billing/ccbill/frontend-oauth", {});
+  billingLog("Got frontend OAuth", { got: !!t.access_token });
+  try {
+    await window.createPaymentToken(
+      t.access_token,
+      billingState.config.clientAccnum,
+      billingState.config.clientSubacc,
+      true,
+      false,
+      3600,
+      999
+    );
+    billingLog("createPaymentToken() invoked");
+  } catch (e) {
+    billingLog("createPaymentToken() threw", { error: String(e) });
+    alert("Tokenization failed: " + e);
+  }
+}
+
+async function billingSubscribeMonthly() {
+  const monthly = Number(document.getElementById("billingMonthlyCents").value);
+  const planId = document.getElementById("billingPlanId").value.trim() || "monthly";
+  const resp = await apiPost("/api/billing/subscribe-monthly", { plan_id: planId, monthly_price_cents: monthly });
+  billingLog("subscribe-monthly response", resp);
+  await billingRefreshAll();
+  alert(resp.approved ? "Subscription started (approved)." : "Subscription failed.");
+}
+
+async function billingChargeOnce() {
+  const amount = Number(document.getElementById("billingOneTimeCents").value);
+  const resp = await apiPost("/api/billing/charge-once", { amount_cents: amount });
+  billingLog("charge-once response", resp);
+  await billingRefreshAll();
+  alert(resp.approved ? "Charge approved." : "Charge failed.");
+}
+
+async function billingPayBalance() {
+  const resp = await apiPost("/api/billing/pay-balance", {});
+  billingLog("pay-balance response", resp);
+  await billingRefreshAll();
+  alert("Pay balance result: " + JSON.stringify(resp));
+}
+
+async function billingLoadSubscriptions() {
+  const data = await apiGet("/api/billing/subscriptions");
+  const el = document.getElementById("billingDebugOut");
+  if (el) el.value = JSON.stringify(data, null, 2);
+  billingLog("Loaded subscriptions", data);
+}
+
+async function billingLoadPayments() {
+  const data = await apiGet("/api/billing/payments");
+  const el = document.getElementById("billingDebugOut");
+  if (el) el.value = JSON.stringify(data, null, 2);
+  billingLog("Loaded payments", data);
+}
+
+async function billingLoadLedger() {
+  const data = await apiGet("/api/billing/ledger");
+  const el = document.getElementById("billingDebugOut");
+  if (el) el.value = JSON.stringify(data, null, 2);
+  billingLog("Loaded ledger", data);
+}
+
+function initBillingUi() {
+  if (!document.getElementById("billingSection")) return;
+  document.getElementById("billingRefreshBtn").onclick = async () => { await billingRefreshAll(); };
+  document.getElementById("billingCreateTokenBtn").onclick = async () => { await ensureUiSession(); await billingCreateToken(); };
+  document.getElementById("billingRefreshMethodsBtn").onclick = async () => { await ensureUiSession(); await billingLoadPaymentMethods(); };
+  document.getElementById("billingSubscribeBtn").onclick = async () => { await ensureUiSession(); await billingSubscribeMonthly(); };
+  document.getElementById("billingChargeOnceBtn").onclick = async () => { await ensureUiSession(); await billingChargeOnce(); };
+  document.getElementById("billingPayBalanceBtn").onclick = async () => { await ensureUiSession(); await billingPayBalance(); };
+  document.getElementById("billingLoadSubscriptionsBtn").onclick = async () => { await ensureUiSession(); await billingLoadSubscriptions(); };
+  document.getElementById("billingLoadPaymentsBtn").onclick = async () => { await ensureUiSession(); await billingLoadPayments(); };
+  document.getElementById("billingLoadLedgerBtn").onclick = async () => { await ensureUiSession(); await billingLoadLedger(); };
+
+  window.addEventListener("tokenCreated", async (ev) => {
+    try {
+      await ensureUiSession();
+      const detail = ev.detail || {};
+      billingLog("tokenCreated event", detail);
+
+      const tokenId = detail.paymentTokenId || detail.paymentToken || detail.payment_token_id;
+      if (!tokenId) {
+        alert("Token created but token id not found in event.detail");
+        return;
+      }
+
+      const label = detail.cardType && detail.last4
+        ? `${detail.cardType} ****${detail.last4}`
+        : (detail.paymentType ? String(detail.paymentType) : null);
+
+      await apiPost("/api/billing/payment-methods/ccbill-token", {
+        payment_token_id: tokenId,
+        label: label,
+        make_default: document.getElementById("billingMakeDefault").checked,
+      });
+
+      billingLog("Saved payment token to backend", { tokenId, label });
+      await billingRefreshAll();
+      alert("Payment method saved!");
+    } catch (e) {
+      billingLog("tokenCreated handler failed", { error: String(e) });
+      alert("Failed to save token: " + e);
+    }
+  });
+}
+
 function fmtDurSec(sec){
   sec = Math.max(0, Math.floor(sec||0));
   const d=Math.floor(sec/86400); sec-=d*86400;
@@ -1163,6 +1397,7 @@ async function refreshAll() {
       refreshAlertEmailSettings(),
       refreshPushUI(),
       refreshAlerts(),
+      billingRefreshAll(),
     ]);
     await pollToastsOnce();
   } catch (e) {
@@ -1554,6 +1789,8 @@ document.getElementById("smsAddBtn").onclick = async () => { await ensureUiSessi
 
 document.getElementById("emailRefreshBtn").onclick = async () => { await ensureUiSession(); await refreshEmailDevices(); };
 document.getElementById("emailAddBtn").onclick = async () => { await ensureUiSession(); openEmailAddModal(); };
+
+initBillingUi();
 
 /* ===================== boot ===================== */
 if (!accessToken()) { openTokenModal(); } else { refreshAll(); }
