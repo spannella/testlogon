@@ -1432,12 +1432,16 @@ async function accountClosureFinalize(challenge_id) {
 }
 
 function handleAccountClosureSuccess() {
+  clearAuthTokens();
+  alert("Account permanently closed. All data deleted for this user.");
+  window.location.reload();
+}
+
+function clearAuthTokens() {
   lsDel("access_token");
   lsDel("id_token");
   lsDel("refresh_token");
   lsDel("session_id");
-  alert("Account permanently closed. All data deleted for this user.");
-  window.location.reload();
 }
 
 async function runAccountClosureChallenge(challengeId, required) {
@@ -2094,14 +2098,6 @@ function openAccountActionModal({ title, confirmText, onConfirm }) {
       }},
     ]
   });
-}
-
-/* ===================== TOTP add flow ===================== */
-async function totpBegin(label) {
-  return await apiPost("/ui/mfa/totp/devices/begin", { label: label || "" });
-}
-async function totpConfirm(device_id, totp_code) {
-  return await apiPost("/ui/mfa/totp/devices/confirm", { device_id, totp_code });
 }
 
 function openTotpAddModal() {
@@ -2980,7 +2976,7 @@ document.getElementById("btnRefreshAll").onclick = refreshAll;
 document.getElementById("btnClearSession").onclick = () => { lsDel("session_id"); alert("UI session cleared."); };
 document.getElementById("btnSetTokens").onclick = openTokenModal;
 
-document.getElementById("btnClearTokens").onclick = () => { lsDel("access_token"); lsDel("id_token"); lsDel("refresh_token"); lsDel("session_id"); alert("Tokens cleared."); };
+document.getElementById("btnClearTokens").onclick = () => { clearAuthTokens(); alert("Tokens cleared."); };
 
 document.getElementById("totpRefreshBtn").onclick = async () => { await ensureUiSession(); await refreshTotpDevices(); };
 
