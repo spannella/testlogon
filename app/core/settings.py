@@ -133,5 +133,9 @@ class Settings:
     # Calendar
     calendar_table_name: str = os.environ.get("CALENDAR_TABLE_NAME", "calendar")
 
+    # File manager
+    filemgr_table_name: str = os.environ.get("FILEMGR_TABLE", "")
+    filemgr_bucket: str = os.environ.get("FILEMGR_BUCKET", "")
+
 
 S = Settings()

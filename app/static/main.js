@@ -256,6 +256,15 @@ function escapeHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
+function fmtBytes(value) {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const idx = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
+  const scaled = size / Math.pow(1024, idx);
+  return `${scaled.toFixed(scaled >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
+}
+
 /* ===================== billing (CCBill) ===================== */
 const billingState = { config: null };
 
@@ -2383,6 +2392,7 @@ async function refreshAll() {
       refreshPushUI(),
       refreshAlerts(),
       refreshProfile(),
+      refreshFileManager(),
       refreshAddresses(),
       billingRefreshAll(),
       refreshCalendarEvents(),
@@ -2970,6 +2980,235 @@ async function uploadProfilePhoto(kind, fileInputId) {
   input.value = "";
 }
 
+/* ===================== File Manager ===================== */
+const fileMgrState = {
+  path: "/",
+  searchResults: [],
+};
+
+function fileMgrStatus(msg) {
+  const el = document.getElementById("filemgrStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function normalizeFolderPath(path) {
+  const trimmed = (path || "").trim();
+  if (!trimmed || trimmed === "/") return "/";
+  return trimmed.endsWith("/") ? trimmed : trimmed + "/";
+}
+
+function currentFileMgrPath() {
+  const input = document.getElementById("filemgrPath");
+  return normalizeFolderPath(input ? input.value : fileMgrState.path);
+}
+
+function setFileMgrPath(path) {
+  fileMgrState.path = normalizeFolderPath(path || "/");
+  const input = document.getElementById("filemgrPath");
+  if (input) input.value = fileMgrState.path;
+}
+
+async function apiUploadFileManager(path, file) {
+  const tok = accessToken();
+  if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const form = new FormData();
+  form.append("file", file);
+  const url = `${API_BASE}/v1/fs/upload?path=${encodeURIComponent(path)}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + tok,
+      "X-SESSION-ID": sid,
+    },
+    body: form,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return await res.json();
+}
+
+async function fileMgrDownload(path, filename) {
+  const tok = accessToken();
+  if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const url = `${API_BASE}/v1/fs/download?path=${encodeURIComponent(path)}`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Authorization": "Bearer " + tok,
+      "X-SESSION-ID": sid,
+    },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const blob = await res.blob();
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename || "download";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+}
+
+function renderFileMgrSearchResults() {
+  const list = document.getElementById("filemgrSearchResults");
+  if (!list) return;
+  list.innerHTML = "";
+  const results = fileMgrState.searchResults || [];
+  if (!results.length) {
+    list.innerHTML = '<div class="muted">No search results.</div>';
+    return;
+  }
+  results.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `
+      <div class="grow">
+        <div class="mono">${escapeHtml(item.name || "")}</div>
+        <div class="muted">${escapeHtml(item.path || "")}</div>
+      </div>
+      <div class="muted">${escapeHtml(item.type || "")}</div>
+      <div class="muted">${item.type === "file" ? fmtBytes(item.size || 0) : ""}</div>
+      <div><button data-path="${escapeHtml(item.path || "")}" data-type="${escapeHtml(item.type || "")}">Open</button></div>
+    `;
+    row.querySelector("button").onclick = async (ev) => {
+      const p = ev.target.getAttribute("data-path");
+      const t = ev.target.getAttribute("data-type");
+      if (!p) return;
+      if (t === "folder") {
+        setFileMgrPath(p);
+      } else {
+        const parent = p.split("/").slice(0, -1).join("/") + "/";
+        setFileMgrPath(parent || "/");
+      }
+      await refreshFileManager();
+    };
+    list.appendChild(row);
+  });
+}
+
+function renderFileMgrList(items) {
+  const tbody = document.querySelector("#filemgrTable tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  (items || []).forEach((item) => {
+    const row = document.createElement("tr");
+    const isFolder = item.type === "folder";
+    row.innerHTML = `
+      <td class="mono">${escapeHtml(item.name || "")}</td>
+      <td>${escapeHtml(item.type || "")}</td>
+      <td>${isFolder ? "" : fmtBytes(item.size || 0)}</td>
+      <td class="muted">${escapeHtml(item.updated_at || "")}</td>
+      <td>
+        <div class="row-inline">
+          ${isFolder ? '<button data-action="open">Open</button>' : '<button data-action="download">Download</button>'}
+          <button data-action="rename">Rename</button>
+          <button data-action="delete" class="danger">Delete</button>
+        </div>
+      </td>
+    `;
+    row.querySelectorAll("button").forEach((btn) => {
+      btn.onclick = async () => {
+        const action = btn.getAttribute("data-action");
+        if (!action) return;
+        try {
+          if (action === "open") {
+            setFileMgrPath(item.path);
+            await refreshFileManager();
+            return;
+          }
+          if (action === "download") {
+            await fileMgrDownload(item.path, item.name);
+            return;
+          }
+          if (action === "rename") {
+            const newName = prompt("New name:", item.name || "");
+            if (!newName) return;
+            const endpoint = isFolder ? "/v1/fs/rename-folder" : "/v1/fs/rename-file";
+            await apiPost(endpoint, { path: item.path, new_name: newName });
+            await refreshFileManager();
+            return;
+          }
+          if (action === "delete") {
+            const ok = confirm(`Delete ${item.type} ${item.name}?`);
+            if (!ok) return;
+            const endpoint = isFolder ? "/v1/fs/folder" : "/v1/fs/file";
+            await apiDelete(`${endpoint}?path=${encodeURIComponent(item.path)}`);
+            await refreshFileManager();
+          }
+        } catch (e) {
+          fileMgrStatus(String(e));
+        }
+      };
+    });
+    tbody.appendChild(row);
+  });
+  if (!items || items.length === 0) {
+    const empty = document.createElement("tr");
+    empty.innerHTML = '<td colspan="5" class="muted">No files in this folder.</td>';
+    tbody.appendChild(empty);
+  }
+}
+
+async function refreshFileManager() {
+  const table = document.getElementById("filemgrTable");
+  if (!table) return;
+  try {
+    fileMgrStatus("Loading...");
+    await ensureUiSession();
+    const path = currentFileMgrPath();
+    const res = await apiGet(`/v1/fs/list?path=${encodeURIComponent(path)}`);
+    setFileMgrPath(res.path || path);
+    renderFileMgrList(res.items || []);
+    fileMgrStatus(`Loaded ${res.items ? res.items.length : 0} items.`);
+  } catch (e) {
+    fileMgrStatus(String(e));
+  }
+}
+
+async function createFileMgrFolder() {
+  const nameInput = document.getElementById("filemgrNewFolder");
+  if (!nameInput) return;
+  const name = nameInput.value.trim();
+  if (!name) return;
+  const path = currentFileMgrPath() + name + "/";
+  await ensureUiSession();
+  await apiPost("/v1/fs/folder", { path });
+  nameInput.value = "";
+  await refreshFileManager();
+}
+
+async function uploadFileMgr() {
+  const input = document.getElementById("filemgrUploadInput");
+  if (!input || !input.files || !input.files.length) return;
+  const file = input.files[0];
+  const path = currentFileMgrPath() + file.name;
+  await ensureUiSession();
+  await apiUploadFileManager(path, file);
+  input.value = "";
+  await refreshFileManager();
+}
+
+async function searchFileMgr() {
+  const input = document.getElementById("filemgrSearch");
+  if (!input) return;
+  const prefix = input.value.trim();
+  if (!prefix) return;
+  await ensureUiSession();
+  const res = await apiGet(`/v1/fs/search?prefix=${encodeURIComponent(prefix)}`);
+  fileMgrState.searchResults = res.results || [];
+  renderFileMgrSearchResults();
+}
+
+function clearFileMgrSearch() {
+  fileMgrState.searchResults = [];
+  const input = document.getElementById("filemgrSearch");
+  if (input) input.value = "";
+  renderFileMgrSearchResults();
+}
+
 /* ===================== Push (FCM Web) =====================
    You MUST fill firebaseConfig + VAPID key for your Firebase project.
    For production, don't hardcode secrets; these are public config values.
@@ -3395,6 +3634,41 @@ document.getElementById("profileAuditRefreshBtn").onclick = async () => {
   }
 };
 
+document.getElementById("filemgrRefreshBtn").onclick = refreshFileManager;
+document.getElementById("filemgrGoBtn").onclick = async () => {
+  setFileMgrPath(currentFileMgrPath());
+  await refreshFileManager();
+};
+document.getElementById("filemgrUpBtn").onclick = async () => {
+  const path = currentFileMgrPath();
+  if (path === "/") return;
+  const parts = path.split("/").filter(Boolean);
+  const parent = parts.length > 1 ? `/${parts.slice(0, -1).join("/")}/` : "/";
+  setFileMgrPath(parent);
+  await refreshFileManager();
+};
+document.getElementById("filemgrCreateFolderBtn").onclick = async () => {
+  try {
+    await createFileMgrFolder();
+  } catch (e) {
+    fileMgrStatus(String(e));
+  }
+};
+document.getElementById("filemgrUploadBtn").onclick = async () => {
+  try {
+    await uploadFileMgr();
+  } catch (e) {
+    fileMgrStatus(String(e));
+  }
+};
+document.getElementById("filemgrSearchBtn").onclick = async () => {
+  try {
+    await searchFileMgr();
+  } catch (e) {
+    fileMgrStatus(String(e));
+  }
+};
+document.getElementById("filemgrClearSearchBtn").onclick = clearFileMgrSearch;
 document.getElementById("addressRefreshBtn").onclick = async () => {
   try {
     setAddressStatus("Refreshing...");
