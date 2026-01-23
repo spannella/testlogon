@@ -25,6 +25,55 @@
   </div>
 </div>
 
+<div class="row" id="messagingSection">
+  <div class="card">
+    <h3>Messaging Console</h3>
+    <div class="muted">Use the messaging API with a user ID (Authorization: Bearer &lt;user_id&gt;).</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <input id="msgApiBase" placeholder="API base URL" style="flex:1;" />
+      <input id="msgUserId" placeholder="User ID" style="flex:1;" />
+      <button id="msgLoadConvosBtn">Load conversations</button>
+    </div>
+    <div class="muted" id="msgGlobalStatus" style="margin-top:8px;"></div>
+    <div class="hr"></div>
+    <div class="row-inline">
+      <label class="muted">Type</label>
+      <select id="msgConvoType">
+        <option value="dm">DM</option>
+        <option value="group">Group</option>
+      </select>
+      <label class="muted">Title</label>
+      <input id="msgConvoTitle" placeholder="Optional title" style="flex:1;" />
+    </div>
+    <div class="row-inline" style="margin-top:8px;">
+      <input id="msgParticipants" placeholder="Participants (comma-separated)" style="flex:1;" />
+      <button id="msgCreateConvoBtn">Create</button>
+      <button id="msgAcceptConvoBtn">Accept invite</button>
+    </div>
+    <div class="muted" id="msgConvoStatus" style="margin-top:8px;"></div>
+    <div class="section">
+      <h4 style="margin:0 0 6px 0;">Conversations</h4>
+      <div id="msgConvoList" class="list"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Conversation Details</h3>
+    <div class="row-inline">
+      <span id="msgActiveConvoLabel" class="pill">No conversation selected</span>
+      <button id="msgLoadMessagesBtn">Load messages</button>
+    </div>
+    <div id="msgMessagesList" class="section"></div>
+    <div class="hr"></div>
+    <h4 style="margin:0 0 6px 0;">Send Message</h4>
+    <textarea id="msgText" placeholder="Write a message..."></textarea>
+    <div class="row-inline" style="margin-top:8px;">
+      <button id="msgSendBtn">Send</button>
+      <span class="muted" id="msgMessageStatus"></span>
+    </div>
+  </div>
+</div>
+
 <div class="row" id="ccbillSection">
   <div class="card">
     <h3>API Key IP Allowlist</h3>
