@@ -13,10 +13,12 @@ from app.services.sessions import (
     compute_required_factors,
     create_real_session,
     create_stepup_challenge,
+    is_real_ui_session_id,
     load_challenge_or_401,
     maybe_finalize,
     require_ui_session,
 )
+from app.metrics import record_session_revoked
 from app.core.tables import T
 from app.core.time import now_ts
 
@@ -76,6 +78,8 @@ async def ui_sessions_revoke(req: Request, body: Dict[str, Any], ctx: Dict[str, 
     if not target:
         return {"status":"error","reason":"missing session_id"}
     T.sessions.update_item(Key={"user_sub": ctx["user_sub"], "session_id": target}, UpdateExpression="SET revoked=:t, revoked_at=:now", ExpressionAttributeValues={":t": True, ":now": now_ts()})
+    if is_real_ui_session_id(target):
+        record_session_revoked(ctx["user_sub"])
     audit_event("ui_session_revoke", ctx["user_sub"], req, outcome="success", session_id=target)
     return {"status":"ok"}
 
@@ -92,5 +96,7 @@ async def ui_sessions_revoke_others(req: Request, ctx: Dict[str, str] = Depends(
             T.sessions.update_item(Key={"user_sub": user_sub, "session_id": sid}, UpdateExpression="SET revoked=:t, revoked_at=:now", ExpressionAttributeValues={":t": True, ":now": now_ts()})
         except Exception:
             pass
+        if is_real_ui_session_id(sid):
+            record_session_revoked(user_sub)
     audit_event("ui_session_revoke_others", user_sub, req, outcome="success")
     return {"status":"ok"}

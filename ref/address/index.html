@@ -1,0 +1,1040 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Address + UPS Shipping (DynamoDB) — Frontend</title>
+  <style>
+    :root{
+      --bg:#0b0f14;
+      --panel:#121823;
+      --panel2:#0f1520;
+      --text:#e8eef7;
+      --muted:#97a3b6;
+      --line:#253149;
+      --accent:#4da3ff;
+      --good:#48d18b;
+      --bad:#ff5d5d;
+      --warn:#ffcc66;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; background:linear-gradient(180deg,#070a0f 0%, #0b0f14 100%);
+      color:var(--text); font-family:var(--sans);
+    }
+    header{
+      padding:14px 16px; border-bottom:1px solid var(--line);
+      display:flex; align-items:center; gap:14px;
+      position:sticky; top:0; background:rgba(11,15,20,.85); backdrop-filter: blur(10px); z-index:10;
+    }
+    header h1{font-size:14px; letter-spacing:.2px; margin:0; color:var(--text); font-weight:700}
+    header .pill{
+      font-size:12px; color:var(--muted); padding:4px 10px; border:1px solid var(--line); border-radius:999px;
+      background:rgba(255,255,255,.03)
+    }
+    main{
+      padding:16px;
+      display:grid;
+      grid-template-columns: 360px 1fr;
+      gap:16px;
+    }
+    @media(max-width:1100px){
+      main{grid-template-columns:1fr}
+    }
+    .card{
+      background:rgba(18,24,35,.75);
+      border:1px solid var(--line);
+      border-radius:16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+      overflow:hidden;
+    }
+    .card .hd{
+      padding:12px 14px;
+      border-bottom:1px solid var(--line);
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      background:rgba(255,255,255,.02);
+    }
+    .card .hd h2{margin:0; font-size:13px; font-weight:800; letter-spacing:.2px}
+    .card .bd{padding:14px}
+    .row{display:flex; gap:10px; align-items:center}
+    .row.wrap{flex-wrap:wrap}
+    label{display:block; font-size:12px; color:var(--muted); margin:0 0 6px}
+    input, select, textarea, button{
+      font-family:var(--sans);
+      border:1px solid var(--line);
+      background:rgba(0,0,0,.22);
+      color:var(--text);
+      border-radius:12px;
+      padding:10px 10px;
+      outline:none;
+    }
+    textarea{min-height:90px; resize:vertical; font-family:var(--mono); font-size:12px}
+    input::placeholder{color:rgba(151,163,182,.65)}
+    input:focus, select:focus, textarea:focus{border-color: rgba(77,163,255,.55); box-shadow:0 0 0 3px rgba(77,163,255,.15)}
+    button{
+      cursor:pointer;
+      font-weight:700;
+      background: rgba(77,163,255,.12);
+      border-color: rgba(77,163,255,.35);
+    }
+    button:hover{background: rgba(77,163,255,.18)}
+    button.secondary{
+      background: rgba(255,255,255,.05);
+      border-color: rgba(255,255,255,.12);
+      color: var(--text);
+    }
+    button.danger{
+      background: rgba(255,93,93,.12);
+      border-color: rgba(255,93,93,.35);
+    }
+    button.good{
+      background: rgba(72,209,139,.12);
+      border-color: rgba(72,209,139,.35);
+    }
+    .grid2{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+    .grid3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px}
+    .grid4{display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px}
+    .muted{color:var(--muted)}
+    .tiny{font-size:12px}
+    .hr{height:1px; background:var(--line); margin:12px 0}
+    .list{display:flex; flex-direction:column; gap:10px}
+    .addr{
+      border:1px solid var(--line);
+      background:rgba(0,0,0,.18);
+      border-radius:14px;
+      padding:10px;
+    }
+    .addr .top{display:flex; justify-content:space-between; gap:10px; align-items:flex-start}
+    .addr .name{font-weight:800; font-size:13px}
+    .addr .id{font-family:var(--mono); font-size:11px; color:var(--muted)}
+    .addr .line{font-size:12px; color:var(--text); margin-top:4px}
+    .addr .badges{display:flex; gap:8px; flex-wrap:wrap; margin-top:8px}
+    .badge{
+      font-size:11px;
+      padding:3px 8px;
+      border-radius:999px;
+      border:1px solid var(--line);
+      background:rgba(255,255,255,.04);
+      color:var(--muted);
+    }
+    .badge.good{border-color: rgba(72,209,139,.35); background:rgba(72,209,139,.10); color:#bff1d6}
+    .badge.warn{border-color: rgba(255,204,102,.35); background:rgba(255,204,102,.10); color:#ffe8b8}
+    .badge.bad{border-color: rgba(255,93,93,.35); background:rgba(255,93,93,.10); color:#ffd0d0}
+    .actions{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px}
+    .actions button{padding:8px 10px; font-size:12px; border-radius:12px}
+    .paneTitle{
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      margin-bottom:10px;
+    }
+    .paneTitle h3{margin:0; font-size:13px}
+    .log{
+      font-family:var(--mono);
+      font-size:12px;
+      white-space:pre-wrap;
+      word-break:break-word;
+      background:rgba(0,0,0,.22);
+      border:1px solid var(--line);
+      border-radius:14px;
+      padding:10px;
+      max-height: 420px;
+      overflow:auto;
+    }
+    .statusline{
+      display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+      font-size:12px; color:var(--muted)
+    }
+    .dot{width:8px; height:8px; border-radius:50%}
+    .dot.good{background:var(--good)}
+    .dot.bad{background:var(--bad)}
+    .dot.warn{background:var(--warn)}
+    .help{
+      font-size:12px; color:var(--muted); line-height:1.35;
+      background:rgba(255,255,255,.02);
+      border:1px dashed rgba(151,163,182,.25);
+      border-radius:14px;
+      padding:10px;
+    }
+    .autocompleteBox{
+      position:relative;
+    }
+    .suggestions{
+      position:absolute;
+      top:100%;
+      left:0;
+      right:0;
+      background:rgba(10,14,20,.98);
+      border:1px solid var(--line);
+      border-radius:14px;
+      margin-top:6px;
+      overflow:hidden;
+      box-shadow:0 20px 60px rgba(0,0,0,.45);
+      z-index:20;
+    }
+    .suggestions .item{
+      padding:10px;
+      border-bottom:1px solid rgba(37,49,73,.6);
+      cursor:pointer;
+    }
+    .suggestions .item:last-child{border-bottom:none}
+    .suggestions .item:hover{background:rgba(77,163,255,.10)}
+    .suggestions .prov{
+      font-size:11px; color:var(--muted); margin-top:4px
+    }
+    .kbd{
+      font-family:var(--mono);
+      font-size:11px;
+      border:1px solid rgba(255,255,255,.14);
+      background:rgba(255,255,255,.04);
+      padding:2px 6px;
+      border-radius:8px;
+      color:var(--muted);
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Address + UPS Shipping</h1>
+  <span class="pill">FastAPI + DynamoDB</span>
+
+  <div style="flex:1"></div>
+
+  <div class="row" style="gap:10px;">
+    <div>
+      <label style="margin:0 0 6px;">API Base URL</label>
+      <input id="baseUrl" style="width:260px" placeholder="http://localhost:8000" value="http://localhost:8000"/>
+    </div>
+    <div>
+      <label style="margin:0 0 6px;">Bearer Token</label>
+      <input id="token" style="width:260px" placeholder="user_123" value="user_123"/>
+    </div>
+    <div style="padding-top:20px">
+      <button class="secondary" id="btnHealth">Health</button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- LEFT: address list + quick tools -->
+  <section class="card">
+    <div class="hd">
+      <h2>Saved addresses</h2>
+      <div class="row" style="gap:8px">
+        <button class="secondary" id="btnRefresh">Refresh</button>
+        <button class="secondary" id="btnClearLog">Clear log</button>
+      </div>
+    </div>
+    <div class="bd">
+      <div class="row wrap" style="justify-content:space-between; margin-bottom:10px">
+        <div style="flex:1; min-width:220px">
+          <label>Search saved addresses</label>
+          <div class="row">
+            <input id="searchSavedQ" style="flex:1" placeholder="e.g. soho, 10001, queens, label..." />
+            <button class="secondary" id="btnSearchSaved">Search</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="help" style="margin-bottom:12px">
+        Tip: Click an address to set it as the current “Ship To”. Use <span class="kbd">Verify</span> to run Smarty/UPS validation.
+      </div>
+
+      <div id="addrList" class="list"></div>
+    </div>
+  </section>
+
+  <!-- RIGHT: forms + providers + shipping -->
+  <section class="card">
+    <div class="hd">
+      <h2>Actions</h2>
+      <div class="statusline" id="statusLine">
+        <span class="dot warn"></span><span id="statusText">Ready.</span>
+      </div>
+    </div>
+    <div class="bd">
+
+      <div class="grid2" style="gap:16px">
+        <!-- Add Address -->
+        <div class="card" style="border-radius:16px; background:rgba(0,0,0,.12)">
+          <div class="hd"><h2>Add US postal address</h2></div>
+          <div class="bd">
+            <div class="grid2">
+              <div>
+                <label>Name (optional)</label>
+                <input id="a_name" placeholder="John Doe" />
+              </div>
+              <div>
+                <label>Label (optional)</label>
+                <input id="a_label" placeholder="Home / Office" />
+              </div>
+            </div>
+
+            <div style="margin-top:10px">
+              <label>Line 1</label>
+              <input id="a_line1" placeholder="123 Main St" />
+            </div>
+
+            <div style="margin-top:10px">
+              <label>Line 2 (optional)</label>
+              <input id="a_line2" placeholder="Apt 5B" />
+            </div>
+
+            <div class="grid3" style="margin-top:10px">
+              <div>
+                <label>City</label>
+                <input id="a_city" placeholder="New York" />
+              </div>
+              <div>
+                <label>State</label>
+                <input id="a_state" placeholder="NY" maxlength="2" />
+              </div>
+              <div>
+                <label>ZIP5</label>
+                <input id="a_zip5" placeholder="10001" maxlength="5" />
+              </div>
+            </div>
+
+            <div class="grid3" style="margin-top:10px">
+              <div>
+                <label>ZIP4 (optional)</label>
+                <input id="a_zip4" placeholder="1234" maxlength="4" />
+              </div>
+              <div>
+                <label>Country</label>
+                <select id="a_country">
+                  <option value="US" selected>US</option>
+                  <option value="PR">PR</option>
+                </select>
+              </div>
+              <div>
+                <label>&nbsp;</label>
+                <button class="good" style="width:100%" id="btnAddAddr">Add</button>
+              </div>
+            </div>
+
+            <div style="margin-top:10px">
+              <label>Notes (optional)</label>
+              <input id="a_notes" placeholder="Delivery instructions..." />
+            </div>
+          </div>
+        </div>
+
+        <!-- Providers / Autocomplete -->
+        <div class="card" style="border-radius:16px; background:rgba(0,0,0,.12)">
+          <div class="hd"><h2>Provider search & autocomplete</h2></div>
+          <div class="bd">
+            <div class="autocompleteBox">
+              <label>Autocomplete query</label>
+              <input id="ac_query" placeholder="Start typing address..." />
+              <div id="ac_suggestions" class="suggestions" style="display:none;"></div>
+            </div>
+
+            <div class="row wrap" style="margin-top:10px">
+              <div style="flex:1; min-width:170px">
+                <label>Provider</label>
+                <select id="ac_provider" style="width:100%">
+                  <option value="both" selected>Both (Smarty + UPS)</option>
+                  <option value="smarty">Smarty</option>
+                  <option value="ups">UPS (candidates)</option>
+                </select>
+              </div>
+              <div style="flex:1; min-width:140px">
+                <label>Max results</label>
+                <input id="ac_max" type="number" min="1" max="50" value="10" />
+              </div>
+              <div style="padding-top:22px">
+                <button class="secondary" id="btnAutocomplete">Search</button>
+              </div>
+            </div>
+
+            <div class="hr"></div>
+
+            <div class="row wrap">
+              <div style="flex:1; min-width:220px">
+                <label>Selected “Ship To” address_id</label>
+                <input id="selectedShipTo" placeholder="Click an address on left..." readonly />
+              </div>
+              <div style="flex:1; min-width:220px">
+                <label>Selected “Ship From” address_id (optional)</label>
+                <input id="selectedShipFrom" placeholder="(blank uses DEFAULT_SHIP_FROM_ADDRESS_ID)" />
+              </div>
+            </div>
+
+            <div class="row wrap" style="margin-top:10px">
+              <div style="flex:1; min-width:170px">
+                <label>Verify provider</label>
+                <select id="verify_provider" style="width:100%">
+                  <option value="both" selected>Both</option>
+                  <option value="smarty">Smarty</option>
+                  <option value="ups">UPS</option>
+                </select>
+              </div>
+              <div style="flex:1; min-width:140px">
+                <label>Max candidates</label>
+                <input id="verify_max" type="number" min="0" max="50" value="10" />
+              </div>
+              <div style="padding-top:22px">
+                <button class="secondary" id="btnVerifySelected">Verify selected</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="grid2" style="gap:16px">
+        <!-- UPS Billing Profile -->
+        <div class="card" style="border-radius:16px; background:rgba(0,0,0,.12)">
+          <div class="hd"><h2>User UPS billing profile</h2></div>
+          <div class="bd">
+            <div class="row wrap">
+              <div style="flex:1; min-width:240px">
+                <label>Account number (UPS)</label>
+                <input id="ups_account" placeholder="User UPS account number" />
+              </div>
+              <div style="flex:1; min-width:220px">
+                <label>Default billing mode</label>
+                <select id="ups_default_mode" style="width:100%">
+                  <option value="BILL_RECEIVER" selected>BILL_RECEIVER (bill user's acct)</option>
+                  <option value="BILL_THIRD_PARTY">BILL_THIRD_PARTY</option>
+                  <option value="PLATFORM_PREPAID">PLATFORM_PREPAID (bill platform)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row wrap" style="margin-top:10px">
+              <div style="flex:1; min-width:200px">
+                <label>Third-party postal code (optional)</label>
+                <input id="ups_tp_postal" placeholder="10001" />
+              </div>
+              <div style="flex:1; min-width:200px">
+                <label>Third-party country (optional)</label>
+                <input id="ups_tp_country" placeholder="US" value="US" maxlength="2" />
+              </div>
+            </div>
+
+            <div class="row wrap" style="margin-top:10px">
+              <button class="good" id="btnSaveUpsProfile">Save profile</button>
+              <button class="secondary" id="btnGetUpsProfile">Get profile</button>
+              <button class="danger" id="btnDeleteUpsProfile">Delete profile</button>
+            </div>
+
+            <div class="help" style="margin-top:10px">
+              If you want “user provides account”, save it here and then create labels with billing mode <span class="kbd">BILL_RECEIVER</span> or <span class="kbd">BILL_THIRD_PARTY</span>.
+            </div>
+          </div>
+        </div>
+
+        <!-- UPS Shipping -->
+        <div class="card" style="border-radius:16px; background:rgba(0,0,0,.12)">
+          <div class="hd"><h2>UPS Shipping</h2></div>
+          <div class="bd">
+            <div class="grid2">
+              <div>
+                <label>Service code (label requires)</label>
+                <input id="ups_service" placeholder="03" value="03" />
+              </div>
+              <div>
+                <label>Request option (estimate)</label>
+                <select id="ups_request_option">
+                  <option value="Shop" selected>Shop</option>
+                  <option value="Rate">Rate</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="grid4" style="margin-top:10px">
+              <div>
+                <label>Weight (lbs)</label>
+                <input id="pkg_w" type="number" step="0.01" value="2.0" />
+              </div>
+              <div>
+                <label>L (in)</label>
+                <input id="pkg_l" type="number" step="0.01" value="10" />
+              </div>
+              <div>
+                <label>W (in)</label>
+                <input id="pkg_wi" type="number" step="0.01" value="6" />
+              </div>
+              <div>
+                <label>H (in)</label>
+                <input id="pkg_h" type="number" step="0.01" value="4" />
+              </div>
+            </div>
+
+            <div class="grid2" style="margin-top:10px">
+              <div>
+                <label>Billing mode (label)</label>
+                <select id="label_billing_mode" style="width:100%">
+                  <option value="PLATFORM_PREPAID" selected>PLATFORM_PREPAID (bill platform)</option>
+                  <option value="BILL_RECEIVER">BILL_RECEIVER (bill user acct)</option>
+                  <option value="BILL_THIRD_PARTY">BILL_THIRD_PARTY</option>
+                </select>
+              </div>
+              <div>
+                <label>Payer account override (optional)</label>
+                <input id="label_payer_account" placeholder="If blank, uses saved UPS profile" />
+              </div>
+            </div>
+
+            <div class="grid2" style="margin-top:10px">
+              <div>
+                <label>Payer postal (third party optional)</label>
+                <input id="label_payer_postal" placeholder="10001" />
+              </div>
+              <div>
+                <label>Payer country (third party optional)</label>
+                <input id="label_payer_country" placeholder="US" value="US" maxlength="2" />
+              </div>
+            </div>
+
+            <div class="row wrap" style="margin-top:12px">
+              <button class="secondary" id="btnEstimate">Estimate</button>
+              <button class="good" id="btnCreateLabel">Create label</button>
+              <button class="secondary" id="btnSetPrimary">Set selected as primary mailing</button>
+            </div>
+
+            <div class="help" style="margin-top:10px">
+              Estimate uses <span class="kbd">/shipping/ups/estimate</span>. Label uses <span class="kbd">/shipping/ups/label</span>.
+              Make sure “Ship To” is selected on the left.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="grid2" style="gap:16px">
+        <!-- Pin tools -->
+        <div class="card" style="border-radius:16px; background:rgba(0,0,0,.12)">
+          <div class="hd"><h2>Location pin</h2></div>
+          <div class="bd">
+            <div class="grid3">
+              <div>
+                <label>Lat</label>
+                <input id="pin_lat" type="number" step="0.000001" placeholder="40.7484" />
+              </div>
+              <div>
+                <label>Lon</label>
+                <input id="pin_lon" type="number" step="0.000001" placeholder="-73.9857" />
+              </div>
+              <div>
+                <label>Source</label>
+                <input id="pin_src" placeholder="manual" value="manual" />
+              </div>
+            </div>
+            <div class="row wrap" style="margin-top:10px">
+              <button class="secondary" id="btnSetPin">Set pin</button>
+              <button class="secondary" id="btnGetPin">Get pin</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mail verification -->
+        <div class="card" style="border-radius:16px; background:rgba(0,0,0,.12)">
+          <div class="hd"><h2>Mail verification</h2></div>
+          <div class="bd">
+            <div class="row wrap">
+              <div style="flex:1; min-width:250px">
+                <label>Address ID (defaults to selected “Ship To”)</label>
+                <input id="mv_addr" placeholder="address_id" />
+              </div>
+              <div style="flex:1; min-width:180px">
+                <label>Initial tracking # (optional)</label>
+                <input id="mv_tracking" placeholder="1Z..." />
+              </div>
+            </div>
+
+            <div class="row wrap" style="margin-top:10px">
+              <button class="secondary" id="btnMVRequest">Request verification</button>
+            </div>
+
+            <div class="hr"></div>
+
+            <div class="row wrap">
+              <div style="flex:1; min-width:250px">
+                <label>Verification ID</label>
+                <input id="mv_id" placeholder="verification_id" />
+              </div>
+              <div style="flex:1; min-width:160px">
+                <label>Code</label>
+                <input id="mv_code" placeholder="6-digit code" />
+              </div>
+            </div>
+
+            <div class="row wrap" style="margin-top:10px">
+              <button class="secondary" id="btnMVRespond">Respond</button>
+              <button class="secondary" id="btnMVTrack">Get tracking</button>
+            </div>
+
+            <div class="help" style="margin-top:10px">
+              For local testing you can set env <span class="kbd">MAIL_VERIFY_DEBUG_RETURN_CODE=1</span> to return a debug code in the response.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="paneTitle">
+        <h3>API log</h3>
+        <div class="row" style="gap:8px">
+          <button class="secondary" id="btnCopyLog">Copy</button>
+        </div>
+      </div>
+      <div id="log" class="log"></div>
+
+    </div>
+  </section>
+</main>
+
+<script>
+(function(){
+  const $ = (id) => document.getElementById(id);
+
+  const logEl = $("log");
+  const statusText = $("statusText");
+  const statusLineDot = $("statusLine").querySelector(".dot");
+
+  function setStatus(kind, text){
+    statusLineDot.className = "dot " + (kind || "warn");
+    statusText.textContent = text;
+  }
+
+  function log(obj){
+    const ts = new Date().toISOString();
+    const s = (typeof obj === "string") ? obj : JSON.stringify(obj, null, 2);
+    logEl.textContent = `[${ts}]\n${s}\n\n` + logEl.textContent;
+  }
+
+  function baseUrl(){
+    return $("baseUrl").value.replace(/\/+$/,"");
+  }
+
+  function token(){
+    return $("token").value.trim();
+  }
+
+  async function api(path, {method="GET", body=null, query=null}={}){
+    const url = new URL(baseUrl() + path);
+    if(query){
+      Object.entries(query).forEach(([k,v])=>{
+        if(v !== undefined && v !== null && v !== "") url.searchParams.set(k, v);
+      });
+    }
+    const headers = {
+      "Authorization": "Bearer " + token(),
+    };
+    if(body !== null){
+      headers["Content-Type"] = "application/json";
+    }
+    setStatus("warn", `${method} ${url.pathname}${url.search}`);
+    const res = await fetch(url.toString(), {
+      method,
+      headers,
+      body: body !== null ? JSON.stringify(body) : undefined
+    });
+    const text = await res.text();
+    let data;
+    try { data = text ? JSON.parse(text) : null; }
+    catch { data = {raw:text}; }
+    if(!res.ok){
+      setStatus("bad", `Error ${res.status}`);
+      log({error:true, status:res.status, path, data});
+      throw new Error((data && (data.error || data.detail)) ? (data.error || data.detail) : `HTTP ${res.status}`);
+    }
+    setStatus("good", `OK ${res.status}`);
+    log({ok:true, status:res.status, path, data});
+    return data;
+  }
+
+  // -----------------------------
+  // Address list rendering
+  // -----------------------------
+  let addresses = [];
+  function renderAddresses(list){
+    const el = $("addrList");
+    el.innerHTML = "";
+    if(!list || !list.length){
+      el.innerHTML = `<div class="muted tiny">No addresses saved.</div>`;
+      return;
+    }
+    list.forEach(a=>{
+      const div = document.createElement("div");
+      div.className = "addr";
+      const line = `${a.line1}${a.line2 ? ", "+a.line2 : ""}, ${a.city}, ${a.state} ${a.zip5}${a.zip4 ? "-"+a.zip4 : ""} (${a.country})`;
+      const mv = a.mail_verified ? `<span class="badge good">Mail verified</span>` : `<span class="badge">Mail unverified</span>`;
+      const primary = a.is_primary_mailing ? `<span class="badge warn">Primary mailing</span>` : "";
+      const pin = a.location_pin ? `<span class="badge good">Pinned</span>` : `<span class="badge">No pin</span>`;
+      const lastVerify = a.last_verify ? `<span class="badge good">Verified ${new Date(a.last_verify.ts_ms).toLocaleString()}</span>` : `<span class="badge">Not verified</span>`;
+
+      div.innerHTML = `
+        <div class="top">
+          <div>
+            <div class="name">${escapeHtml(a.label || a.name || "Address")}</div>
+            <div class="id">${escapeHtml(a.address_id)}</div>
+            <div class="line">${escapeHtml(line)}</div>
+            <div class="badges">${primary}${mv}${pin}${lastVerify}</div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:8px; align-items:flex-end">
+            <button class="secondary" data-act="select" data-id="${a.address_id}">Select</button>
+            <button class="danger" data-act="delete" data-id="${a.address_id}">Delete</button>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="secondary" data-act="verify" data-id="${a.address_id}">Verify</button>
+          <button class="secondary" data-act="setPrimary" data-id="${a.address_id}">Set primary</button>
+          <button class="secondary" data-act="getPin" data-id="${a.address_id}">Get pin</button>
+        </div>
+      `;
+      div.addEventListener("click", (e)=>{
+        const btn = e.target.closest("button");
+        if(!btn) return;
+        e.stopPropagation();
+        const act = btn.getAttribute("data-act");
+        const id = btn.getAttribute("data-id");
+        if(act === "select") selectShipTo(id);
+        if(act === "delete") deleteAddress(id);
+        if(act === "verify") verifyAddress(id);
+        if(act === "setPrimary") setPrimary(id);
+        if(act === "getPin") getPin(id);
+      });
+      el.appendChild(div);
+    });
+  }
+
+  function escapeHtml(s){
+    return (s ?? "").toString()
+      .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;").replaceAll("'","&#039;");
+  }
+
+  function selectShipTo(id){
+    $("selectedShipTo").value = id;
+    $("mv_addr").value = id;
+    setStatus("good", `Selected Ship To: ${id}`);
+  }
+
+  // -----------------------------
+  // API actions
+  // -----------------------------
+  async function refresh(){
+    const list = await api("/addresses/us");
+    addresses = list || [];
+    renderAddresses(addresses);
+  }
+
+  async function deleteAddress(id){
+    if(!confirm("Delete address " + id + "?")) return;
+    await api("/addresses/us/" + encodeURIComponent(id), {method:"DELETE"});
+    await refresh();
+  }
+
+  async function verifyAddress(id){
+    const provider = $("verify_provider").value;
+    const max = parseInt($("verify_max").value || "10", 10);
+    await api(`/addresses/us/${encodeURIComponent(id)}/verify`, {
+      method:"POST",
+      body: { provider, include_candidates:true, max_candidates:max }
+    });
+    await refresh();
+  }
+
+  async function setPrimary(id){
+    await api("/addresses/us/primary-mailing", {method:"PUT", body:{address_id:id}});
+    await refresh();
+  }
+
+  async function setPin(){
+    const id = $("selectedShipTo").value.trim();
+    if(!id) return alert("Select a Ship To address first.");
+    const lat = parseFloat($("pin_lat").value);
+    const lon = parseFloat($("pin_lon").value);
+    if(!Number.isFinite(lat) || !Number.isFinite(lon)) return alert("Enter lat/lon");
+    const source = $("pin_src").value || "manual";
+    await api(`/addresses/us/${encodeURIComponent(id)}/pin`, {method:"PUT", body:{lat, lon, source}});
+    await refresh();
+  }
+
+  async function getPin(id=null){
+    const aid = (id || $("selectedShipTo").value.trim());
+    if(!aid) return alert("Select a Ship To address first.");
+    const data = await api(`/addresses/us/${encodeURIComponent(aid)}/pin`);
+    $("pin_lat").value = data.lat;
+    $("pin_lon").value = data.lon;
+    $("pin_src").value = data.source || "manual";
+  }
+
+  async function addAddress(){
+    const body = {
+      name: $("a_name").value.trim() || null,
+      label: $("a_label").value.trim() || null,
+      line1: $("a_line1").value.trim(),
+      line2: $("a_line2").value.trim() || null,
+      city: $("a_city").value.trim(),
+      state: $("a_state").value.trim().toUpperCase(),
+      zip5: $("a_zip5").value.trim(),
+      zip4: $("a_zip4").value.trim() || null,
+      country: $("a_country").value,
+      notes: $("a_notes").value.trim() || null
+    };
+    // basic validation
+    if(!body.line1 || !body.city || !body.state || !body.zip5) return alert("Need line1, city, state, zip5");
+    if(body.state.length !== 2) return alert("State must be 2 letters");
+    if(body.zip5.length !== 5) return alert("zip5 must be 5 digits");
+    await api("/addresses/us", {method:"POST", body});
+    // clear some fields
+    $("a_label").value = "";
+    $("a_line1").value = "";
+    $("a_line2").value = "";
+    $("a_city").value = "";
+    $("a_state").value = "";
+    $("a_zip5").value = "";
+    $("a_zip4").value = "";
+    $("a_notes").value = "";
+    await refresh();
+  }
+
+  async function searchSaved(){
+    const q = $("searchSavedQ").value.trim();
+    if(!q) return refresh();
+    const data = await api("/addresses/search", {query:{q}});
+    addresses = data.matches || [];
+    renderAddresses(addresses);
+  }
+
+  // -----------------------------
+  // Autocomplete UI
+  // -----------------------------
+  let acTimer = null;
+  let acOpen = false;
+  function closeSuggestions(){
+    $("ac_suggestions").style.display = "none";
+    $("ac_suggestions").innerHTML = "";
+    acOpen = false;
+  }
+
+  function showSuggestions(cands){
+    const box = $("ac_suggestions");
+    box.innerHTML = "";
+    if(!cands || !cands.length){
+      closeSuggestions();
+      return;
+    }
+    cands.forEach(c=>{
+      const div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML = `<div>${escapeHtml(c.text)}</div><div class="prov">${escapeHtml(c.provider)}</div>`;
+      div.addEventListener("mousedown", (e)=>{
+        e.preventDefault();
+        $("ac_query").value = c.text;
+        closeSuggestions();
+      });
+      box.appendChild(div);
+    });
+    box.style.display = "block";
+    acOpen = true;
+  }
+
+  async function runAutocomplete(){
+    const q = $("ac_query").value.trim();
+    if(!q) return closeSuggestions();
+
+    const provider = $("ac_provider").value;
+    const max_results = parseInt($("ac_max").value || "10", 10);
+
+    let data;
+    if(provider === "both"){
+      data = await api("/autocomplete/both", {method:"POST", body:{search:q, max_results}});
+    } else if(provider === "smarty"){
+      data = await api("/providers/smarty/autocomplete", {method:"POST", body:{search:q, max_results}});
+    } else {
+      data = await api("/providers/ups/autocomplete", {method:"POST", body:{search:q, max_results}});
+    }
+    showSuggestions((data && data.candidates) ? data.candidates : []);
+  }
+
+  $("ac_query").addEventListener("input", ()=>{
+    clearTimeout(acTimer);
+    acTimer = setTimeout(()=>{ runAutocomplete().catch(()=>{}); }, 250);
+  });
+  $("ac_query").addEventListener("keydown", (e)=>{
+    if(e.key === "Escape") closeSuggestions();
+  });
+  document.addEventListener("click", (e)=>{
+    if(!acOpen) return;
+    const within = e.target.closest(".autocompleteBox");
+    if(!within) closeSuggestions();
+  });
+
+  // -----------------------------
+  // UPS Billing Profile
+  // -----------------------------
+  async function saveUpsProfile(){
+    const account_number = $("ups_account").value.trim();
+    if(!account_number) return alert("Enter UPS account number");
+    const body = {
+      account_number,
+      default_mode: $("ups_default_mode").value,
+      third_party_postal_code: $("ups_tp_postal").value.trim() || null,
+      third_party_country: $("ups_tp_country").value.trim().toUpperCase() || "US",
+    };
+    await api("/users/me/ups-billing-profile", {method:"PUT", body});
+  }
+  async function getUpsProfile(){
+    const data = await api("/users/me/ups-billing-profile");
+    if(!data.configured){
+      alert("No UPS billing profile saved.");
+      return;
+    }
+    // show masked; leave account input alone unless you want to overwrite
+    alert(`Saved profile: ${data.masked_account} default=${data.default_mode}`);
+  }
+  async function deleteUpsProfile(){
+    if(!confirm("Delete your UPS billing profile?")) return;
+    await api("/users/me/ups-billing-profile", {method:"DELETE"});
+  }
+
+  // -----------------------------
+  // UPS Shipping
+  // -----------------------------
+  function pkg(){
+    return [{
+      weight_lbs: parseFloat($("pkg_w").value || "0"),
+      length_in: parseFloat($("pkg_l").value || "0"),
+      width_in: parseFloat($("pkg_wi").value || "0"),
+      height_in: parseFloat($("pkg_h").value || "0"),
+    }];
+  }
+
+  async function upsEstimate(){
+    const ship_to_address_id = $("selectedShipTo").value.trim();
+    if(!ship_to_address_id) return alert("Select a Ship To address on the left.");
+    const ship_from_address_id = $("selectedShipFrom").value.trim() || null;
+
+    const request_option = $("ups_request_option").value;
+    const service_code = $("ups_service").value.trim() || null;
+
+    const body = {
+      ship_from_address_id,
+      ship_to_address_id,
+      packages: pkg(),
+      request_option,
+      service_code: (request_option === "Rate" ? (service_code || null) : (service_code || null)),
+    };
+    if(request_option === "Rate" && !service_code) return alert("For Rate, provide service code (e.g. 03).");
+    await api("/shipping/ups/estimate", {method:"POST", body});
+  }
+
+  async function upsCreateLabel(){
+    const ship_to_address_id = $("selectedShipTo").value.trim();
+    if(!ship_to_address_id) return alert("Select a Ship To address on the left.");
+    const ship_from_address_id = $("selectedShipFrom").value.trim() || null;
+
+    const service_code = $("ups_service").value.trim();
+    if(!service_code) return alert("Service code required for label (e.g. 03).");
+
+    const body = {
+      ship_from_address_id,
+      ship_to_address_id,
+      packages: pkg(),
+      service_code,
+      billing_mode: $("label_billing_mode").value,
+      payer_account_number: $("label_payer_account").value.trim() || null,
+      payer_postal_code: $("label_payer_postal").value.trim() || null,
+      payer_country: ($("label_payer_country").value.trim().toUpperCase() || null),
+      label_image_format: "GIF"
+    };
+
+    const data = await api("/shipping/ups/label", {method:"POST", body});
+    if(data && data.label_image_base64){
+      // Display label preview in a new window if GIF/PNG
+      const fmt = "image/gif";
+      const w = window.open("", "_blank");
+      w.document.write(`<title>UPS Label</title>`);
+      w.document.write(`<div style="font-family:system-ui;padding:16px"><h3>Tracking: ${escapeHtml(data.tracking_number || "")}</h3></div>`);
+      w.document.write(`<img style="max-width:100%;height:auto" src="data:${fmt};base64,${data.label_image_base64}" />`);
+      w.document.close();
+    } else {
+      alert("Label created (no label_image_base64 returned in response). Check API log.");
+    }
+  }
+
+  // -----------------------------
+  // Mail verification
+  // -----------------------------
+  async function mvRequest(){
+    const address_id = ($("mv_addr").value.trim() || $("selectedShipTo").value.trim());
+    if(!address_id) return alert("Provide address_id or select Ship To.");
+    const initial_tracking_number = $("mv_tracking").value.trim() || null;
+    const data = await api("/mail_verification/request", {method:"POST", body:{address_id, carrier:"UPS", initial_tracking_number}});
+    if(data && data.verification_id){
+      $("mv_id").value = data.verification_id;
+    }
+    if(data && data.debug_code){
+      $("mv_code").value = data.debug_code;
+      alert("Debug code returned (dev mode): " + data.debug_code);
+    }
+  }
+  async function mvRespond(){
+    const verification_id = $("mv_id").value.trim();
+    const code = $("mv_code").value.trim();
+    if(!verification_id || !code) return alert("Need verification_id and code");
+    await api("/mail_verification/respond", {method:"POST", body:{verification_id, code}});
+    await refresh();
+  }
+  async function mvTrack(){
+    const verification_id = $("mv_id").value.trim();
+    if(!verification_id) return alert("Need verification_id");
+    await api(`/mail_verification/${encodeURIComponent(verification_id)}/tracking`);
+  }
+
+  // -----------------------------
+  // Buttons wiring
+  // -----------------------------
+  $("btnHealth").addEventListener("click", async ()=>{
+    try{ await api("/health"); }catch(e){ alert(e.message); }
+  });
+  $("btnRefresh").addEventListener("click", ()=>refresh().catch(e=>alert(e.message)));
+  $("btnAddAddr").addEventListener("click", ()=>addAddress().catch(e=>alert(e.message)));
+  $("btnSearchSaved").addEventListener("click", ()=>searchSaved().catch(e=>alert(e.message)));
+  $("btnAutocomplete").addEventListener("click", ()=>runAutocomplete().catch(e=>alert(e.message)));
+  $("btnVerifySelected").addEventListener("click", ()=>{
+    const id = $("selectedShipTo").value.trim();
+    if(!id) return alert("Select a Ship To address first.");
+    verifyAddress(id).catch(e=>alert(e.message));
+  });
+  $("btnEstimate").addEventListener("click", ()=>upsEstimate().catch(e=>alert(e.message)));
+  $("btnCreateLabel").addEventListener("click", ()=>upsCreateLabel().catch(e=>alert(e.message)));
+  $("btnSetPrimary").addEventListener("click", ()=>{
+    const id = $("selectedShipTo").value.trim();
+    if(!id) return alert("Select a Ship To address first.");
+    setPrimary(id).catch(e=>alert(e.message));
+  });
+  $("btnSetPin").addEventListener("click", ()=>setPin().catch(e=>alert(e.message)));
+  $("btnGetPin").addEventListener("click", ()=>getPin().catch(e=>alert(e.message)));
+  $("btnSaveUpsProfile").addEventListener("click", ()=>saveUpsProfile().catch(e=>alert(e.message)));
+  $("btnGetUpsProfile").addEventListener("click", ()=>getUpsProfile().catch(e=>alert(e.message)));
+  $("btnDeleteUpsProfile").addEventListener("click", ()=>deleteUpsProfile().catch(e=>alert(e.message)));
+  $("btnMVRequest").addEventListener("click", ()=>mvRequest().catch(e=>alert(e.message)));
+  $("btnMVRespond").addEventListener("click", ()=>mvRespond().catch(e=>alert(e.message)));
+  $("btnMVTrack").addEventListener("click", ()=>mvTrack().catch(e=>alert(e.message)));
+
+  $("btnClearLog").addEventListener("click", ()=>{ logEl.textContent=""; });
+  $("btnCopyLog").addEventListener("click", async ()=>{
+    try{
+      await navigator.clipboard.writeText(logEl.textContent);
+      setStatus("good","Log copied to clipboard");
+    }catch{
+      alert("Clipboard copy failed");
+    }
+  });
+
+  // init
+  refresh().catch(()=>{});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,573 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Shopping Cart (FastAPI + DynamoDB + Streams + SSE)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root { --pad: 12px; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; background: #f6f7f9; }
+    header { background: #111827; color: #fff; padding: 14px 18px; display: flex; gap: 14px; align-items: center; }
+    header h1 { font-size: 16px; margin: 0; font-weight: 700; letter-spacing: .2px; }
+    header .right { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+    header input { padding: 8px 10px; border-radius: 8px; border: 1px solid #2b3345; background: #0b1220; color: #fff; min-width: 220px; }
+    header button { padding: 8px 10px; border-radius: 10px; border: 1px solid #2b3345; background: #1f2937; color: #fff; cursor: pointer; }
+    header button:hover { background: #273449; }
+
+    main { padding: 16px; display: grid; grid-template-columns: 360px 1fr; gap: 14px; }
+    .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 14px; padding: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+    .card h2 { margin: 0 0 10px; font-size: 14px; color: #111827; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .row > * { flex: 1; }
+    label { font-size: 12px; color: #374151; display: block; margin-bottom: 6px; }
+    input, select { width: 100%; box-sizing: border-box; padding: 10px 10px; border-radius: 10px; border: 1px solid #d1d5db; background: #fff; }
+    button.primary { background: #2563eb; color: #fff; border: 1px solid #1d4ed8; }
+    button.primary:hover { background: #1d4ed8; }
+    button.danger { background: #ef4444; color: #fff; border: 1px solid #dc2626; }
+    button.danger:hover { background: #dc2626; }
+    button.ghost { background: #fff; border: 1px solid #d1d5db; }
+    button.ghost:hover { background: #f3f4f6; }
+    button { padding: 10px 12px; border-radius: 10px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
+    th { font-size: 12px; color: #6b7280; font-weight: 700; }
+    .muted { color: #6b7280; font-size: 12px; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 999px; font-size: 12px; border: 1px solid #e5e7eb; }
+    .pill.green { background: #ecfdf5; border-color: #a7f3d0; color: #065f46; }
+    .pill.gray { background: #f3f4f6; border-color: #e5e7eb; color: #374151; }
+    .pill.red { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+    .split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    .log { max-height: 220px; overflow: auto; background: #0b1220; color: #e5e7eb; border-radius: 12px; padding: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono"; font-size: 12px; }
+    .log .t { color: #93c5fd; }
+    .log .warn { color: #fbbf24; }
+    .log .err { color: #fb7185; }
+
+    .badge { font-size: 12px; padding: 4px 8px; border-radius: 10px; border: 1px solid #e5e7eb; background: #fff; }
+    .right-align { text-align: right; }
+    .small { font-size: 12px; }
+    .nowrap { white-space: nowrap; }
+    @media (max-width: 980px) { main { grid-template-columns: 1fr; } header input { min-width: 160px; } }
+  </style>
+</head>
+
+<body>
+<header>
+  <h1>Shopping Cart</h1>
+
+  <div class="right">
+    <span class="badge">API: <span id="apiBaseLabel" class="muted"></span></span>
+    <input id="userId" placeholder="X-User-Id (e.g. alice)" />
+    <button id="saveUserBtn">Use User</button>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <h2>Cart Controls</h2>
+
+    <div class="row">
+      <div style="flex:1.3">
+        <label>Active Cart</label>
+        <select id="cartSelect"></select>
+        <div class="muted small" id="cartMeta"></div>
+      </div>
+      <div style="flex:0.9">
+        <label>&nbsp;</label>
+        <button class="primary" id="startCartBtn">Start cart</button>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <button class="ghost" id="refreshBtn">Refresh</button>
+      <button class="danger" id="deleteCartBtn">Delete cart</button>
+      <button class="primary" id="purchaseBtn">Purchase</button>
+    </div>
+
+    <div style="margin-top:12px" class="split">
+      <div class="card" style="padding:12px">
+        <h2 style="margin-bottom:6px">Total</h2>
+        <div class="row">
+          <div>
+            <div style="font-size: 26px; font-weight: 800" id="totalLabel">$0.00</div>
+            <div class="muted" id="totalMeta">—</div>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="padding:12px">
+        <h2 style="margin-bottom:6px">SSE Status</h2>
+        <div class="row">
+          <span id="ssePill" class="pill gray">disconnected</span>
+          <button id="connectSseBtn" class="ghost">Connect</button>
+          <button id="disconnectSseBtn" class="ghost">Disconnect</button>
+        </div>
+        <div class="muted small" id="sseHint" style="margin-top:6px">
+          Note: EventSource can’t send custom headers; this demo uses <code>?user_id=</code> query param for SSE.
+        </div>
+      </div>
+    </div>
+
+    <h2 style="margin-top:14px">Event Log</h2>
+    <div class="log" id="log"></div>
+  </section>
+
+  <section class="card">
+    <h2>Items</h2>
+
+    <div class="card" style="padding:12px; margin-bottom:12px">
+      <h2 style="margin-bottom:8px">Add Item</h2>
+      <div class="split">
+        <div>
+          <label>SKU</label>
+          <input id="sku" placeholder="sku_123" />
+        </div>
+        <div>
+          <label>Name</label>
+          <input id="name" placeholder="Product name" />
+        </div>
+      </div>
+      <div class="split" style="margin-top:10px">
+        <div>
+          <label>Quantity</label>
+          <input id="qty" type="number" min="1" value="1" />
+        </div>
+        <div>
+          <label>Unit Price (cents)</label>
+          <input id="price" type="number" min="0" value="1999" />
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="addItemBtn">Add / increment</button>
+        <button class="ghost" id="clearItemBtn">Clear</button>
+      </div>
+      <div class="muted small" style="margin-top:8px">
+        Tip: remove uses the row action below (defaults to decrement by 1).
+      </div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>SKU</th>
+          <th>Name</th>
+          <th class="right-align">Qty</th>
+          <th class="right-align nowrap">Unit</th>
+          <th class="right-align nowrap">Line Total</th>
+          <th class="right-align">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="itemsBody"></tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+(function () {
+  // -------------------------
+  // Config / State
+  // -------------------------
+  const API_BASE = location.origin; // same origin
+  document.getElementById("apiBaseLabel").textContent = API_BASE;
+
+  let state = {
+    userId: localStorage.getItem("demo_user_id") || "alice",
+    cartId: localStorage.getItem("demo_cart_id") || "",
+    carts: [],
+    items: [],
+    totalCents: 0,
+    es: null,
+    lastEventId: localStorage.getItem("demo_last_event_id") || ""
+  };
+
+  const el = (id) => document.getElementById(id);
+
+  // -------------------------
+  // Logging
+  // -------------------------
+  function logLine(msg, kind="t") {
+    const d = document.createElement("div");
+    const ts = new Date().toISOString();
+    d.innerHTML = `<span class="t">${ts}</span> ${escapeHtml(msg)}`;
+    if (kind === "warn") d.innerHTML = `<span class="warn">${ts}</span> ${escapeHtml(msg)}`;
+    if (kind === "err") d.innerHTML = `<span class="err">${ts}</span> ${escapeHtml(msg)}`;
+    el("log").appendChild(d);
+    el("log").scrollTop = el("log").scrollHeight;
+  }
+
+  function escapeHtml(s) {
+    return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
+  }
+
+  function fmtMoney(cents) {
+    const v = (cents || 0) / 100;
+    return v.toLocaleString(undefined, { style: "currency", currency: "USD" });
+  }
+
+  // -------------------------
+  // HTTP helpers
+  // -------------------------
+  async function api(path, opts = {}) {
+    const headers = Object.assign({}, opts.headers || {});
+    headers["Content-Type"] = headers["Content-Type"] || "application/json";
+    headers["X-User-Id"] = state.userId;
+
+    const res = await fetch(API_BASE + path, {
+      method: opts.method || "GET",
+      headers,
+      body: opts.body,
+    });
+
+    let text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+
+    if (!res.ok) {
+      const detail = data && data.detail ? data.detail : text;
+      throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+    }
+    return data;
+  }
+
+  // -------------------------
+  // UI rendering
+  // -------------------------
+  function renderCarts() {
+    const sel = el("cartSelect");
+    sel.innerHTML = "";
+
+    if (!state.carts.length) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "(no carts)";
+      sel.appendChild(opt);
+    } else {
+      state.carts.forEach(c => {
+        const opt = document.createElement("option");
+        opt.value = c.cart_id;
+        const status = c.status || "";
+        opt.textContent = `${c.cart_id} — ${status}`;
+        sel.appendChild(opt);
+      });
+    }
+
+    // restore selected
+    if (state.cartId && state.carts.some(c => c.cart_id === state.cartId)) {
+      sel.value = state.cartId;
+    } else {
+      state.cartId = sel.value || "";
+      localStorage.setItem("demo_cart_id", state.cartId);
+    }
+    renderCartMeta();
+  }
+
+  function renderCartMeta() {
+    const c = state.carts.find(x => x.cart_id === state.cartId);
+    if (!c) {
+      el("cartMeta").textContent = "No active cart selected.";
+      return;
+    }
+    const st = c.status === "OPEN" ? "green" : (c.status === "PURCHASED" ? "gray" : "red");
+    el("cartMeta").innerHTML =
+      `<span class="pill ${st}">${c.status}</span> <span class="muted">created:</span> ${escapeHtml(c.created_at)}`
+      + (c.purchased_at ? ` <span class="muted">purchased:</span> ${escapeHtml(c.purchased_at)}` : "");
+  }
+
+  function renderItems() {
+    const body = el("itemsBody");
+    body.innerHTML = "";
+
+    if (!state.items.length) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td colspan="6" class="muted">No items</td>`;
+      body.appendChild(tr);
+      return;
+    }
+
+    for (const it of state.items) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td class="nowrap">${escapeHtml(it.sku)}</td>
+        <td>${escapeHtml(it.name)}</td>
+        <td class="right-align">${it.quantity}</td>
+        <td class="right-align nowrap">${fmtMoney(it.unit_price_cents)}</td>
+        <td class="right-align nowrap">${fmtMoney(it.line_total_cents)}</td>
+        <td class="right-align">
+          <button class="ghost" data-act="dec" data-sku="${escapeHtml(it.sku)}">-1</button>
+          <button class="ghost" data-act="dec5" data-sku="${escapeHtml(it.sku)}">-5</button>
+          <button class="danger" data-act="rm" data-sku="${escapeHtml(it.sku)}">Remove</button>
+        </td>
+      `;
+      body.appendChild(tr);
+    }
+
+    body.querySelectorAll("button[data-act]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const sku = btn.getAttribute("data-sku");
+        const act = btn.getAttribute("data-act");
+        if (!state.cartId) return alert("Select/start a cart first");
+
+        try {
+          if (act === "rm") {
+            await removeItem(sku, 1000000); // remove all
+          } else if (act === "dec") {
+            await removeItem(sku, 1);
+          } else if (act === "dec5") {
+            await removeItem(sku, 5);
+          }
+          await refreshAll({reason: "removeItem"});
+        } catch (e) {
+          logLine(`Remove failed: ${e.message}`, "err");
+          alert(e.message);
+        }
+      });
+    });
+  }
+
+  function renderTotal() {
+    el("totalLabel").textContent = fmtMoney(state.totalCents);
+    el("totalMeta").textContent = state.cartId ? `cart_id: ${state.cartId}` : "—";
+  }
+
+  function setSseStatus(on) {
+    const pill = el("ssePill");
+    if (on) {
+      pill.className = "pill green";
+      pill.textContent = "connected";
+    } else {
+      pill.className = "pill gray";
+      pill.textContent = "disconnected";
+    }
+  }
+
+  // -------------------------
+  // Data ops
+  // -------------------------
+  async function refreshCarts() {
+    state.carts = await api(`/carts?limit=50`);
+    renderCarts();
+  }
+
+  async function refreshItems() {
+    if (!state.cartId) {
+      state.items = [];
+      renderItems();
+      return;
+    }
+    const resp = await api(`/carts/${encodeURIComponent(state.cartId)}/items`);
+    state.items = resp.items || [];
+    renderItems();
+  }
+
+  async function refreshTotal() {
+    if (!state.cartId) {
+      state.totalCents = 0;
+      renderTotal();
+      return;
+    }
+    const resp = await api(`/carts/${encodeURIComponent(state.cartId)}/total`);
+    state.totalCents = resp.total_cents || 0;
+    renderTotal();
+  }
+
+  async function refreshAll({reason=""}={}) {
+    await refreshCarts();
+    await refreshItems();
+    await refreshTotal();
+    renderCartMeta();
+    if (reason) logLine(`Refreshed (${reason})`);
+  }
+
+  async function startCart() {
+    const resp = await api(`/carts`, { method: "POST", body: "{}" });
+    state.cartId = resp.cart_id;
+    localStorage.setItem("demo_cart_id", state.cartId);
+    logLine(`Started cart ${state.cartId}`);
+    await refreshAll({reason: "startCart"});
+  }
+
+  async function deleteCart() {
+    if (!state.cartId) return alert("No cart selected");
+    if (!confirm(`Delete cart ${state.cartId}?`)) return;
+    await api(`/carts/${encodeURIComponent(state.cartId)}`, { method: "DELETE" });
+    logLine(`Deleted cart ${state.cartId}`, "warn");
+    state.cartId = "";
+    localStorage.setItem("demo_cart_id", "");
+    await refreshAll({reason: "deleteCart"});
+  }
+
+  async function purchaseCart() {
+    if (!state.cartId) return alert("No cart selected");
+    if (!confirm(`Purchase cart ${state.cartId}?`)) return;
+    const resp = await api(`/carts/${encodeURIComponent(state.cartId)}/purchase`, { method: "POST", body: "{}" });
+    logLine(`Purchased cart ${state.cartId} order=${resp.order_id} total=${fmtMoney(resp.purchased_total_cents)}`, "warn");
+    await refreshAll({reason: "purchase"});
+  }
+
+  async function addItem() {
+    if (!state.cartId) return alert("Select/start a cart first");
+    const sku = el("sku").value.trim();
+    const name = el("name").value.trim();
+    const quantity = parseInt(el("qty").value, 10);
+    const unit_price_cents = parseInt(el("price").value, 10);
+
+    if (!sku || !name) return alert("SKU and name are required");
+    if (!Number.isFinite(quantity) || quantity < 1) return alert("Quantity must be >= 1");
+    if (!Number.isFinite(unit_price_cents) || unit_price_cents < 0) return alert("Price must be >= 0");
+
+    const body = JSON.stringify({ sku, name, quantity, unit_price_cents });
+    const resp = await api(`/carts/${encodeURIComponent(state.cartId)}/items`, { method: "POST", body });
+    logLine(`Added ${quantity} x ${sku} @ ${fmtMoney(unit_price_cents)} (now qty=${resp.quantity})`);
+    await refreshAll({reason: "addItem"});
+  }
+
+  async function removeItem(sku, quantity) {
+    const q = Math.max(1, Math.min(quantity, 1000000));
+    await api(`/carts/${encodeURIComponent(state.cartId)}/items/${encodeURIComponent(sku)}?quantity=${q}`, { method: "DELETE" });
+    logLine(`Removed ${q} of ${sku}`);
+  }
+
+  // -------------------------
+  // SSE
+  // -------------------------
+  function connectSse() {
+    if (!state.cartId) return alert("Select a cart first");
+    if (state.es) return;
+
+    // IMPORTANT: EventSource can't send X-User-Id header.
+    // This demo passes user_id in the query string.
+    // On the server, you should support this (or use cookies / auth tokens).
+    const url = `${API_BASE}/carts/${encodeURIComponent(state.cartId)}/events?user_id=${encodeURIComponent(state.userId)}`
+      + (state.lastEventId ? `&last_event_id=${encodeURIComponent(state.lastEventId)}` : "");
+
+    const es = new EventSource(url);
+    state.es = es;
+
+    setSseStatus(true);
+    logLine(`SSE connected to cart ${state.cartId}`);
+
+    es.onopen = () => {
+      setSseStatus(true);
+    };
+
+    es.onerror = () => {
+      // Browser auto-reconnects; show as warning
+      setSseStatus(false);
+      logLine(`SSE disconnected (browser will retry)`, "warn");
+    };
+
+    // Catch all events:
+    es.addEventListener("hello", (e) => {
+      if (e.lastEventId) {
+        state.lastEventId = e.lastEventId;
+        localStorage.setItem("demo_last_event_id", state.lastEventId);
+      }
+      logLine(`SSE hello: ${e.data}`);
+    });
+
+    es.addEventListener("heartbeat", (e) => {
+      // no-op, but keep lastEventId if present
+      if (e.lastEventId) {
+        state.lastEventId = e.lastEventId;
+        localStorage.setItem("demo_last_event_id", state.lastEventId);
+      }
+    });
+
+    // INSERT/MODIFY/REMOVE mapped to lowercase in the server: insert/modify/remove
+    ["insert", "modify", "remove", "update", "replay"].forEach(type => {
+      es.addEventListener(type, async (e) => {
+        if (e.lastEventId) {
+          state.lastEventId = e.lastEventId;
+          localStorage.setItem("demo_last_event_id", state.lastEventId);
+        }
+        logLine(`SSE ${type}: ${e.data}`);
+        // Refetch authoritative state on any update
+        await refreshItems();
+        await refreshTotal();
+        renderCartMeta();
+      });
+    });
+  }
+
+  function disconnectSse() {
+    if (state.es) {
+      state.es.close();
+      state.es = null;
+      setSseStatus(false);
+      logLine(`SSE closed`);
+    }
+  }
+
+  // -------------------------
+  // Wire up UI
+  // -------------------------
+  function init() {
+    el("userId").value = state.userId;
+
+    el("saveUserBtn").addEventListener("click", async () => {
+      const u = el("userId").value.trim();
+      if (!u) return alert("Enter a user id");
+      state.userId = u;
+      localStorage.setItem("demo_user_id", state.userId);
+      logLine(`Using user ${state.userId}`);
+      disconnectSse();
+      await refreshAll({reason: "changeUser"});
+    });
+
+    el("startCartBtn").addEventListener("click", async () => {
+      try {
+        await startCart();
+      } catch (e) {
+        logLine(`Start cart failed: ${e.message}`, "err");
+        alert(e.message);
+      }
+    });
+
+    el("refreshBtn").addEventListener("click", async () => {
+      try { await refreshAll({reason: "manual"}); } catch (e) { alert(e.message); }
+    });
+
+    el("deleteCartBtn").addEventListener("click", async () => {
+      try { await deleteCart(); } catch (e) { logLine(`Delete failed: ${e.message}`, "err"); alert(e.message); }
+    });
+
+    el("purchaseBtn").addEventListener("click", async () => {
+      try { await purchaseCart(); } catch (e) { logLine(`Purchase failed: ${e.message}`, "err"); alert(e.message); }
+    });
+
+    el("addItemBtn").addEventListener("click", async () => {
+      try { await addItem(); } catch (e) { logLine(`Add failed: ${e.message}`, "err"); alert(e.message); }
+    });
+
+    el("clearItemBtn").addEventListener("click", () => {
+      el("sku").value = "";
+      el("name").value = "";
+      el("qty").value = "1";
+      el("price").value = "1999";
+    });
+
+    el("cartSelect").addEventListener("change", async () => {
+      state.cartId = el("cartSelect").value || "";
+      localStorage.setItem("demo_cart_id", state.cartId);
+      logLine(`Selected cart ${state.cartId || "(none)"}`);
+      disconnectSse();
+      await refreshItems();
+      await refreshTotal();
+      renderCartMeta();
+    });
+
+    el("connectSseBtn").addEventListener("click", () => connectSse());
+    el("disconnectSseBtn").addEventListener("click", () => disconnectSse());
+
+    // initial load
+    refreshAll({reason: "init"}).catch(e => {
+      logLine(`Init refresh failed: ${e.message}`, "err");
+    });
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

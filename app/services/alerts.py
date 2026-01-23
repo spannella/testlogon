@@ -12,6 +12,7 @@ from app.core.normalize import normalize_email, normalize_phone, client_ip_from_
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
+from app.metrics import record_auth_event
 from app.services.rate_limit import can_send_alert_channel
 from app.services.push import send_push_for_alert
 from app.services.ttl import with_ttl
@@ -233,6 +234,7 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
     outcome = str(fields.get("outcome", "info"))
     status_code = fields.get("status_code")
     alert_type = event_to_type(event, outcome, status_code=status_code)
+    record_auth_event(alert_type)
 
     # Persist alert (best effort)
     try:

@@ -1,0 +1,1190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Shopping Catalog (FastAPI + DynamoDB + SSE)</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #111826;
+      --panel2: #0f1622;
+      --text: #e6edf3;
+      --muted: #a9b6c3;
+      --border: #223147;
+      --accent: #4ea1ff;
+      --good: #37d67a;
+      --bad: #ff5c5c;
+      --warn: #ffcc66;
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --radius: 14px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background: radial-gradient(1200px 700px at 15% -10%, #1b2a44 0%, transparent 50%),
+                  radial-gradient(900px 600px at 105% 0%, #1b3a2c 0%, transparent 45%),
+                  var(--bg);
+      color: var(--text);
+    }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      backdrop-filter: blur(10px);
+      background: rgba(11,15,20,.7);
+      border-bottom: 1px solid rgba(34,49,71,.6);
+    }
+    .topbar {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 14px 18px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 240px;
+    }
+    .dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--warn);
+      box-shadow: 0 0 0 4px rgba(255,204,102,.15);
+    }
+    .brand h1 {
+      font-size: 14px;
+      margin: 0;
+      letter-spacing: .2px;
+      font-weight: 700;
+    }
+    .brand .sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .grow { flex: 1; }
+    .pill {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 10px;
+      background: rgba(17,24,38,.9);
+      border: 1px solid rgba(34,49,71,.85);
+      border-radius: 999px;
+      box-shadow: var(--shadow);
+    }
+    .pill label {
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .pill input, .pill select {
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text);
+      font-size: 12px;
+      min-width: 160px;
+    }
+    .pill input::placeholder { color: rgba(169,182,195,.6); }
+    .btn {
+      cursor: pointer;
+      padding: 9px 11px;
+      border-radius: 10px;
+      border: 1px solid rgba(34,49,71,.85);
+      background: linear-gradient(180deg, rgba(29,40,62,.9), rgba(17,24,38,.9));
+      color: var(--text);
+      box-shadow: var(--shadow);
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .btn:hover { border-color: rgba(78,161,255,.7); }
+    .btn:active { transform: translateY(1px); }
+    .btn.primary {
+      border-color: rgba(78,161,255,.6);
+      background: linear-gradient(180deg, rgba(78,161,255,.25), rgba(17,24,38,.9));
+    }
+    .btn.danger {
+      border-color: rgba(255,92,92,.6);
+      background: linear-gradient(180deg, rgba(255,92,92,.18), rgba(17,24,38,.9));
+    }
+    .btn.ghost {
+      background: transparent;
+      box-shadow: none;
+    }
+    main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 18px;
+      display: grid;
+      grid-template-columns: 320px 1fr 360px;
+      gap: 16px;
+      align-items: start;
+    }
+    .card {
+      background: rgba(17,24,38,.9);
+      border: 1px solid rgba(34,49,71,.8);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .card .hd {
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(34,49,71,.6);
+      background: rgba(15,22,34,.75);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .card .hd h2 {
+      margin: 0;
+      font-size: 13px;
+      letter-spacing: .2px;
+    }
+    .card .bd { padding: 12px 14px; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .row { display: flex; gap: 10px; align-items: center; }
+    .col { display: flex; flex-direction: column; gap: 8px; }
+    .field {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .field label { font-size: 12px; color: var(--muted); }
+    .field input, .field textarea, .field select {
+      width: 100%;
+      background: rgba(11,15,20,.55);
+      border: 1px solid rgba(34,49,71,.85);
+      border-radius: 10px;
+      padding: 9px 10px;
+      color: var(--text);
+      outline: none;
+      font-size: 12px;
+    }
+    .field textarea { min-height: 74px; resize: vertical; }
+    .list {
+      display: grid;
+      gap: 8px;
+    }
+    .item {
+      border: 1px solid rgba(34,49,71,.7);
+      background: rgba(11,15,20,.4);
+      border-radius: 12px;
+      padding: 10px 10px;
+      display: grid;
+      gap: 6px;
+      cursor: pointer;
+    }
+    .item:hover { border-color: rgba(78,161,255,.55); }
+    .item.selected {
+      border-color: rgba(78,161,255,.75);
+      box-shadow: 0 0 0 3px rgba(78,161,255,.12);
+    }
+    .item .title {
+      display: flex; justify-content: space-between; gap: 10px;
+      align-items: baseline;
+    }
+    .item .title b { font-size: 13px; }
+    .badge {
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(34,49,71,.8);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .price { color: #d9f0ff; font-family: var(--mono); font-size: 12px; }
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .hr { height: 1px; background: rgba(34,49,71,.6); margin: 10px 0; }
+    .small { font-size: 11px; }
+    .right { text-align: right; }
+    .toast-wrap {
+      position: fixed;
+      right: 14px;
+      bottom: 14px;
+      width: 360px;
+      display: grid;
+      gap: 10px;
+      z-index: 1000;
+      pointer-events: none;
+    }
+    .toast {
+      pointer-events: auto;
+      background: rgba(17,24,38,.95);
+      border: 1px solid rgba(34,49,71,.9);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 10px 12px;
+      display: grid;
+      gap: 4px;
+      animation: pop .18s ease-out;
+    }
+    @keyframes pop { from { transform: translateY(6px); opacity: .5;} to { transform: translateY(0); opacity: 1;} }
+    .toast .t {
+      display: flex; justify-content: space-between; gap: 8px;
+      align-items: center;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .toast .m { font-size: 12px; color: var(--muted); }
+    .toast.good { border-color: rgba(55,214,122,.6); }
+    .toast.bad { border-color: rgba(255,92,92,.6); }
+    .toast.warn { border-color: rgba(255,204,102,.6); }
+    .code {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: rgba(230,237,243,.9);
+      background: rgba(11,15,20,.5);
+      border: 1px solid rgba(34,49,71,.7);
+      padding: 8px;
+      border-radius: 10px;
+      overflow: auto;
+      max-height: 260px;
+      white-space: pre-wrap;
+    }
+    .statusline {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .statusdot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: var(--warn);
+    }
+    .statusdot.ok { background: var(--good); }
+    .statusdot.bad { background: var(--bad); }
+    .link {
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 12px;
+    }
+    .link:hover { text-decoration: underline; }
+    .inline {
+      display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="topbar">
+    <div class="brand">
+      <div id="connDot" class="dot"></div>
+      <div>
+        <h1>Shopping Catalog</h1>
+        <div class="sub">FastAPI + DynamoDB + Streams + SSE</div>
+      </div>
+    </div>
+
+    <div class="grow"></div>
+
+    <div class="pill">
+      <label>API Base</label>
+      <input id="apiBase" placeholder="http://localhost:8000" value="http://localhost:8000" />
+    </div>
+
+    <div class="pill">
+      <label>Bearer</label>
+      <input id="bearer" placeholder="test" value="test" />
+    </div>
+
+    <button class="btn" id="btnHealth">Health</button>
+    <button class="btn primary" id="btnConnect">Connect SSE</button>
+    <button class="btn ghost" id="btnDisconnect" style="display:none;">Disconnect</button>
+  </div>
+</header>
+
+<main>
+  <!-- Left: Categories -->
+  <section class="card">
+    <div class="hd">
+      <h2>Categories</h2>
+      <div class="row">
+        <button class="btn" id="btnCatRefresh">Refresh</button>
+        <button class="btn primary" id="btnCatMore">Load more</button>
+      </div>
+    </div>
+    <div class="bd">
+      <div class="muted">Select a category to view items. Items will live-update via SSE.</div>
+      <div class="hr"></div>
+
+      <div class="split">
+        <div class="field">
+          <label>Category Name</label>
+          <input id="catName" placeholder="e.g. Sneakers" />
+        </div>
+        <div class="field">
+          <label>Category ID (optional)</label>
+          <input id="catId" placeholder="leave blank to auto-generate" />
+        </div>
+      </div>
+      <div class="field">
+        <label>Description (optional)</label>
+        <textarea id="catDesc" placeholder="What belongs in this category..."></textarea>
+      </div>
+      <div class="row">
+        <button class="btn primary" id="btnCatCreate">Create Category</button>
+        <button class="btn danger" id="btnCatDelete">Delete (cascade)</button>
+      </div>
+
+      <div class="hr"></div>
+
+      <div id="catList" class="list"></div>
+
+      <div class="hr"></div>
+      <div class="muted small">Pagination token:</div>
+      <div id="catNextToken" class="code"></div>
+    </div>
+  </section>
+
+  <!-- Middle: Items -->
+  <section class="card">
+    <div class="hd">
+      <h2>Items</h2>
+      <div class="row">
+        <button class="btn" id="btnItemRefresh">Refresh</button>
+        <button class="btn primary" id="btnItemMore">Load more</button>
+      </div>
+    </div>
+    <div class="bd">
+      <div class="statusline">
+        <span id="selCatLabel" class="muted">No category selected</span>
+      </div>
+      <div class="hr"></div>
+
+      <div class="split">
+        <div class="field">
+          <label>Item Name</label>
+          <input id="itemName" placeholder="e.g. Nike Air Zoom" />
+        </div>
+        <div class="field">
+          <label>Item ID (optional)</label>
+          <input id="itemId" placeholder="leave blank to auto-generate" />
+        </div>
+      </div>
+
+      <div class="split">
+        <div class="field">
+          <label>Price (cents)</label>
+          <input id="itemPrice" type="number" min="0" value="1999" />
+        </div>
+        <div class="field">
+          <label>Currency</label>
+          <input id="itemCur" value="USD" />
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Description (optional)</label>
+        <textarea id="itemDesc" placeholder="Product details..."></textarea>
+      </div>
+
+      <div class="field">
+        <label>Image URLs (comma-separated)</label>
+        <input id="itemImgs" placeholder="https://... , https://..." />
+      </div>
+
+      <div class="field">
+        <label>Attributes JSON (optional)</label>
+        <textarea id="itemAttrs" placeholder='{"color":"black","size":"10"}'></textarea>
+      </div>
+
+      <div class="row">
+        <button class="btn primary" id="btnItemCreate">Add Item</button>
+        <button class="btn" id="btnItemSave">Save edits</button>
+        <button class="btn danger" id="btnItemDelete">Delete (cascade)</button>
+      </div>
+
+      <div class="hr"></div>
+
+      <div id="itemList" class="list"></div>
+
+      <div class="hr"></div>
+      <div class="muted small">Pagination token:</div>
+      <div id="itemNextToken" class="code"></div>
+    </div>
+  </section>
+
+  <!-- Right: Reviews + Stream/Jobs -->
+  <section class="card">
+    <div class="hd">
+      <h2>Reviews & Live Feed</h2>
+      <div class="row">
+        <button class="btn" id="btnRevRefresh">Refresh</button>
+        <button class="btn primary" id="btnRevMore">Load more</button>
+      </div>
+    </div>
+    <div class="bd">
+      <div class="statusline">
+        <span id="selItemLabel" class="muted">No item selected</span>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="split">
+        <div class="field">
+          <label>Rating (1-5)</label>
+          <select id="revRating">
+            <option>5</option><option>4</option><option>3</option><option>2</option><option>1</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Reviewer</label>
+          <input id="revReviewer" placeholder="e.g. sean" />
+        </div>
+      </div>
+      <div class="field">
+        <label>Title</label>
+        <input id="revTitle" placeholder="Quick take..." />
+      </div>
+      <div class="field">
+        <label>Body</label>
+        <textarea id="revBody" placeholder="Write the review..."></textarea>
+      </div>
+      <div class="row">
+        <button class="btn primary" id="btnRevAdd">Add Review</button>
+        <button class="btn danger" id="btnRevDelete">Remove Review</button>
+      </div>
+
+      <div class="hr"></div>
+
+      <div id="revList" class="list"></div>
+
+      <div class="hr"></div>
+      <div class="muted small">Reviews pagination token:</div>
+      <div id="revNextToken" class="code"></div>
+
+      <div class="hr"></div>
+
+      <div class="row" style="justify-content: space-between;">
+        <div class="statusline">
+          <span id="sseStatusDot" class="statusdot"></span>
+          <span id="sseStatus" class="muted">SSE disconnected</span>
+        </div>
+        <a class="link" href="#" id="btnClearFeed">Clear feed</a>
+      </div>
+
+      <div id="feed" class="code"></div>
+
+      <div class="hr"></div>
+
+      <div class="muted small">Last cascade job:</div>
+      <div class="inline">
+        <span id="jobId" class="badge">none</span>
+        <button class="btn" id="btnJobCheck">Check job</button>
+      </div>
+      <div id="jobOut" class="code"></div>
+    </div>
+  </section>
+</main>
+
+<div class="toast-wrap" id="toasts"></div>
+
+<script>
+/* ============================================================
+   Minimal frontend for the API you have in app.py
+   - Category list with pagination
+   - Items list per category with pagination
+   - Reviews list per item with pagination
+   - Create/edit/delete items and categories (cascade)
+   - SSE stream for live updates on item_created / item_updated / etc.
+============================================================ */
+
+const el = (id) => document.getElementById(id);
+
+const state = {
+  sse: null,
+  sseConnected: false,
+
+  selectedCategory: null, // {category_id, name}
+  selectedItem: null,     // {item_id, category_id, ...}
+  selectedReview: null,   // {review_id, item_id, ...}
+
+  catNextToken: null,
+  itemNextToken: null,
+  revNextToken: null,
+
+  // local caches for fast upsert
+  categories: new Map(),  // category_id -> obj
+  items: new Map(),       // item_id -> obj (for selected category)
+  reviews: new Map(),     // review_id -> obj (for selected item)
+};
+
+function apiBase() { return el("apiBase").value.trim().replace(/\/+$/, ""); }
+function bearer()  { return el("bearer").value.trim(); }
+
+function authHeaders() {
+  return {
+    "Authorization": "Bearer " + bearer(),
+    "Content-Type": "application/json"
+  };
+}
+
+function toast(kind, title, msg) {
+  const wrap = el("toasts");
+  const t = document.createElement("div");
+  t.className = "toast " + (kind || "");
+  t.innerHTML = `
+    <div class="t">
+      <span>${escapeHtml(title)}</span>
+      <button class="btn ghost" style="padding:2px 8px; box-shadow:none;" aria-label="Close">×</button>
+    </div>
+    <div class="m">${escapeHtml(msg || "")}</div>
+  `;
+  const btn = t.querySelector("button");
+  btn.onclick = () => t.remove();
+  wrap.appendChild(t);
+  setTimeout(() => { if (t.isConnected) t.remove(); }, 4200);
+}
+
+function escapeHtml(s) {
+  return (""+s).replace(/[&<>"']/g, (c) => ({
+    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+  }[c]));
+}
+
+async function apiFetch(path, opts={}) {
+  const url = apiBase() + path;
+  try {
+    const resp = await fetch(url, opts);
+    const text = await resp.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    if (!resp.ok) {
+      const msg = (data && data.detail) ? data.detail : (typeof data === "string" ? data : JSON.stringify(data));
+      throw new Error(msg || ("HTTP " + resp.status));
+    }
+    return data;
+  } catch (e) {
+    throw e;
+  }
+}
+
+function setConnDot(ok) {
+  const d = el("connDot");
+  d.style.background = ok ? "var(--good)" : "var(--warn)";
+  d.style.boxShadow = ok ? "0 0 0 4px rgba(55,214,122,.15)" : "0 0 0 4px rgba(255,204,102,.15)";
+}
+
+function setSseStatus(ok, msg) {
+  state.sseConnected = ok;
+  el("sseStatus").textContent = msg;
+  const dot = el("sseStatusDot");
+  dot.classList.toggle("ok", ok);
+  dot.classList.toggle("bad", !ok);
+  dot.style.background = ok ? "var(--good)" : "var(--bad)";
+  el("btnConnect").style.display = ok ? "none" : "";
+  el("btnDisconnect").style.display = ok ? "" : "none";
+}
+
+function appendFeed(obj) {
+  const feed = el("feed");
+  const line = `[${new Date().toISOString()}] ${obj.type || "event"}: ${JSON.stringify(obj)}\n`;
+  feed.textContent = line + feed.textContent;
+}
+
+function renderCategories() {
+  const list = el("catList");
+  list.innerHTML = "";
+  const arr = Array.from(state.categories.values())
+    .sort((a,b) => (a.name||"").localeCompare(b.name||""));
+
+  for (const c of arr) {
+    const div = document.createElement("div");
+    div.className = "item" + (state.selectedCategory && state.selectedCategory.category_id === c.category_id ? " selected" : "");
+    div.innerHTML = `
+      <div class="title">
+        <b>${escapeHtml(c.name)}</b>
+        <span class="badge">${escapeHtml(c.category_id)}</span>
+      </div>
+      <div class="muted small">${escapeHtml(c.description || "")}</div>
+    `;
+    div.onclick = () => selectCategory(c);
+    list.appendChild(div);
+  }
+  el("catNextToken").textContent = state.catNextToken || "";
+}
+
+function renderItems() {
+  const list = el("itemList");
+  list.innerHTML = "";
+
+  const arr = Array.from(state.items.values())
+    .sort((a,b) => (a.name||"").localeCompare(b.name||""));
+
+  for (const it of arr) {
+    const div = document.createElement("div");
+    div.className = "item" + (state.selectedItem && state.selectedItem.item_id === it.item_id ? " selected" : "");
+    div.innerHTML = `
+      <div class="title">
+        <b>${escapeHtml(it.name)}</b>
+        <span class="badge">${escapeHtml(it.item_id)}</span>
+      </div>
+      <div class="row" style="justify-content:space-between;">
+        <span class="price">${formatMoney(it.price_cents, it.currency)}</span>
+        <span class="muted small">${escapeHtml((it.updated_at||"").slice(0,19))}</span>
+      </div>
+      <div class="muted small">${escapeHtml(it.description || "")}</div>
+    `;
+    div.onclick = () => selectItem(it);
+    list.appendChild(div);
+  }
+  el("itemNextToken").textContent = state.itemNextToken || "";
+}
+
+function renderReviews() {
+  const list = el("revList");
+  list.innerHTML = "";
+
+  const arr = Array.from(state.reviews.values())
+    .sort((a,b) => (b.created_at||"").localeCompare(a.created_at||""));
+
+  for (const r of arr) {
+    const div = document.createElement("div");
+    div.className = "item" + (state.selectedReview && state.selectedReview.review_id === r.review_id ? " selected" : "");
+    div.innerHTML = `
+      <div class="title">
+        <b>${"★".repeat(r.rating)}${"☆".repeat(5-r.rating)}</b>
+        <span class="badge">${escapeHtml(r.review_id)}</span>
+      </div>
+      <div class="muted small">${escapeHtml(r.title || "")}</div>
+      <div class="muted small">${escapeHtml((r.reviewer ? ("by " + r.reviewer + " • ") : "") + (r.created_at||"").slice(0,19))}</div>
+      <div class="muted small">${escapeHtml(r.body || "")}</div>
+    `;
+    div.onclick = () => { state.selectedReview = r; renderReviews(); };
+    list.appendChild(div);
+  }
+  el("revNextToken").textContent = state.revNextToken || "";
+}
+
+function formatMoney(cents, cur) {
+  const v = (Number(cents || 0) / 100.0);
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: cur || "USD" }).format(v);
+  } catch {
+    return `${cur || "USD"} ${v.toFixed(2)}`;
+  }
+}
+
+function selectCategory(c) {
+  state.selectedCategory = c;
+  state.selectedItem = null;
+  state.selectedReview = null;
+
+  state.items.clear();
+  state.reviews.clear();
+
+  state.itemNextToken = null;
+  state.revNextToken = null;
+
+  el("selCatLabel").textContent = `Category: ${c.name} (${c.category_id})`;
+  el("selItemLabel").textContent = `No item selected`;
+
+  renderCategories();
+  renderItems();
+  renderReviews();
+
+  // When category changes, restart SSE with category filter if connected
+  if (state.sseConnected) connectSse();
+  // Load first page
+  listItems(true);
+}
+
+function selectItem(it) {
+  state.selectedItem = it;
+  state.selectedReview = null;
+
+  // populate edit fields for convenience
+  el("itemName").value = it.name || "";
+  el("itemId").value = it.item_id || "";
+  el("itemDesc").value = it.description || "";
+  el("itemPrice").value = it.price_cents ?? 0;
+  el("itemCur").value = it.currency || "USD";
+  el("itemImgs").value = (it.image_urls || []).join(", ");
+  el("itemAttrs").value = JSON.stringify(it.attributes || {}, null, 2);
+
+  el("selItemLabel").textContent = `Item: ${it.name} (${it.item_id})`;
+
+  state.reviews.clear();
+  state.revNextToken = null;
+
+  renderItems();
+  renderReviews();
+
+  if (state.sseConnected) connectSse();
+  listReviews(true);
+}
+
+/* ===========================
+   API actions
+=========================== */
+
+async function doHealth() {
+  const data = await apiFetch("/health", { headers: authHeaders() });
+  toast("good", "Health OK", JSON.stringify(data));
+  setConnDot(true);
+}
+
+async function listCategories(reset) {
+  if (reset) {
+    state.categories.clear();
+    state.catNextToken = null;
+  }
+  const qs = new URLSearchParams();
+  qs.set("page_size", "50");
+  if (state.catNextToken) qs.set("next_token", state.catNextToken);
+  const data = await apiFetch("/categories?" + qs.toString(), { headers: authHeaders() });
+  for (const c of data.items || []) state.categories.set(c.category_id, c);
+  state.catNextToken = data.next_token || null;
+  renderCategories();
+}
+
+async function createCategory() {
+  const name = el("catName").value.trim();
+  const category_id = el("catId").value.trim();
+  const description = el("catDesc").value.trim();
+
+  if (!name) return toast("warn", "Missing", "Category name is required.");
+
+  const body = { name };
+  if (category_id) body.category_id = category_id;
+  if (description) body.description = description;
+
+  const c = await apiFetch("/categories", { method:"POST", headers: authHeaders(), body: JSON.stringify(body) });
+  state.categories.set(c.category_id, c);
+  renderCategories();
+  toast("good", "Category created", `${c.name} (${c.category_id})`);
+}
+
+async function deleteCategoryCascade() {
+  if (!state.selectedCategory) return toast("warn", "Select category", "Pick a category first.");
+  const c = state.selectedCategory;
+  if (!confirm(`Cascade delete category "${c.name}" and all items + reviews?`)) return;
+
+  const data = await apiFetch(`/categories/${encodeURIComponent(c.category_id)}?cascade=true`, { method:"DELETE", headers: authHeaders() });
+  toast("warn", "Delete started", `Job: ${data.job_id}`);
+  setLastJob(data.job_id);
+
+  // optimistic UI
+  state.categories.delete(c.category_id);
+  state.selectedCategory = null;
+  state.items.clear();
+  state.reviews.clear();
+  state.catNextToken = null;
+  state.itemNextToken = null;
+  state.revNextToken = null;
+
+  el("selCatLabel").textContent = "No category selected";
+  el("selItemLabel").textContent = "No item selected";
+  renderCategories(); renderItems(); renderReviews();
+}
+
+async function listItems(reset) {
+  if (!state.selectedCategory) return;
+  if (reset) {
+    state.items.clear();
+    state.itemNextToken = null;
+  }
+  const cat = state.selectedCategory;
+  const qs = new URLSearchParams();
+  qs.set("page_size", "50");
+  if (state.itemNextToken) qs.set("next_token", state.itemNextToken);
+
+  const data = await apiFetch(`/categories/${encodeURIComponent(cat.category_id)}/items?` + qs.toString(), { headers: authHeaders() });
+  for (const it of data.items || []) state.items.set(it.item_id, it);
+  state.itemNextToken = data.next_token || null;
+  renderItems();
+}
+
+async function createItem() {
+  if (!state.selectedCategory) return toast("warn", "Select category", "Pick a category first.");
+  const cat = state.selectedCategory;
+
+  const name = el("itemName").value.trim();
+  if (!name) return toast("warn", "Missing", "Item name is required.");
+  const item_id = el("itemId").value.trim();
+  const description = el("itemDesc").value.trim();
+  const price_cents = Number(el("itemPrice").value || "0");
+  const currency = el("itemCur").value.trim() || "USD";
+  const image_urls = el("itemImgs").value.split(",").map(s => s.trim()).filter(Boolean);
+
+  let attributes = {};
+  const attrsRaw = el("itemAttrs").value.trim();
+  if (attrsRaw) {
+    try { attributes = JSON.parse(attrsRaw); }
+    catch { return toast("bad", "Invalid JSON", "Attributes must be valid JSON."); }
+  }
+
+  const body = { name, price_cents, currency, image_urls, attributes };
+  if (item_id) body.item_id = item_id;
+  if (description) body.description = description;
+
+  const it = await apiFetch(`/categories/${encodeURIComponent(cat.category_id)}/items`, {
+    method:"POST", headers: authHeaders(), body: JSON.stringify(body)
+  });
+
+  state.items.set(it.item_id, it);
+  renderItems();
+  toast("good", "Item added", `${it.name} (${it.item_id})`);
+}
+
+async function saveItemEdits() {
+  if (!state.selectedCategory || !state.selectedItem) return toast("warn","Select item","Pick an item first.");
+  const cat = state.selectedCategory;
+  const it0 = state.selectedItem;
+
+  const patch = {};
+  const name = el("itemName").value.trim();
+  const description = el("itemDesc").value.trim();
+  const price_cents = Number(el("itemPrice").value || "0");
+  const currency = el("itemCur").value.trim() || "USD";
+  const image_urls = el("itemImgs").value.split(",").map(s => s.trim()).filter(Boolean);
+
+  let attributes = undefined;
+  const attrsRaw = el("itemAttrs").value.trim();
+  if (attrsRaw) {
+    try { attributes = JSON.parse(attrsRaw); }
+    catch { return toast("bad", "Invalid JSON", "Attributes must be valid JSON."); }
+  }
+
+  patch.name = name;
+  patch.description = description;
+  patch.price_cents = price_cents;
+  patch.currency = currency;
+  patch.image_urls = image_urls;
+  if (attributes !== undefined) patch.attributes = attributes;
+
+  const it = await apiFetch(`/categories/${encodeURIComponent(cat.category_id)}/items/${encodeURIComponent(it0.item_id)}`, {
+    method:"PATCH", headers: authHeaders(), body: JSON.stringify(patch)
+  });
+
+  state.items.set(it.item_id, it);
+  state.selectedItem = it;
+  renderItems();
+  toast("good", "Item updated", `${it.name} saved`);
+}
+
+async function deleteItemCascade() {
+  if (!state.selectedCategory || !state.selectedItem) return toast("warn","Select item","Pick an item first.");
+  const cat = state.selectedCategory;
+  const it = state.selectedItem;
+  if (!confirm(`Cascade delete item "${it.name}" and all reviews?`)) return;
+
+  const data = await apiFetch(`/categories/${encodeURIComponent(cat.category_id)}/items/${encodeURIComponent(it.item_id)}?cascade=true`, {
+    method:"DELETE", headers: authHeaders()
+  });
+
+  toast("warn","Delete started", `Job: ${data.job_id}`);
+  setLastJob(data.job_id);
+
+  // optimistic UI
+  state.items.delete(it.item_id);
+  state.selectedItem = null;
+  state.reviews.clear();
+  state.revNextToken = null;
+  el("selItemLabel").textContent = "No item selected";
+  renderItems(); renderReviews();
+}
+
+async function listReviews(reset) {
+  if (!state.selectedItem) return;
+  if (reset) {
+    state.reviews.clear();
+    state.revNextToken = null;
+  }
+  const it = state.selectedItem;
+  const qs = new URLSearchParams();
+  qs.set("page_size", "50");
+  if (state.revNextToken) qs.set("next_token", state.revNextToken);
+
+  const data = await apiFetch(`/items/${encodeURIComponent(it.item_id)}/reviews?` + qs.toString(), { headers: authHeaders() });
+  for (const r of data.items || []) state.reviews.set(r.review_id, r);
+  state.revNextToken = data.next_token || null;
+  renderReviews();
+}
+
+async function addReview() {
+  if (!state.selectedItem) return toast("warn","Select item","Pick an item first.");
+  const it = state.selectedItem;
+
+  const rating = Number(el("revRating").value);
+  const reviewer = el("revReviewer").value.trim();
+  const title = el("revTitle").value.trim();
+  const body = el("revBody").value.trim();
+
+  const payload = { rating };
+  if (reviewer) payload.reviewer = reviewer;
+  if (title) payload.title = title;
+  if (body) payload.body = body;
+
+  const r = await apiFetch(`/items/${encodeURIComponent(it.item_id)}/reviews`, {
+    method:"POST", headers: authHeaders(), body: JSON.stringify(payload)
+  });
+
+  state.reviews.set(r.review_id, r);
+  renderReviews();
+  toast("good","Review added", `★${r.rating} (${r.review_id})`);
+}
+
+async function deleteReview() {
+  if (!state.selectedItem) return toast("warn","Select item","Pick an item first.");
+  if (!state.selectedReview) return toast("warn","Select review","Click a review to select it.");
+  const it = state.selectedItem;
+  const r = state.selectedReview;
+  if (!confirm(`Delete review ${r.review_id}?`)) return;
+
+  await apiFetch(`/items/${encodeURIComponent(it.item_id)}/reviews/${encodeURIComponent(r.review_id)}`, {
+    method:"DELETE", headers: authHeaders()
+  });
+
+  state.reviews.delete(r.review_id);
+  state.selectedReview = null;
+  renderReviews();
+  toast("good","Review deleted", r.review_id);
+}
+
+/* ===========================
+   Jobs
+=========================== */
+
+function setLastJob(jobId) {
+  el("jobId").textContent = jobId || "none";
+  el("jobOut").textContent = "";
+}
+
+async function checkJob() {
+  const jobId = el("jobId").textContent;
+  if (!jobId || jobId === "none") return toast("warn","No job","No job_id set yet.");
+  const j = await apiFetch(`/jobs/${encodeURIComponent(jobId)}`, { headers: authHeaders() });
+  el("jobOut").textContent = JSON.stringify(j, null, 2);
+  if (j.status === "done") toast("good","Job done", `${j.kind} deleted=${j.progress?.deleted ?? "?"}`);
+  else if (j.status === "error") toast("bad","Job error", j.error || "unknown");
+  else toast("warn","Job status", j.status);
+}
+
+/* ===========================
+   SSE
+=========================== */
+
+function disconnectSse() {
+  if (state.sse) {
+    state.sse.close();
+    state.sse = null;
+  }
+  setSseStatus(false, "SSE disconnected");
+}
+
+function connectSse() {
+  disconnectSse();
+
+  // Build SSE URL with filters
+  const qs = new URLSearchParams();
+  // Optionally filter by category or item when selected:
+  if (state.selectedCategory) qs.set("category_id", state.selectedCategory.category_id);
+  if (state.selectedItem) qs.set("item_id", state.selectedItem.item_id);
+
+  // NOTE: native EventSource cannot set headers; we pass token via query for demo.
+  // For production, either:
+  //   - allow cookie auth, or
+  //   - implement /events that accepts token query and validates it (server-side),
+  //   - or use fetch() streaming with headers.
+  qs.set("access_token", bearer()); // purely for demo; requires server change to accept it
+
+  const url = apiBase() + "/events?" + qs.toString();
+
+  // If your server ONLY accepts Authorization header, this will 401.
+  // In that case, either disable REQUIRE_BEARER, or update server to accept access_token in query for /events,
+  // or switch to fetch-stream approach.
+  const es = new EventSource(url);
+  state.sse = es;
+
+  es.onopen = () => {
+    setSseStatus(true, "SSE connected");
+    appendFeed({type:"sse_open"});
+  };
+
+  es.onerror = () => {
+    setSseStatus(false, "SSE error / disconnected");
+    appendFeed({type:"sse_error"});
+  };
+
+  const handle = (evtName) => (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      appendFeed(data);
+      applyLiveEvent(data);
+    } catch {
+      appendFeed({type:"bad_event", raw: ev.data});
+    }
+  };
+
+  // Generic message (if server sends untyped)
+  es.onmessage = handle("message");
+
+  // Specific types your backend emits
+  es.addEventListener("item_created", handle("item_created"));
+  es.addEventListener("item_updated", handle("item_updated"));
+  es.addEventListener("item_deleted", handle("item_deleted"));
+  es.addEventListener("category_created", handle("category_created"));
+  es.addEventListener("category_updated", handle("category_updated"));
+  es.addEventListener("category_deleted", handle("category_deleted"));
+  es.addEventListener("review_added", handle("review_added"));
+  es.addEventListener("review_removed", handle("review_removed"));
+  es.addEventListener("keepalive", () => {});
+  es.addEventListener("hello", () => {});
+}
+
+function applyLiveEvent(e) {
+  // Keep local UI in sync (best-effort).
+  if (!e || !e.type) return;
+
+  if (e.type === "category_created" && e.category) {
+    // We only have partial; refresh categories soon
+    listCategories(false).catch(()=>{});
+    toast("good","Live: category_created", e.category.category_id);
+    return;
+  }
+
+  if (e.type === "category_deleted" && e.category) {
+    state.categories.delete(e.category.category_id);
+    if (state.selectedCategory && state.selectedCategory.category_id === e.category.category_id) {
+      state.selectedCategory = null;
+      state.selectedItem = null;
+      state.items.clear();
+      state.reviews.clear();
+      el("selCatLabel").textContent = "No category selected";
+      el("selItemLabel").textContent = "No item selected";
+    }
+    renderCategories(); renderItems(); renderReviews();
+    toast("warn","Live: category_deleted", e.category.category_id);
+    return;
+  }
+
+  if ((e.type === "item_created" || e.type === "item_updated") && e.item) {
+    // Only apply if matches selected category
+    if (state.selectedCategory && e.item.category_id === state.selectedCategory.category_id) {
+      // Pull a fresh page (cheap) OR optimistic insert
+      // We'll optimistic insert minimal, then refresh soon.
+      const existing = state.items.get(e.item.item_id) || {};
+      state.items.set(e.item.item_id, {...existing, ...e.item});
+      renderItems();
+      // optionally refresh to get full fields
+      setTimeout(() => listItems(true).catch(()=>{}), 350);
+    }
+    toast("good", "Live: " + e.type, `${e.item.name || e.item.item_id}`);
+    return;
+  }
+
+  if (e.type === "item_deleted" && e.item) {
+    if (state.selectedCategory && e.item.category_id === state.selectedCategory.category_id) {
+      state.items.delete(e.item.item_id);
+      if (state.selectedItem && state.selectedItem.item_id === e.item.item_id) {
+        state.selectedItem = null;
+        state.reviews.clear();
+        el("selItemLabel").textContent = "No item selected";
+      }
+      renderItems(); renderReviews();
+    }
+    toast("warn","Live: item_deleted", e.item.item_id);
+    return;
+  }
+
+  if (e.type === "review_added" && e.review) {
+    if (state.selectedItem && e.review.item_id === state.selectedItem.item_id) {
+      // refresh reviews to get full body/title
+      setTimeout(() => listReviews(true).catch(()=>{}), 250);
+      toast("good","Live: review_added", e.review.review_id);
+    }
+    return;
+  }
+
+  if (e.type === "review_removed" && e.review) {
+    if (state.selectedItem && e.review.item_id === state.selectedItem.item_id) {
+      state.reviews.delete(e.review.review_id);
+      renderReviews();
+      toast("warn","Live: review_removed", e.review.review_id);
+    }
+    return;
+  }
+}
+
+/* ===========================
+   Wiring UI
+=========================== */
+
+el("btnHealth").onclick = () => doHealth().catch(e => toast("bad","Health failed", e.message));
+
+el("btnConnect").onclick = () => {
+  // NOTE about auth headers and EventSource:
+  toast("warn","SSE note",
+    "EventSource can’t send Authorization headers. This demo appends access_token=... in the URL. " +
+    "If your backend requires Bearer header for /events, either disable REQUIRE_BEARER or update /events to accept access_token query.");
+  connectSse();
+};
+el("btnDisconnect").onclick = () => disconnectSse();
+
+el("btnCatRefresh").onclick = () => listCategories(true).catch(e => toast("bad","Categories failed", e.message));
+el("btnCatMore").onclick = () => listCategories(false).catch(e => toast("bad","Categories failed", e.message));
+el("btnCatCreate").onclick = () => createCategory().catch(e => toast("bad","Create category failed", e.message));
+el("btnCatDelete").onclick = () => deleteCategoryCascade().catch(e => toast("bad","Delete category failed", e.message));
+
+el("btnItemRefresh").onclick = () => listItems(true).catch(e => toast("bad","Items failed", e.message));
+el("btnItemMore").onclick = () => listItems(false).catch(e => toast("bad","Items failed", e.message));
+el("btnItemCreate").onclick = () => createItem().catch(e => toast("bad","Add item failed", e.message));
+el("btnItemSave").onclick = () => saveItemEdits().catch(e => toast("bad","Save item failed", e.message));
+el("btnItemDelete").onclick = () => deleteItemCascade().catch(e => toast("bad","Delete item failed", e.message));
+
+el("btnRevRefresh").onclick = () => listReviews(true).catch(e => toast("bad","Reviews failed", e.message));
+el("btnRevMore").onclick = () => listReviews(false).catch(e => toast("bad","Reviews failed", e.message));
+el("btnRevAdd").onclick = () => addReview().catch(e => toast("bad","Add review failed", e.message));
+el("btnRevDelete").onclick = () => deleteReview().catch(e => toast("bad","Delete review failed", e.message));
+
+el("btnJobCheck").onclick = () => checkJob().catch(e => toast("bad","Job check failed", e.message));
+
+el("btnClearFeed").onclick = (e) => {
+  e.preventDefault();
+  el("feed").textContent = "";
+};
+
+window.addEventListener("load", async () => {
+  setConnDot(false);
+  el("catNextToken").textContent = "";
+  el("itemNextToken").textContent = "";
+  el("revNextToken").textContent = "";
+  el("feed").textContent = "";
+  el("jobOut").textContent = "";
+  setSseStatus(false, "SSE disconnected");
+
+  try {
+    await doHealth();
+    await listCategories(true);
+  } catch (e) {
+    toast("bad","Startup error", e.message);
+    setConnDot(false);
+  }
+});
+</script>
+
+<footer style="max-width:1200px;margin:0 auto;padding:0 18px 20px 18px;">
+  <div class="muted small">
+    Tip: If your backend keeps <span class="badge">REQUIRE_BEARER=1</span>, native EventSource cannot send headers.
+    For production SSE auth, prefer cookie auth or a fetch-stream implementation that supports headers.
+  </div>
+</footer>
+
+</body>
+</html>

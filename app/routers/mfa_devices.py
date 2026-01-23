@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 from boto3.dynamodb.conditions import Key
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -34,20 +34,26 @@ from app.core.time import now_ts
 
 router = APIRouter(prefix="/ui/mfa", tags=["mfa-devices"])
 
+
+def _sorted_devices(items: List[Dict[str, Any]], mapper: Callable[[Dict[str, Any]], Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    devices = [mapper(it) for it in items]
+    devices.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+    return {"devices": devices}
+
+
 @router.get("/totp/devices")
 async def totp_devices(ctx=Depends(require_ui_session)):
     r = T.totp.query(KeyConditionExpression=Key("user_sub").eq(ctx["user_sub"]))
-    devices = []
-    for it in r.get("Items", []):
-        devices.append({
+    return _sorted_devices(
+        r.get("Items", []),
+        lambda it: {
             "device_id": it["device_id"],
-            "label": it.get("label",""),
+            "label": it.get("label", ""),
             "enabled": it.get("enabled", False),
-            "created_at": it.get("created_at",0),
-            "last_used_at": it.get("last_used_at",0),
-        })
-    devices.sort(key=lambda x: x.get("created_at",0), reverse=True)
-    return {"devices": devices}
+            "created_at": it.get("created_at", 0),
+            "last_used_at": it.get("last_used_at", 0),
+        },
+    )
 
 @router.post("/totp/devices/begin")
 async def totp_devices_begin(req: Request, body: TotpDeviceBeginReq, ctx=Depends(require_ui_session)):
@@ -75,19 +81,18 @@ async def totp_devices_remove(req: Request, device_id: str, body: TotpDeviceRemo
 @router.get("/sms/devices")
 async def sms_devices(ctx=Depends(require_ui_session)):
     r = T.sms.query(KeyConditionExpression=Key("user_sub").eq(ctx["user_sub"]))
-    devices=[]
-    for it in r.get("Items", []):
-        devices.append({
+    return _sorted_devices(
+        r.get("Items", []),
+        lambda it: {
             "sms_device_id": it["sms_device_id"],
-            "phone_e164": it.get("phone_e164",""),
-            "label": it.get("label",""),
+            "phone_e164": it.get("phone_e164", ""),
+            "label": it.get("label", ""),
             "enabled": it.get("enabled", False),
             "pending": it.get("pending", False),
-            "created_at": it.get("created_at",0),
-            "last_used_at": it.get("last_used_at",0),
-        })
-    devices.sort(key=lambda x: x.get("created_at",0), reverse=True)
-    return {"devices": devices}
+            "created_at": it.get("created_at", 0),
+            "last_used_at": it.get("last_used_at", 0),
+        },
+    )
 
 @router.post("/sms/devices/begin")
 async def sms_devices_begin(req: Request, body: SmsDeviceBeginReq, ctx=Depends(require_ui_session)):
@@ -190,19 +195,18 @@ async def sms_devices_remove_confirm(req: Request, body: SmsDeviceRemoveConfirmR
 @router.get("/email/devices")
 async def email_devices(ctx=Depends(require_ui_session)):
     r = T.email.query(KeyConditionExpression=Key("user_sub").eq(ctx["user_sub"]))
-    devices=[]
-    for it in r.get("Items", []):
-        devices.append({
+    return _sorted_devices(
+        r.get("Items", []),
+        lambda it: {
             "email_device_id": it["email_device_id"],
-            "email": it.get("email",""),
-            "label": it.get("label",""),
+            "email": it.get("email", ""),
+            "label": it.get("label", ""),
             "enabled": it.get("enabled", False),
             "pending": it.get("pending", False),
-            "created_at": it.get("created_at",0),
-            "last_used_at": it.get("last_used_at",0),
-        })
-    devices.sort(key=lambda x: x.get("created_at",0), reverse=True)
-    return {"devices": devices}
+            "created_at": it.get("created_at", 0),
+            "last_used_at": it.get("last_used_at", 0),
+        },
+    )
 
 @router.post("/email/devices/begin")
 async def email_devices_begin(req: Request, body: EmailDeviceBeginReq, ctx=Depends(require_ui_session)):

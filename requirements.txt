@@ -5,3 +5,6 @@ pydantic==2.6.4
 pyotp==2.9.0
 twilio==9.0.5
 requests==2.31.0
+stripe==8.5.0
+pytest==8.2.2
+prometheus-client==0.20.0
