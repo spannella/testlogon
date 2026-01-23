@@ -146,6 +146,21 @@ def _list_events(calendar_id: str) -> List[Dict[str, Any]]:
     return response.get("Items", [])
 
 
+def _event_out(item: Dict[str, Any], calendar_id: str) -> EventOut:
+    return EventOut(
+        event_id=item["event_id"],
+        calendar_id=calendar_id,
+        name=item["name"],
+        description=item.get("description", ""),
+        timezone=item.get("timezone", "UTC"),
+        start_utc=item.get("start_utc"),
+        end_utc=item.get("end_utc"),
+        all_day=item.get("all_day", False),
+        all_day_date=item.get("all_day_date"),
+        created_at_utc=item.get("created_at_utc", ""),
+    )
+
+
 @router.post("/calendars", response_model=CalendarOut)
 async def create_calendar(body: CalendarCreateIn, ctx: Dict[str, str] = Depends(require_ui_session)):
     calendar_id = uuid.uuid4().hex
@@ -207,21 +222,7 @@ async def create_event(
 @router.get("/calendars/{calendar_id}/events", response_model=list[EventOut])
 async def list_events(calendar_id: str, ctx: Dict[str, str] = Depends(require_ui_session)):
     _load_calendar(calendar_id, ctx["user_sub"])
-    events = []
-    for item in _list_events(calendar_id):
-        events.append(EventOut(
-            event_id=item["event_id"],
-            calendar_id=calendar_id,
-            name=item["name"],
-            description=item.get("description", ""),
-            timezone=item.get("timezone", "UTC"),
-            start_utc=item.get("start_utc"),
-            end_utc=item.get("end_utc"),
-            all_day=item.get("all_day", False),
-            all_day_date=item.get("all_day_date"),
-            created_at_utc=item.get("created_at_utc", ""),
-        ))
-    return events
+    return [_event_out(item, calendar_id) for item in _list_events(calendar_id)]
 
 
 @router.get("/calendars/{calendar_id}/openings", response_model=list[OpeningsOut])

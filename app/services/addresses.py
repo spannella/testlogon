@@ -110,11 +110,7 @@ def delete_address(user_sub: str, address_id: str) -> Dict[str, Any]:
 
 def set_primary_address(user_sub: str, address_id: str) -> Dict[str, Any]:
     addresses = list_addresses(user_sub)
-    target = None
-    for address in addresses:
-        if address.get("address_id") == address_id:
-            target = address
-            break
+    target = next((address for address in addresses if address.get("address_id") == address_id), None)
     if not target:
         raise HTTPException(404, "address not found")
 
