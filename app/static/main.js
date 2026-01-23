@@ -2649,6 +2649,198 @@ function setInputValue(id, value) {
   el.value = value || "";
 }
 
+/* ===================== Messaging ===================== */
+const messagingState = {
+  conversations: [],
+  activeConversationId: null,
+};
+
+function msgApiBase() {
+  const base = readInput("msgApiBase");
+  return (base || API_BASE).replace(/\/$/, "");
+}
+
+function msgUserId() {
+  return readInput("msgUserId");
+}
+
+function setMsgStatus(id, msg) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg || "";
+}
+
+async function msgRequest(path, { method = "GET", body = null } = {}) {
+  const uid = msgUserId();
+  if (!uid) throw new Error("Messaging user ID is required.");
+  const headers = { Authorization: `Bearer ${uid}` };
+  if (body) headers["Content-Type"] = "application/json";
+  const res = await fetch(`${msgApiBase()}${path}`, {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : null,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+function renderMessagingConvos() {
+  const list = document.getElementById("msgConvoList");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!messagingState.conversations.length) {
+    list.innerHTML = "<div class='muted'>No conversations yet.</div>";
+    return;
+  }
+  messagingState.conversations.forEach((c) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "list-button";
+    btn.innerHTML = `
+      <div style="text-align:left;">
+        <div><b>${c.title || c.conversation_id}</b></div>
+        <div class="muted">${c.type} • ${c.status} • participants ${c.participant_count}</div>
+        <div class="muted">${c.last_message_preview || "No messages yet"}</div>
+      </div>
+    `;
+    if (messagingState.activeConversationId === c.conversation_id) {
+      btn.style.borderColor = "#111";
+    }
+    btn.onclick = () => {
+      messagingState.activeConversationId = c.conversation_id;
+      const label = document.getElementById("msgActiveConvoLabel");
+      if (label) label.textContent = c.title || c.conversation_id;
+      renderMessagingConvos();
+    };
+    row.appendChild(btn);
+    list.appendChild(row);
+  });
+}
+
+function renderMessagingMessages(messages) {
+  const list = document.getElementById("msgMessagesList");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!messages.length) {
+    list.innerHTML = "<div class='muted'>No messages yet.</div>";
+    return;
+  }
+  messages.forEach((m) => {
+    const row = document.createElement("div");
+    row.className = "item";
+    const body = m.kind === "image"
+      ? `<em>[image]</em> ${m.image ? (m.image.key || "") : ""}`
+      : (m.text || "");
+    row.innerHTML = `
+      <div class="muted">${m.sender_id} • ${new Date(m.created_at * 1000).toLocaleString()}</div>
+      <div>${body}</div>
+    `;
+    list.appendChild(row);
+  });
+}
+
+async function loadMessagingConvos() {
+  setMsgStatus("msgGlobalStatus", "Loading...");
+  try {
+    const data = await msgRequest("/messaging/conversations");
+    messagingState.conversations = data || [];
+    if (!messagingState.conversations.find((c) => c.conversation_id === messagingState.activeConversationId)) {
+      messagingState.activeConversationId = null;
+      const label = document.getElementById("msgActiveConvoLabel");
+      if (label) label.textContent = "No conversation selected";
+    }
+    renderMessagingConvos();
+    setMsgStatus("msgGlobalStatus", "Loaded.");
+  } catch (e) {
+    setMsgStatus("msgGlobalStatus", String(e));
+  }
+}
+
+async function createMessagingConvo() {
+  setMsgStatus("msgConvoStatus", "Creating...");
+  try {
+    const participants = readInput("msgParticipants")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const payload = {
+      participant_ids: participants,
+      type: readInput("msgConvoType") || "dm",
+      title: readInput("msgConvoTitle") || null,
+    };
+    const convo = await msgRequest("/messaging/conversations", { method: "POST", body: payload });
+    messagingState.conversations.unshift(convo);
+    messagingState.activeConversationId = convo.conversation_id;
+    const label = document.getElementById("msgActiveConvoLabel");
+    if (label) label.textContent = convo.title || convo.conversation_id;
+    renderMessagingConvos();
+    setMsgStatus("msgConvoStatus", "Created.");
+  } catch (e) {
+    setMsgStatus("msgConvoStatus", String(e));
+  }
+}
+
+async function acceptMessagingConvo() {
+  const cid = messagingState.activeConversationId;
+  if (!cid) {
+    setMsgStatus("msgConvoStatus", "Select a conversation first.");
+    return;
+  }
+  setMsgStatus("msgConvoStatus", "Accepting...");
+  try {
+    await msgRequest(`/messaging/conversations/${cid}/accept`, { method: "POST", body: {} });
+    await loadMessagingConvos();
+    setMsgStatus("msgConvoStatus", "Accepted.");
+  } catch (e) {
+    setMsgStatus("msgConvoStatus", String(e));
+  }
+}
+
+async function loadMessagingMessages() {
+  const cid = messagingState.activeConversationId;
+  if (!cid) {
+    setMsgStatus("msgMessageStatus", "Select a conversation first.");
+    return;
+  }
+  setMsgStatus("msgMessageStatus", "Loading...");
+  try {
+    const data = await msgRequest(`/messaging/conversations/${cid}/messages?limit=50`);
+    renderMessagingMessages(data || []);
+    setMsgStatus("msgMessageStatus", "Loaded.");
+  } catch (e) {
+    setMsgStatus("msgMessageStatus", String(e));
+  }
+}
+
+async function sendMessagingMessage() {
+  const cid = messagingState.activeConversationId;
+  if (!cid) {
+    setMsgStatus("msgMessageStatus", "Select a conversation first.");
+    return;
+  }
+  const text = readInput("msgText");
+  if (!text) {
+    setMsgStatus("msgMessageStatus", "Message text required.");
+    return;
+  }
+  setMsgStatus("msgMessageStatus", "Sending...");
+  try {
+    await msgRequest(`/messaging/conversations/${cid}/messages`, {
+      method: "POST",
+      body: { text },
+    });
+    setInputValue("msgText", "");
+    await loadMessagingMessages();
+    await loadMessagingConvos();
+    setMsgStatus("msgMessageStatus", "Sent.");
+  } catch (e) {
+    setMsgStatus("msgMessageStatus", String(e));
+  }
 function setAddressStatus(msg) {
   const el = document.getElementById("addressStatus");
   if (el) el.textContent = msg || "";
@@ -3748,6 +3940,13 @@ document.getElementById("stripeUsePendingSetupIntentBtn").onclick = useBillingPe
 document.getElementById("stripeVerifyByAmountsBtn").onclick = verifyBillingByAmounts;
 document.getElementById("stripeVerifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
 document.getElementById("stripeLoadLedgerBtn").onclick = loadBillingLedger;
+
+setInputValue("msgApiBase", API_BASE);
+document.getElementById("msgLoadConvosBtn").onclick = loadMessagingConvos;
+document.getElementById("msgCreateConvoBtn").onclick = createMessagingConvo;
+document.getElementById("msgAcceptConvoBtn").onclick = acceptMessagingConvo;
+document.getElementById("msgLoadMessagesBtn").onclick = loadMessagingMessages;
+document.getElementById("msgSendBtn").onclick = sendMessagingMessage;
 
 /* ===================== boot ===================== */
 setCalendarId(getCalendarId());
