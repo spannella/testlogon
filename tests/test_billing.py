@@ -25,6 +25,7 @@ from app.models import (
     SetAutopayReq,
     SetDefaultReq,
     SetPriorityReq,
+    StripeChargeReq,
     VerifyMicrodepositsReq,
 )
 
@@ -140,6 +141,7 @@ def setup_stripe_mocks(monkeypatch, *, payment_intent_status: str = "processing"
 
     stripe_mock.Charge.retrieve.return_value = {"payment_intent": "pi_123", "customer": "cus_123"}
     stripe_mock.checkout.Session.create.return_value = MagicMock(id="cs_123", url="https://stripe.example/checkout")
+    stripe_mock.Subscription.list.return_value = {"data": [{"id": "sub_123"}]}
 
     monkeypatch.setattr("app.routers.billing.stripe", stripe_mock)
 
@@ -267,6 +269,31 @@ def test_billing_pay_balance(monkeypatch) -> None:
     assert resp["status"] == "processing"
 
 
+def test_billing_charge_once(monkeypatch) -> None:
+    fake_table = FakeTable()
+    setup_table(fake_table)
+    setup_stripe_mocks(monkeypatch, payment_intent_status="processing")
+    fake_table.put_item(Item={"pk": "USER#user-123", "sk": "BILLING", "currency": "usd", "default_payment_method_id": "pm_123"})
+    fake_table.put_item(Item={"pk": "USER#user-123", "sk": "BALANCE", "owed_settled_cents": 0, "payments_settled_cents": 0})
+
+    resp = billing_router.charge_once(body=StripeChargeReq(amount_cents=650), ctx={"user_sub": "user-123"})
+    assert resp["status"] == "processing"
+    assert resp["payment_intent_id"] == "pi_123"
+
+
+def test_billing_payments_and_subscriptions(monkeypatch) -> None:
+    fake_table = FakeTable()
+    setup_table(fake_table)
+    setup_stripe_mocks(monkeypatch)
+    fake_table.put_item(Item={"pk": "USER#user-123", "sk": "PAY#pi_123", "payment_intent_id": "pi_123", "created_at": 1})
+
+    payments = billing_router.list_payments(ctx={"user_sub": "user-123"})
+    assert payments["items"][0]["payment_intent_id"] == "pi_123"
+
+    subs = billing_router.list_subscriptions(ctx={"user_sub": "user-123"})
+    assert subs["items"][0]["id"] == "sub_123"
+
+
 def test_billing_dev_add_charge(monkeypatch) -> None:
     fake_table = FakeTable()
     setup_table(fake_table)
@@ -333,10 +360,13 @@ def test_billing_ui_routes_registered() -> None:
         "/ui/billing/payment-methods/priority",
         "/ui/billing/payment-methods/default",
         "/ui/billing/payment-methods/{payment_method_id}",
+        "/ui/billing/charge-once",
         "/ui/billing/checkout_session",
         "/ui/billing/pay-balance",
         "/ui/billing/_dev/add-charge",
         "/ui/billing/ledger",
+        "/ui/billing/payments",
+        "/ui/billing/subscriptions",
     }
     assert expected.issubset(paths)
 

@@ -189,6 +189,10 @@ class SubscribeMonthlyIn(BaseModel):
 
 
 class AddChargeIn(BaseModel):
+    amount_cents: int = Field(ge=1)
+    state: str = Field(pattern="^(pending|settled)$")
+    reason: str = "usage"
+
 class BillingCheckoutReq(BaseModel):
     amount_cents: int
     currency: Optional[str] = None
@@ -216,6 +220,12 @@ class SetAutopayReq(BaseModel):
 
 class PayBalanceReq(BaseModel):
     amount_cents: Optional[int] = Field(default=None, ge=1)
+    idempotency_key: Optional[str] = None
+
+class StripeChargeReq(BaseModel):
+    amount_cents: int = Field(ge=1)
+    payment_method_id: Optional[str] = None
+    description: Optional[str] = None
     idempotency_key: Optional[str] = None
 
 class VerifyMicrodepositsReq(BaseModel):
