@@ -4,15 +4,18 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.core.crypto import sha256_str
 from app.core.settings import S
+from app.core.tables import T
+from app.core.time import now_ts
 from app.models import (
     PasswordRecoveryConfirmReq,
+    PasswordRecoveryChallengeReq,
     PasswordRecoveryEmailVerifyReq,
     PasswordRecoveryRecoveryCodeReq,
     PasswordRecoverySmsVerifyReq,
     PasswordRecoveryStartReq,
     PasswordRecoveryTotpVerifyReq,
-    PasswordRecoveryChallengeReq,
 )
 from app.services.alerts import audit_event
 from app.services.cognito import cognito_confirm_forgot_password, cognito_forgot_password
@@ -34,8 +37,6 @@ from app.services.sessions import (
     mark_factor_passed,
     revoke_challenge,
 )
-from app.core.tables import T
-from app.core.time import now_ts
 
 router = APIRouter(prefix="/ui", tags=["password-recovery"])
 
@@ -43,6 +44,13 @@ router = APIRouter(prefix="/ui", tags=["password-recovery"])
 def _require_cognito() -> None:
     if not S.cognito_app_client_id:
         raise HTTPException(500, "Cognito app client id not configured")
+
+
+def _normalized_username(username: str) -> str:
+    cleaned = username.strip()
+    if not cleaned:
+        raise HTTPException(400, "Username required")
+    return cleaned
 
 
 def _load_password_recovery_challenge(username: str, challenge_id: str) -> Dict[str, Any]:
@@ -64,9 +72,7 @@ def _challenge_required_factors(username: str) -> List[str]:
 @router.post("/password-recovery/start")
 async def password_recovery_start(req: Request, body: PasswordRecoveryStartReq) -> Dict[str, Any]:
     _require_cognito()
-    username = body.username.strip()
-    if not username:
-        raise HTTPException(400, "Username required")
+    username = _normalized_username(body.username)
     resp = cognito_forgot_password(username)
     delivery = resp.get("CodeDeliveryDetails") or {}
     required = _challenge_required_factors(username)
@@ -98,9 +104,7 @@ async def password_recovery_start(req: Request, body: PasswordRecoveryStartReq) 
 @router.post("/password-recovery/confirm")
 async def password_recovery_confirm(req: Request, body: PasswordRecoveryConfirmReq) -> Dict[str, Any]:
     _require_cognito()
-    username = body.username.strip()
-    if not username:
-        raise HTTPException(400, "Username required")
+    username = _normalized_username(body.username)
     required = _challenge_required_factors(username)
     if required:
         if not body.challenge_id:
@@ -155,9 +159,9 @@ async def password_recovery_sms_verify(req: Request, body: PasswordRecoverySmsVe
     if not nums:
         raise HTTPException(400, "No SMS devices")
     ok = False
-    for n in nums[:S.sms_device_limit]:
+    for number in nums[:S.sms_device_limit]:
         try:
-            if twilio_check_sms(n, body.code.strip()):
+            if twilio_check_sms(number, body.code.strip()):
                 ok = True
                 break
         except Exception:
@@ -181,7 +185,6 @@ async def password_recovery_email_begin(req: Request, body: PasswordRecoveryChal
         raise HTTPException(429, "Rate limited")
     rate_limit_or_429(body.username, "email_recovery")
     code = gen_numeric_code(6)
-    from app.core.crypto import sha256_str
     T.sessions.update_item(
         Key={"user_sub": body.username, "session_id": body.challenge_id},
         UpdateExpression="SET email_code_hash=:h, email_code_sent_at=:t, email_code_attempts=:z",
@@ -198,7 +201,6 @@ async def password_recovery_email_begin(req: Request, body: PasswordRecoveryChal
 async def password_recovery_email_verify(req: Request, body: PasswordRecoveryEmailVerifyReq) -> Dict[str, Any]:
     chal = _load_password_recovery_challenge(body.username, body.challenge_id)
     _ensure_factor_required(chal, "email")
-    from app.core.crypto import sha256_str
     expected = chal.get("email_code_hash", "")
     if not expected:
         raise HTTPException(400, "No email code pending")
