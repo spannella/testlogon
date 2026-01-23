@@ -48,7 +48,9 @@ def fcm_access_token() -> Optional[str]:
             "iat": now,
             "exp": now + 3600,
         }
-        signing_input = f"{_b64url(json.dumps(header, separators=(",", ":")).encode("utf-8"))}.{_b64url(json.dumps(payload, separators=(",", ":")).encode("utf-8"))}"
+        header_json = json.dumps(header, separators=(",", ":")).encode("utf-8")
+        payload_json = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        signing_input = f"{_b64url(header_json)}.{_b64url(payload_json)}"
         sig = key.sign(signing_input.encode("utf-8"), padding.PKCS1v15(), hashes.SHA256())
         jwt = signing_input + "." + _b64url(sig)
         r = requests.post(
