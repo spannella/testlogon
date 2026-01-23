@@ -49,6 +49,34 @@ class RecoveryReq(BaseModel):
     recovery_code: str = Field(validation_alias=AliasChoices("recovery_code", "code"))
     factor: str = "totp"  # totp|sms|email
 
+class PasswordRecoveryStartReq(BaseModel):
+    username: str
+
+class PasswordRecoveryConfirmReq(BaseModel):
+    username: str
+    confirmation_code: str = Field(validation_alias=AliasChoices("confirmation_code", "code"))
+    new_password: str
+    challenge_id: Optional[str] = None
+
+class PasswordRecoveryChallengeReq(BaseModel):
+    username: str
+    challenge_id: str
+
+class PasswordRecoveryTotpVerifyReq(PasswordRecoveryChallengeReq):
+    model_config = ConfigDict(populate_by_name=True)
+    totp_code: str = Field(validation_alias=AliasChoices("totp_code", "code"))
+
+class PasswordRecoverySmsVerifyReq(PasswordRecoveryChallengeReq):
+    code: str
+
+class PasswordRecoveryEmailVerifyReq(PasswordRecoveryChallengeReq):
+    code: str
+
+class PasswordRecoveryRecoveryCodeReq(PasswordRecoveryChallengeReq):
+    model_config = ConfigDict(populate_by_name=True)
+    factor: str
+    recovery_code: str = Field(validation_alias=AliasChoices("recovery_code", "code"))
+
 class CreateApiKeyReq(BaseModel):
     label: Optional[str] = None
 
@@ -169,6 +197,46 @@ class SetAutopayIn(BaseModel):
     enabled: bool
 
 
+class MailingAddress(BaseModel):
+    line1: Optional[str] = None
+    line2: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+
+
+class LanguageIn(BaseModel):
+    name: str
+    level: str
+
+
+class ProfileBase(BaseModel):
+    display_name: Optional[str] = None
+    first_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    last_name: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    birthday: Optional[str] = None
+    gender: Optional[str] = None
+    location: Optional[str] = None
+    displayed_email: Optional[str] = None
+    displayed_telephone_number: Optional[str] = None
+    mailing_address: Optional[MailingAddress] = None
+    languages: Optional[List[LanguageIn]] = None
+    profile_photo_url: Optional[str] = None
+    cover_photo_url: Optional[str] = None
+
+
+class ProfilePatchReq(ProfileBase):
+    pass
+
+
+class ProfilePutReq(ProfileBase):
+    pass
+
+
 class PayBalanceIn(BaseModel):
     amount_cents: Optional[int] = Field(default=None, ge=1)
     idempotency_key: Optional[str] = None
@@ -221,6 +289,12 @@ class SetAutopayReq(BaseModel):
 
 class PayBalanceReq(BaseModel):
     amount_cents: Optional[int] = Field(default=None, ge=1)
+    idempotency_key: Optional[str] = None
+
+class StripeChargeReq(BaseModel):
+    amount_cents: int = Field(ge=1)
+    payment_method_id: Optional[str] = None
+    description: Optional[str] = None
     idempotency_key: Optional[str] = None
 
 class VerifyMicrodepositsReq(BaseModel):

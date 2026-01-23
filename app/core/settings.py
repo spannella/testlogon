@@ -126,5 +126,8 @@ class Settings:
     billing_table_name: str = os.environ.get("BILLING_TABLE_NAME", "billing")
     account_state_table_name: str = os.environ.get("ACCOUNT_STATE_TABLE_NAME", "account_state")
 
+    # Profile
+    profile_table_name: str = os.environ.get("PROFILE_TABLE_NAME", "profiles")
+
 
 S = Settings()
