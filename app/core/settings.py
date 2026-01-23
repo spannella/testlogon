@@ -129,5 +129,8 @@ class Settings:
     # Profile
     profile_table_name: str = os.environ.get("PROFILE_TABLE_NAME", "profiles")
 
+    # Calendar
+    calendar_table_name: str = os.environ.get("CALENDAR_TABLE_NAME", "calendar")
+
 
 S = Settings()

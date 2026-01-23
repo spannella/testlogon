@@ -298,6 +298,63 @@
 </div>
 
 <div class="row">
+  <div class="card" style="width:100%">
+    <h3>Scheduling</h3>
+    <div class="muted">Create calendars, add events, and view availability windows.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <input id="calendarIdInput" class="mono" placeholder="Calendar ID" style="flex:1;"/>
+      <button id="calendarSetBtn">Use calendar</button>
+      <button id="calendarCreateBtn" class="primary">Create calendar</button>
+    </div>
+    <div class="row-inline" style="margin-top:10px;">
+      <input id="calendarNameInput" placeholder="Calendar name" style="flex:1;"/>
+      <input id="calendarTimezoneInput" placeholder="Timezone (e.g. UTC)" style="width:220px;"/>
+    </div>
+    <div id="calendarStatus" class="muted" style="margin-top:6px;"></div>
+
+    <div class="section" style="margin-top:16px;">
+      <h4 style="margin:0 0 8px 0;">Create event</h4>
+      <div class="row-inline">
+        <input id="eventNameInput" placeholder="Event name" style="flex:1;"/>
+        <input id="eventTimezoneInput" placeholder="Timezone (optional)" style="width:220px;"/>
+      </div>
+      <div class="row-inline" style="margin-top:8px;">
+        <textarea id="eventDescriptionInput" placeholder="Description" rows="2" style="flex:1;"></textarea>
+      </div>
+      <div class="row-inline" style="margin-top:8px;">
+        <label style="display:flex;align-items:center;gap:8px;">
+          <input type="checkbox" id="eventAllDayToggle" />
+          All-day event
+        </label>
+        <input id="eventAllDayDateInput" type="date" style="width:200px;" />
+      </div>
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="eventStartInput" class="mono" placeholder="Start (ISO-8601, e.g. 2024-01-01T09:00:00Z)" style="flex:1;"/>
+        <input id="eventEndInput" class="mono" placeholder="End (ISO-8601, e.g. 2024-01-01T10:00:00Z)" style="flex:1;"/>
+        <button id="eventCreateBtn">Add event</button>
+      </div>
+      <div id="eventCreateStatus" class="muted" style="margin-top:6px;"></div>
+    </div>
+
+    <div class="section" style="margin-top:16px;">
+      <h4 style="margin:0 0 8px 0;">Events</h4>
+      <div class="row-inline">
+        <button id="eventsRefreshBtn">Refresh events</button>
+      </div>
+      <div id="calendarEventsList" class="list" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="section" style="margin-top:16px;">
+      <h4 style="margin:0 0 8px 0;">Availability</h4>
+      <div class="row-inline">
+        <input id="openingsStartInput" class="mono" placeholder="Start window (ISO-8601 UTC)" style="flex:1;"/>
+        <input id="openingsEndInput" class="mono" placeholder="End window (ISO-8601 UTC)" style="flex:1;"/>
+        <button id="openingsLoadBtn">Load openings</button>
+      </div>
+      <div id="calendarOpeningsList" class="list" style="margin-top:8px;"></div>
+    </div>
+  </div>
+
   <div class="card">
     <h3>Alert Recipients</h3>
     <div class="section">
