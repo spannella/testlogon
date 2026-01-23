@@ -216,6 +216,17 @@ function apiPost(path, body, { includeSession = true } = {}) {
   return api(path, { method: "POST", body, includeSession });
 }
 
+async function apiPublic(path, { method = "GET", body = null } = {}) {
+  const headers = {};
+  if (body !== null) headers["Content-Type"] = "application/json";
+  const res = await fetch(API_BASE + path, {
+    method,
+    headers,
+    body: body !== null ? JSON.stringify(body) : undefined,
+  });
+  const txt = await res.text();
+  if (!res.ok) throw new Error(res.status + ": " + txt);
+  return txt ? JSON.parse(txt) : {};
 function apiPatch(path, body, { includeSession = true } = {}) {
   return api(path, { method: "PATCH", body, includeSession });
 }
@@ -818,6 +829,284 @@ async function refreshBillingAll() {
   } catch (e) {
     setBillingStatus(String(e));
   }
+}
+
+/* ===================== password recovery ===================== */
+const passwordRecoveryState = {
+  username: "",
+  challengeId: null,
+  required: [],
+  totpDone: false,
+  smsDone: false,
+  emailDone: false,
+  smsSentTo: [],
+  emailSentTo: [],
+  delivery: null,
+  lastErr: "",
+};
+
+function resetPasswordRecoveryState() {
+  passwordRecoveryState.challengeId = null;
+  passwordRecoveryState.required = [];
+  passwordRecoveryState.totpDone = false;
+  passwordRecoveryState.smsDone = false;
+  passwordRecoveryState.emailDone = false;
+  passwordRecoveryState.smsSentTo = [];
+  passwordRecoveryState.emailSentTo = [];
+  passwordRecoveryState.delivery = null;
+  passwordRecoveryState.lastErr = "";
+}
+
+function renderPasswordRecovery() {
+  const deliveryEl = document.getElementById("pwRecoveryDelivery");
+  const challengeEl = document.getElementById("pwRecoveryChallenge");
+  const challengesEl = document.getElementById("pwRecoveryChallenges");
+  const msgEl = document.getElementById("pwRecoveryMsg");
+  if (!deliveryEl || !challengeEl || !challengesEl || !msgEl) return;
+
+  if (passwordRecoveryState.delivery) {
+    deliveryEl.textContent = `Delivery: ${passwordRecoveryState.delivery}`;
+  } else {
+    deliveryEl.textContent = "";
+  }
+
+  if (passwordRecoveryState.challengeId) {
+    challengeEl.innerHTML = `Challenge: <code class="mono">${passwordRecoveryState.challengeId}</code>`;
+  } else if (passwordRecoveryState.required.length) {
+    challengeEl.textContent = "Challenge required but not started.";
+  } else {
+    challengeEl.textContent = "";
+  }
+
+  const req = passwordRecoveryState.required;
+  if (!req.length) {
+    challengesEl.innerHTML = "";
+  } else {
+    const badge = (done) => done ? `<span class="pill">✅ verified</span>` : `<span class="pill">required</span>`;
+    const totpSection = req.includes("totp") ? `
+      <div style="border:1px solid #eee; padding:10px; border-radius:10px; margin-top:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+          <div><b>TOTP</b> ${badge(passwordRecoveryState.totpDone)}</div>
+        </div>
+        <input id="pwRecoveryTotpCode" placeholder="123456" inputmode="numeric" autocomplete="one-time-code"
+               ${passwordRecoveryState.totpDone ? "disabled" : ""} />
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">
+          <button id="pwRecoveryTotpVerifyBtn" ${passwordRecoveryState.totpDone ? "disabled" : ""}>Verify TOTP</button>
+          <button id="pwRecoveryTotpRecoveryBtn" ${passwordRecoveryState.totpDone ? "disabled" : ""}>Use TOTP recovery</button>
+        </div>
+      </div>
+    ` : "";
+
+    const smsSection = req.includes("sms") ? `
+      <div style="border:1px solid #eee; padding:10px; border-radius:10px; margin-top:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+          <div><b>SMS</b> ${badge(passwordRecoveryState.smsDone)}</div>
+          <button id="pwRecoverySmsSendBtn" ${passwordRecoveryState.smsDone ? "disabled" : ""}>
+            ${passwordRecoveryState.smsSentTo.length ? "Resend SMS" : "Send SMS"}
+          </button>
+        </div>
+        <div style="margin-top:6px;">
+          ${passwordRecoveryState.smsSentTo.length
+            ? `<small>Sent to: ${passwordRecoveryState.smsSentTo.map(x=>`<code>${x}</code>`).join(" ")}</small>`
+            : `<small>We will text a code to all your enabled numbers.</small>`}
+        </div>
+        <input id="pwRecoverySmsCode" placeholder="SMS code" inputmode="numeric" autocomplete="one-time-code"
+               ${passwordRecoveryState.smsDone ? "disabled" : ""} />
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">
+          <button id="pwRecoverySmsVerifyBtn" ${passwordRecoveryState.smsDone ? "disabled" : ""}>Verify SMS</button>
+          <button id="pwRecoverySmsRecoveryBtn" ${passwordRecoveryState.smsDone ? "disabled" : ""}>Use SMS recovery</button>
+        </div>
+      </div>
+    ` : "";
+
+    const emailSection = req.includes("email") ? `
+      <div style="border:1px solid #eee; padding:10px; border-radius:10px; margin-top:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+          <div><b>Email</b> ${badge(passwordRecoveryState.emailDone)}</div>
+          <button id="pwRecoveryEmailSendBtn" ${passwordRecoveryState.emailDone ? "disabled" : ""}>
+            ${passwordRecoveryState.emailSentTo.length ? "Resend Email" : "Send Email"}
+          </button>
+        </div>
+        <div style="margin-top:6px;">
+          ${passwordRecoveryState.emailSentTo.length
+            ? `<small>Sent to: ${passwordRecoveryState.emailSentTo.map(x=>`<code>${x}</code>`).join(" ")}</small>`
+            : `<small>We will email a code to all your enabled addresses.</small>`}
+        </div>
+        <input id="pwRecoveryEmailCode" placeholder="Email code" inputmode="numeric" autocomplete="one-time-code"
+               ${passwordRecoveryState.emailDone ? "disabled" : ""} />
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">
+          <button id="pwRecoveryEmailVerifyBtn" ${passwordRecoveryState.emailDone ? "disabled" : ""}>Verify Email</button>
+          <button id="pwRecoveryEmailRecoveryBtn" ${passwordRecoveryState.emailDone ? "disabled" : ""}>Use Email recovery</button>
+        </div>
+      </div>
+    ` : "";
+
+    challengesEl.innerHTML = `${totpSection}${smsSection}${emailSection}`;
+  }
+
+  msgEl.textContent = passwordRecoveryState.lastErr || "";
+
+  const setError = (e) => {
+    passwordRecoveryState.lastErr = String(e);
+    renderPasswordRecovery();
+  };
+
+  if (req.includes("totp")) {
+    const verifyBtn = document.getElementById("pwRecoveryTotpVerifyBtn");
+    const recoveryBtn = document.getElementById("pwRecoveryTotpRecoveryBtn");
+    if (verifyBtn) verifyBtn.onclick = async () => {
+      try {
+        const code = (document.getElementById("pwRecoveryTotpCode").value || "").trim();
+        await apiPublic("/ui/password-recovery/challenge/totp/verify", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId, totp_code: code },
+        });
+        passwordRecoveryState.totpDone = true;
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+    if (recoveryBtn) recoveryBtn.onclick = async () => {
+      const rc = prompt("Enter a TOTP recovery code:") || "";
+      if (!rc.trim()) return;
+      try {
+        await apiPublic("/ui/password-recovery/challenge/recovery", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId, factor: "totp", recovery_code: rc.trim() },
+        });
+        passwordRecoveryState.totpDone = true;
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+  }
+
+  if (req.includes("sms")) {
+    const sendBtn = document.getElementById("pwRecoverySmsSendBtn");
+    const verifyBtn = document.getElementById("pwRecoverySmsVerifyBtn");
+    const recoveryBtn = document.getElementById("pwRecoverySmsRecoveryBtn");
+    if (sendBtn) sendBtn.onclick = async () => {
+      try {
+        const res = await apiPublic("/ui/password-recovery/challenge/sms/begin", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId },
+        });
+        passwordRecoveryState.smsSentTo = res.sent_to || [];
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+    if (verifyBtn) verifyBtn.onclick = async () => {
+      try {
+        const code = (document.getElementById("pwRecoverySmsCode").value || "").trim();
+        await apiPublic("/ui/password-recovery/challenge/sms/verify", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId, code },
+        });
+        passwordRecoveryState.smsDone = true;
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+    if (recoveryBtn) recoveryBtn.onclick = async () => {
+      const rc = prompt("Enter an SMS recovery code:") || "";
+      if (!rc.trim()) return;
+      try {
+        await apiPublic("/ui/password-recovery/challenge/recovery", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId, factor: "sms", recovery_code: rc.trim() },
+        });
+        passwordRecoveryState.smsDone = true;
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+  }
+
+  if (req.includes("email")) {
+    const sendBtn = document.getElementById("pwRecoveryEmailSendBtn");
+    const verifyBtn = document.getElementById("pwRecoveryEmailVerifyBtn");
+    const recoveryBtn = document.getElementById("pwRecoveryEmailRecoveryBtn");
+    if (sendBtn) sendBtn.onclick = async () => {
+      try {
+        const res = await apiPublic("/ui/password-recovery/challenge/email/begin", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId },
+        });
+        passwordRecoveryState.emailSentTo = res.sent_to || [];
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+    if (verifyBtn) verifyBtn.onclick = async () => {
+      try {
+        const code = (document.getElementById("pwRecoveryEmailCode").value || "").trim();
+        await apiPublic("/ui/password-recovery/challenge/email/verify", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId, code },
+        });
+        passwordRecoveryState.emailDone = true;
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+    if (recoveryBtn) recoveryBtn.onclick = async () => {
+      const rc = prompt("Enter an Email recovery code:") || "";
+      if (!rc.trim()) return;
+      try {
+        await apiPublic("/ui/password-recovery/challenge/recovery", {
+          method: "POST",
+          body: { username: passwordRecoveryState.username, challenge_id: passwordRecoveryState.challengeId, factor: "email", recovery_code: rc.trim() },
+        });
+        passwordRecoveryState.emailDone = true;
+        renderPasswordRecovery();
+      } catch (e) { setError(e); }
+    };
+  }
+}
+
+async function startPasswordRecovery() {
+  const username = (document.getElementById("pwRecoveryUsername").value || "").trim();
+  if (!username) {
+    passwordRecoveryState.lastErr = "Username required.";
+    renderPasswordRecovery();
+    return;
+  }
+  resetPasswordRecoveryState();
+  passwordRecoveryState.username = username;
+  try {
+    const res = await apiPublic("/ui/password-recovery/start", {
+      method: "POST",
+      body: { username },
+    });
+    const delivery = [res.delivery_medium, res.delivery_destination].filter(Boolean).join(" • ");
+    passwordRecoveryState.delivery = delivery || null;
+    passwordRecoveryState.challengeId = res.challenge_id || null;
+    passwordRecoveryState.required = res.required_factors || [];
+    passwordRecoveryState.lastErr = "";
+  } catch (e) {
+    passwordRecoveryState.lastErr = String(e);
+  }
+  renderPasswordRecovery();
+}
+
+async function confirmPasswordRecovery() {
+  const username = (document.getElementById("pwRecoveryUsername").value || "").trim();
+  const code = (document.getElementById("pwRecoveryCode").value || "").trim();
+  const newPassword = (document.getElementById("pwRecoveryNewPassword").value || "").trim();
+  if (!username || !code || !newPassword) {
+    passwordRecoveryState.lastErr = "Username, confirmation code, and new password are required.";
+    renderPasswordRecovery();
+    return;
+  }
+  try {
+    await apiPublic("/ui/password-recovery/confirm", {
+      method: "POST",
+      body: {
+        username,
+        confirmation_code: code,
+        new_password: newPassword,
+        challenge_id: passwordRecoveryState.challengeId,
+      },
+    });
+    passwordRecoveryState.lastErr = "Password updated. You can now log in.";
+  } catch (e) {
+    passwordRecoveryState.lastErr = String(e);
+  }
+  renderPasswordRecovery();
 }
 
 /* ===================== session start ===================== */
@@ -2322,6 +2611,8 @@ document.getElementById("smsAddBtn").onclick = async () => { await ensureUiSessi
 
 document.getElementById("emailRefreshBtn").onclick = async () => { await ensureUiSession(); await refreshEmailDevices(); };
 document.getElementById("emailAddBtn").onclick = async () => { await ensureUiSession(); openEmailAddModal(); };
+document.getElementById("pwRecoveryStartBtn").onclick = startPasswordRecovery;
+document.getElementById("pwRecoveryConfirmBtn").onclick = confirmPasswordRecovery;
 
 document.getElementById("profileLoadBtn").onclick = async () => {
   try {
@@ -2395,6 +2686,20 @@ document.getElementById("profileAuditRefreshBtn").onclick = async () => {
 };
 
 initBillingUi();
+renderPasswordRecovery();
+document.getElementById("billingRefreshBtn").onclick = refreshBillingAll;
+document.getElementById("paySettledBalanceBtn").onclick = payBillingSettledBalance;
+document.getElementById("autopay").onchange = setBillingAutopay;
+document.getElementById("paneAddCardBtn").onclick = () => showBillingPane("add_card");
+document.getElementById("paneAddBankBtn").onclick = () => showBillingPane("add_bank");
+document.getElementById("paneVerifyBankBtn").onclick = () => showBillingPane("verify_bank");
+document.getElementById("paneListMethodsBtn").onclick = () => showBillingPane("list_methods");
+document.getElementById("addCardBtn").onclick = addBillingCard;
+document.getElementById("addBankAccountBtn").onclick = addBillingBankAccount;
+document.getElementById("usePendingSetupIntentBtn").onclick = useBillingPendingSetupIntent;
+document.getElementById("verifyByAmountsBtn").onclick = verifyBillingByAmounts;
+document.getElementById("verifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
+document.getElementById("loadLedgerBtn").onclick = loadBillingLedger;
 document.getElementById("stripeRefreshBtn").onclick = refreshBillingAll;
 document.getElementById("stripePaySettledBalanceBtn").onclick = payBillingSettledBalance;
 document.getElementById("stripe_autopay").onchange = setBillingAutopay;

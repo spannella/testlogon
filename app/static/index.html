@@ -105,6 +105,26 @@
 </div>
 
 <div class="row">
+  <div class="card" style="width:100%">
+    <h3>Password Recovery (Cognito)</h3>
+    <div class="muted">Reset your password and complete every enabled MFA challenge before confirming.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <input id="pwRecoveryUsername" placeholder="Username or email" style="flex:1;" />
+      <button id="pwRecoveryStartBtn">Start recovery</button>
+    </div>
+    <div id="pwRecoveryDelivery" class="muted" style="margin-top:8px;"></div>
+    <div id="pwRecoveryChallenge" class="muted" style="margin-top:6px;"></div>
+    <div id="pwRecoveryChallenges" class="section"></div>
+    <div class="row-inline" style="margin-top:10px;">
+      <input id="pwRecoveryCode" placeholder="Confirmation code" />
+      <input id="pwRecoveryNewPassword" placeholder="New password" type="password" />
+      <button id="pwRecoveryConfirmBtn">Confirm new password</button>
+    </div>
+    <div id="pwRecoveryMsg" class="muted" style="margin-top:8px;"></div>
+  </div>
+</div>
+
+<div class="row">
   <div class="card">
     <h3>User Profile</h3>
     <div class="muted">Manage profile details displayed to other users.</div>

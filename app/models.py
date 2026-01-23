@@ -49,6 +49,34 @@ class RecoveryReq(BaseModel):
     recovery_code: str = Field(validation_alias=AliasChoices("recovery_code", "code"))
     factor: str = "totp"  # totp|sms|email
 
+class PasswordRecoveryStartReq(BaseModel):
+    username: str
+
+class PasswordRecoveryConfirmReq(BaseModel):
+    username: str
+    confirmation_code: str = Field(validation_alias=AliasChoices("confirmation_code", "code"))
+    new_password: str
+    challenge_id: Optional[str] = None
+
+class PasswordRecoveryChallengeReq(BaseModel):
+    username: str
+    challenge_id: str
+
+class PasswordRecoveryTotpVerifyReq(PasswordRecoveryChallengeReq):
+    model_config = ConfigDict(populate_by_name=True)
+    totp_code: str = Field(validation_alias=AliasChoices("totp_code", "code"))
+
+class PasswordRecoverySmsVerifyReq(PasswordRecoveryChallengeReq):
+    code: str
+
+class PasswordRecoveryEmailVerifyReq(PasswordRecoveryChallengeReq):
+    code: str
+
+class PasswordRecoveryRecoveryCodeReq(PasswordRecoveryChallengeReq):
+    model_config = ConfigDict(populate_by_name=True)
+    factor: str
+    recovery_code: str = Field(validation_alias=AliasChoices("recovery_code", "code"))
+
 class CreateApiKeyReq(BaseModel):
     label: Optional[str] = None
 
