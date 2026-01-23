@@ -44,6 +44,64 @@ This service is a FastAPI application with DynamoDB-backed storage and optional 
 
 5. Open the UI at `http://localhost:8000/`.
 
+## PayPal billing
+
+The dashboard includes a PayPal billing panel for vaulting payment methods, one-time charges, subscriptions, and ledger visibility.
+
+### Required environment variables
+
+```bash
+export BILLING_TABLE_NAME=your_billing_table
+export PAYPAL_CLIENT_ID=your_paypal_client_id
+export PAYPAL_CLIENT_SECRET=your_paypal_client_secret
+export PAYPAL_WEBHOOK_ID=your_paypal_webhook_id
+```
+
+### Optional environment variables
+
+```bash
+export PAYPAL_ENV=sandbox                # sandbox or live
+export PUBLIC_BASE_URL=http://localhost:8000
+export DEFAULT_CURRENCY=usd
+export DEFAULT_MONTHLY_PRICE_CENTS=999
+export PAYPAL_PLAN_MAP=monthly:P-123,pro:P-456
+```
+
+### Billing DynamoDB table
+
+The billing table stores balance snapshots, ledger entries, payment method tokens, payment records, subscription records, and webhook dedupe markers. The table uses a partition key of `pk` and sort key of `sk`.
+
+### Billing endpoints
+
+- `GET /api/billing/config`
+- `GET /api/billing/settings`
+- `POST /api/billing/autopay`
+- `GET /api/billing/balance`
+- `POST /api/billing/payment-methods/paypal/setup-token`
+- `POST /api/billing/payment-methods/paypal/exchange-token`
+- `GET /api/billing/payment-methods`
+- `POST /api/billing/payment-methods/priority`
+- `POST /api/billing/payment-methods/default`
+- `DELETE /api/billing/payment-methods/{payment_token_id}`
+- `POST /api/billing/charge-once`
+- `POST /api/billing/paypal/capture-order`
+- `POST /api/billing/pay-balance`
+- `POST /api/billing/subscribe-monthly`
+- `POST /api/billing/subscriptions/cancel`
+- `POST /api/billing/_dev/add-charge`
+- `GET /api/billing/ledger`
+- `GET /api/billing/payments`
+- `GET /api/billing/subscriptions`
+- `POST /api/paypal/webhook`
+
+### Running billing tests
+
+The billing test suite exercises helper utilities and all billing endpoints via FastAPI's TestClient. Run:
+
+```bash
+pytest -q
+```
+
 ## Deploy
 
 ### Requirements

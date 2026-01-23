@@ -16,6 +16,7 @@ from app.routers.alerts import router as alerts_router
 from app.routers.push import router as push_router
 from app.routers.recovery import router as recovery_router
 from app.routers.misc import router as misc_router
+from app.routers.paypal import router as paypal_router
 from app.routers.billing import router as billing_router
 
 def create_app() -> FastAPI:
@@ -48,6 +49,7 @@ def create_app() -> FastAPI:
     app.include_router(push_router)
     app.include_router(recovery_router)
     app.include_router(misc_router)
+    app.include_router(paypal_router)
     app.include_router(billing_router)
 
     return app
