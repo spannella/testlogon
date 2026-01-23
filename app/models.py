@@ -169,6 +169,46 @@ class SetAutopayIn(BaseModel):
     enabled: bool
 
 
+class MailingAddress(BaseModel):
+    line1: Optional[str] = None
+    line2: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+
+
+class LanguageIn(BaseModel):
+    name: str
+    level: str
+
+
+class ProfileBase(BaseModel):
+    display_name: Optional[str] = None
+    first_name: Optional[str] = None
+    middle_name: Optional[str] = None
+    last_name: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    birthday: Optional[str] = None
+    gender: Optional[str] = None
+    location: Optional[str] = None
+    displayed_email: Optional[str] = None
+    displayed_telephone_number: Optional[str] = None
+    mailing_address: Optional[MailingAddress] = None
+    languages: Optional[List[LanguageIn]] = None
+    profile_photo_url: Optional[str] = None
+    cover_photo_url: Optional[str] = None
+
+
+class ProfilePatchReq(ProfileBase):
+    pass
+
+
+class ProfilePutReq(ProfileBase):
+    pass
+
+
 class PayBalanceIn(BaseModel):
     amount_cents: Optional[int] = Field(default=None, ge=1)
     idempotency_key: Optional[str] = None

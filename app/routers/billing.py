@@ -4,7 +4,10 @@ import secrets
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin
 
-import stripe
+try:
+    import stripe  # type: ignore
+except Exception:  # pragma: no cover
+    stripe = None  # type: ignore
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -19,6 +22,7 @@ from app.models import (
     SetAutopayReq,
     SetDefaultReq,
     SetPriorityReq,
+    StripePaymentMethodOut,
     VerifyMicrodepositsReq,
 )
 from app.services.sessions import require_ui_session
@@ -53,6 +57,8 @@ def dual_route(methods: str | Iterable[str], path: str, **kwargs: Any) -> Callab
 
 
 def ensure_stripe_configured() -> None:
+    if not stripe:
+        raise HTTPException(501, "Stripe SDK not installed")
     if not S.stripe_secret_key:
         raise HTTPException(501, "Stripe is not configured")
     stripe.api_key = S.stripe_secret_key

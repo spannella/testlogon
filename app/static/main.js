@@ -216,6 +216,14 @@ function apiPost(path, body, { includeSession = true } = {}) {
   return api(path, { method: "POST", body, includeSession });
 }
 
+function apiPatch(path, body, { includeSession = true } = {}) {
+  return api(path, { method: "PATCH", body, includeSession });
+}
+
+function apiPut(path, body, { includeSession = true } = {}) {
+  return api(path, { method: "PUT", body, includeSession });
+}
+
 function parseHttpError(errStr){
   const m = String(errStr).match(/^(\d+):\s/);
   return m ? parseInt(m[1],10) : null;
@@ -1704,6 +1712,7 @@ async function refreshAll() {
       refreshAlertEmailSettings(),
       refreshPushUI(),
       refreshAlerts(),
+      refreshProfile(),
       billingRefreshAll(),
     ]);
     await pollToastsOnce();
@@ -1793,6 +1802,223 @@ function openConfirmSmsModal(sentTo, challenge_id) {
       }},
     ]
   });
+}
+
+/* ===================== Profile ===================== */
+let profileLanguages = [];
+
+function setProfileStatus(msg) {
+  const el = document.getElementById("profileStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function setProfileAuditStatus(msg) {
+  const el = document.getElementById("profileAuditStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function readInput(id) {
+  const el = document.getElementById(id);
+  if (!el) return "";
+  return (el.value || "").trim();
+}
+
+function readInputOrNull(id) {
+  const v = readInput(id);
+  return v ? v : null;
+}
+
+function setInputValue(id, value) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.value = value || "";
+}
+
+function renderProfileLanguages() {
+  const el = document.getElementById("profileLangList");
+  if (!el) return;
+  el.innerHTML = "";
+  profileLanguages.forEach((lang) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `
+      <div class="grow"><b>${escapeHtml(lang.name || "")}</b><div class="muted">${escapeHtml(lang.level || "")}</div></div>
+      <div><button data-name="${escapeHtml(lang.name || "")}">Remove</button></div>
+    `;
+    row.querySelector("button").onclick = (ev) => {
+      const name = ev.target.getAttribute("data-name");
+      profileLanguages = profileLanguages.filter((l) => l.name !== name);
+      renderProfileLanguages();
+    };
+    el.appendChild(row);
+  });
+}
+
+function setProfileLanguages(langs) {
+  profileLanguages = Array.isArray(langs) ? langs : [];
+  renderProfileLanguages();
+}
+
+function setProfileForm(profile) {
+  setInputValue("profileDisplayName", profile.display_name);
+  setInputValue("profileFirstName", profile.first_name);
+  setInputValue("profileMiddleName", profile.middle_name);
+  setInputValue("profileLastName", profile.last_name);
+  setInputValue("profileTitle", profile.title);
+  setInputValue("profileDescription", profile.description);
+  setInputValue("profileBirthday", profile.birthday);
+  setInputValue("profileGender", profile.gender);
+  setInputValue("profileLocation", profile.location);
+  setInputValue("profileEmail", profile.displayed_email);
+  setInputValue("profilePhone", profile.displayed_telephone_number);
+
+  const addr = profile.mailing_address || {};
+  setInputValue("profileAddrLine1", addr.line1);
+  setInputValue("profileAddrLine2", addr.line2);
+  setInputValue("profileAddrCity", addr.city);
+  setInputValue("profileAddrState", addr.state);
+  setInputValue("profileAddrPostal", addr.postal_code);
+  setInputValue("profileAddrCountry", addr.country);
+
+  setProfileLanguages(profile.languages || []);
+
+  const profileUrl = profile.profile_photo_url || "";
+  const profileUrlEl = document.getElementById("profilePhotoUrl");
+  if (profileUrlEl) profileUrlEl.textContent = profileUrl;
+  const profileImg = document.getElementById("profilePhotoPreview");
+  if (profileImg) {
+    if (profileUrl) {
+      profileImg.src = profileUrl;
+      profileImg.classList.remove("hidden");
+    } else {
+      profileImg.classList.add("hidden");
+    }
+  }
+
+  const coverUrl = profile.cover_photo_url || "";
+  const coverUrlEl = document.getElementById("profileCoverUrl");
+  if (coverUrlEl) coverUrlEl.textContent = coverUrl;
+  const coverImg = document.getElementById("profileCoverPreview");
+  if (coverImg) {
+    if (coverUrl) {
+      coverImg.src = coverUrl;
+      coverImg.classList.remove("hidden");
+    } else {
+      coverImg.classList.add("hidden");
+    }
+  }
+}
+
+function resetProfileForm() {
+  setProfileForm({});
+  setProfileStatus("");
+  setProfileAuditStatus("");
+  const list = document.getElementById("profileAuditList");
+  if (list) list.innerHTML = "";
+}
+
+function buildProfilePayload({ includeEmpty }) {
+  const payload = {};
+  const fields = [
+    ["display_name", "profileDisplayName"],
+    ["first_name", "profileFirstName"],
+    ["middle_name", "profileMiddleName"],
+    ["last_name", "profileLastName"],
+    ["title", "profileTitle"],
+    ["description", "profileDescription"],
+    ["birthday", "profileBirthday"],
+    ["gender", "profileGender"],
+    ["location", "profileLocation"],
+    ["displayed_email", "profileEmail"],
+    ["displayed_telephone_number", "profilePhone"],
+  ];
+  fields.forEach(([key, id]) => {
+    const val = readInputOrNull(id);
+    if (includeEmpty || val) payload[key] = val;
+  });
+
+  const addr = {
+    line1: readInputOrNull("profileAddrLine1"),
+    line2: readInputOrNull("profileAddrLine2"),
+    city: readInputOrNull("profileAddrCity"),
+    state: readInputOrNull("profileAddrState"),
+    postal_code: readInputOrNull("profileAddrPostal"),
+    country: readInputOrNull("profileAddrCountry"),
+  };
+  const addrHasValue = Object.values(addr).some((v) => v);
+  if (includeEmpty) {
+    payload.mailing_address = addrHasValue ? addr : null;
+  } else if (addrHasValue) {
+    payload.mailing_address = addr;
+  }
+
+  if (includeEmpty || profileLanguages.length) {
+    payload.languages = profileLanguages;
+  }
+  return payload;
+}
+
+async function refreshProfile() {
+  await ensureUiSession();
+  const res = await apiGet("/ui/profile");
+  setProfileForm(res.profile || {});
+}
+
+async function saveProfile({ replace }) {
+  await ensureUiSession();
+  const payload = buildProfilePayload({ includeEmpty: replace });
+  const path = "/ui/profile";
+  const result = replace ? await apiPut(path, payload) : await apiPatch(path, payload);
+  setProfileForm(result.profile || {});
+}
+
+async function refreshProfileAudit() {
+  await ensureUiSession();
+  const res = await apiGet("/ui/profile/audit");
+  const list = document.getElementById("profileAuditList");
+  if (!list) return;
+  list.innerHTML = "";
+  (res.audit || []).forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `
+      <div class="grow">
+        <div><b>${escapeHtml(entry.field || "")}</b></div>
+        <div class="muted">${escapeHtml(JSON.stringify(entry.to ?? null))}</div>
+      </div>
+      <div class="muted">${fmtTs(entry.ts)}</div>
+    `;
+    list.appendChild(row);
+  });
+}
+
+async function apiUpload(path, file) {
+  const tok = accessToken();
+  if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(API_BASE + path, {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + tok,
+      "X-SESSION-ID": sid,
+    },
+    body: form,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return await res.json();
+}
+
+async function uploadProfilePhoto(kind, fileInputId) {
+  const input = document.getElementById(fileInputId);
+  if (!input || !input.files || !input.files.length) return;
+  const file = input.files[0];
+  await ensureUiSession();
+  const res = await apiUpload(`/ui/profile/photos/${kind}/upload`, file);
+  setProfileForm(res.profile || {});
+  input.value = "";
 }
 
 /* ===================== Push (FCM Web) =====================
@@ -2096,6 +2322,77 @@ document.getElementById("smsAddBtn").onclick = async () => { await ensureUiSessi
 
 document.getElementById("emailRefreshBtn").onclick = async () => { await ensureUiSession(); await refreshEmailDevices(); };
 document.getElementById("emailAddBtn").onclick = async () => { await ensureUiSession(); openEmailAddModal(); };
+
+document.getElementById("profileLoadBtn").onclick = async () => {
+  try {
+    setProfileStatus("Loading...");
+    await refreshProfile();
+    setProfileStatus("Loaded.");
+  } catch (e) {
+    setProfileStatus(String(e));
+  }
+};
+document.getElementById("profileSavePatchBtn").onclick = async () => {
+  try {
+    setProfileStatus("Saving...");
+    await saveProfile({ replace: false });
+    setProfileStatus("Saved.");
+  } catch (e) {
+    setProfileStatus(String(e));
+  }
+};
+document.getElementById("profileSaveReplaceBtn").onclick = async () => {
+  try {
+    setProfileStatus("Saving...");
+    await saveProfile({ replace: true });
+    setProfileStatus("Saved.");
+  } catch (e) {
+    setProfileStatus(String(e));
+  }
+};
+document.getElementById("profileResetBtn").onclick = () => {
+  resetProfileForm();
+};
+document.getElementById("profileLangAddBtn").onclick = () => {
+  const name = readInput("profileLangName");
+  if (!name) return;
+  const level = readInput("profileLangLevel") || "basic";
+  const existing = profileLanguages.find((l) => l.name === name);
+  if (existing) {
+    existing.level = level;
+  } else {
+    profileLanguages.push({ name, level });
+  }
+  setInputValue("profileLangName", "");
+  renderProfileLanguages();
+};
+document.getElementById("profilePhotoUploadBtn").onclick = async () => {
+  try {
+    setProfileStatus("Uploading profile photo...");
+    await uploadProfilePhoto("profile", "profilePhotoFile");
+    setProfileStatus("Profile photo updated.");
+  } catch (e) {
+    setProfileStatus(String(e));
+  }
+};
+document.getElementById("profileCoverUploadBtn").onclick = async () => {
+  try {
+    setProfileStatus("Uploading cover photo...");
+    await uploadProfilePhoto("cover", "profileCoverFile");
+    setProfileStatus("Cover photo updated.");
+  } catch (e) {
+    setProfileStatus(String(e));
+  }
+};
+document.getElementById("profileAuditRefreshBtn").onclick = async () => {
+  try {
+    setProfileAuditStatus("Refreshing...");
+    await refreshProfileAudit();
+    setProfileAuditStatus("");
+  } catch (e) {
+    setProfileAuditStatus(String(e));
+  }
+};
 
 initBillingUi();
 document.getElementById("stripeRefreshBtn").onclick = refreshBillingAll;
