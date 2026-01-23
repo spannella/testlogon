@@ -89,5 +89,17 @@ class Settings:
 
     audit_log_enabled: bool = os.environ.get("AUDIT_LOG_ENABLED", "1") not in ("0","false","False")
 
+    # Billing / PayPal
+    billing_table_name: str = os.environ.get("BILLING_TABLE_NAME", os.environ.get("DDB_TABLE", ""))
+    public_base_url: str = os.environ.get("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")
+    default_monthly_price_cents: int = int(os.environ.get("DEFAULT_MONTHLY_PRICE_CENTS", "999"))
+    default_currency: str = os.environ.get("DEFAULT_CURRENCY", "usd").lower()
+
+    paypal_env: str = os.environ.get("PAYPAL_ENV", "sandbox").lower()
+    paypal_client_id: str = os.environ.get("PAYPAL_CLIENT_ID", "")
+    paypal_client_secret: str = os.environ.get("PAYPAL_CLIENT_SECRET", "")
+    paypal_webhook_id: str = os.environ.get("PAYPAL_WEBHOOK_ID", "")
+    paypal_plan_map: str = os.environ.get("PAYPAL_PLAN_MAP", "")
+
 
 S = Settings()

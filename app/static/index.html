@@ -183,10 +183,542 @@
   </div>
 </div>
 
+<div class="card" style="margin-top:16px;">
+  <h3>Billing (PayPal)</h3>
+  <div class="muted">
+    Assumes login is handled. This UI sends <code>X-User-Id</code> on each request.
+  </div>
+  <div class="row-inline" style="margin-top:10px;">
+    <label class="muted">User ID</label>
+    <input id="uid" placeholder="u_123" style="width:280px; margin-top:0;"/>
+    <button class="primary" onclick="refreshAll()">Refresh</button>
+    <span id="status" class="muted"></span>
+  </div>
+  <div class="row-inline muted">
+    <div>Tip:</div>
+    <div>When PayPal redirects back here, we can auto-capture an approved order if <code>?token=ORDER_ID</code> is present.</div>
+  </div>
+</div>
+
+<div class="grid" style="margin-top:16px;">
+  <div class="card">
+    <h3 style="margin:0 0 8px 0">Balance</h3>
+    <div class="row">
+      <div>
+        <div class="muted">Due (settled)</div>
+        <div class="mono" style="font-size:22px" id="due_settled">—</div>
+      </div>
+      <div style="width:24px"></div>
+      <div>
+        <div class="muted">Due (if pending settles)</div>
+        <div class="mono" style="font-size:22px" id="due_all">—</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="row">
+        <div class="muted">Owed pending:</div><div class="mono" id="owed_pending">—</div>
+        <div class="muted">Owed settled:</div><div class="mono" id="owed_settled">—</div>
+      </div>
+      <div class="row">
+        <div class="muted">Payments pending:</div><div class="mono" id="pay_pending">—</div>
+        <div class="muted">Payments settled:</div><div class="mono" id="pay_settled">—</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="row">
+        <button class="primary" onclick="paySettledBalance()">Pay settled balance</button>
+        <input id="pay_amount" placeholder="amount (optional, cents)" style="width:220px; margin-top:0;"/>
+        <span id="pay_result" class="muted"></span>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="row">
+        <label class="muted">Autopay</label>
+        <input type="checkbox" id="autopay" onchange="setAutopay()"/>
+        <span class="muted">Autopay scheduling is backend/worker responsibility (webhook settles).</span>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3 style="margin:0 0 8px 0">One-time charge</h3>
+      <div class="muted">Creates a PayPal order; if approval is required, you’ll be redirected to PayPal and back.</div>
+      <div class="row" style="margin-top:10px">
+        <input id="charge_amount" placeholder="amount (cents)" style="width:220px; margin-top:0;"/>
+        <select id="charge_use_default">
+          <option value="1" selected>Use default saved method</option>
+          <option value="0">Pick token manually</option>
+        </select>
+        <input id="charge_token" placeholder="payment_token_id (optional)" style="width:360px; margin-top:0;" class="hidden"/>
+      </div>
+      <div class="row">
+        <button class="primary" onclick="chargeOnce()">Create order</button>
+        <button onclick="captureFromUrlToken()">Capture ?token (if present)</button>
+        <span id="charge_result" class="muted"></span>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3 style="margin:0 0 8px 0">Monthly subscription</h3>
+      <div class="muted">Creates a PayPal subscription (approval required). Activate/renewal handled via webhooks.</div>
+      <div class="row" style="margin-top:10px">
+        <input id="sub_plan" placeholder="plan_id (your internal, e.g. monthly)" style="width:320px; margin-top:0;" value="monthly"/>
+        <input id="sub_paypal_plan" placeholder="paypal_plan_id (optional override)" style="width:360px; margin-top:0;"/>
+      </div>
+      <div class="row">
+        <button class="primary" onclick="startSubscription()">Start subscription</button>
+        <span id="sub_result" class="muted"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px 0">Payment methods (PayPal Vault)</h3>
+
+    <div class="row">
+      <button onclick="showPane('add_paypal')">Add PayPal</button>
+      <button onclick="showPane('add_card')">Add Card</button>
+      <button onclick="showPane('list_methods')" class="primary">List</button>
+    </div>
+
+    <div class="section">
+      <div id="pane_add_paypal" class="pane">
+        <div class="muted">
+          1) Create a setup token → 2) Approve on PayPal → 3) Exchange setup token for a saved <code>payment_token_id</code>.
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input id="pm_label_paypal" placeholder="label (optional)" style="width:260px; margin-top:0;"/>
+          <label class="muted"><input type="checkbox" id="pm_default_paypal" checked/> make default</label>
+          <button class="primary" onclick="createSetupToken('paypal')">Create + Open approval</button>
+        </div>
+        <div class="row">
+          <div class="muted">Last setup token:</div>
+          <div class="mono"><code id="last_setup_token">—</code></div>
+          <a id="last_approve_link" class="btnlink primary hidden" target="_blank" rel="noreferrer">Open approval</a>
+        </div>
+        <div class="row">
+          <button class="primary" onclick="exchangeLastSetupToken()">Finalize save (exchange)</button>
+          <span id="add_paypal_result" class="muted"></span>
+        </div>
+        <div class="muted">
+          If PayPal redirects you back here, just click “Finalize save (exchange)”.
+        </div>
+      </div>
+
+      <div id="pane_add_card" class="pane hidden">
+        <div class="muted">
+          Card vaulting via PayPal Vault. (Depending on your account setup, you may use PayPal JS SDK for card entry.)
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input id="pm_label_card" placeholder="label (optional)" style="width:260px; margin-top:0;"/>
+          <label class="muted"><input type="checkbox" id="pm_default_card" checked/> make default</label>
+          <button class="primary" onclick="createSetupToken('card')">Create + Open approval</button>
+        </div>
+        <div class="row">
+          <div class="muted">Last setup token:</div>
+          <div class="mono"><code id="last_setup_token_card">—</code></div>
+          <a id="last_approve_link_card" class="btnlink primary hidden" target="_blank" rel="noreferrer">Open approval</a>
+        </div>
+        <div class="row">
+          <button class="primary" onclick="exchangeLastSetupToken('card')">Finalize save (exchange)</button>
+          <span id="add_card_result" class="muted"></span>
+        </div>
+      </div>
+
+      <div id="pane_list_methods" class="pane hidden">
+        <div class="row">
+          <label class="muted"><input type="checkbox" id="del_from_paypal"/> delete from PayPal too</label>
+          <span class="muted">(otherwise only removes from your DB)</span>
+        </div>
+        <div id="methods" class="list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <h3 style="margin:0 0 8px 0">Ledger</h3>
+  <div class="row">
+    <button onclick="loadLedger()">Refresh ledger</button>
+    <input id="ledger_limit" placeholder="limit (default 50)" style="width:200px; margin-top:0;"/>
+    <span class="muted">Shows most recent first</span>
+  </div>
+  <div id="ledger" class="list" style="margin-top:10px"></div>
+</div>
+
 <div class="err" id="globalErr" style="margin-top:12px;"></div>
 
 <div id="toastContainer" class="toast-container"></div>
 
 <script src="/static/main.js"></script>
+<script>
+let lastSetupTokenPaypal = null;
+let lastSetupTokenCard = null;
+
+function fmtMoney(cents, currency='usd') {
+  const sign = cents < 0 ? "-" : "";
+  const v = Math.abs(cents) / 100.0;
+  return sign + v.toFixed(2) + " " + currency.toUpperCase();
+}
+
+function setStatus(msg) {
+  document.getElementById('status').innerText = msg || '';
+}
+
+async function api(path, opts={}) {
+  const uid = document.getElementById('uid').value.trim();
+  if (!uid) throw new Error("Set User ID first");
+  opts.headers = Object.assign({}, opts.headers||{}, {'X-User-Id': uid, 'Content-Type': 'application/json'});
+  const r = await fetch(path, opts);
+  const txt = await r.text();
+  if (!r.ok) throw new Error(txt || r.statusText);
+  return txt ? JSON.parse(txt) : null;
+}
+
+function showPane(which) {
+  const panes = ['add_paypal','add_card','list_methods'];
+  for (const p of panes) document.getElementById('pane_' + p).classList.add('hidden');
+  document.getElementById('pane_' + which).classList.remove('hidden');
+}
+
+function pillForType(t) {
+  const x = (t || '').toLowerCase();
+  if (x === 'paypal') return '<span class="pill ok">PAYPAL</span>';
+  if (x === 'card') return '<span class="pill warn">CARD</span>';
+  if (x) return '<span class="pill">' + x.toUpperCase() + '</span>';
+  return '<span class="pill">TOKEN</span>';
+}
+
+async function refreshAll() {
+  try {
+    setStatus("Loading...");
+
+    const bal = await api('/api/billing/balance');
+    document.getElementById('due_settled').innerText = fmtMoney(bal.due_settled_cents, bal.currency);
+    document.getElementById('due_all').innerText = fmtMoney(bal.due_if_all_settles_cents, bal.currency);
+
+    document.getElementById('owed_pending').innerText = fmtMoney(bal.owed_pending_cents, bal.currency);
+    document.getElementById('owed_settled').innerText = fmtMoney(bal.owed_settled_cents, bal.currency);
+    document.getElementById('pay_pending').innerText = fmtMoney(bal.payments_pending_cents, bal.currency);
+    document.getElementById('pay_settled').innerText = fmtMoney(bal.payments_settled_cents, bal.currency);
+
+    const settings = await api('/api/billing/settings');
+    document.getElementById('autopay').checked = !!settings.autopay_enabled;
+
+    await loadPaymentMethods();
+    await loadLedger();
+
+    await captureFromUrlToken(true);
+
+    document.getElementById('charge_use_default').onchange = () => {
+      const useDefault = document.getElementById('charge_use_default').value === '1';
+      document.getElementById('charge_token').classList.toggle('hidden', useDefault);
+    };
+
+    showPane('list_methods');
+    setStatus("OK");
+  } catch (e) {
+    setStatus("Error: " + e.message);
+  }
+}
+
+async function loadPaymentMethods() {
+  const methods = await api('/api/billing/payment-methods');
+  renderMethods(methods);
+}
+
+function renderMethods(methods) {
+  const wrap = document.getElementById('methods');
+  wrap.innerHTML = '';
+  methods.sort((a,b)=>a.priority-b.priority);
+
+  for (const m of methods) {
+    const div = document.createElement('div');
+    div.className = 'item';
+
+    const label = m.label || '';
+    div.innerHTML = `
+      <div class="row">
+        ${pillForType(m.pm_type)}
+        <div class="mono"><code>${m.payment_token_id}</code></div>
+        <div>${label}</div>
+        <div class="right muted">priority</div>
+        <input value="${m.priority}" style="width:90px; margin-top:0;" onchange="setPriority('${m.payment_token_id}', this.value)"/>
+      </div>
+      <div class="row">
+        <button class="primary" onclick="setDefault('${m.payment_token_id}')">Set default</button>
+        <button class="danger" onclick="removePM('${m.payment_token_id}')">Remove</button>
+        <span class="muted" id="pm_msg_${m.payment_token_id}"></span>
+      </div>
+    `;
+    wrap.appendChild(div);
+  }
+
+  if (methods.length === 0) {
+    wrap.innerHTML = '<div class="muted">No payment methods yet.</div>';
+  }
+}
+
+async function setPriority(tokenId, prio) {
+  try {
+    await api('/api/billing/payment-methods/priority', {method:'POST', body: JSON.stringify({payment_token_id: tokenId, priority: parseInt(prio)})});
+    document.getElementById('pm_msg_' + tokenId).innerText = 'Saved';
+  } catch (e) {
+    document.getElementById('pm_msg_' + tokenId).innerText = 'Error: ' + e.message;
+  }
+}
+
+async function setDefault(tokenId) {
+  try {
+    await api('/api/billing/payment-methods/default', {method:'POST', body: JSON.stringify({payment_token_id: tokenId})});
+    document.getElementById('pm_msg_' + tokenId).innerText = 'Default set';
+  } catch (e) {
+    document.getElementById('pm_msg_' + tokenId).innerText = 'Error: ' + e.message;
+  }
+}
+
+async function removePM(tokenId) {
+  try {
+    const delFromPayPal = document.getElementById('del_from_paypal').checked;
+    const qs = delFromPayPal ? '?delete_from_paypal=true' : '';
+    await api('/api/billing/payment-methods/' + encodeURIComponent(tokenId) + qs, {method:'DELETE'});
+    await loadPaymentMethods();
+  } catch (e) {
+    alert('Remove failed: ' + e.message);
+  }
+}
+
+async function setAutopay() {
+  try {
+    const enabled = document.getElementById('autopay').checked;
+    await api('/api/billing/autopay', {method:'POST', body: JSON.stringify({enabled})});
+  } catch (e) {
+    alert('Autopay update failed: ' + e.message);
+  }
+}
+
+async function paySettledBalance() {
+  document.getElementById('pay_result').innerText = '';
+  try {
+    const amtTxt = document.getElementById('pay_amount').value.trim();
+    const payload = {};
+    if (amtTxt) payload.amount_cents = parseInt(amtTxt);
+
+    const res = await api('/api/billing/pay-balance', {method:'POST', body: JSON.stringify(payload)});
+    const orderId = res.order_id || res.transaction_id || '';
+    document.getElementById('pay_result').innerHTML =
+      'Created order ' + (orderId ? ('<code>' + orderId + '</code>') : '') +
+      (res.approve_url ? (' — <a href="' + res.approve_url + '" target="_blank" rel="noreferrer">approve</a>') : '');
+    if (res.approve_url) window.open(res.approve_url, '_blank');
+    setTimeout(refreshAll, 800);
+  } catch (e) {
+    document.getElementById('pay_result').innerText = 'Error: ' + e.message;
+  }
+}
+
+async function createSetupToken(kind) {
+  if (kind === 'paypal') document.getElementById('add_paypal_result').innerText = '';
+  else document.getElementById('add_card_result').innerText = '';
+
+  try {
+    const label = (kind === 'paypal')
+      ? document.getElementById('pm_label_paypal').value.trim()
+      : document.getElementById('pm_label_card').value.trim();
+
+    const make_default = (kind === 'paypal')
+      ? document.getElementById('pm_default_paypal').checked
+      : document.getElementById('pm_default_card').checked;
+
+    const resp = await api('/api/billing/payment-methods/paypal/setup-token', {
+      method:'POST',
+      body: JSON.stringify({pm_kind: kind, label, make_default})
+    });
+
+    const setupToken = resp.setup_token;
+    const approveUrl = resp.approve_url;
+
+    if (kind === 'paypal') {
+      lastSetupTokenPaypal = setupToken;
+      localStorage.setItem('pp_last_setup_token_paypal', setupToken || '');
+      document.getElementById('last_setup_token').innerText = setupToken || '—';
+      const a = document.getElementById('last_approve_link');
+      if (approveUrl) { a.href = approveUrl; a.classList.remove('hidden'); } else { a.classList.add('hidden'); }
+      if (approveUrl) window.open(approveUrl, '_blank');
+      document.getElementById('add_paypal_result').innerText = 'Setup token created. Approve in PayPal, then click Finalize.';
+    } else {
+      lastSetupTokenCard = setupToken;
+      localStorage.setItem('pp_last_setup_token_card', setupToken || '');
+      document.getElementById('last_setup_token_card').innerText = setupToken || '—';
+      const a = document.getElementById('last_approve_link_card');
+      if (approveUrl) { a.href = approveUrl; a.classList.remove('hidden'); } else { a.classList.add('hidden'); }
+      if (approveUrl) window.open(approveUrl, '_blank');
+      document.getElementById('add_card_result').innerText = 'Setup token created. Approve/complete, then click Finalize.';
+    }
+  } catch (e) {
+    if (kind === 'paypal') document.getElementById('add_paypal_result').innerText = 'Error: ' + e.message;
+    else document.getElementById('add_card_result').innerText = 'Error: ' + e.message;
+  }
+}
+
+async function exchangeLastSetupToken(kind='paypal') {
+  const msgId = (kind === 'paypal') ? 'add_paypal_result' : 'add_card_result';
+  document.getElementById(msgId).innerText = '';
+
+  try {
+    const setup_token_id = (kind === 'paypal')
+      ? (lastSetupTokenPaypal || localStorage.getItem('pp_last_setup_token_paypal') || '').trim()
+      : (lastSetupTokenCard || localStorage.getItem('pp_last_setup_token_card') || '').trim();
+
+    if (!setup_token_id) throw new Error('No setup_token_id stored. Create one first.');
+
+    const label = (kind === 'paypal')
+      ? document.getElementById('pm_label_paypal').value.trim()
+      : document.getElementById('pm_label_card').value.trim();
+
+    const make_default = (kind === 'paypal')
+      ? document.getElementById('pm_default_paypal').checked
+      : document.getElementById('pm_default_card').checked;
+
+    const resp = await api('/api/billing/payment-methods/paypal/exchange-token', {
+      method:'POST',
+      body: JSON.stringify({setup_token_id, label, make_default})
+    });
+
+    document.getElementById(msgId).innerHTML = 'Saved token <code>' + resp.payment_token_id + '</code>.';
+    await loadPaymentMethods();
+    showPane('list_methods');
+    setTimeout(refreshAll, 600);
+  } catch (e) {
+    document.getElementById(msgId).innerText = 'Error: ' + e.message;
+  }
+}
+
+async function chargeOnce() {
+  document.getElementById('charge_result').innerText = '';
+  try {
+    const amount = parseInt(document.getElementById('charge_amount').value.trim());
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error('Enter amount (cents)');
+
+    const useDefault = document.getElementById('charge_use_default').value === '1';
+    const token = useDefault ? null : (document.getElementById('charge_token').value.trim() || null);
+
+    const payload = {amount_cents: amount, reason: 'one_time_charge'};
+    if (token) payload.payment_token_id = token;
+
+    const res = await api('/api/billing/charge-once', {method:'POST', body: JSON.stringify(payload)});
+    const orderId = res.order_id || '';
+    const approveUrl = res.approve_url || '';
+
+    if (approveUrl) {
+      document.getElementById('charge_result').innerHTML =
+        'Order <code>' + orderId + '</code> created — opening approval...';
+      window.open(approveUrl, '_blank');
+    } else if (orderId) {
+      document.getElementById('charge_result').innerHTML =
+        'Order <code>' + orderId + '</code> created — capturing...';
+      const cap = await api('/api/billing/paypal/capture-order', {method:'POST', body: JSON.stringify({order_id: orderId})});
+      document.getElementById('charge_result').innerText = cap.ok ? 'Captured!' : 'Capture failed.';
+      setTimeout(refreshAll, 800);
+    } else {
+      document.getElementById('charge_result').innerText = 'Created (no order_id returned?)';
+    }
+  } catch (e) {
+    document.getElementById('charge_result').innerText = 'Error: ' + e.message;
+  }
+}
+
+function getQueryParam(name) {
+  const u = new URL(window.location.href);
+  return u.searchParams.get(name);
+}
+
+async function captureFromUrlToken(silent=false) {
+  try {
+    const orderId = getQueryParam('token');
+    if (!orderId) {
+      if (!silent) document.getElementById('charge_result').innerText = 'No ?token=... in URL.';
+      return;
+    }
+    if (!silent) document.getElementById('charge_result').innerHTML = 'Capturing <code>' + orderId + '</code>...';
+    const cap = await api('/api/billing/paypal/capture-order', {method:'POST', body: JSON.stringify({order_id: orderId})});
+    if (!silent) document.getElementById('charge_result').innerText = cap.ok ? 'Captured!' : 'Capture failed.';
+    const u = new URL(window.location.href);
+    u.searchParams.delete('token');
+    window.history.replaceState({}, document.title, u.toString());
+    setTimeout(refreshAll, 800);
+  } catch (e) {
+    if (!silent) document.getElementById('charge_result').innerText = 'Capture error: ' + e.message;
+  }
+}
+
+async function startSubscription() {
+  document.getElementById('sub_result').innerText = '';
+  try {
+    const plan_id = document.getElementById('sub_plan').value.trim() || 'monthly';
+    const paypal_plan_id = document.getElementById('sub_paypal_plan').value.trim() || null;
+
+    const payload = {plan_id};
+    if (paypal_plan_id) payload.paypal_plan_id = paypal_plan_id;
+
+    const res = await api('/api/billing/subscribe-monthly', {method:'POST', body: JSON.stringify(payload)});
+    const approveUrl = res.approve_url || '';
+    const subId = res.subscription_id || '';
+
+    document.getElementById('sub_result').innerHTML =
+      'Subscription ' + (subId ? ('<code>' + subId + '</code>') : '') +
+      (approveUrl ? (' — <a href="' + approveUrl + '" target="_blank" rel="noreferrer">approve</a>') : '');
+
+    if (approveUrl) window.open(approveUrl, '_blank');
+    setTimeout(refreshAll, 800);
+  } catch (e) {
+    document.getElementById('sub_result').innerText = 'Error: ' + e.message;
+  }
+}
+
+async function loadLedger() {
+  const wrap = document.getElementById('ledger');
+  wrap.innerHTML = '';
+  try {
+    const limitTxt = document.getElementById('ledger_limit').value.trim();
+    const limit = limitTxt ? parseInt(limitTxt) : 50;
+    const res = await api('/api/billing/ledger?limit=' + encodeURIComponent(limit));
+    const items = res.items || [];
+
+    for (const it of items) {
+      const div = document.createElement('div');
+      div.className = 'item';
+
+      let pill = '<span class="pill">' + (it.state || '') + '</span>';
+      if (it.state === 'settled') pill = '<span class="pill ok">settled</span>';
+      if (it.state === 'pending') pill = '<span class="pill warn">pending</span>';
+      if (it.state === 'reversed') pill = '<span class="pill bad">reversed</span>';
+
+      div.innerHTML = `
+        <div class="row">
+          ${pill}
+          <div class="muted">${new Date((it.ts||0)*1000).toISOString()}</div>
+          <div class="mono">${it.type}</div>
+          <div class="mono">${it.reason || ''}</div>
+          <div class="right mono">${it.amount_cents}</div>
+        </div>
+        <div class="muted mono w100">
+          ${it.paypal_order_id ? ('order=' + it.paypal_order_id + ' ') : ''}
+          ${it.paypal_capture_id ? ('cap=' + it.paypal_capture_id + ' ') : ''}
+          ${it.paypal_payment_token_id ? ('token=' + it.paypal_payment_token_id + ' ') : ''}
+          ${it.paypal_subscription_id ? ('sub=' + it.paypal_subscription_id + ' ') : ''}
+          ${it.entry_id ? ('entry=' + it.entry_id) : ''}
+        </div>
+      `;
+      wrap.appendChild(div);
+    }
+
+    if (items.length === 0) wrap.innerHTML = '<div class="muted">No ledger entries yet.</div>';
+  } catch (e) {
+    wrap.innerHTML = '<div class="muted">Error loading ledger: ' + e.message + '</div>';
+  }
+}
+</script>
 </body>
 </html>
