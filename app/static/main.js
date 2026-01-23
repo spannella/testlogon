@@ -1540,27 +1540,6 @@ document.getElementById("alertPushTypesSaveBtn").onclick = async () => {
   }
 };
 
-async function startStripeCheckout() {
-  const msg = document.getElementById("stripeCheckoutMsg");
-  const amountInput = document.getElementById("stripeAmount");
-  try {
-    msg.textContent = "Starting checkout…";
-    await ensureUiSession();
-    const amount = parseInt((amountInput.value || "").trim(), 10);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      throw new Error("Enter a valid amount in cents.");
-    }
-    const resp = await apiPost("/ui/billing/checkout_session", { amount_cents: amount });
-    if (resp.url) {
-      window.location.href = resp.url;
-      return;
-    }
-    msg.textContent = `Checkout session created: ${resp.session_id || "unknown"}`;
-  } catch (e) {
-    msg.textContent = String(e);
-  }
-}
-
 document.getElementById("btnRefreshAll").onclick = refreshAll;
 document.getElementById("btnClearSession").onclick = () => { lsDel("session_id"); alert("UI session cleared."); };
 document.getElementById("btnSetTokens").onclick = openTokenModal;
@@ -1575,7 +1554,6 @@ document.getElementById("smsAddBtn").onclick = async () => { await ensureUiSessi
 
 document.getElementById("emailRefreshBtn").onclick = async () => { await ensureUiSession(); await refreshEmailDevices(); };
 document.getElementById("emailAddBtn").onclick = async () => { await ensureUiSession(); openEmailAddModal(); };
-document.getElementById("stripeCheckoutBtn").onclick = startStripeCheckout;
 
 /* ===================== boot ===================== */
 if (!accessToken()) { openTokenModal(); } else { refreshAll(); }

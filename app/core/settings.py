@@ -96,6 +96,7 @@ class Settings:
     stripe_default_currency: str = os.environ.get("STRIPE_DEFAULT_CURRENCY", "usd")
     stripe_success_url: str = os.environ.get("STRIPE_SUCCESS_URL", "")
     stripe_cancel_url: str = os.environ.get("STRIPE_CANCEL_URL", "")
+    billing_table_name: str = os.environ.get("BILLING_TABLE_NAME", "billing")
 
 
 S = Settings()
