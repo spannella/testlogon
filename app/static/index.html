@@ -4,6 +4,7 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Security Control Panel</title>
+  <script src="https://js.stripe.com/v3/"></script>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
@@ -188,8 +189,130 @@
     <h3>Billing (Stripe)</h3>
     <div class="muted">Manage payment methods, balances, and ledger entries.</div>
     <div class="row-inline" style="margin-top:10px;">
-      <a class="button-link" href="/static/billing.html">Open billing console</a>
+      <button id="billingRefreshBtn">Refresh billing</button>
+      <span id="billingStatus" class="muted"></span>
     </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <h3 style="margin:0 0 8px 0">Balance</h3>
+    <div class="row">
+      <div>
+        <div class="muted">Due (settled)</div>
+        <div class="mono" style="font-size:22px" id="due_settled">—</div>
+      </div>
+      <div style="width:24px"></div>
+      <div>
+        <div class="muted">Due (if pending settles)</div>
+        <div class="mono" style="font-size:22px" id="due_all">—</div>
+      </div>
+    </div>
+
+    <div class="hr"></div>
+
+    <div class="row">
+      <div class="muted">Owed pending:</div><div class="mono" id="owed_pending">—</div>
+      <div class="muted">Owed settled:</div><div class="mono" id="owed_settled">—</div>
+    </div>
+    <div class="row">
+      <div class="muted">Payments pending:</div><div class="mono" id="pay_pending">—</div>
+      <div class="muted">Payments settled:</div><div class="mono" id="pay_settled">—</div>
+    </div>
+
+    <div class="hr"></div>
+
+    <div class="row">
+      <button class="primary" id="paySettledBalanceBtn">Pay settled balance</button>
+      <input id="pay_amount" placeholder="amount (optional, cents)" style="width:220px"/>
+      <span id="pay_result" class="muted"></span>
+    </div>
+
+    <div class="row">
+      <label class="muted">Autopay</label>
+      <input type="checkbox" id="autopay"/>
+      <span class="muted">Webhook-driven settlement; autopay scheduling is backend/worker responsibility.</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px 0">Payment methods</h3>
+
+    <div class="row">
+      <button id="paneAddCardBtn">Add card</button>
+      <button id="paneAddBankBtn">Add checking (ACH)</button>
+      <button id="paneVerifyBankBtn">Verify microdeposits</button>
+      <button id="paneListMethodsBtn" class="primary">List</button>
+    </div>
+
+    <div class="hr"></div>
+
+    <div id="pane_add_card" class="pane">
+      <div class="muted">Add a credit/debit card (saved for future off-session payments).</div>
+      <div style="margin-top:10px" id="card-element"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="addCardBtn">Save card</button>
+        <span id="add_card_result" class="muted"></span>
+      </div>
+    </div>
+
+    <div id="pane_add_bank" class="pane hidden">
+      <div class="muted">
+        Add a US checking account via ACH. Microdeposit verification may be required.
+      </div>
+      <div class="row" style="margin-top:10px">
+        <input id="bank_name" placeholder="Name (for mandate)" style="width:260px"/>
+        <input id="bank_email" placeholder="Email (optional)" style="width:260px"/>
+      </div>
+      <div class="row">
+        <button class="primary" id="addBankAccountBtn">Start ACH setup</button>
+        <span id="add_bank_result" class="muted"></span>
+      </div>
+      <div id="bank_next" class="muted" style="margin-top:10px"></div>
+    </div>
+
+    <div id="pane_verify_bank" class="pane hidden">
+      <div class="muted">
+        If the SetupIntent requires microdeposit verification, paste the SetupIntent ID below and verify by amounts or descriptor code.
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <input id="verify_si" placeholder="setup_intent_id (e.g. seti_...)" style="width:420px"/>
+        <button id="usePendingSetupIntentBtn">Use last pending from this browser</button>
+      </div>
+
+      <div class="row">
+        <input id="amt1" placeholder="amount1 (cents)" style="width:180px"/>
+        <input id="amt2" placeholder="amount2 (cents)" style="width:180px"/>
+        <button class="primary" id="verifyByAmountsBtn">Verify by amounts</button>
+      </div>
+
+      <div class="row">
+        <input id="desc" placeholder="descriptor code (optional)" style="width:300px"/>
+        <button class="primary" id="verifyByDescriptorBtn">Verify by code</button>
+      </div>
+
+      <div class="row">
+        <span id="verify_result" class="muted"></span>
+      </div>
+    </div>
+
+    <div id="pane_list_methods" class="pane hidden">
+      <div id="methods" class="list"></div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <h3 style="margin:0 0 8px 0">Ledger</h3>
+    <div class="row">
+      <button id="loadLedgerBtn">Refresh ledger</button>
+      <input id="ledger_limit" placeholder="limit (default 50)" style="width:200px"/>
+      <span class="muted">Shows most recent first</span>
+    </div>
+    <div id="ledger" class="list" style="margin-top:10px"></div>
   </div>
 </div>
 
