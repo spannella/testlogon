@@ -24,6 +24,9 @@ class UiSessionFinalizeResp(BaseModel):
     required_factors: List[str] = Field(default_factory=list)
     passed: Dict[str, bool] = Field(default_factory=dict)
 
+class AccountClosureFinalizeReq(BaseModel):
+    challenge_id: str
+
 class TotpVerifyReq(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     challenge_id: str

@@ -21,6 +21,7 @@ from app.core.time import now_ts
 from app.models import (
     AddChargeReq,
     BillingCheckoutReq,
+    StripePaymentMethodOut,
     PayBalanceReq,
     SetAutopayReq,
     SetDefaultReq,
