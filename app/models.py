@@ -250,6 +250,42 @@ class MailingAddress(BaseModel):
     country: Optional[str] = None
 
 
+class AddressBase(BaseModel):
+    name: Optional[str] = None
+    line1: Optional[str] = None
+    line2: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    label: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class AddressIn(AddressBase):
+    pass
+
+
+class AddressOut(AddressBase):
+    address_id: str
+    is_primary_mailing: bool = False
+    created_at: int
+    updated_at: int
+
+
+class AddressSearchReq(BaseModel):
+    query: str
+
+
+class AddressSearchResp(BaseModel):
+    query: str
+    matches: List[AddressOut]
+
+
+class AddressPrimaryReq(BaseModel):
+    address_id: str
+
+
 class LanguageIn(BaseModel):
     name: str
     level: str

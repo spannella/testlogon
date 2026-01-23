@@ -20,6 +20,7 @@ class Tables:
     billing: Any
     account_state: Any
     profile: Any
+    addresses: Any
     calendar: Any
 
 T = Tables(
@@ -35,5 +36,6 @@ T = Tables(
     billing=ddb.Table(S.billing_table_name),
     account_state=ddb.Table(S.account_state_table_name),
     profile=ddb.Table(S.profile_table_name),
+    addresses=ddb.Table(S.addresses_table_name),
     calendar=ddb.Table(S.calendar_table_name),
 )
