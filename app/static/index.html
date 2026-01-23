@@ -6,6 +6,8 @@
   <title>Security Control Panel</title>
   <script src="https://js.stripe.com/v3/"></script>
   <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="preload" href="https://js.ccbill.com/v1.12.2/ccbill-advanced-widget.js" as="script" />
+  <script src="https://js.ccbill.com/v1.12.2/ccbill-advanced-widget.js"></script>
 </head>
 <body>
 
@@ -16,6 +18,7 @@
   </div>
   <div class="toolbar">
     <button id="btnRefreshAll">Refresh</button>
+    <button onclick="document.getElementById('billingSection').scrollIntoView({behavior:'smooth'});">Billing</button>
     <button id="btnSetTokens">Set tokens</button>
     <button id="btnClearSession">Logout UI session</button>
     <button id="btnClearTokens">Clear tokens</button>
@@ -184,6 +187,98 @@
   </div>
 </div>
 
+<div id="billingSection" class="row">
+  <div class="card" style="width:100%">
+    <h3>Billing (CCBill)</h3>
+    <div class="muted">
+      Use the CCBill widget to create a <code>paymentTokenId</code>, save it, then charge or subscribe using the billing API.
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <h3>Billing Status</h3>
+    <div class="row-inline" style="margin-top:10px;">
+      <button id="billingRefreshBtn">Refresh billing</button>
+    </div>
+    <div class="list" style="margin-top:10px;">
+      <div><span class="pill">Settings</span> <span id="billingSettingsOut" class="mono"></span></div>
+      <div><span class="pill">Balance</span> <span id="billingBalanceOut" class="mono"></span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Add Card (Create Payment Token)</h3>
+    <div class="muted">Creates a token via <code>createPaymentToken()</code> and saves it to the backend.</div>
+    <div id="billingConfigBox" class="muted mono" style="margin-top:8px;"></div>
+
+    <form id="billingPaymentForm">
+      <div class="row-inline">
+        <input data-ccbill="customerName" placeholder="Cardholder name" autocomplete="cc-name" required />
+        <input data-ccbill="email" placeholder="email@example.com" autocomplete="email" required />
+      </div>
+
+      <div class="row-inline">
+        <input data-ccbill="cardNumber" placeholder="4111111111111111" autocomplete="cc-number" required />
+        <input data-ccbill="expMonth" placeholder="12" autocomplete="cc-exp-month" required />
+        <input data-ccbill="expYear" placeholder="2030" autocomplete="cc-exp-year" required />
+        <input data-ccbill="cvv" placeholder="123" autocomplete="cc-csc" required />
+      </div>
+
+      <div class="row-inline">
+        <input data-ccbill="address1" placeholder="123 Main St" autocomplete="address-line1" />
+        <input data-ccbill="city" placeholder="City" autocomplete="address-level2" />
+        <input data-ccbill="state" placeholder="State" autocomplete="address-level1" />
+        <input data-ccbill="postalCode" placeholder="Postal Code" autocomplete="postal-code" />
+        <input data-ccbill="country" placeholder="US" autocomplete="country" />
+      </div>
+
+      <div class="row-inline" style="margin-top:8px;">
+        <button id="billingCreateTokenBtn" type="button">Create token</button>
+        <label class="muted" style="margin:0; display:flex; align-items:center; gap:6px;">
+          <input type="checkbox" id="billingMakeDefault" checked />
+          Make default
+        </label>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <h3>Payment Methods</h3>
+    <div class="row-inline" style="margin-top:10px;">
+      <button id="billingRefreshMethodsBtn">Refresh methods</button>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Token</th>
+          <th>Label</th>
+          <th>Priority</th>
+          <th class="right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="billingPmTbody"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>Subscriptions & Charges</h3>
+    <label>Monthly price (cents)</label>
+    <input id="billingMonthlyCents" value="999" />
+    <label>Plan ID</label>
+    <input id="billingPlanId" value="monthly" />
+    <div class="row-inline" style="margin-top:8px;">
+      <button id="billingSubscribeBtn">Start subscription</button>
+    </div>
+
+    <label style="margin-top:12px;">One-time amount (cents)</label>
+    <input id="billingOneTimeCents" value="500" />
+    <div class="row-inline" style="margin-top:8px;">
+      <button id="billingChargeOnceBtn">Charge once</button>
+      <button id="billingPayBalanceBtn">Pay settled balance</button>
 <div class="card" style="margin-top:16px;">
   <h3>Billing (PayPal)</h3>
   <div class="muted">
@@ -351,6 +446,20 @@
   </div>
 </div>
 
+<div class="row">
+  <div class="card">
+    <h3>Billing Debug</h3>
+    <div class="row-inline" style="margin-top:10px;">
+      <button id="billingLoadSubscriptionsBtn">Subscriptions</button>
+      <button id="billingLoadPaymentsBtn">Payments</button>
+      <button id="billingLoadLedgerBtn">Ledger</button>
+    </div>
+    <textarea id="billingDebugOut" class="mono" readonly></textarea>
+  </div>
+
+  <div class="card">
+    <h3>Billing Log</h3>
+    <textarea id="billingLog" class="mono" readonly></textarea>
 <div class="card" style="margin-top:16px">
   <h3 style="margin:0 0 8px 0">Ledger</h3>
   <div class="row">

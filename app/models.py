@@ -143,6 +143,52 @@ class PushRegisterReq(BaseModel):
 class PushRevokeReq(BaseModel):
     device_id: str
 
+
+class PaymentMethodOut(BaseModel):
+    payment_token_id: str
+    label: Optional[str] = None
+    priority: int
+
+
+class SavePaymentTokenIn(BaseModel):
+    payment_token_id: str
+    label: Optional[str] = None
+    make_default: bool = True
+
+
+class SetPriorityIn(BaseModel):
+    payment_token_id: str
+    priority: int = Field(ge=0, le=100000)
+
+
+class SetDefaultIn(BaseModel):
+    payment_token_id: str
+
+
+class SetAutopayIn(BaseModel):
+    enabled: bool
+
+
+class PayBalanceIn(BaseModel):
+    amount_cents: Optional[int] = Field(default=None, ge=1)
+    idempotency_key: Optional[str] = None
+
+
+class OneTimeChargeIn(BaseModel):
+    amount_cents: int = Field(ge=1)
+    payment_token_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+    reason: str = "one_time_charge"
+
+
+class SubscribeMonthlyIn(BaseModel):
+    plan_id: str = "monthly"
+    monthly_price_cents: Optional[int] = Field(default=None, ge=1)
+    payment_token_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
+
+class AddChargeIn(BaseModel):
 class BillingCheckoutReq(BaseModel):
     amount_cents: int
     currency: Optional[str] = None
