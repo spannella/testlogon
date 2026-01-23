@@ -200,6 +200,47 @@ class SetAutopayIn(BaseModel):
     enabled: bool
 
 
+class CalendarCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    timezone: str = Field(default="UTC", max_length=64)
+
+
+class CalendarOut(BaseModel):
+    calendar_id: str
+    name: str
+    timezone: str
+    owner_user_id: str
+    created_at_utc: str
+
+
+class EventCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=5000)
+    timezone: str | None = Field(default=None, max_length=64)
+    start_utc: str | None = None
+    end_utc: str | None = None
+    all_day: bool = False
+    all_day_date: str | None = None
+
+
+class EventOut(BaseModel):
+    event_id: str
+    calendar_id: str
+    name: str
+    description: str
+    timezone: str
+    start_utc: str | None = None
+    end_utc: str | None = None
+    all_day: bool
+    all_day_date: str | None = None
+    created_at_utc: str
+
+
+class OpeningsOut(BaseModel):
+    start_utc: str
+    end_utc: str
+
+
 class MailingAddress(BaseModel):
     line1: Optional[str] = None
     line2: Optional[str] = None
@@ -207,6 +248,42 @@ class MailingAddress(BaseModel):
     state: Optional[str] = None
     postal_code: Optional[str] = None
     country: Optional[str] = None
+
+
+class AddressBase(BaseModel):
+    name: Optional[str] = None
+    line1: Optional[str] = None
+    line2: Optional[str] = None
+    city: Optional[str] = None
+    state: Optional[str] = None
+    postal_code: Optional[str] = None
+    country: Optional[str] = None
+    label: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class AddressIn(AddressBase):
+    pass
+
+
+class AddressOut(AddressBase):
+    address_id: str
+    is_primary_mailing: bool = False
+    created_at: int
+    updated_at: int
+
+
+class AddressSearchReq(BaseModel):
+    query: str
+
+
+class AddressSearchResp(BaseModel):
+    query: str
+    matches: List[AddressOut]
+
+
+class AddressPrimaryReq(BaseModel):
+    address_id: str
 
 
 class LanguageIn(BaseModel):

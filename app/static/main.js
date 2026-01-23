@@ -228,6 +228,7 @@ async function apiPublic(path, { method = "GET", body = null } = {}) {
   if (!res.ok) throw new Error(res.status + ": " + txt);
   return txt ? JSON.parse(txt) : {};
 }
+
 function apiPatch(path, body, { includeSession = true } = {}) {
   return api(path, { method: "PATCH", body, includeSession });
 }
@@ -1446,12 +1447,16 @@ async function accountClosureFinalize(challenge_id) {
 }
 
 function handleAccountClosureSuccess() {
+  clearAuthTokens();
+  alert("Account permanently closed. All data deleted for this user.");
+  window.location.reload();
+}
+
+function clearAuthTokens() {
   lsDel("access_token");
   lsDel("id_token");
   lsDel("refresh_token");
   lsDel("session_id");
-  alert("Account permanently closed. All data deleted for this user.");
-  window.location.reload();
 }
 
 async function runAccountClosureChallenge(challengeId, required) {
@@ -2110,14 +2115,6 @@ function openAccountActionModal({ title, confirmText, onConfirm }) {
   });
 }
 
-/* ===================== TOTP add flow ===================== */
-async function totpBegin(label) {
-  return await apiPost("/ui/mfa/totp/devices/begin", { label: label || "" });
-}
-async function totpConfirm(device_id, totp_code) {
-  return await apiPost("/ui/mfa/totp/devices/confirm", { device_id, totp_code });
-}
-
 function openTotpAddModal() {
   modalShow({
     title: "Add TOTP Device",
@@ -2396,7 +2393,9 @@ async function refreshAll() {
       refreshAlerts(),
       refreshProfile(),
       refreshFileManager(),
+      refreshAddresses(),
       billingRefreshAll(),
+      refreshCalendarEvents(),
     ]);
     await pollToastsOnce();
   } catch (e) {
@@ -2458,6 +2457,137 @@ async function beginAddAlertSms(phone) {
   await ensureUiSession();
   return await apiPost("/ui/alerts/sms/begin", { phone });
 }
+
+/* ===================== calendar ===================== */
+function getCalendarId() {
+  return lsGet("calendar_id") || "";
+}
+
+function setCalendarId(calendarId) {
+  if (calendarId) {
+    lsSet("calendar_id", calendarId);
+  } else {
+    lsDel("calendar_id");
+  }
+  const input = document.getElementById("calendarIdInput");
+  if (input) input.value = calendarId || "";
+}
+
+function setCalendarStatus(msg) {
+  const el = document.getElementById("calendarStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function renderCalendarEvents(events) {
+  const wrap = document.getElementById("calendarEventsList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!events || events.length === 0) {
+    wrap.innerHTML = '<div class="muted">No events yet.</div>';
+    return;
+  }
+  events.forEach(evt => {
+    const row = document.createElement("div");
+    row.className = "item";
+    const when = evt.all_day
+      ? `All day ${escapeHtml(evt.all_day_date || "")}`
+      : `${escapeHtml(evt.start_utc || "")} → ${escapeHtml(evt.end_utc || "")}`;
+    row.innerHTML = `
+      <div class="row">
+        <div class="grow"><b>${escapeHtml(evt.name || "")}</b></div>
+        <div class="mono">${escapeHtml(evt.event_id || "")}</div>
+      </div>
+      <div class="muted">${when} (${escapeHtml(evt.timezone || "")})</div>
+      ${evt.description ? `<div class="muted">${escapeHtml(evt.description)}</div>` : ""}
+    `;
+    wrap.appendChild(row);
+  });
+}
+
+function renderCalendarOpenings(openings) {
+  const wrap = document.getElementById("calendarOpeningsList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!openings || openings.length === 0) {
+    wrap.innerHTML = '<div class="muted">No openings for selected window.</div>';
+    return;
+  }
+  openings.forEach(o => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `<div class="mono">${escapeHtml(o.start_utc)} → ${escapeHtml(o.end_utc)}</div>`;
+    wrap.appendChild(row);
+  });
+}
+
+async function createCalendar() {
+  try {
+    await ensureUiSession();
+    const name = document.getElementById("calendarNameInput").value.trim() || "My Calendar";
+    const timezone = document.getElementById("calendarTimezoneInput").value.trim() || "UTC";
+    const res = await apiPost("/ui/calendars", { name, timezone });
+    setCalendarId(res.calendar_id || "");
+    setCalendarStatus(`Created calendar ${res.calendar_id}`);
+    await refreshCalendarEvents();
+  } catch (e) {
+    setCalendarStatus("Error: " + e.message);
+  }
+}
+
+async function refreshCalendarEvents() {
+  const calendarId = getCalendarId();
+  if (!calendarId) return;
+  await ensureUiSession();
+  const events = await apiGet(`/ui/calendars/${encodeURIComponent(calendarId)}/events`);
+  renderCalendarEvents(events || []);
+}
+
+async function createCalendarEvent() {
+  const calendarId = getCalendarId();
+  if (!calendarId) {
+    setCalendarStatus("Set a calendar ID first.");
+    return;
+  }
+  try {
+    await ensureUiSession();
+    const payload = {
+      name: document.getElementById("eventNameInput").value.trim(),
+      description: document.getElementById("eventDescriptionInput").value.trim(),
+      timezone: document.getElementById("eventTimezoneInput").value.trim() || null,
+      all_day: document.getElementById("eventAllDayToggle").checked,
+      all_day_date: document.getElementById("eventAllDayDateInput").value || null,
+      start_utc: document.getElementById("eventStartInput").value.trim() || null,
+      end_utc: document.getElementById("eventEndInput").value.trim() || null,
+    };
+    const res = await apiPost(`/ui/calendars/${encodeURIComponent(calendarId)}/events`, payload);
+    document.getElementById("eventCreateStatus").textContent = `Added event ${res.event_id}`;
+    await refreshCalendarEvents();
+  } catch (e) {
+    document.getElementById("eventCreateStatus").textContent = "Error: " + e.message;
+  }
+}
+
+async function loadCalendarOpenings() {
+  const calendarId = getCalendarId();
+  if (!calendarId) {
+    setCalendarStatus("Set a calendar ID first.");
+    return;
+  }
+  const start = document.getElementById("openingsStartInput").value.trim();
+  const end = document.getElementById("openingsEndInput").value.trim();
+  if (!start || !end) {
+    setCalendarStatus("Enter start and end window.");
+    return;
+  }
+  try {
+    await ensureUiSession();
+    const qs = `?start_utc=${encodeURIComponent(start)}&end_utc=${encodeURIComponent(end)}`;
+    const res = await apiGet(`/ui/calendars/${encodeURIComponent(calendarId)}/openings${qs}`);
+    renderCalendarOpenings(res || []);
+  } catch (e) {
+    setCalendarStatus("Error: " + e.message);
+  }
+}
 async function confirmAddAlertSms(challenge_id, code) {
   await ensureUiSession();
   return await apiPost("/ui/alerts/sms/confirm", { challenge_id, code });
@@ -2489,6 +2619,8 @@ function openConfirmSmsModal(sentTo, challenge_id) {
 
 /* ===================== Profile ===================== */
 let profileLanguages = [];
+let addressBook = [];
+let selectedAddressId = null;
 
 function setProfileStatus(msg) {
   const el = document.getElementById("profileStatus");
@@ -2515,6 +2647,150 @@ function setInputValue(id, value) {
   const el = document.getElementById(id);
   if (!el) return;
   el.value = value || "";
+}
+
+function setAddressStatus(msg) {
+  const el = document.getElementById("addressStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function setAddressForm(address) {
+  const addr = address || {};
+  const postal = String(addr.postal_code || "");
+  const zip5 = postal.includes("-") ? postal.split("-")[0] : postal.slice(0, 5);
+  const zip4 = postal.includes("-") ? postal.split("-")[1] : postal.slice(5, 9);
+  selectedAddressId = addr.address_id || null;
+  setInputValue("addressName", addr.name);
+  setInputValue("addressLabel", addr.label);
+  setInputValue("addressLine1", addr.line1);
+  setInputValue("addressLine2", addr.line2);
+  setInputValue("addressCity", addr.city);
+  setInputValue("addressState", addr.state);
+  setInputValue("addressZip5", zip5 || "");
+  setInputValue("addressZip4", zip4 || "");
+  setInputValue("addressCountry", addr.country || "US");
+  setInputValue("addressNotes", addr.notes);
+}
+
+function clearAddressForm() {
+  selectedAddressId = null;
+  setAddressForm({});
+}
+
+function buildAddressPayload() {
+  const zip5 = readInputOrNull("addressZip5");
+  const zip4 = readInputOrNull("addressZip4");
+  const postalCode = zip5 ? (zip4 ? `${zip5}-${zip4}` : zip5) : null;
+  return {
+    name: readInputOrNull("addressName"),
+    label: readInputOrNull("addressLabel"),
+    line1: readInputOrNull("addressLine1"),
+    line2: readInputOrNull("addressLine2"),
+    city: readInputOrNull("addressCity"),
+    state: readInputOrNull("addressState"),
+    postal_code: postalCode,
+    country: readInputOrNull("addressCountry"),
+    notes: readInputOrNull("addressNotes"),
+  };
+}
+
+function renderAddressList(addresses) {
+  const el = document.getElementById("addressList");
+  if (!el) return;
+  el.innerHTML = "";
+  (addresses || []).forEach((addr) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    const label = addr.label || addr.name || "Saved address";
+    const meta = [
+      addr.line1,
+      addr.line2,
+      [addr.city, addr.state].filter(Boolean).join(", "),
+      addr.postal_code,
+      addr.country,
+    ].filter(Boolean).join(" · ");
+    const primaryBadge = addr.is_primary_mailing
+      ? `<span class="pill" style="font-size:11px;">Primary</span>`
+      : "";
+    row.innerHTML = `
+      <div class="grow">
+        <div><b>${escapeHtml(label)}</b> ${primaryBadge}</div>
+        <div class="muted">${escapeHtml(meta)}</div>
+      </div>
+      <div class="row-inline">
+        <button data-action="edit" data-id="${escapeHtml(addr.address_id)}">Edit</button>
+        <button data-action="primary" data-id="${escapeHtml(addr.address_id)}">Set primary</button>
+        <button class="danger" data-action="delete" data-id="${escapeHtml(addr.address_id)}">Delete</button>
+      </div>
+    `;
+    row.querySelectorAll("button").forEach((btn) => {
+      btn.onclick = async () => {
+        const action = btn.getAttribute("data-action");
+        const id = btn.getAttribute("data-id");
+        if (action === "edit") {
+          setAddressForm(addr);
+          setAddressStatus("Editing address " + id);
+          return;
+        }
+        if (action === "primary") {
+          try {
+            setAddressStatus("Setting primary...");
+            await ensureUiSession();
+            await apiPut("/ui/addresses/primary", { address_id: id });
+            await refreshAddresses();
+            setAddressStatus("Primary address updated.");
+          } catch (e) {
+            setAddressStatus(String(e));
+          }
+          return;
+        }
+        if (action === "delete") {
+          if (!confirm("Delete this address?")) return;
+          try {
+            setAddressStatus("Deleting...");
+            await ensureUiSession();
+            await apiDelete(`/ui/addresses/${id}`);
+            if (selectedAddressId === id) clearAddressForm();
+            await refreshAddresses();
+            setAddressStatus("Address deleted.");
+          } catch (e) {
+            setAddressStatus(String(e));
+          }
+        }
+      };
+    });
+    el.appendChild(row);
+  });
+}
+
+async function refreshAddresses() {
+  await ensureUiSession();
+  const res = await apiGet("/ui/addresses");
+  addressBook = Array.isArray(res) ? res : [];
+  renderAddressList(addressBook);
+}
+
+async function searchAddressBook(query) {
+  await ensureUiSession();
+  if (!query) {
+    await refreshAddresses();
+    return;
+  }
+  const res = await apiPost("/ui/addresses/search", { query });
+  renderAddressList(res.matches || []);
+}
+
+async function saveAddress() {
+  await ensureUiSession();
+  const payload = buildAddressPayload();
+  if (selectedAddressId) {
+    const res = await apiPatch(`/ui/addresses/${selectedAddressId}`, payload);
+    setAddressForm(res);
+  } else {
+    const res = await apiPost("/ui/addresses", payload);
+    setAddressForm(res);
+  }
+  await refreshAddresses();
 }
 
 function renderProfileLanguages() {
@@ -3179,6 +3455,33 @@ document.getElementById("alertEmailAddBtn").onclick = async () => {
   }
 };
 
+document.getElementById("calendarSetBtn").onclick = async () => {
+  const calendarId = document.getElementById("calendarIdInput").value.trim();
+  setCalendarId(calendarId);
+  if (calendarId) {
+    setCalendarStatus(`Using calendar ${calendarId}`);
+    await refreshCalendarEvents();
+  } else {
+    setCalendarStatus("Calendar cleared.");
+  }
+};
+
+document.getElementById("calendarCreateBtn").onclick = async () => {
+  await createCalendar();
+};
+
+document.getElementById("eventCreateBtn").onclick = async () => {
+  await createCalendarEvent();
+};
+
+document.getElementById("eventsRefreshBtn").onclick = async () => {
+  await refreshCalendarEvents();
+};
+
+document.getElementById("openingsLoadBtn").onclick = async () => {
+  await loadCalendarOpenings();
+};
+
 document.getElementById("alertTypesSaveBtn").onclick = async () => {
   try {
     await ensureUiSession();
@@ -3224,7 +3527,7 @@ document.getElementById("btnRefreshAll").onclick = refreshAll;
 document.getElementById("btnClearSession").onclick = () => { lsDel("session_id"); alert("UI session cleared."); };
 document.getElementById("btnSetTokens").onclick = openTokenModal;
 
-document.getElementById("btnClearTokens").onclick = () => { lsDel("access_token"); lsDel("id_token"); lsDel("refresh_token"); lsDel("session_id"); alert("Tokens cleared."); };
+document.getElementById("btnClearTokens").onclick = () => { clearAuthTokens(); alert("Tokens cleared."); };
 
 document.getElementById("totpRefreshBtn").onclick = async () => { await ensureUiSession(); await refreshTotpDevices(); };
 
@@ -3366,6 +3669,37 @@ document.getElementById("filemgrSearchBtn").onclick = async () => {
   }
 };
 document.getElementById("filemgrClearSearchBtn").onclick = clearFileMgrSearch;
+document.getElementById("addressRefreshBtn").onclick = async () => {
+  try {
+    setAddressStatus("Refreshing...");
+    await refreshAddresses();
+    setAddressStatus("Loaded.");
+  } catch (e) {
+    setAddressStatus(String(e));
+  }
+};
+document.getElementById("addressSaveBtn").onclick = async () => {
+  try {
+    setAddressStatus("Saving...");
+    await saveAddress();
+    setAddressStatus("Saved.");
+  } catch (e) {
+    setAddressStatus(String(e));
+  }
+};
+document.getElementById("addressClearBtn").onclick = () => {
+  clearAddressForm();
+  setAddressStatus("");
+};
+document.getElementById("addressSearchBtn").onclick = async () => {
+  try {
+    setAddressStatus("Searching...");
+    await searchAddressBook(readInput("addressSearchInput"));
+    setAddressStatus("");
+  } catch (e) {
+    setAddressStatus(String(e));
+  }
+};
 
 document.getElementById("accountSuspendBtn").onclick = () => {
   openAccountActionModal({
@@ -3416,6 +3750,7 @@ document.getElementById("stripeVerifyByDescriptorBtn").onclick = verifyBillingBy
 document.getElementById("stripeLoadLedgerBtn").onclick = loadBillingLedger;
 
 /* ===================== boot ===================== */
+setCalendarId(getCalendarId());
 if (!accessToken()) { openTokenModal(); } else { refreshAll(); }
 startToastSSE();
 startToastPolling();
