@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import importlib.util
+import sys
 import secrets
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin
 
-try:
+if "stripe" in sys.modules:
+    stripe = sys.modules["stripe"]  # type: ignore
+elif importlib.util.find_spec("stripe") is not None:
     import stripe  # type: ignore
-except Exception:  # pragma: no cover
+else:  # pragma: no cover
     stripe = None  # type: ignore
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -17,7 +21,6 @@ from app.core.time import now_ts
 from app.models import (
     AddChargeReq,
     BillingCheckoutReq,
-    StripePaymentMethodOut,
     PayBalanceReq,
     SetAutopayReq,
     SetDefaultReq,
@@ -195,6 +198,7 @@ def pm_sk(payment_method_id: str) -> str:
 def list_payment_methods_ddb(user_id: str) -> List[Dict[str, Any]]:
     items = ddb_query_pk(T.billing, user_pk(user_id))
     return [it for it in items if it["sk"].startswith("PM#")]
+
 
 def list_payment_records_ddb(user_id: str) -> List[Dict[str, Any]]:
     items = ddb_query_pk(T.billing, user_pk(user_id))
