@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-import time
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -12,8 +11,20 @@ from botocore.exceptions import ClientError
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app.core.aws import ddb
 from app.core.settings import S
+from app.core.tables import T
+from app.core.time import now_ts
+from app.services.billing_shared import (
+    apply_balance_delta as apply_balance_delta_shared,
+    compute_due,
+    ddb_del as ddb_del_shared,
+    ddb_get as ddb_get_shared,
+    ddb_put as ddb_put_shared,
+    ddb_query_pk as ddb_query_pk_shared,
+    ddb_update as ddb_update_shared,
+    ensure_balance_row as ensure_balance_row_shared,
+    user_pk,
+)
 
 router = APIRouter(tags=["billing"])
 
@@ -38,9 +49,12 @@ if S.paypal_plan_map.strip():
 # ============================================================
 
 def _billing_table():
-    if not S.billing_table_name:
+    billing_table_name = getattr(S, "billing_table_name", None)
+    if billing_table_name is None:
+        return T.billing
+    if not billing_table_name:
         raise HTTPException(500, "Billing table not configured (set BILLING_TABLE_NAME)")
-    return ddb.Table(S.billing_table_name)
+    return T.billing
 
 
 def _require_paypal_config() -> None:
@@ -48,16 +62,8 @@ def _require_paypal_config() -> None:
         raise HTTPException(500, "PayPal not configured (set PAYPAL_CLIENT_ID/PAYPAL_CLIENT_SECRET)")
 
 
-def now_ts() -> int:
-    return int(time.time())
-
-
 def ulidish() -> str:
-    return f"{int(time.time() * 1000)}_{secrets.token_hex(8)}"
-
-
-def user_pk(user_id: str) -> str:
-    return f"USER#{user_id}"
+    return f"{int(now_ts() * 1000)}_{secrets.token_hex(8)}"
 
 
 def _money_value_from_cents(cents: int) -> str:
@@ -68,39 +74,31 @@ def _money_value_from_cents(cents: int) -> str:
 # ---------- DynamoDB wrappers ----------
 
 def ddb_get(pk: str, sk: str) -> Optional[Dict[str, Any]]:
-    resp = _billing_table().get_item(Key={"pk": pk, "sk": sk})
-    return resp.get("Item")
+    return ddb_get_shared(_billing_table(), pk, sk)
 
 
 def ddb_put(item: Dict[str, Any], *, condition_expression: Optional[str] = None) -> None:
-    kwargs = {"Item": item}
-    if condition_expression:
-        kwargs["ConditionExpression"] = condition_expression
-    _billing_table().put_item(**kwargs)
+    ddb_put_shared(_billing_table(), item, condition_expression=condition_expression)
 
 
 def ddb_del(pk: str, sk: str) -> None:
-    _billing_table().delete_item(Key={"pk": pk, "sk": sk})
+    ddb_del_shared(_billing_table(), pk, sk)
 
 
 def ddb_query_pk(pk: str) -> List[Dict[str, Any]]:
-    resp = _billing_table().query(
-        KeyConditionExpression="pk = :pk",
-        ExpressionAttributeValues={":pk": pk},
-    )
-    return resp.get("Items", [])
+    return ddb_query_pk_shared(_billing_table(), pk)
 
 
 def ddb_update(pk: str, sk: str, expr: str, values: Dict[str, Any], names: Optional[Dict[str, str]] = None) -> None:
-    kwargs = {
-        "Key": {"pk": pk, "sk": sk},
-        "UpdateExpression": expr,
-        "ExpressionAttributeValues": values,
-    }
-    if names:
-        kwargs["ExpressionAttributeNames"] = names
-    _billing_table().update_item(**kwargs)
+    ddb_update_shared(_billing_table(), pk, sk, expr, values, names=names)
 
+
+def ensure_balance_row(pk: str) -> None:
+    ensure_balance_row_shared(_billing_table(), pk, DEFAULT_CURRENCY)
+
+
+def apply_balance_delta(pk: str, delta: Dict[str, int]) -> None:
+    apply_balance_delta_shared(_billing_table(), pk, delta, currency=DEFAULT_CURRENCY)
 
 # ---------- Auth assumption ----------
 
@@ -108,68 +106,6 @@ def require_user(x_user_id: Optional[str]) -> str:
     if not x_user_id:
         raise HTTPException(401, "Missing X-User-Id (login assumed handled)")
     return x_user_id
-
-
-# ============================================================
-# Balance snapshot (same semantics)
-# ============================================================
-BAL_FIELDS = [
-    "owed_pending_cents",
-    "owed_settled_cents",
-    "payments_pending_cents",
-    "payments_settled_cents",
-]
-
-
-def ensure_balance_row(pk: str) -> None:
-    if not ddb_get(pk, "BALANCE"):
-        ddb_put(
-            {
-                "pk": pk,
-                "sk": "BALANCE",
-                "currency": DEFAULT_CURRENCY,
-                **{k: 0 for k in BAL_FIELDS},
-                "updated_at": now_ts(),
-            }
-        )
-
-
-def apply_balance_delta(pk: str, delta: Dict[str, int]) -> None:
-    ensure_balance_row(pk)
-    sets = []
-    values: Dict[str, Any] = {":z": 0, ":t": now_ts()}
-    names: Dict[str, str] = {}
-
-    i = 0
-    for k, v in delta.items():
-        if v == 0:
-            continue
-        i += 1
-        nk = f"#k{i}"
-        dv = f":d{i}"
-        names[nk] = k
-        values[dv] = int(v)
-        sets.append(f"{nk} = if_not_exists({nk}, :z) + {dv}")
-
-    names["#u"] = "updated_at"
-    sets.append("#u = :t")
-
-    expr = "SET " + ", ".join(sets)
-    ddb_update(pk, "BALANCE", expr, values, names=names)
-
-
-def compute_due(balance_item: Dict[str, Any]) -> Dict[str, int]:
-    owed_settled = int(balance_item.get("owed_settled_cents", 0))
-    owed_pending = int(balance_item.get("owed_pending_cents", 0))
-    pay_settled = int(balance_item.get("payments_settled_cents", 0))
-    pay_pending = int(balance_item.get("payments_pending_cents", 0))
-
-    due_settled = owed_settled - pay_settled
-    due_if_all_settles = (owed_settled + owed_pending) - (pay_settled + pay_pending)
-    return {
-        "due_settled_cents": due_settled,
-        "due_if_all_settles_cents": due_if_all_settles,
-    }
 
 
 # ============================================================
@@ -771,7 +707,7 @@ def _get_default_token_or_400(user_id: str) -> str:
 @router.post("/api/billing/payment-methods/paypal/setup-token")
 def create_setup_token(body: SetupTokenIn, x_user_id: Optional[str] = Header(default=None)):
     user_id = require_user(x_user_id)
-    idem = f"setup:{user_id}:{body.pm_kind}:{int(time.time()/300)}:{secrets.token_hex(4)}"
+    idem = f"setup:{user_id}:{body.pm_kind}:{int(now_ts()/300)}:{secrets.token_hex(4)}"
     ret = f"{PUBLIC_BASE_URL}/billing/paypal/vault/return"
     can = f"{PUBLIC_BASE_URL}/billing/paypal/vault/cancel"
 
@@ -792,7 +728,7 @@ def exchange_setup_token(body: ExchangeTokenIn, x_user_id: Optional[str] = Heade
     user_id = require_user(x_user_id)
     pk = user_pk(user_id)
 
-    idem = f"exchange:{user_id}:{body.setup_token_id}:{int(time.time()/300)}"
+    idem = f"exchange:{user_id}:{body.setup_token_id}:{int(now_ts()/300)}"
     resp = paypal_exchange_setup_for_payment_token(setup_token_id=body.setup_token_id, idempotency_key=idem)
 
     payment_token_id = resp.get("id")
@@ -899,7 +835,7 @@ async def charge_once(body: OneTimeChargeIn, request: Request, x_user_id: Option
     token = body.payment_token_id or _get_default_token_or_400(user_id)
     amount = int(body.amount_cents)
 
-    idem = body.idempotency_key or f"order:{user_id}:{token}:{amount}:{int(time.time()/30)}"
+    idem = body.idempotency_key or f"order:{user_id}:{token}:{amount}:{int(now_ts()/30)}"
     return_url = f"{PUBLIC_BASE_URL}/billing/paypal/checkout/return"
     cancel_url = f"{PUBLIC_BASE_URL}/billing/paypal/checkout/cancel"
 
@@ -951,7 +887,7 @@ async def capture_order(body: CaptureOrderIn, x_user_id: Optional[str] = Header(
     pk = user_pk(user_id)
 
     order_id = body.order_id
-    idem = body.idempotency_key or f"capture:{user_id}:{order_id}:{int(time.time()/30)}"
+    idem = body.idempotency_key or f"capture:{user_id}:{order_id}:{int(now_ts()/30)}"
 
     pay = ddb_get(pk, pay_sk(order_id))
     if not pay or not pay.get("ledger_sk"):
@@ -993,7 +929,7 @@ async def pay_balance(body: PayBalanceIn, request: Request, x_user_id: Optional[
         return {"status": "no_settled_balance_due"}
 
     token = _get_default_token_or_400(user_id)
-    idem = body.idempotency_key or f"paybalance:{user_id}:{token}:{amount}:{int(time.time()/30)}"
+    idem = body.idempotency_key or f"paybalance:{user_id}:{token}:{amount}:{int(now_ts()/30)}"
 
     ot = OneTimeChargeIn(amount_cents=amount, payment_token_id=token, idempotency_key=idem, reason="pay_balance")
     return await charge_once(ot, request, x_user_id=x_user_id)
@@ -1010,7 +946,7 @@ async def subscribe_monthly(body: SubscribeMonthlyIn, x_user_id: Optional[str] =
     if not paypal_plan_id:
         raise HTTPException(400, "Missing paypal_plan_id (or PAYPAL_PLAN_MAP does not contain this plan_id)")
 
-    idem = body.idempotency_key or f"subcreate:{user_id}:{paypal_plan_id}:{int(time.time()/300)}"
+    idem = body.idempotency_key or f"subcreate:{user_id}:{paypal_plan_id}:{int(now_ts()/300)}"
     return_url = f"{PUBLIC_BASE_URL}/billing/paypal/subscription/return"
     cancel_url = f"{PUBLIC_BASE_URL}/billing/paypal/subscription/cancel"
 
@@ -1041,7 +977,7 @@ async def subscribe_monthly(body: SubscribeMonthlyIn, x_user_id: Optional[str] =
 @router.post("/api/billing/subscriptions/cancel")
 def cancel_subscription(body: CancelSubscriptionIn, x_user_id: Optional[str] = Header(default=None)):
     user_id = require_user(x_user_id)
-    idem = body.idempotency_key or f"subcancel:{user_id}:{body.subscription_id}:{int(time.time()/300)}"
+    idem = body.idempotency_key or f"subcancel:{user_id}:{body.subscription_id}:{int(now_ts()/300)}"
     paypal_cancel_subscription(subscription_id=body.subscription_id, reason=body.reason, idempotency_key=idem)
     upsert_subscription(user_id, body.subscription_id, status="canceled", plan_id="unknown", raw={"cancel_reason": body.reason})
     return {"ok": True}
