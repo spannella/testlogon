@@ -189,12 +189,17 @@ class SubscribeMonthlyIn(BaseModel):
 
 
 class AddChargeIn(BaseModel):
+    amount_cents: int = Field(ge=1)
+    state: str = Field(pattern="^(pending|settled)$")
+    reason: str = "usage"
+
+
 class BillingCheckoutReq(BaseModel):
     amount_cents: int
     currency: Optional[str] = None
     description: Optional[str] = None
 
-class PaymentMethodOut(BaseModel):
+class StripePaymentMethodOut(BaseModel):
     payment_method_id: str
     method_type: str
     label: Optional[str] = None
@@ -227,3 +232,7 @@ class AddChargeReq(BaseModel):
     amount_cents: int = Field(ge=1)
     state: str = Field(pattern="^(pending|settled)$")
     reason: str = "usage"
+
+
+class AccountStatusReq(BaseModel):
+    reason: Optional[str] = None

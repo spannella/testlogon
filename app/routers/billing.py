@@ -14,11 +14,11 @@ from app.core.time import now_ts
 from app.models import (
     AddChargeReq,
     BillingCheckoutReq,
-    PaymentMethodOut,
     PayBalanceReq,
     SetAutopayReq,
     SetDefaultReq,
     SetPriorityReq,
+    StripePaymentMethodOut,
     VerifyMicrodepositsReq,
 )
 from app.services.sessions import require_ui_session
@@ -305,14 +305,14 @@ def verify_microdeposits(body: VerifyMicrodepositsReq, ctx=Depends(require_ui_se
     return {"status": si["status"]}
 
 
-@dual_route("GET", "/billing/payment-methods", response_model=List[PaymentMethodOut])
-def list_payment_methods(ctx=Depends(require_ui_session)) -> List[PaymentMethodOut]:
+@dual_route("GET", "/billing/payment-methods", response_model=List[StripePaymentMethodOut])
+def list_payment_methods(ctx=Depends(require_ui_session)) -> List[StripePaymentMethodOut]:
     user_id = ctx["user_sub"]
     pms = list_payment_methods_ddb(user_id)
 
-    out: List[PaymentMethodOut] = []
+    out: List[StripePaymentMethodOut] = []
     for it in pms:
-        out.append(PaymentMethodOut(
+        out.append(StripePaymentMethodOut(
             payment_method_id=it["payment_method_id"],
             method_type=it.get("method_type", "unknown"),
             label=it.get("label"),

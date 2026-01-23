@@ -19,6 +19,7 @@ from app.routers.misc import router as misc_router
 from app.routers.billing_ccbill import router as billing_ccbill_router
 from app.routers.paypal import router as paypal_router
 from app.routers.billing import router as billing_router
+from app.routers.account_state import router as account_state_router
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Security Backend (refactored)", version="0.1.0")
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
     app.include_router(billing_ccbill_router)
     app.include_router(paypal_router)
     app.include_router(billing_router)
+    app.include_router(account_state_router)
 
     return app
 
