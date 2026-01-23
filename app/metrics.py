@@ -6,27 +6,46 @@ from typing import Callable, Optional
 
 from fastapi import Request, Response
 
-METRICS_ENABLED = os.environ.get("APP_ENV", "development").lower() == "production"
+_APP_ENV = os.environ.get("APP_ENV", "development").lower()
+_PROD_ENVS = {"prod", "production"}
+_METRICS_ENABLED = _APP_ENV in _PROD_ENVS
+METRICS_ENABLED = _METRICS_ENABLED
 
-if METRICS_ENABLED:
-    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, Info, generate_latest
+if _METRICS_ENABLED:
+    try:
+        from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, Info, generate_latest
+    except ImportError as exc:  # pragma: no cover - hard failure in prod misconfig
+        raise RuntimeError("prometheus_client must be installed in production mode") from exc
 else:
     CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
 
     class _NoopMetric:
-        def labels(self, **_kwargs):
+        def labels(self, **_kwargs: str) -> "_NoopMetric":
             return self
 
-        def inc(self, *_args, **_kwargs):
+        def inc(self, _value: float = 1.0) -> None:
             return None
 
-        def set(self, *_args, **_kwargs):
+        def observe(self, _value: float) -> None:
             return None
 
-        def observe(self, *_args, **_kwargs):
+        def set(self, _value: float) -> None:
             return None
 
-    Counter = Gauge = Histogram = Info = lambda *_args, **_kwargs: _NoopMetric()
+        def info(self, _value: dict[str, str]) -> None:
+            return None
+
+    def Counter(*_args: object, **_kwargs: object) -> _NoopMetric:
+        return _NoopMetric()
+
+    def Gauge(*_args: object, **_kwargs: object) -> _NoopMetric:
+        return _NoopMetric()
+
+    def Histogram(*_args: object, **_kwargs: object) -> _NoopMetric:
+        return _NoopMetric()
+
+    def Info(*_args: object, **_kwargs: object) -> _NoopMetric:
+        return _NoopMetric()
 
     def generate_latest() -> bytes:
         return b""

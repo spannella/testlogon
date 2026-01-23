@@ -243,7 +243,7 @@ function escapeHtml(str) {
 const billingState = { config: null };
 
 function billingLog(msg, obj=null) {
-  const el = document.getElementById("billingLog");
+  const el = document.getElementById("ccbillLog");
   if (!el) return;
   const line = `[${new Date().toISOString()}] ${msg}` + (obj ? `\n${JSON.stringify(obj,null,2)}\n` : "\n");
   el.value = line + el.value;
@@ -256,7 +256,7 @@ function billingFmtCents(c) {
 
 async function billingLoadConfig() {
   billingState.config = await apiGet("/api/billing/config");
-  const el = document.getElementById("billingConfigBox");
+  const el = document.getElementById("ccbillConfigBox");
   if (el) {
     el.textContent = `clientAccnum=${billingState.config.clientAccnum} clientSubacc=${billingState.config.clientSubacc} currency=${billingState.config.default_currency}`;
   }
@@ -265,7 +265,7 @@ async function billingLoadConfig() {
 
 async function billingLoadSettings() {
   const s = await apiGet("/api/billing/settings");
-  const el = document.getElementById("billingSettingsOut");
+  const el = document.getElementById("ccbillSettingsOut");
   if (el) el.textContent = JSON.stringify(s);
   billingLog("Loaded billing settings", s);
 }
@@ -282,13 +282,13 @@ async function billingLoadBalance() {
     due_if_all_settles: billingFmtCents(b.due_if_all_settles_cents),
     updated_at: b.updated_at,
   };
-  const el = document.getElementById("billingBalanceOut");
+  const el = document.getElementById("ccbillBalanceOut");
   if (el) el.textContent = JSON.stringify(view);
   billingLog("Loaded billing balance", b);
 }
 
 async function billingLoadPaymentMethods() {
-  const tbody = document.getElementById("billingPmTbody");
+  const tbody = document.getElementById("ccbillPmTbody");
   if (!tbody) return;
   const pms = await apiGet("/api/billing/payment-methods");
   tbody.innerHTML = "";
@@ -355,7 +355,7 @@ async function billingLoadPaymentMethods() {
 }
 
 async function billingRefreshAll() {
-  if (!document.getElementById("billingSection")) return;
+  if (!document.getElementById("ccbillSection")) return;
   await ensureUiSession();
   await billingLoadConfig();
   await billingLoadSettings();
@@ -385,8 +385,8 @@ async function billingCreateToken() {
 }
 
 async function billingSubscribeMonthly() {
-  const monthly = Number(document.getElementById("billingMonthlyCents").value);
-  const planId = document.getElementById("billingPlanId").value.trim() || "monthly";
+  const monthly = Number(document.getElementById("ccbillMonthlyCents").value);
+  const planId = document.getElementById("ccbillPlanId").value.trim() || "monthly";
   const resp = await apiPost("/api/billing/subscribe-monthly", { plan_id: planId, monthly_price_cents: monthly });
   billingLog("subscribe-monthly response", resp);
   await billingRefreshAll();
@@ -394,7 +394,7 @@ async function billingSubscribeMonthly() {
 }
 
 async function billingChargeOnce() {
-  const amount = Number(document.getElementById("billingOneTimeCents").value);
+  const amount = Number(document.getElementById("ccbillOneTimeCents").value);
   const resp = await apiPost("/api/billing/charge-once", { amount_cents: amount });
   billingLog("charge-once response", resp);
   await billingRefreshAll();
@@ -410,36 +410,36 @@ async function billingPayBalance() {
 
 async function billingLoadSubscriptions() {
   const data = await apiGet("/api/billing/subscriptions");
-  const el = document.getElementById("billingDebugOut");
+  const el = document.getElementById("ccbillDebugOut");
   if (el) el.value = JSON.stringify(data, null, 2);
   billingLog("Loaded subscriptions", data);
 }
 
 async function billingLoadPayments() {
   const data = await apiGet("/api/billing/payments");
-  const el = document.getElementById("billingDebugOut");
+  const el = document.getElementById("ccbillDebugOut");
   if (el) el.value = JSON.stringify(data, null, 2);
   billingLog("Loaded payments", data);
 }
 
 async function billingLoadLedger() {
   const data = await apiGet("/api/billing/ledger");
-  const el = document.getElementById("billingDebugOut");
+  const el = document.getElementById("ccbillDebugOut");
   if (el) el.value = JSON.stringify(data, null, 2);
   billingLog("Loaded ledger", data);
 }
 
 function initBillingUi() {
-  if (!document.getElementById("billingSection")) return;
-  document.getElementById("billingRefreshBtn").onclick = async () => { await billingRefreshAll(); };
-  document.getElementById("billingCreateTokenBtn").onclick = async () => { await ensureUiSession(); await billingCreateToken(); };
-  document.getElementById("billingRefreshMethodsBtn").onclick = async () => { await ensureUiSession(); await billingLoadPaymentMethods(); };
-  document.getElementById("billingSubscribeBtn").onclick = async () => { await ensureUiSession(); await billingSubscribeMonthly(); };
-  document.getElementById("billingChargeOnceBtn").onclick = async () => { await ensureUiSession(); await billingChargeOnce(); };
-  document.getElementById("billingPayBalanceBtn").onclick = async () => { await ensureUiSession(); await billingPayBalance(); };
-  document.getElementById("billingLoadSubscriptionsBtn").onclick = async () => { await ensureUiSession(); await billingLoadSubscriptions(); };
-  document.getElementById("billingLoadPaymentsBtn").onclick = async () => { await ensureUiSession(); await billingLoadPayments(); };
-  document.getElementById("billingLoadLedgerBtn").onclick = async () => { await ensureUiSession(); await billingLoadLedger(); };
+  if (!document.getElementById("ccbillSection")) return;
+  document.getElementById("ccbillRefreshBtn").onclick = async () => { await billingRefreshAll(); };
+  document.getElementById("ccbillCreateTokenBtn").onclick = async () => { await ensureUiSession(); await billingCreateToken(); };
+  document.getElementById("ccbillRefreshMethodsBtn").onclick = async () => { await ensureUiSession(); await billingLoadPaymentMethods(); };
+  document.getElementById("ccbillSubscribeBtn").onclick = async () => { await ensureUiSession(); await billingSubscribeMonthly(); };
+  document.getElementById("ccbillChargeOnceBtn").onclick = async () => { await ensureUiSession(); await billingChargeOnce(); };
+  document.getElementById("ccbillPayBalanceBtn").onclick = async () => { await ensureUiSession(); await billingPayBalance(); };
+  document.getElementById("ccbillLoadSubscriptionsBtn").onclick = async () => { await ensureUiSession(); await billingLoadSubscriptions(); };
+  document.getElementById("ccbillLoadPaymentsBtn").onclick = async () => { await ensureUiSession(); await billingLoadPayments(); };
+  document.getElementById("ccbillLoadLedgerBtn").onclick = async () => { await ensureUiSession(); await billingLoadLedger(); };
 
   window.addEventListener("tokenCreated", async (ev) => {
     try {
@@ -460,7 +460,7 @@ function initBillingUi() {
       await apiPost("/api/billing/payment-methods/ccbill-token", {
         payment_token_id: tokenId,
         label: label,
-        make_default: document.getElementById("billingMakeDefault").checked,
+        make_default: document.getElementById("ccbillMakeDefault").checked,
       });
 
       billingLog("Saved payment token to backend", { tokenId, label });
@@ -522,7 +522,7 @@ function renderAlertRow(a) {
 }
 
 function setBillingStatus(msg) {
-  const el = document.getElementById("billingStatus");
+  const el = document.getElementById("stripeStatus");
   if (el) el.textContent = msg || "";
 }
 
@@ -532,12 +532,12 @@ async function initStripeBilling() {
   stripe = Stripe(cfg.publishable_key);
   stripeElements = stripe.elements();
   stripeCard = stripeElements.create("card");
-  stripeCard.mount("#card-element");
+  stripeCard.mount("#stripe_card_element");
 }
 
-function showBillingPane(name) {
-  document.querySelectorAll(".pane").forEach(p => p.classList.add("hidden"));
-  const el = document.getElementById("pane_" + name);
+function showStripePane(name) {
+  document.querySelectorAll(".stripe-pane").forEach(p => p.classList.add("hidden"));
+  const el = document.getElementById("stripe_pane_" + name);
   if (el) el.classList.remove("hidden");
   if (name === "list_methods") {
     loadBillingPaymentMethods();
@@ -546,23 +546,23 @@ function showBillingPane(name) {
 
 async function loadBillingSettings() {
   const res = await apiGet("/api/billing/settings");
-  const chk = document.getElementById("autopay");
+  const chk = document.getElementById("stripe_autopay");
   if (chk) chk.checked = !!res.autopay_enabled;
 }
 
 async function loadBillingBalance() {
   const b = await apiGet("/api/billing/balance");
   const currency = b.currency || "usd";
-  document.getElementById("due_settled").innerText = fmtMoney(b.due_settled_cents || 0, currency);
-  document.getElementById("due_all").innerText = fmtMoney(b.due_if_all_settles_cents || 0, currency);
-  document.getElementById("owed_pending").innerText = fmtMoney(b.owed_pending_cents || 0, currency);
-  document.getElementById("owed_settled").innerText = fmtMoney(b.owed_settled_cents || 0, currency);
-  document.getElementById("pay_pending").innerText = fmtMoney(b.payments_pending_cents || 0, currency);
-  document.getElementById("pay_settled").innerText = fmtMoney(b.payments_settled_cents || 0, currency);
+  document.getElementById("stripe_due_settled").innerText = fmtMoney(b.due_settled_cents || 0, currency);
+  document.getElementById("stripe_due_all").innerText = fmtMoney(b.due_if_all_settles_cents || 0, currency);
+  document.getElementById("stripe_owed_pending").innerText = fmtMoney(b.owed_pending_cents || 0, currency);
+  document.getElementById("stripe_owed_settled").innerText = fmtMoney(b.owed_settled_cents || 0, currency);
+  document.getElementById("stripe_pay_pending").innerText = fmtMoney(b.payments_pending_cents || 0, currency);
+  document.getElementById("stripe_pay_settled").innerText = fmtMoney(b.payments_settled_cents || 0, currency);
 }
 
 async function loadBillingPaymentMethods() {
-  const wrap = document.getElementById("methods");
+  const wrap = document.getElementById("stripe_methods");
   wrap.innerHTML = "";
   const list = await apiGet("/api/billing/payment-methods");
   if (!list || list.length === 0) {
@@ -584,9 +584,9 @@ async function loadBillingPaymentMethods() {
       </div>
       <div class="row">
         <div class="muted">Priority:</div>
-        <input id="prio_${pm.payment_method_id}" value="${pm.priority}" style="width:90px"/>
+        <input id="stripe_prio_${pm.payment_method_id}" value="${pm.priority}" style="width:90px"/>
         <button type="button" data-action="priority" data-pm="${pm.payment_method_id}">Save priority</button>
-        <span id="pm_msg_${pm.payment_method_id}" class="muted"></span>
+        <span id="stripe_pm_msg_${pm.payment_method_id}" class="muted"></span>
       </div>
     `;
     wrap.appendChild(div);
@@ -608,20 +608,20 @@ async function loadBillingPaymentMethods() {
 
 async function updateBillingPriority(pm) {
   try {
-    const val = parseInt(document.getElementById("prio_" + pm).value, 10);
+    const val = parseInt(document.getElementById("stripe_prio_" + pm).value, 10);
     await apiPost("/api/billing/payment-methods/priority", { payment_method_id: pm, priority: val });
-    document.getElementById("pm_msg_" + pm).innerText = "Priority saved";
+    document.getElementById("stripe_pm_msg_" + pm).innerText = "Priority saved";
   } catch (e) {
-    document.getElementById("pm_msg_" + pm).innerText = "Error: " + String(e);
+    document.getElementById("stripe_pm_msg_" + pm).innerText = "Error: " + String(e);
   }
 }
 
 async function setBillingDefault(pm) {
   try {
     await apiPost("/api/billing/payment-methods/default", { payment_method_id: pm });
-    document.getElementById("pm_msg_" + pm).innerText = "Default set";
+    document.getElementById("stripe_pm_msg_" + pm).innerText = "Default set";
   } catch (e) {
-    document.getElementById("pm_msg_" + pm).innerText = "Error: " + String(e);
+    document.getElementById("stripe_pm_msg_" + pm).innerText = "Error: " + String(e);
   }
 }
 
@@ -635,25 +635,25 @@ async function removeBillingPM(pm) {
 }
 
 async function addBillingCard() {
-  document.getElementById("add_card_result").innerText = "";
+  document.getElementById("stripe_add_card_result").innerText = "";
   try {
     const si = await apiPost("/api/billing/setup-intent/card", {});
     const res = await stripe.confirmCardSetup(si.client_secret, { payment_method: { card: stripeCard } });
     if (res.error) throw new Error(res.error.message);
 
-    document.getElementById("add_card_result").innerText = "Saved. (Will appear after webhook)";
+    document.getElementById("stripe_add_card_result").innerText = "Saved. (Will appear after webhook)";
     setTimeout(refreshBillingAll, 800);
   } catch (e) {
-    document.getElementById("add_card_result").innerText = "Error: " + String(e);
+    document.getElementById("stripe_add_card_result").innerText = "Error: " + String(e);
   }
 }
 
 async function addBillingBankAccount() {
-  document.getElementById("add_bank_result").innerText = "";
-  document.getElementById("bank_next").innerText = "";
+  document.getElementById("stripe_add_bank_result").innerText = "";
+  document.getElementById("stripe_bank_next").innerText = "";
   try {
-    const name = document.getElementById("bank_name").value || "Customer";
-    const email = document.getElementById("bank_email").value || undefined;
+    const name = document.getElementById("stripe_bank_name").value || "Customer";
+    const email = document.getElementById("stripe_bank_email").value || undefined;
 
     const si = await apiPost("/api/billing/setup-intent/us-bank", {});
 
@@ -672,40 +672,40 @@ async function addBillingBankAccount() {
     if (confirmed.error) throw new Error(confirmed.error.message);
 
     const setupIntent = confirmed.setupIntent;
-    document.getElementById("add_bank_result").innerText = "Submitted. Status: " + setupIntent.status;
+    document.getElementById("stripe_add_bank_result").innerText = "Submitted. Status: " + setupIntent.status;
 
     if (setupIntent.status === "requires_action" &&
         setupIntent.next_action &&
         setupIntent.next_action.type === "verify_with_microdeposits") {
       lastPendingSetupIntentId = setupIntent.id;
-      document.getElementById("bank_next").innerHTML =
+      document.getElementById("stripe_bank_next").innerHTML =
         "Microdeposits required. SetupIntent: <code>" + setupIntent.id + "</code>. " +
         "Go to “Verify microdeposits” tab after deposits arrive.";
-      document.getElementById("verify_si").value = setupIntent.id;
-      showBillingPane("verify_bank");
+      document.getElementById("stripe_verify_si").value = setupIntent.id;
+      showStripePane("verify_bank");
     } else {
-      document.getElementById("bank_next").innerText = "If it succeeded, it will appear after webhook.";
+      document.getElementById("stripe_bank_next").innerText = "If it succeeded, it will appear after webhook.";
       setTimeout(refreshBillingAll, 800);
     }
   } catch (e) {
-    document.getElementById("add_bank_result").innerText = "Error: " + String(e);
+    document.getElementById("stripe_add_bank_result").innerText = "Error: " + String(e);
   }
 }
 
 function useBillingPendingSetupIntent() {
   if (lastPendingSetupIntentId) {
-    document.getElementById("verify_si").value = lastPendingSetupIntentId;
+    document.getElementById("stripe_verify_si").value = lastPendingSetupIntentId;
   } else {
     alert("No pending SetupIntent stored in this browser session.");
   }
 }
 
 async function verifyBillingByAmounts() {
-  document.getElementById("verify_result").innerText = "";
+  document.getElementById("stripe_verify_result").innerText = "";
   try {
-    const setup_intent_id = document.getElementById("verify_si").value.trim();
-    const a1 = parseInt(document.getElementById("amt1").value.trim(), 10);
-    const a2 = parseInt(document.getElementById("amt2").value.trim(), 10);
+    const setup_intent_id = document.getElementById("stripe_verify_si").value.trim();
+    const a1 = parseInt(document.getElementById("stripe_amt1").value.trim(), 10);
+    const a2 = parseInt(document.getElementById("stripe_amt2").value.trim(), 10);
     if (!setup_intent_id) throw new Error("Missing setup_intent_id");
     if (!Number.isFinite(a1) || !Number.isFinite(a2)) throw new Error("Enter both amounts (cents)");
 
@@ -714,18 +714,18 @@ async function verifyBillingByAmounts() {
       amounts: [a1, a2],
     });
 
-    document.getElementById("verify_result").innerText = "Verify result: " + res.status + " (PM will appear after webhook if succeeded)";
+    document.getElementById("stripe_verify_result").innerText = "Verify result: " + res.status + " (PM will appear after webhook if succeeded)";
     setTimeout(refreshBillingAll, 800);
   } catch (e) {
-    document.getElementById("verify_result").innerText = "Error: " + String(e);
+    document.getElementById("stripe_verify_result").innerText = "Error: " + String(e);
   }
 }
 
 async function verifyBillingByDescriptor() {
-  document.getElementById("verify_result").innerText = "";
+  document.getElementById("stripe_verify_result").innerText = "";
   try {
-    const setup_intent_id = document.getElementById("verify_si").value.trim();
-    const descriptor_code = document.getElementById("desc").value.trim();
+    const setup_intent_id = document.getElementById("stripe_verify_si").value.trim();
+    const descriptor_code = document.getElementById("stripe_desc").value.trim();
     if (!setup_intent_id) throw new Error("Missing setup_intent_id");
     if (!descriptor_code) throw new Error("Missing descriptor code");
 
@@ -734,16 +734,16 @@ async function verifyBillingByDescriptor() {
       descriptor_code,
     });
 
-    document.getElementById("verify_result").innerText = "Verify result: " + res.status + " (PM will appear after webhook if succeeded)";
+    document.getElementById("stripe_verify_result").innerText = "Verify result: " + res.status + " (PM will appear after webhook if succeeded)";
     setTimeout(refreshBillingAll, 800);
   } catch (e) {
-    document.getElementById("verify_result").innerText = "Error: " + String(e);
+    document.getElementById("stripe_verify_result").innerText = "Error: " + String(e);
   }
 }
 
 async function setBillingAutopay() {
   try {
-    const enabled = document.getElementById("autopay").checked;
+    const enabled = document.getElementById("stripe_autopay").checked;
     await apiPost("/api/billing/autopay", { enabled });
   } catch (e) {
     alert("Autopay update failed: " + String(e));
@@ -751,27 +751,27 @@ async function setBillingAutopay() {
 }
 
 async function payBillingSettledBalance() {
-  document.getElementById("pay_result").innerText = "";
+  document.getElementById("stripe_pay_result").innerText = "";
   try {
-    const amtTxt = document.getElementById("pay_amount").value.trim();
+    const amtTxt = document.getElementById("stripe_pay_amount").value.trim();
     const amount_cents = amtTxt ? parseInt(amtTxt, 10) : null;
 
     const payload = {};
     if (amount_cents) payload.amount_cents = amount_cents;
 
     const res = await apiPost("/api/billing/pay-balance", payload);
-    document.getElementById("pay_result").innerText = "PI status: " + res.status + " (" + (res.payment_intent_id || "") + ")";
+    document.getElementById("stripe_pay_result").innerText = "PI status: " + res.status + " (" + (res.payment_intent_id || "") + ")";
     setTimeout(refreshBillingAll, 800);
   } catch (e) {
-    document.getElementById("pay_result").innerText = "Error: " + String(e);
+    document.getElementById("stripe_pay_result").innerText = "Error: " + String(e);
   }
 }
 
 async function loadBillingLedger() {
-  const wrap = document.getElementById("ledger");
+  const wrap = document.getElementById("stripe_ledger");
   wrap.innerHTML = "";
   try {
-    const limitTxt = document.getElementById("ledger_limit").value.trim();
+    const limitTxt = document.getElementById("stripe_ledger_limit").value.trim();
     const limit = limitTxt ? parseInt(limitTxt, 10) : 50;
     const res = await apiGet("/api/billing/ledger?limit=" + encodeURIComponent(limit));
     const items = res.items || [];
@@ -2395,19 +2395,19 @@ document.getElementById("profileAuditRefreshBtn").onclick = async () => {
 };
 
 initBillingUi();
-document.getElementById("billingRefreshBtn").onclick = refreshBillingAll;
-document.getElementById("paySettledBalanceBtn").onclick = payBillingSettledBalance;
-document.getElementById("autopay").onchange = setBillingAutopay;
-document.getElementById("paneAddCardBtn").onclick = () => showBillingPane("add_card");
-document.getElementById("paneAddBankBtn").onclick = () => showBillingPane("add_bank");
-document.getElementById("paneVerifyBankBtn").onclick = () => showBillingPane("verify_bank");
-document.getElementById("paneListMethodsBtn").onclick = () => showBillingPane("list_methods");
-document.getElementById("addCardBtn").onclick = addBillingCard;
-document.getElementById("addBankAccountBtn").onclick = addBillingBankAccount;
-document.getElementById("usePendingSetupIntentBtn").onclick = useBillingPendingSetupIntent;
-document.getElementById("verifyByAmountsBtn").onclick = verifyBillingByAmounts;
-document.getElementById("verifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
-document.getElementById("loadLedgerBtn").onclick = loadBillingLedger;
+document.getElementById("stripeRefreshBtn").onclick = refreshBillingAll;
+document.getElementById("stripePaySettledBalanceBtn").onclick = payBillingSettledBalance;
+document.getElementById("stripe_autopay").onchange = setBillingAutopay;
+document.getElementById("stripePaneAddCardBtn").onclick = () => showStripePane("add_card");
+document.getElementById("stripePaneAddBankBtn").onclick = () => showStripePane("add_bank");
+document.getElementById("stripePaneVerifyBankBtn").onclick = () => showStripePane("verify_bank");
+document.getElementById("stripePaneListMethodsBtn").onclick = () => showStripePane("list_methods");
+document.getElementById("stripeAddCardBtn").onclick = addBillingCard;
+document.getElementById("stripeAddBankAccountBtn").onclick = addBillingBankAccount;
+document.getElementById("stripeUsePendingSetupIntentBtn").onclick = useBillingPendingSetupIntent;
+document.getElementById("stripeVerifyByAmountsBtn").onclick = verifyBillingByAmounts;
+document.getElementById("stripeVerifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
+document.getElementById("stripeLoadLedgerBtn").onclick = loadBillingLedger;
 
 /* ===================== boot ===================== */
 if (!accessToken()) { openTokenModal(); } else { refreshAll(); }
