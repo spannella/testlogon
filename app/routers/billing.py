@@ -22,6 +22,7 @@ from app.models import (
     SetAutopayReq,
     SetDefaultReq,
     SetPriorityReq,
+    StripeChargeReq,
     StripePaymentMethodOut,
     VerifyMicrodepositsReq,
 )
@@ -194,6 +195,10 @@ def pm_sk(payment_method_id: str) -> str:
 def list_payment_methods_ddb(user_id: str) -> List[Dict[str, Any]]:
     items = ddb_query_pk(T.billing, user_pk(user_id))
     return [it for it in items if it["sk"].startswith("PM#")]
+
+def list_payment_records_ddb(user_id: str) -> List[Dict[str, Any]]:
+    items = ddb_query_pk(T.billing, user_pk(user_id))
+    return [it for it in items if it["sk"].startswith("PAY#")]
 
 
 def current_default_pm(user_id: str) -> Optional[str]:
@@ -446,6 +451,72 @@ def pay_balance(body: PayBalanceReq, ctx=Depends(require_ui_session)) -> Dict[st
         settle_or_reverse_ledger(user_id, led_sk, "settled")
     else:
         apply_balance_delta(T.billing, pk, {"payments_pending_cents": amount}, currency=billing.get("currency", "usd"))
+
+    put_payment_record(user_id, pi, led_sk, payment_method_type=pm_type)
+
+    return {"status": pi.get("status"), "payment_intent_id": pi["id"]}
+
+
+@dual_route("POST", "/billing/charge-once")
+def charge_once(body: StripeChargeReq, ctx=Depends(require_ui_session)) -> Dict[str, Any]:
+    ensure_stripe_configured()
+    user_id = ctx["user_sub"]
+    pk = user_pk(user_id)
+
+    ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
+    billing = ddb_get(T.billing, pk, "BILLING") or {"currency": "usd", "default_payment_method_id": None}
+    payment_method_id = body.payment_method_id or billing.get("default_payment_method_id")
+    if not payment_method_id:
+        raise HTTPException(400, "No payment method provided")
+
+    customer_id = get_or_create_customer(user_id)
+    idem = body.idempotency_key or f"chargeonce:{user_id}:{body.amount_cents}:{int(now_ts()/30)}"
+    description = body.description or f"One-time charge for {user_id}"
+
+    try:
+        pi = stripe.PaymentIntent.create(
+            amount=int(body.amount_cents),
+            currency=billing.get("currency", "usd"),
+            customer=customer_id,
+            payment_method=payment_method_id,
+            off_session=True,
+            confirm=True,
+            description=description,
+            metadata={"app_user_id": user_id, "purpose": "charge_once"},
+            idempotency_key=idem,
+        )
+    except stripe.error.CardError as exc:
+        return {"status": "failed", "reason": str(exc)}
+
+    pm_type = "unknown"
+    try:
+        pm_obj = stripe.PaymentMethod.retrieve(payment_method_id)
+        pm_type = pm_obj.get("type", "unknown")
+    except Exception:
+        pass
+
+    state = "pending"
+    if pi.get("status") == "succeeded":
+        state = "settled"
+    elif pi.get("status") not in ("processing", "requires_action"):
+        state = "pending"
+
+    led_sk, led_item = new_ledger_entry(
+        user_id=user_id,
+        entry_type="credit",
+        amount_cents=int(body.amount_cents),
+        state=state,
+        reason="charge_once",
+        stripe_payment_intent_id=pi["id"],
+        meta={"idempotency_key": idem, "payment_method_id": payment_method_id},
+    )
+    ddb_put(T.billing, led_item)
+
+    if pi.get("status") == "succeeded":
+        apply_balance_delta(T.billing, pk, {"payments_settled_cents": int(body.amount_cents)}, currency=billing.get("currency", "usd"))
+        settle_or_reverse_ledger(user_id, led_sk, "settled")
+    else:
+        apply_balance_delta(T.billing, pk, {"payments_pending_cents": int(body.amount_cents)}, currency=billing.get("currency", "usd"))
 
     put_payment_record(user_id, pi, led_sk, payment_method_type=pm_type)
 
@@ -709,3 +780,25 @@ def list_ledger(ctx=Depends(require_ui_session), limit: int = 50) -> Dict[str, A
     led = [it for it in items if it["sk"].startswith("LEDGER#")]
     led.sort(key=lambda x: x.get("ts", 0), reverse=True)
     return {"items": led[: max(1, min(limit, 200))]}
+
+
+@dual_route("GET", "/billing/payments")
+def list_payments(ctx=Depends(require_ui_session), limit: int = 50) -> Dict[str, Any]:
+    user_id = ctx["user_sub"]
+    pays = list_payment_records_ddb(user_id)
+    pays.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+    return {"items": pays[: max(1, min(limit, 200))]}
+
+
+@dual_route("GET", "/billing/subscriptions")
+def list_subscriptions(ctx=Depends(require_ui_session), limit: int = 50) -> Dict[str, Any]:
+    ensure_stripe_configured()
+    user_id = ctx["user_sub"]
+    customer_id = get_or_create_customer(user_id)
+    capped_limit = max(1, min(limit, 200))
+    resp = stripe.Subscription.list(customer=customer_id, limit=capped_limit)
+    if isinstance(resp, dict):
+        items = resp.get("data", [])
+    else:
+        items = getattr(resp, "data", []) or []
+    return {"items": items}

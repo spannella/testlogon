@@ -263,6 +263,12 @@ class PayBalanceReq(BaseModel):
     amount_cents: Optional[int] = Field(default=None, ge=1)
     idempotency_key: Optional[str] = None
 
+class StripeChargeReq(BaseModel):
+    amount_cents: int = Field(ge=1)
+    payment_method_id: Optional[str] = None
+    description: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
 class VerifyMicrodepositsReq(BaseModel):
     setup_intent_id: str
     amounts: Optional[List[int]] = None
