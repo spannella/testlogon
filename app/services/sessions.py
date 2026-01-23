@@ -131,11 +131,17 @@ def compute_required_factors(user_sub: str) -> List[str]:
         required.append("email")
     return required
 
-def create_stepup_challenge(req: Request, user_sub: str, required_factors: List[str]) -> str:
+def create_stepup_challenge(
+    req: Request,
+    user_sub: str,
+    required_factors: List[str],
+    *,
+    purpose: Optional[str] = None,
+) -> str:
     challenge_id = "chal_" + uuid.uuid4().hex
     ts = now_ts()
     expires = ts + S.session_challenge_ttl_seconds
-    T.sessions.put_item(Item=with_ttl({
+    item: Dict[str, Any] = {
         "user_sub": user_sub,
         "session_id": challenge_id,
         "created_at": ts,
@@ -147,7 +153,10 @@ def create_stepup_challenge(req: Request, user_sub: str, required_factors: List[
         "required_factors": required_factors,
         "passed": {f: False for f in required_factors},
         "expires_at": expires,
-    }, ttl_epoch=expires))
+    }
+    if purpose:
+        item["purpose"] = purpose
+    T.sessions.put_item(Item=with_ttl(item, ttl_epoch=expires))
     return challenge_id
 
 def create_action_challenge(
@@ -180,6 +189,8 @@ def create_action_challenge(
 def maybe_finalize(req: Request, user_sub: str, challenge_id: str) -> Optional[str]:
     chal = load_challenge_or_401(user_sub, challenge_id)
     if not challenge_done(chal):
+        return None
+    if chal.get("purpose"):
         return None
     sid = create_real_session(req, user_sub)
     revoke_challenge(user_sub, challenge_id)

@@ -24,6 +24,9 @@ class UiSessionFinalizeResp(BaseModel):
     required_factors: List[str] = Field(default_factory=list)
     passed: Dict[str, bool] = Field(default_factory=dict)
 
+class AccountClosureFinalizeReq(BaseModel):
+    challenge_id: str
+
 class TotpVerifyReq(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     challenge_id: str
@@ -189,12 +192,16 @@ class SubscribeMonthlyIn(BaseModel):
 
 
 class AddChargeIn(BaseModel):
+    amount_cents: int = Field(ge=1)
+    state: str = Field(pattern="^(pending|settled)$")
+    reason: str = "usage"
+
 class BillingCheckoutReq(BaseModel):
     amount_cents: int
     currency: Optional[str] = None
     description: Optional[str] = None
 
-class PaymentMethodOut(BaseModel):
+class StripePaymentMethodOut(BaseModel):
     payment_method_id: str
     method_type: str
     label: Optional[str] = None

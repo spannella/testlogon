@@ -36,6 +36,30 @@ class TestChallengeDone(unittest.TestCase):
         self.assertFalse(sessions_service.challenge_done(chal))
 
 
+class TestMaybeFinalize(unittest.TestCase):
+    def test_maybe_finalize_skips_purpose_challenge(self):
+        chal = {"required_factors": [], "passed": {}, "purpose": "account_closure"}
+        with patch.object(sessions_service, "load_challenge_or_401", return_value=chal), patch.object(
+            sessions_service, "challenge_done", return_value=True
+        ), patch.object(sessions_service, "create_real_session") as create_real_session:
+            resp = sessions_service.maybe_finalize(Mock(), "user", "chal")
+
+        self.assertIsNone(resp)
+        create_real_session.assert_not_called()
+
+
+class TestMaybeFinalize(unittest.TestCase):
+    def test_maybe_finalize_skips_purpose_challenge(self):
+        chal = {"required_factors": [], "passed": {}, "purpose": "account_closure"}
+        with patch.object(sessions_service, "load_challenge_or_401", return_value=chal), patch.object(
+            sessions_service, "challenge_done", return_value=True
+        ), patch.object(sessions_service, "create_real_session") as create_real_session:
+            resp = sessions_service.maybe_finalize(Mock(), "user", "chal")
+
+        self.assertIsNone(resp)
+        create_real_session.assert_not_called()
+
+
 class TestComputeRequiredFactors(unittest.TestCase):
     def test_compute_required_factors_uses_tables(self):
         totp_table = Mock()

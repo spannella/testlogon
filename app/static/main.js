@@ -1125,6 +1125,307 @@ async function ensureUiSession() {
   });
 }
 
+/* ===================== Account closure ===================== */
+async function accountClosureStart() {
+  return await apiPost("/ui/account/closure/start", {});
+}
+
+async function accountClosureFinalize(challenge_id) {
+  return await apiPost("/ui/account/closure/finalize", { challenge_id });
+}
+
+function handleAccountClosureSuccess() {
+  lsDel("access_token");
+  lsDel("id_token");
+  lsDel("refresh_token");
+  lsDel("session_id");
+  alert("Account permanently closed. All data deleted for this user.");
+  window.location.reload();
+}
+
+async function runAccountClosureChallenge(challengeId, required) {
+  const needTotp = (required || []).includes("totp");
+  const needSms = (required || []).includes("sms");
+  const needEmail = (required || []).includes("email");
+
+  async function postBearer(path, payload) {
+    const tok = accessToken();
+    const res = await fetch(API_BASE + path, {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + tok, "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const txt = await res.text();
+    if (!res.ok) throw new Error(res.status + ": " + txt);
+    return txt ? JSON.parse(txt) : {};
+  }
+
+  return new Promise((resolve, reject) => {
+    const state = {
+      challengeId,
+      needTotp,
+      needSms,
+      needEmail,
+      totpDone: false,
+      smsDone: false,
+      emailDone: false,
+      smsSending: false,
+      smsSentOnce: false,
+      smsSentTo: [],
+      emailSending: false,
+      emailSentOnce: false,
+      emailSentTo: [],
+      lastErr: "",
+    };
+
+    function badge(done) {
+      return done ? `<span class="pill">✅ verified</span>` : `<span class="pill">required</span>`;
+    }
+
+    async function tryFinalizeOrClose() {
+      const res = await accountClosureFinalize(challengeId);
+      if (res && res.status === "closed") {
+        modalClose();
+        handleAccountClosureSuccess();
+        resolve(true);
+        return true;
+      }
+      return false;
+    }
+
+    async function autoSendSmsOnce() {
+      if (!state.needSms || state.smsDone || state.smsSentOnce || state.smsSending) return;
+      state.smsSending = true;
+      state.lastErr = "";
+      render();
+      try {
+        const res = await postBearer("/ui/mfa/sms/begin", { challenge_id: challengeId });
+        state.smsSentTo = res.sent_to || [];
+        state.smsSentOnce = true;
+      } catch (e) {
+        state.lastErr = String(e);
+      } finally {
+        state.smsSending = false;
+        render();
+      }
+    }
+
+    async function autoSendEmailOnce() {
+      if (!state.needEmail || state.emailDone || state.emailSentOnce || state.emailSending) return;
+      state.emailSending = true;
+      state.lastErr = "";
+      render();
+      try {
+        const res = await postBearer("/ui/mfa/email/begin", { challenge_id: challengeId });
+        state.emailSentTo = res.sent_to || [];
+        state.emailSentOnce = true;
+      } catch (e) {
+        state.lastErr = String(e);
+      } finally {
+        state.emailSending = false;
+        render();
+      }
+    }
+
+    function render() {
+      const totpSection = !state.needTotp ? "" : `
+        <div style="border:1px solid #eee; padding:10px; border-radius:10px; margin-top:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+            <div><b>TOTP</b> ${badge(state.totpDone)}</div>
+          </div>
+
+          <input id="totpCode" placeholder="123456" inputmode="numeric" autocomplete="one-time-code"
+                 ${state.totpDone ? "disabled" : ""} />
+
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button id="totpVerifyBtn" ${state.totpDone ? "disabled" : ""}>Verify TOTP</button>
+            <button id="totpRecoveryBtn" ${state.totpDone ? "disabled" : ""}>Use TOTP recovery</button>
+          </div>
+          <small>Any registered authenticator works.</small>
+        </div>
+      `;
+
+      const smsSection = !state.needSms ? "" : `
+        <div style="border:1px solid #eee; padding:10px; border-radius:10px; margin-top:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+            <div><b>SMS</b> ${badge(state.smsDone)}</div>
+            <div>
+              <button id="smsResendBtn" ${state.smsDone || state.smsSending ? "disabled" : ""}>
+                ${state.smsSentOnce ? "Resend SMS" : "Send SMS"}
+              </button>
+            </div>
+          </div>
+
+          <div style="margin-top:6px;">
+            ${state.smsSentTo.length
+              ? `<small>Sent to: ${state.smsSentTo.map(x=>`<code>${x}</code>`).join(" ")}</small>`
+              : `<small>We will text a code to all your enabled numbers.</small>`}
+          </div>
+
+          <input id="smsCode" placeholder="SMS code" inputmode="numeric" autocomplete="one-time-code"
+                 ${state.smsDone ? "disabled" : ""} />
+
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button id="smsVerifyBtn" ${state.smsDone ? "disabled" : ""}>Verify SMS</button>
+            <button id="smsRecoveryBtn" ${state.smsDone ? "disabled" : ""}>Use SMS recovery</button>
+          </div>
+        </div>
+      `;
+
+      const emailSection = !state.needEmail ? "" : `
+        <div style="border:1px solid #eee; padding:10px; border-radius:10px; margin-top:10px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+            <div><b>Email</b> ${badge(state.emailDone)}</div>
+            <div>
+              <button id="emailResendBtn" ${state.emailDone || state.emailSending ? "disabled" : ""}>
+                ${state.emailSentOnce ? "Resend Email" : "Send Email"}
+              </button>
+            </div>
+          </div>
+
+          <div style="margin-top:6px;">
+            ${state.emailSentTo.length
+              ? `<small>Sent to: ${state.emailSentTo.map(x=>`<code>${x}</code>`).join(" ")}</small>`
+              : `<small>We will email a code to all your enabled addresses.</small>`}
+          </div>
+
+          <input id="emailCode" placeholder="Email code" inputmode="numeric" autocomplete="one-time-code"
+                 ${state.emailDone ? "disabled" : ""} />
+
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button id="emailVerifyBtn" ${state.emailDone ? "disabled" : ""}>Verify Email</button>
+            <button id="emailRecoveryBtn" ${state.emailDone ? "disabled" : ""}>Use Email recovery</button>
+          </div>
+        </div>
+      `;
+
+      modalShow({
+        title: "Account permanent closure",
+        bodyHtml: `
+          <div>Complete all required factors to permanently close your account.</div>
+          <div class="muted" style="margin-top:6px;">This action cannot be undone and removes all stored data.</div>
+          <div style="margin-top:6px;"><small>Challenge: <code class="mono">${challengeId}</code></small></div>
+          ${totpSection}${smsSection}${emailSection}
+          <div id="closeErr" class="err" style="margin-top:10px;">${state.lastErr || ""}</div>
+        `,
+        actions: [
+          { text: "Cancel", onClick: () => { modalClose(); reject(new Error("Account closure cancelled")); } }
+        ]
+      });
+
+      if (state.needTotp) {
+        const v = document.getElementById("totpVerifyBtn");
+        const r = document.getElementById("totpRecoveryBtn");
+        if (v) v.onclick = async () => {
+          state.lastErr = ""; render();
+          try {
+            const code = document.getElementById("totpCode").value.trim();
+            await postBearer("/ui/mfa/totp/verify", { challenge_id: challengeId, totp_code: code });
+            if (await tryFinalizeOrClose()) return;
+            state.totpDone = true; render();
+          } catch (e) { state.lastErr = String(e); render(); }
+        };
+        if (r) r.onclick = async () => {
+          const rc = prompt("Enter a TOTP recovery code:") || "";
+          if (!rc.trim()) return;
+          state.lastErr = ""; render();
+          try {
+            await postBearer("/ui/recovery/totp", { challenge_id: challengeId, recovery_code: rc.trim() });
+            if (await tryFinalizeOrClose()) return;
+            state.totpDone = true; render();
+          } catch (e) { state.lastErr = String(e); render(); }
+        };
+      }
+
+      if (state.needSms) {
+        const resend = document.getElementById("smsResendBtn");
+        const verify = document.getElementById("smsVerifyBtn");
+        const recov = document.getElementById("smsRecoveryBtn");
+
+        if (resend) resend.onclick = async () => {
+          if (state.smsDone || state.smsSending) return;
+          state.smsSending = true; state.lastErr = ""; render();
+          try {
+            const res = await postBearer("/ui/mfa/sms/begin", { challenge_id: challengeId });
+            state.smsSentTo = res.sent_to || [];
+            state.smsSentOnce = true;
+          } catch (e) { state.lastErr = String(e); }
+          finally { state.smsSending = false; render(); }
+        };
+
+        if (verify) verify.onclick = async () => {
+          state.lastErr = ""; render();
+          try {
+            const code = document.getElementById("smsCode").value.trim();
+            await postBearer("/ui/mfa/sms/verify", { challenge_id: challengeId, code });
+            if (await tryFinalizeOrClose()) return;
+            state.smsDone = true; render();
+          } catch (e) { state.lastErr = String(e); render(); }
+        };
+
+        if (recov) recov.onclick = async () => {
+          const rc = prompt("Enter an SMS recovery code:") || "";
+          if (!rc.trim()) return;
+          state.lastErr = ""; render();
+          try {
+            await postBearer("/ui/recovery/sms", { challenge_id: challengeId, recovery_code: rc.trim() });
+            if (await tryFinalizeOrClose()) return;
+            state.smsDone = true; render();
+          } catch (e) { state.lastErr = String(e); render(); }
+        };
+      }
+
+      if (state.needEmail) {
+        const resend = document.getElementById("emailResendBtn");
+        const verify = document.getElementById("emailVerifyBtn");
+        const recov = document.getElementById("emailRecoveryBtn");
+
+        if (resend) resend.onclick = async () => {
+          if (state.emailDone || state.emailSending) return;
+          state.emailSending = true; state.lastErr = ""; render();
+          try {
+            const res = await postBearer("/ui/mfa/email/begin", { challenge_id: challengeId });
+            state.emailSentTo = res.sent_to || [];
+            state.emailSentOnce = true;
+          } catch (e) { state.lastErr = String(e); }
+          finally { state.emailSending = false; render(); }
+        };
+
+        if (verify) verify.onclick = async () => {
+          state.lastErr = ""; render();
+          try {
+            const code = document.getElementById("emailCode").value.trim();
+            await postBearer("/ui/mfa/email/verify", { challenge_id: challengeId, code });
+            if (await tryFinalizeOrClose()) return;
+            state.emailDone = true; render();
+          } catch (e) { state.lastErr = String(e); render(); }
+        };
+
+        if (recov) recov.onclick = async () => {
+          const rc = prompt("Enter an Email recovery code:") || "";
+          if (!rc.trim()) return;
+          state.lastErr = ""; render();
+          try {
+            await postBearer("/ui/recovery/email", { challenge_id: challengeId, recovery_code: rc.trim() });
+            if (await tryFinalizeOrClose()) return;
+            state.emailDone = true; render();
+          } catch (e) { state.lastErr = String(e); render(); }
+        };
+      }
+
+      setTimeout(() => {
+        if (state.needTotp && !state.totpDone) { const el = document.getElementById("totpCode"); if (el) el.focus(); }
+        else if (state.needSms && !state.smsDone) { const el = document.getElementById("smsCode"); if (el) el.focus(); }
+        else if (state.needEmail && !state.emailDone) { const el = document.getElementById("emailCode"); if (el) el.focus(); }
+      }, 50);
+    }
+
+    render();
+    autoSendSmsOnce();
+    autoSendEmailOnce();
+  });
+}
+
 /* ===================== UI: ME ===================== */
 async function refreshMe() {
   await ensureUiSession();
@@ -2090,6 +2391,29 @@ document.getElementById("btnClearTokens").onclick = () => { lsDel("access_token"
 
 document.getElementById("totpRefreshBtn").onclick = async () => { await ensureUiSession(); await refreshTotpDevices(); };
 
+document.getElementById("accountCloseBtn").onclick = async () => {
+  await ensureUiSession();
+  const confirmText = prompt("Type CLOSE to permanently close your account:") || "";
+  if (confirmText.trim() !== "CLOSE") return;
+  try {
+    const start = await accountClosureStart();
+    if (!start.challenge_id) {
+      throw new Error("Missing account closure challenge.");
+    }
+    if (!start.auth_required) {
+      const res = await accountClosureFinalize(start.challenge_id);
+      if (res.status === "closed") {
+        handleAccountClosureSuccess();
+      } else {
+        alert("Account closure still pending verification.");
+      }
+      return;
+    }
+    await runAccountClosureChallenge(start.challenge_id, start.required_factors || []);
+  } catch (e) {
+    alert(String(e));
+  }
+};
 
 document.getElementById("smsRefreshBtn").onclick = async () => { await ensureUiSession(); await refreshSmsDevices(); };
 document.getElementById("smsAddBtn").onclick = async () => { await ensureUiSession(); openSmsAddModal(); };
