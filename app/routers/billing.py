@@ -22,6 +22,17 @@ from app.models import (
     VerifyMicrodepositsReq,
 )
 from app.services.sessions import require_ui_session
+from app.services.billing_shared import (
+    apply_balance_delta,
+    compute_due,
+    ddb_del,
+    ddb_get,
+    ddb_put,
+    ddb_query_pk,
+    ddb_update,
+    ensure_balance_row,
+    user_pk,
+)
 from app.services.ttl import with_ttl
 
 router = APIRouter(tags=["billing"])
@@ -39,57 +50,18 @@ def build_return_url(req: Request, fallback_query: str) -> str:
     return urljoin(str(req.base_url), fallback_query)
 
 
-def user_pk(user_id: str) -> str:
-    return f"USER#{user_id}"
-
-
 def ulidish() -> str:
     return f"{int(now_ts() * 1000)}_{secrets.token_hex(8)}"
 
 
-def ddb_get(pk: str, sk: str) -> Optional[Dict[str, Any]]:
-    resp = T.billing.get_item(Key={"pk": pk, "sk": sk})
-    return resp.get("Item")
-
-
-def ddb_put(item: Dict[str, Any], *, condition_expression: Optional[str] = None) -> None:
-    kwargs: Dict[str, Any] = {"Item": item}
-    if condition_expression:
-        kwargs["ConditionExpression"] = condition_expression
-    T.billing.put_item(**kwargs)
-
-
-def ddb_del(pk: str, sk: str) -> None:
-    T.billing.delete_item(Key={"pk": pk, "sk": sk})
-
-
-def ddb_query_pk(pk: str) -> List[Dict[str, Any]]:
-    resp = T.billing.query(
-        KeyConditionExpression="pk = :pk",
-        ExpressionAttributeValues={":pk": pk},
-    )
-    return resp.get("Items", [])
-
-
-def ddb_update(pk: str, sk: str, expr: str, values: Dict[str, Any], names: Optional[Dict[str, str]] = None) -> None:
-    kwargs: Dict[str, Any] = {
-        "Key": {"pk": pk, "sk": sk},
-        "UpdateExpression": expr,
-        "ExpressionAttributeValues": values,
-    }
-    if names:
-        kwargs["ExpressionAttributeNames"] = names
-    T.billing.update_item(**kwargs)
-
-
 def get_or_create_customer(user_id: str) -> str:
     pk = user_pk(user_id)
-    prof = ddb_get(pk, "PROFILE")
+    prof = ddb_get(T.billing, pk, "PROFILE")
     if prof and prof.get("stripe_customer_id"):
         return prof["stripe_customer_id"]
 
     cust = stripe.Customer.create(metadata={"app_user_id": user_id})
-    ddb_put({"pk": pk, "sk": "PROFILE", "stripe_customer_id": cust["id"], "created_at": now_ts()})
+    ddb_put(T.billing, {"pk": pk, "sk": "PROFILE", "stripe_customer_id": cust["id"], "created_at": now_ts()})
     return cust["id"]
 
 
@@ -100,64 +72,6 @@ def user_id_from_customer(customer_id: str) -> Optional[str]:
     except Exception:
         return None
 
-
-BAL_FIELDS = [
-    "owed_pending_cents",
-    "owed_settled_cents",
-    "payments_pending_cents",
-    "payments_settled_cents",
-]
-
-
-def ensure_balance_row(pk: str) -> None:
-    if not ddb_get(pk, "BALANCE"):
-        ddb_put({
-            "pk": pk,
-            "sk": "BALANCE",
-            "currency": "usd",
-            **{k: 0 for k in BAL_FIELDS},
-            "updated_at": now_ts(),
-        })
-
-
-def apply_balance_delta(pk: str, delta: Dict[str, int]) -> None:
-    ensure_balance_row(pk)
-
-    sets = []
-    values: Dict[str, Any] = {":z": 0, ":t": now_ts()}
-    names: Dict[str, str] = {}
-
-    i = 0
-    for key, value in delta.items():
-        if value == 0:
-            continue
-        i += 1
-        nk = f"#k{i}"
-        dv = f":d{i}"
-        names[nk] = key
-        values[dv] = int(value)
-        sets.append(f"{nk} = if_not_exists({nk}, :z) + {dv}")
-
-    names["#u"] = "updated_at"
-    sets.append("#u = :t")
-
-    expr = "SET " + ", ".join(sets)
-    ddb_update(pk, "BALANCE", expr, values, names=names)
-
-
-def compute_due(balance_item: Dict[str, Any]) -> Dict[str, int]:
-    owed_settled = int(balance_item.get("owed_settled_cents", 0))
-    owed_pending = int(balance_item.get("owed_pending_cents", 0))
-    pay_settled = int(balance_item.get("payments_settled_cents", 0))
-    pay_pending = int(balance_item.get("payments_pending_cents", 0))
-
-    due_settled = owed_settled - pay_settled
-    due_if_all_settles = (owed_settled + owed_pending) - (pay_settled + pay_pending)
-
-    return {
-        "due_settled_cents": due_settled,
-        "due_if_all_settles_cents": due_if_all_settles,
-    }
 
 
 def ledger_sk(ts: int, entry_id: str) -> str:
@@ -198,7 +112,7 @@ def new_ledger_entry(
 
 def settle_or_reverse_ledger(user_id: str, ledger_sk_value: str, new_state: str) -> None:
     pk = user_pk(user_id)
-    ddb_update(pk, ledger_sk_value, "SET #s = :s", {":s": new_state}, names={"#s": "state"})
+    ddb_update(T.billing, pk, ledger_sk_value, "SET #s = :s", {":s": new_state}, names={"#s": "state"})
 
 
 def pay_sk(payment_intent_id: str) -> str:
@@ -226,7 +140,7 @@ def put_payment_record(
         "created_at": now_ts(),
         "updated_at": now_ts(),
     }
-    ddb_put(item)
+    ddb_put(T.billing, item)
 
 
 def update_payment_status(
@@ -251,7 +165,7 @@ def update_payment_status(
         values[":le"] = last_error
         sets.append("#le = :le")
 
-    ddb_update(pk, pay_sk(pi_id), "SET " + ", ".join(sets), values, names=names)
+    ddb_update(T.billing, pk, pay_sk(pi_id), "SET " + ", ".join(sets), values, names=names)
 
 
 def pm_sk(payment_method_id: str) -> str:
@@ -259,26 +173,27 @@ def pm_sk(payment_method_id: str) -> str:
 
 
 def list_payment_methods_ddb(user_id: str) -> List[Dict[str, Any]]:
-    items = ddb_query_pk(user_pk(user_id))
+    items = ddb_query_pk(T.billing, user_pk(user_id))
     return [it for it in items if it["sk"].startswith("PM#")]
 
 
 def current_default_pm(user_id: str) -> Optional[str]:
-    billing = ddb_get(user_pk(user_id), "BILLING") or {}
+    billing = ddb_get(T.billing, user_pk(user_id), "BILLING") or {}
     return billing.get("default_payment_method_id")
 
 
 def set_default_pm(user_id: str, pm_id: Optional[str]) -> None:
     pk = user_pk(user_id)
-    if not ddb_get(pk, "BILLING"):
-        ddb_put({"pk": pk, "sk": "BILLING", "autopay_enabled": False, "currency": "usd", "default_payment_method_id": pm_id})
+    if not ddb_get(T.billing, pk, "BILLING"):
+        ddb_put(T.billing, {"pk": pk, "sk": "BILLING", "autopay_enabled": False, "currency": "usd", "default_payment_method_id": pm_id})
     else:
-        ddb_update(pk, "BILLING", "SET default_payment_method_id = :pm", {":pm": pm_id})
+        ddb_update(T.billing, pk, "BILLING", "SET default_payment_method_id = :pm", {":pm": pm_id})
 
 
 def mark_event_processed(event_id: str) -> bool:
     try:
         ddb_put(
+            T.billing,
             with_ttl(
                 {"pk": "STRIPE_EVENT", "sk": event_id, "ts": now_ts()},
                 ttl_epoch=now_ts() + 60 * 60 * 24 * 7,
@@ -308,7 +223,7 @@ def billing_config() -> Dict[str, str]:
 def get_settings(ctx=Depends(require_ui_session)) -> Dict[str, Any]:
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
-    settings = ddb_get(pk, "BILLING") or {"autopay_enabled": False, "currency": "usd", "default_payment_method_id": None}
+    settings = ddb_get(T.billing, pk, "BILLING") or {"autopay_enabled": False, "currency": "usd", "default_payment_method_id": None}
     return settings
 
 
@@ -317,9 +232,9 @@ def get_settings(ctx=Depends(require_ui_session)) -> Dict[str, Any]:
 def set_autopay(body: SetAutopayReq, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
-    if not ddb_get(pk, "BILLING"):
-        ddb_put({"pk": pk, "sk": "BILLING", "autopay_enabled": False, "currency": "usd", "default_payment_method_id": None})
-    ddb_update(pk, "BILLING", "SET autopay_enabled = :e", {":e": bool(body.enabled)})
+    if not ddb_get(T.billing, pk, "BILLING"):
+        ddb_put(T.billing, {"pk": pk, "sk": "BILLING", "autopay_enabled": False, "currency": "usd", "default_payment_method_id": None})
+    ddb_update(T.billing, pk, "BILLING", "SET autopay_enabled = :e", {":e": bool(body.enabled)})
     return {"ok": True}
 
 
@@ -328,8 +243,8 @@ def set_autopay(body: SetAutopayReq, ctx=Depends(require_ui_session)) -> Dict[st
 def get_balance(ctx=Depends(require_ui_session)) -> Dict[str, Any]:
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
-    ensure_balance_row(pk)
-    bal = ddb_get(pk, "BALANCE") or {}
+    ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
+    bal = ddb_get(T.billing, pk, "BALANCE") or {}
     due = compute_due(bal)
     return {
         "currency": bal.get("currency", "usd"),
@@ -412,9 +327,9 @@ def set_priority(body: SetPriorityReq, ctx=Depends(require_ui_session)) -> Dict[
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
     sk = pm_sk(body.payment_method_id)
-    if not ddb_get(pk, sk):
+    if not ddb_get(T.billing, pk, sk):
         raise HTTPException(404, "Payment method not found")
-    ddb_update(pk, sk, "SET priority = :p", {":p": int(body.priority)})
+    ddb_update(T.billing, pk, sk, "SET priority = :p", {":p": int(body.priority)})
     return {"ok": True}
 
 
@@ -424,7 +339,7 @@ def set_default(body: SetDefaultReq, ctx=Depends(require_ui_session)) -> Dict[st
     ensure_stripe_configured()
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
-    if not ddb_get(pk, pm_sk(body.payment_method_id)):
+    if not ddb_get(T.billing, pk, pm_sk(body.payment_method_id)):
         raise HTTPException(404, "Payment method not found")
 
     customer_id = get_or_create_customer(user_id)
@@ -440,7 +355,7 @@ def remove_payment_method(payment_method_id: str, ctx=Depends(require_ui_session
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
     sk = pm_sk(payment_method_id)
-    if not ddb_get(pk, sk):
+    if not ddb_get(T.billing, pk, sk):
         raise HTTPException(404, "Payment method not found")
 
     try:
@@ -448,7 +363,7 @@ def remove_payment_method(payment_method_id: str, ctx=Depends(require_ui_session
     except Exception:
         pass
 
-    ddb_del(pk, sk)
+    ddb_del(T.billing, pk, sk)
 
     if current_default_pm(user_id) == payment_method_id:
         remaining = list_payment_methods_ddb(user_id)
@@ -469,8 +384,8 @@ def pay_balance(body: PayBalanceReq, ctx=Depends(require_ui_session)) -> Dict[st
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
 
-    ensure_balance_row(pk)
-    bal = ddb_get(pk, "BALANCE") or {}
+    ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
+    bal = ddb_get(T.billing, pk, "BALANCE") or {}
     due = compute_due(bal)["due_settled_cents"]
     if due <= 0:
         return {"status": "no_settled_balance_due"}
@@ -479,7 +394,7 @@ def pay_balance(body: PayBalanceReq, ctx=Depends(require_ui_session)) -> Dict[st
     if amount <= 0:
         return {"status": "no_settled_balance_due"}
 
-    billing = ddb_get(pk, "BILLING") or {"currency": "usd", "default_payment_method_id": None}
+    billing = ddb_get(T.billing, pk, "BILLING") or {"currency": "usd", "default_payment_method_id": None}
     default_pm = billing.get("default_payment_method_id")
     if not default_pm:
         raise HTTPException(400, "No default payment method set")
@@ -517,13 +432,13 @@ def pay_balance(body: PayBalanceReq, ctx=Depends(require_ui_session)) -> Dict[st
         stripe_payment_intent_id=pi["id"],
         meta={"idempotency_key": idem},
     )
-    ddb_put(led_item)
+    ddb_put(T.billing, led_item)
 
     if pi.get("status") == "succeeded":
-        apply_balance_delta(pk, {"payments_settled_cents": amount})
+        apply_balance_delta(T.billing, pk, {"payments_settled_cents": amount}, currency=billing.get("currency", "usd"))
         settle_or_reverse_ledger(user_id, led_sk, "settled")
     else:
-        apply_balance_delta(pk, {"payments_pending_cents": amount})
+        apply_balance_delta(T.billing, pk, {"payments_pending_cents": amount}, currency=billing.get("currency", "usd"))
 
     put_payment_record(user_id, pi, led_sk, payment_method_type=pm_type)
 
@@ -621,7 +536,7 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
         existing = list_payment_methods_ddb(user_id)
         next_priority = 0 if not existing else (max(int(x.get("priority", 0)) for x in existing) + 1)
 
-        ddb_put({
+        ddb_put(T.billing, {
             "pk": pk,
             "sk": pm_sk(pm_id),
             "payment_method_id": pm_id,
@@ -655,7 +570,7 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
             return {"received": True}
 
         pk = user_pk(user_id)
-        pay = ddb_get(pk, pay_sk(pi_id))
+        pay = ddb_get(T.billing, pk, pay_sk(pi_id))
         if not pay:
             return {"received": True}
 
@@ -676,25 +591,25 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
         elif status == "succeeded":
             update_payment_status(user_id, pi_id, "succeeded", charge_id=charge_id)
             if pay.get("status") in ("processing", "requires_action"):
-                apply_balance_delta(pk, {"payments_pending_cents": -amount, "payments_settled_cents": amount})
+                apply_balance_delta(T.billing, pk, {"payments_pending_cents": -amount, "payments_settled_cents": amount}, currency=pay.get("currency", "usd"))
             if led_sk_value:
                 settle_or_reverse_ledger(user_id, led_sk_value, "settled")
 
         elif status in ("requires_payment_method", "canceled"):
             update_payment_status(user_id, pi_id, status, charge_id=charge_id, last_error=pi.get("last_payment_error"))
             if pay.get("status") in ("processing", "requires_action"):
-                apply_balance_delta(pk, {"payments_pending_cents": -amount})
+                apply_balance_delta(T.billing, pk, {"payments_pending_cents": -amount}, currency=pay.get("currency", "usd"))
             elif pay.get("status") == "succeeded":
-                apply_balance_delta(pk, {"payments_settled_cents": -amount})
+                apply_balance_delta(T.billing, pk, {"payments_settled_cents": -amount}, currency=pay.get("currency", "usd"))
             if led_sk_value:
                 settle_or_reverse_ledger(user_id, led_sk_value, "reversed")
 
         elif status == "payment_failed":
             update_payment_status(user_id, pi_id, "payment_failed", charge_id=charge_id, last_error=pi.get("last_payment_error"))
             if pay.get("status") in ("processing", "requires_action"):
-                apply_balance_delta(pk, {"payments_pending_cents": -amount})
+                apply_balance_delta(T.billing, pk, {"payments_pending_cents": -amount}, currency=pay.get("currency", "usd"))
             elif pay.get("status") == "succeeded":
-                apply_balance_delta(pk, {"payments_settled_cents": -amount})
+                apply_balance_delta(T.billing, pk, {"payments_settled_cents": -amount}, currency=pay.get("currency", "usd"))
             if led_sk_value:
                 settle_or_reverse_ledger(user_id, led_sk_value, "reversed")
 
@@ -725,7 +640,7 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
             return {"received": True}
 
         pk = user_pk(user_id)
-        ensure_balance_row(pk)
+        ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
 
         if event_type == "charge.dispute.funds_withdrawn":
             led_sk_value, led_item = new_ledger_entry(
@@ -738,8 +653,8 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
                 stripe_payment_intent_id=pi_id,
                 meta={"currency": currency, "dispute_id": dispute.get("id")},
             )
-            ddb_put(led_item)
-            apply_balance_delta(pk, {"owed_settled_cents": amount})
+            ddb_put(T.billing, led_item)
+            apply_balance_delta(T.billing, pk, {"owed_settled_cents": amount}, currency=currency)
 
         elif event_type == "charge.dispute.funds_reinstated":
             led_sk_value, led_item = new_ledger_entry(
@@ -752,8 +667,8 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
                 stripe_payment_intent_id=pi_id,
                 meta={"currency": currency, "dispute_id": dispute.get("id")},
             )
-            ddb_put(led_item)
-            apply_balance_delta(pk, {"owed_settled_cents": -amount})
+            ddb_put(T.billing, led_item)
+            apply_balance_delta(T.billing, pk, {"owed_settled_cents": -amount}, currency=currency)
 
     return {"received": True}
 
@@ -763,7 +678,7 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
 def dev_add_charge(body: AddChargeReq, ctx=Depends(require_ui_session)) -> Dict[str, Any]:
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
-    ensure_balance_row(pk)
+    ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
 
     led_sk_value, led_item = new_ledger_entry(
         user_id=user_id,
@@ -772,12 +687,12 @@ def dev_add_charge(body: AddChargeReq, ctx=Depends(require_ui_session)) -> Dict[
         state=body.state,
         reason=body.reason,
     )
-    ddb_put(led_item)
+    ddb_put(T.billing, led_item)
 
     if body.state == "pending":
-        apply_balance_delta(pk, {"owed_pending_cents": int(body.amount_cents)})
+        apply_balance_delta(T.billing, pk, {"owed_pending_cents": int(body.amount_cents)}, currency=S.stripe_default_currency or "usd")
     else:
-        apply_balance_delta(pk, {"owed_settled_cents": int(body.amount_cents)})
+        apply_balance_delta(T.billing, pk, {"owed_settled_cents": int(body.amount_cents)}, currency=S.stripe_default_currency or "usd")
 
     return {"ok": True, "ledger_sk": led_sk_value}
 
@@ -786,7 +701,7 @@ def dev_add_charge(body: AddChargeReq, ctx=Depends(require_ui_session)) -> Dict[
 @router.get("/ui/billing/ledger")
 def list_ledger(ctx=Depends(require_ui_session), limit: int = 50) -> Dict[str, Any]:
     user_id = ctx["user_sub"]
-    items = ddb_query_pk(user_pk(user_id))
+    items = ddb_query_pk(T.billing, user_pk(user_id))
     led = [it for it in items if it["sk"].startswith("LEDGER#")]
     led.sort(key=lambda x: x.get("ts", 0), reverse=True)
     return {"items": led[: max(1, min(limit, 200))]}
