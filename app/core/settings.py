@@ -125,5 +125,8 @@ class Settings:
     stripe_cancel_url: str = os.environ.get("STRIPE_CANCEL_URL", "")
     billing_table_name: str = os.environ.get("BILLING_TABLE_NAME", "billing")
 
+    # Profile
+    profile_table_name: str = os.environ.get("PROFILE_TABLE_NAME", "profiles")
+
 
 S = Settings()

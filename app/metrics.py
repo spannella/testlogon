@@ -1,10 +1,35 @@
 from __future__ import annotations
 
+import os
 import time
 from typing import Callable, Optional
 
 from fastapi import Request, Response
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, Info, generate_latest
+
+METRICS_ENABLED = os.environ.get("APP_ENV", "development").lower() == "production"
+
+if METRICS_ENABLED:
+    from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, Info, generate_latest
+else:
+    CONTENT_TYPE_LATEST = "text/plain; version=0.0.4; charset=utf-8"
+
+    class _NoopMetric:
+        def labels(self, **_kwargs):
+            return self
+
+        def inc(self, *_args, **_kwargs):
+            return None
+
+        def set(self, *_args, **_kwargs):
+            return None
+
+        def observe(self, *_args, **_kwargs):
+            return None
+
+    Counter = Gauge = Histogram = Info = lambda *_args, **_kwargs: _NoopMetric()
+
+    def generate_latest() -> bytes:
+        return b""
 
 REQUEST_COUNT = Counter(
     "http_requests_total",

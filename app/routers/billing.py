@@ -4,7 +4,10 @@ import secrets
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin
 
-import stripe
+try:
+    import stripe  # type: ignore
+except Exception:  # pragma: no cover
+    stripe = None  # type: ignore
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -14,11 +17,11 @@ from app.core.time import now_ts
 from app.models import (
     AddChargeReq,
     BillingCheckoutReq,
-    PaymentMethodOut,
     PayBalanceReq,
     SetAutopayReq,
     SetDefaultReq,
     SetPriorityReq,
+    StripePaymentMethodOut,
     VerifyMicrodepositsReq,
 )
 from app.services.sessions import require_ui_session
@@ -53,6 +56,8 @@ def dual_route(methods: str | Iterable[str], path: str, **kwargs: Any) -> Callab
 
 
 def ensure_stripe_configured() -> None:
+    if not stripe:
+        raise HTTPException(501, "Stripe SDK not installed")
     if not S.stripe_secret_key:
         raise HTTPException(501, "Stripe is not configured")
     stripe.api_key = S.stripe_secret_key
@@ -305,14 +310,14 @@ def verify_microdeposits(body: VerifyMicrodepositsReq, ctx=Depends(require_ui_se
     return {"status": si["status"]}
 
 
-@dual_route("GET", "/billing/payment-methods", response_model=List[PaymentMethodOut])
-def list_payment_methods(ctx=Depends(require_ui_session)) -> List[PaymentMethodOut]:
+@dual_route("GET", "/billing/payment-methods", response_model=List[StripePaymentMethodOut])
+def list_payment_methods(ctx=Depends(require_ui_session)) -> List[StripePaymentMethodOut]:
     user_id = ctx["user_sub"]
     pms = list_payment_methods_ddb(user_id)
 
-    out: List[PaymentMethodOut] = []
+    out: List[StripePaymentMethodOut] = []
     for it in pms:
-        out.append(PaymentMethodOut(
+        out.append(StripePaymentMethodOut(
             payment_method_id=it["payment_method_id"],
             method_type=it.get("method_type", "unknown"),
             label=it.get("label"),

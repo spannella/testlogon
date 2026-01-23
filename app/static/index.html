@@ -106,6 +106,154 @@
 
 <div class="row">
   <div class="card">
+    <h3>User Profile</h3>
+    <div class="muted">Manage profile details displayed to other users.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <button id="profileLoadBtn">Load</button>
+      <button id="profileSavePatchBtn">Save (Patch)</button>
+      <button id="profileSaveReplaceBtn" class="primary">Save (Replace)</button>
+      <button id="profileResetBtn">Reset</button>
+      <span id="profileStatus" class="muted"></span>
+    </div>
+    <div class="section">
+      <div class="grid">
+        <div>
+          <label class="muted">Display name</label>
+          <input id="profileDisplayName" type="text" />
+        </div>
+        <div>
+          <label class="muted">Title</label>
+          <input id="profileTitle" type="text" />
+        </div>
+        <div>
+          <label class="muted">First name</label>
+          <input id="profileFirstName" type="text" />
+        </div>
+        <div>
+          <label class="muted">Middle name</label>
+          <input id="profileMiddleName" type="text" />
+        </div>
+        <div>
+          <label class="muted">Last name</label>
+          <input id="profileLastName" type="text" />
+        </div>
+        <div>
+          <label class="muted">Birthday</label>
+          <input id="profileBirthday" type="date" />
+        </div>
+        <div>
+          <label class="muted">Gender</label>
+          <select id="profileGender">
+            <option value="">(unset)</option>
+            <option value="male">male</option>
+            <option value="female">female</option>
+            <option value="non_binary">non_binary</option>
+            <option value="other">other</option>
+            <option value="prefer_not_to_say">prefer_not_to_say</option>
+          </select>
+        </div>
+        <div>
+          <label class="muted">Location</label>
+          <input id="profileLocation" type="text" />
+        </div>
+        <div>
+          <label class="muted">Displayed email</label>
+          <input id="profileEmail" type="email" />
+        </div>
+        <div>
+          <label class="muted">Displayed phone</label>
+          <input id="profilePhone" type="text" />
+        </div>
+      </div>
+    </div>
+    <div class="section">
+      <label class="muted">Description</label>
+      <textarea id="profileDescription" rows="3"></textarea>
+    </div>
+    <div class="section">
+      <b>Mailing address</b>
+      <div class="grid" style="margin-top:8px;">
+        <div>
+          <label class="muted">Line 1</label>
+          <input id="profileAddrLine1" type="text" />
+        </div>
+        <div>
+          <label class="muted">Line 2</label>
+          <input id="profileAddrLine2" type="text" />
+        </div>
+        <div>
+          <label class="muted">City</label>
+          <input id="profileAddrCity" type="text" />
+        </div>
+        <div>
+          <label class="muted">State</label>
+          <input id="profileAddrState" type="text" />
+        </div>
+        <div>
+          <label class="muted">Postal code</label>
+          <input id="profileAddrPostal" type="text" />
+        </div>
+        <div>
+          <label class="muted">Country (ISO-2)</label>
+          <input id="profileAddrCountry" type="text" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Profile Media + Languages</h3>
+    <div class="section">
+      <b>Languages</b>
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="profileLangName" placeholder="Language" />
+        <select id="profileLangLevel">
+          <option value="native">native</option>
+          <option value="fluent">fluent</option>
+          <option value="advanced">advanced</option>
+          <option value="intermediate">intermediate</option>
+          <option value="basic">basic</option>
+          <option value="A1">A1</option>
+          <option value="A2">A2</option>
+          <option value="B1">B1</option>
+          <option value="B2">B2</option>
+          <option value="C1">C1</option>
+          <option value="C2">C2</option>
+        </select>
+        <button id="profileLangAddBtn">Add / Update</button>
+      </div>
+      <div id="profileLangList" class="list"></div>
+    </div>
+    <div class="section">
+      <b>Profile photo</b>
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="profilePhotoFile" type="file" accept="image/*" />
+        <button id="profilePhotoUploadBtn">Upload</button>
+      </div>
+      <div class="muted mono break" id="profilePhotoUrl"></div>
+      <img id="profilePhotoPreview" class="hidden" alt="Profile photo preview" style="margin-top:8px; max-width:100%; border-radius:10px; border:1px solid #eee;" />
+    </div>
+    <div class="section">
+      <b>Cover photo</b>
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="profileCoverFile" type="file" accept="image/*" />
+        <button id="profileCoverUploadBtn">Upload</button>
+      </div>
+      <div class="muted mono break" id="profileCoverUrl"></div>
+      <img id="profileCoverPreview" class="hidden" alt="Cover photo preview" style="margin-top:8px; max-width:100%; border-radius:10px; border:1px solid #eee;" />
+    </div>
+    <div class="section">
+      <div class="row-inline">
+        <button id="profileAuditRefreshBtn">Refresh Audit</button>
+        <span id="profileAuditStatus" class="muted"></span>
+      </div>
+      <div id="profileAuditList" class="list"></div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card">
     <h3>Alert Recipients</h3>
     <div class="section">
       <b>Email recipients</b>
