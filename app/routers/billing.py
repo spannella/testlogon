@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import secrets
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin
 
 import stripe
@@ -38,6 +38,20 @@ from app.services.ttl import with_ttl
 router = APIRouter(tags=["billing"])
 
 
+def dual_route(methods: str | Iterable[str], path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    if isinstance(methods, str):
+        methods = [methods]
+    else:
+        methods = list(methods)
+
+    def decorator(func):
+        router.add_api_route(f"/api{path}", func, methods=methods, **kwargs)
+        router.add_api_route(f"/ui{path}", func, methods=methods, **kwargs)
+        return func
+
+    return decorator
+
+
 def ensure_stripe_configured() -> None:
     if not S.stripe_secret_key:
         raise HTTPException(501, "Stripe is not configured")
@@ -71,7 +85,6 @@ def user_id_from_customer(customer_id: str) -> Optional[str]:
         return cust.get("metadata", {}).get("app_user_id")
     except Exception:
         return None
-
 
 
 def ledger_sk(ts: int, entry_id: str) -> str:
@@ -207,8 +220,7 @@ def mark_event_processed(event_id: str) -> bool:
         raise
 
 
-@router.get("/api/billing/config")
-@router.get("/ui/billing/config")
+@dual_route("GET", "/billing/config")
 def billing_config() -> Dict[str, str]:
     if not S.stripe_publishable_key:
         raise HTTPException(500, "Missing STRIPE_PUBLISHABLE_KEY")
@@ -218,8 +230,7 @@ def billing_config() -> Dict[str, str]:
     }
 
 
-@router.get("/api/billing/settings")
-@router.get("/ui/billing/settings")
+@dual_route("GET", "/billing/settings")
 def get_settings(ctx=Depends(require_ui_session)) -> Dict[str, Any]:
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
@@ -227,8 +238,7 @@ def get_settings(ctx=Depends(require_ui_session)) -> Dict[str, Any]:
     return settings
 
 
-@router.post("/api/billing/autopay")
-@router.post("/ui/billing/autopay")
+@dual_route("POST", "/billing/autopay")
 def set_autopay(body: SetAutopayReq, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
@@ -238,8 +248,7 @@ def set_autopay(body: SetAutopayReq, ctx=Depends(require_ui_session)) -> Dict[st
     return {"ok": True}
 
 
-@router.get("/api/billing/balance")
-@router.get("/ui/billing/balance")
+@dual_route("GET", "/billing/balance")
 def get_balance(ctx=Depends(require_ui_session)) -> Dict[str, Any]:
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
@@ -257,8 +266,7 @@ def get_balance(ctx=Depends(require_ui_session)) -> Dict[str, Any]:
     }
 
 
-@router.post("/api/billing/setup-intent/card")
-@router.post("/ui/billing/setup-intent/card")
+@dual_route("POST", "/billing/setup-intent/card")
 def create_card_setup_intent(ctx=Depends(require_ui_session)) -> Dict[str, str]:
     ensure_stripe_configured()
     user_id = ctx["user_sub"]
@@ -271,8 +279,7 @@ def create_card_setup_intent(ctx=Depends(require_ui_session)) -> Dict[str, str]:
     return {"client_secret": si["client_secret"]}
 
 
-@router.post("/api/billing/setup-intent/us-bank")
-@router.post("/ui/billing/setup-intent/us-bank")
+@dual_route("POST", "/billing/setup-intent/us-bank")
 def create_us_bank_setup_intent(ctx=Depends(require_ui_session)) -> Dict[str, str]:
     ensure_stripe_configured()
     user_id = ctx["user_sub"]
@@ -285,8 +292,7 @@ def create_us_bank_setup_intent(ctx=Depends(require_ui_session)) -> Dict[str, st
     return {"client_secret": si["client_secret"]}
 
 
-@router.post("/api/billing/us-bank/verify-microdeposits")
-@router.post("/ui/billing/us-bank/verify-microdeposits")
+@dual_route("POST", "/billing/us-bank/verify-microdeposits")
 def verify_microdeposits(body: VerifyMicrodepositsReq, ctx=Depends(require_ui_session)) -> Dict[str, str]:
     ensure_stripe_configured()
     if not body.amounts and not body.descriptor_code:
@@ -299,8 +305,7 @@ def verify_microdeposits(body: VerifyMicrodepositsReq, ctx=Depends(require_ui_se
     return {"status": si["status"]}
 
 
-@router.get("/api/billing/payment-methods", response_model=List[PaymentMethodOut])
-@router.get("/ui/billing/payment-methods", response_model=List[PaymentMethodOut])
+@dual_route("GET", "/billing/payment-methods", response_model=List[PaymentMethodOut])
 def list_payment_methods(ctx=Depends(require_ui_session)) -> List[PaymentMethodOut]:
     user_id = ctx["user_sub"]
     pms = list_payment_methods_ddb(user_id)
@@ -321,8 +326,7 @@ def list_payment_methods(ctx=Depends(require_ui_session)) -> List[PaymentMethodO
     return out
 
 
-@router.post("/api/billing/payment-methods/priority")
-@router.post("/ui/billing/payment-methods/priority")
+@dual_route("POST", "/billing/payment-methods/priority")
 def set_priority(body: SetPriorityReq, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
@@ -333,8 +337,7 @@ def set_priority(body: SetPriorityReq, ctx=Depends(require_ui_session)) -> Dict[
     return {"ok": True}
 
 
-@router.post("/api/billing/payment-methods/default")
-@router.post("/ui/billing/payment-methods/default")
+@dual_route("POST", "/billing/payment-methods/default")
 def set_default(body: SetDefaultReq, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
     ensure_stripe_configured()
     user_id = ctx["user_sub"]
@@ -348,8 +351,7 @@ def set_default(body: SetDefaultReq, ctx=Depends(require_ui_session)) -> Dict[st
     return {"ok": True}
 
 
-@router.delete("/api/billing/payment-methods/{payment_method_id}")
-@router.delete("/ui/billing/payment-methods/{payment_method_id}")
+@dual_route("DELETE", "/billing/payment-methods/{payment_method_id}")
 def remove_payment_method(payment_method_id: str, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
     ensure_stripe_configured()
     user_id = ctx["user_sub"]
@@ -377,8 +379,7 @@ def remove_payment_method(payment_method_id: str, ctx=Depends(require_ui_session
     return {"ok": True}
 
 
-@router.post("/api/billing/pay-balance")
-@router.post("/ui/billing/pay-balance")
+@dual_route("POST", "/billing/pay-balance")
 def pay_balance(body: PayBalanceReq, ctx=Depends(require_ui_session)) -> Dict[str, str]:
     ensure_stripe_configured()
     user_id = ctx["user_sub"]
@@ -445,8 +446,7 @@ def pay_balance(body: PayBalanceReq, ctx=Depends(require_ui_session)) -> Dict[st
     return {"status": pi.get("status"), "payment_intent_id": pi["id"]}
 
 
-@router.post("/api/billing/checkout_session")
-@router.post("/ui/billing/checkout_session")
+@dual_route("POST", "/billing/checkout_session")
 def create_checkout_session(body: BillingCheckoutReq, req: Request, ctx=Depends(require_ui_session)) -> Dict[str, str]:
     ensure_stripe_configured()
     if body.amount_cents <= 0:
@@ -673,8 +673,7 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
     return {"received": True}
 
 
-@router.post("/api/billing/_dev/add-charge")
-@router.post("/ui/billing/_dev/add-charge")
+@dual_route("POST", "/billing/_dev/add-charge")
 def dev_add_charge(body: AddChargeReq, ctx=Depends(require_ui_session)) -> Dict[str, Any]:
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
@@ -697,8 +696,7 @@ def dev_add_charge(body: AddChargeReq, ctx=Depends(require_ui_session)) -> Dict[
     return {"ok": True, "ledger_sk": led_sk_value}
 
 
-@router.get("/api/billing/ledger")
-@router.get("/ui/billing/ledger")
+@dual_route("GET", "/billing/ledger")
 def list_ledger(ctx=Depends(require_ui_session), limit: int = 50) -> Dict[str, Any]:
     user_id = ctx["user_sub"]
     items = ddb_query_pk(T.billing, user_pk(user_id))
