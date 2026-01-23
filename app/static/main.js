@@ -227,12 +227,18 @@ async function apiPublic(path, { method = "GET", body = null } = {}) {
   const txt = await res.text();
   if (!res.ok) throw new Error(res.status + ": " + txt);
   return txt ? JSON.parse(txt) : {};
+}
+
 function apiPatch(path, body, { includeSession = true } = {}) {
   return api(path, { method: "PATCH", body, includeSession });
 }
 
 function apiPut(path, body, { includeSession = true } = {}) {
   return api(path, { method: "PUT", body, includeSession });
+}
+
+function apiDelete(path, { includeSession = true } = {}) {
+  return api(path, { method: "DELETE", includeSession });
 }
 
 function parseHttpError(errStr){
@@ -248,6 +254,15 @@ function escapeHtml(str) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function fmtBytes(value) {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const idx = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
+  const scaled = size / Math.pow(1024, idx);
+  return `${scaled.toFixed(scaled >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
 }
 
 /* ===================== billing (CCBill) ===================== */
@@ -1432,12 +1447,16 @@ async function accountClosureFinalize(challenge_id) {
 }
 
 function handleAccountClosureSuccess() {
+  clearAuthTokens();
+  alert("Account permanently closed. All data deleted for this user.");
+  window.location.reload();
+}
+
+function clearAuthTokens() {
   lsDel("access_token");
   lsDel("id_token");
   lsDel("refresh_token");
   lsDel("session_id");
-  alert("Account permanently closed. All data deleted for this user.");
-  window.location.reload();
 }
 
 async function runAccountClosureChallenge(challengeId, required) {
@@ -2096,14 +2115,6 @@ function openAccountActionModal({ title, confirmText, onConfirm }) {
   });
 }
 
-/* ===================== TOTP add flow ===================== */
-async function totpBegin(label) {
-  return await apiPost("/ui/mfa/totp/devices/begin", { label: label || "" });
-}
-async function totpConfirm(device_id, totp_code) {
-  return await apiPost("/ui/mfa/totp/devices/confirm", { device_id, totp_code });
-}
-
 function openTotpAddModal() {
   modalShow({
     title: "Add TOTP Device",
@@ -2381,7 +2392,10 @@ async function refreshAll() {
       refreshPushUI(),
       refreshAlerts(),
       refreshProfile(),
+      refreshFileManager(),
+      refreshAddresses(),
       billingRefreshAll(),
+      refreshCalendarEvents(),
     ]);
     await pollToastsOnce();
   } catch (e) {
@@ -2443,6 +2457,137 @@ async function beginAddAlertSms(phone) {
   await ensureUiSession();
   return await apiPost("/ui/alerts/sms/begin", { phone });
 }
+
+/* ===================== calendar ===================== */
+function getCalendarId() {
+  return lsGet("calendar_id") || "";
+}
+
+function setCalendarId(calendarId) {
+  if (calendarId) {
+    lsSet("calendar_id", calendarId);
+  } else {
+    lsDel("calendar_id");
+  }
+  const input = document.getElementById("calendarIdInput");
+  if (input) input.value = calendarId || "";
+}
+
+function setCalendarStatus(msg) {
+  const el = document.getElementById("calendarStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function renderCalendarEvents(events) {
+  const wrap = document.getElementById("calendarEventsList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!events || events.length === 0) {
+    wrap.innerHTML = '<div class="muted">No events yet.</div>';
+    return;
+  }
+  events.forEach(evt => {
+    const row = document.createElement("div");
+    row.className = "item";
+    const when = evt.all_day
+      ? `All day ${escapeHtml(evt.all_day_date || "")}`
+      : `${escapeHtml(evt.start_utc || "")} → ${escapeHtml(evt.end_utc || "")}`;
+    row.innerHTML = `
+      <div class="row">
+        <div class="grow"><b>${escapeHtml(evt.name || "")}</b></div>
+        <div class="mono">${escapeHtml(evt.event_id || "")}</div>
+      </div>
+      <div class="muted">${when} (${escapeHtml(evt.timezone || "")})</div>
+      ${evt.description ? `<div class="muted">${escapeHtml(evt.description)}</div>` : ""}
+    `;
+    wrap.appendChild(row);
+  });
+}
+
+function renderCalendarOpenings(openings) {
+  const wrap = document.getElementById("calendarOpeningsList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!openings || openings.length === 0) {
+    wrap.innerHTML = '<div class="muted">No openings for selected window.</div>';
+    return;
+  }
+  openings.forEach(o => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `<div class="mono">${escapeHtml(o.start_utc)} → ${escapeHtml(o.end_utc)}</div>`;
+    wrap.appendChild(row);
+  });
+}
+
+async function createCalendar() {
+  try {
+    await ensureUiSession();
+    const name = document.getElementById("calendarNameInput").value.trim() || "My Calendar";
+    const timezone = document.getElementById("calendarTimezoneInput").value.trim() || "UTC";
+    const res = await apiPost("/ui/calendars", { name, timezone });
+    setCalendarId(res.calendar_id || "");
+    setCalendarStatus(`Created calendar ${res.calendar_id}`);
+    await refreshCalendarEvents();
+  } catch (e) {
+    setCalendarStatus("Error: " + e.message);
+  }
+}
+
+async function refreshCalendarEvents() {
+  const calendarId = getCalendarId();
+  if (!calendarId) return;
+  await ensureUiSession();
+  const events = await apiGet(`/ui/calendars/${encodeURIComponent(calendarId)}/events`);
+  renderCalendarEvents(events || []);
+}
+
+async function createCalendarEvent() {
+  const calendarId = getCalendarId();
+  if (!calendarId) {
+    setCalendarStatus("Set a calendar ID first.");
+    return;
+  }
+  try {
+    await ensureUiSession();
+    const payload = {
+      name: document.getElementById("eventNameInput").value.trim(),
+      description: document.getElementById("eventDescriptionInput").value.trim(),
+      timezone: document.getElementById("eventTimezoneInput").value.trim() || null,
+      all_day: document.getElementById("eventAllDayToggle").checked,
+      all_day_date: document.getElementById("eventAllDayDateInput").value || null,
+      start_utc: document.getElementById("eventStartInput").value.trim() || null,
+      end_utc: document.getElementById("eventEndInput").value.trim() || null,
+    };
+    const res = await apiPost(`/ui/calendars/${encodeURIComponent(calendarId)}/events`, payload);
+    document.getElementById("eventCreateStatus").textContent = `Added event ${res.event_id}`;
+    await refreshCalendarEvents();
+  } catch (e) {
+    document.getElementById("eventCreateStatus").textContent = "Error: " + e.message;
+  }
+}
+
+async function loadCalendarOpenings() {
+  const calendarId = getCalendarId();
+  if (!calendarId) {
+    setCalendarStatus("Set a calendar ID first.");
+    return;
+  }
+  const start = document.getElementById("openingsStartInput").value.trim();
+  const end = document.getElementById("openingsEndInput").value.trim();
+  if (!start || !end) {
+    setCalendarStatus("Enter start and end window.");
+    return;
+  }
+  try {
+    await ensureUiSession();
+    const qs = `?start_utc=${encodeURIComponent(start)}&end_utc=${encodeURIComponent(end)}`;
+    const res = await apiGet(`/ui/calendars/${encodeURIComponent(calendarId)}/openings${qs}`);
+    renderCalendarOpenings(res || []);
+  } catch (e) {
+    setCalendarStatus("Error: " + e.message);
+  }
+}
 async function confirmAddAlertSms(challenge_id, code) {
   await ensureUiSession();
   return await apiPost("/ui/alerts/sms/confirm", { challenge_id, code });
@@ -2474,6 +2619,8 @@ function openConfirmSmsModal(sentTo, challenge_id) {
 
 /* ===================== Profile ===================== */
 let profileLanguages = [];
+let addressBook = [];
+let selectedAddressId = null;
 
 function setProfileStatus(msg) {
   const el = document.getElementById("profileStatus");
@@ -2694,6 +2841,148 @@ async function sendMessagingMessage() {
   } catch (e) {
     setMsgStatus("msgMessageStatus", String(e));
   }
+function setAddressStatus(msg) {
+  const el = document.getElementById("addressStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function setAddressForm(address) {
+  const addr = address || {};
+  const postal = String(addr.postal_code || "");
+  const zip5 = postal.includes("-") ? postal.split("-")[0] : postal.slice(0, 5);
+  const zip4 = postal.includes("-") ? postal.split("-")[1] : postal.slice(5, 9);
+  selectedAddressId = addr.address_id || null;
+  setInputValue("addressName", addr.name);
+  setInputValue("addressLabel", addr.label);
+  setInputValue("addressLine1", addr.line1);
+  setInputValue("addressLine2", addr.line2);
+  setInputValue("addressCity", addr.city);
+  setInputValue("addressState", addr.state);
+  setInputValue("addressZip5", zip5 || "");
+  setInputValue("addressZip4", zip4 || "");
+  setInputValue("addressCountry", addr.country || "US");
+  setInputValue("addressNotes", addr.notes);
+}
+
+function clearAddressForm() {
+  selectedAddressId = null;
+  setAddressForm({});
+}
+
+function buildAddressPayload() {
+  const zip5 = readInputOrNull("addressZip5");
+  const zip4 = readInputOrNull("addressZip4");
+  const postalCode = zip5 ? (zip4 ? `${zip5}-${zip4}` : zip5) : null;
+  return {
+    name: readInputOrNull("addressName"),
+    label: readInputOrNull("addressLabel"),
+    line1: readInputOrNull("addressLine1"),
+    line2: readInputOrNull("addressLine2"),
+    city: readInputOrNull("addressCity"),
+    state: readInputOrNull("addressState"),
+    postal_code: postalCode,
+    country: readInputOrNull("addressCountry"),
+    notes: readInputOrNull("addressNotes"),
+  };
+}
+
+function renderAddressList(addresses) {
+  const el = document.getElementById("addressList");
+  if (!el) return;
+  el.innerHTML = "";
+  (addresses || []).forEach((addr) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    const label = addr.label || addr.name || "Saved address";
+    const meta = [
+      addr.line1,
+      addr.line2,
+      [addr.city, addr.state].filter(Boolean).join(", "),
+      addr.postal_code,
+      addr.country,
+    ].filter(Boolean).join(" · ");
+    const primaryBadge = addr.is_primary_mailing
+      ? `<span class="pill" style="font-size:11px;">Primary</span>`
+      : "";
+    row.innerHTML = `
+      <div class="grow">
+        <div><b>${escapeHtml(label)}</b> ${primaryBadge}</div>
+        <div class="muted">${escapeHtml(meta)}</div>
+      </div>
+      <div class="row-inline">
+        <button data-action="edit" data-id="${escapeHtml(addr.address_id)}">Edit</button>
+        <button data-action="primary" data-id="${escapeHtml(addr.address_id)}">Set primary</button>
+        <button class="danger" data-action="delete" data-id="${escapeHtml(addr.address_id)}">Delete</button>
+      </div>
+    `;
+    row.querySelectorAll("button").forEach((btn) => {
+      btn.onclick = async () => {
+        const action = btn.getAttribute("data-action");
+        const id = btn.getAttribute("data-id");
+        if (action === "edit") {
+          setAddressForm(addr);
+          setAddressStatus("Editing address " + id);
+          return;
+        }
+        if (action === "primary") {
+          try {
+            setAddressStatus("Setting primary...");
+            await ensureUiSession();
+            await apiPut("/ui/addresses/primary", { address_id: id });
+            await refreshAddresses();
+            setAddressStatus("Primary address updated.");
+          } catch (e) {
+            setAddressStatus(String(e));
+          }
+          return;
+        }
+        if (action === "delete") {
+          if (!confirm("Delete this address?")) return;
+          try {
+            setAddressStatus("Deleting...");
+            await ensureUiSession();
+            await apiDelete(`/ui/addresses/${id}`);
+            if (selectedAddressId === id) clearAddressForm();
+            await refreshAddresses();
+            setAddressStatus("Address deleted.");
+          } catch (e) {
+            setAddressStatus(String(e));
+          }
+        }
+      };
+    });
+    el.appendChild(row);
+  });
+}
+
+async function refreshAddresses() {
+  await ensureUiSession();
+  const res = await apiGet("/ui/addresses");
+  addressBook = Array.isArray(res) ? res : [];
+  renderAddressList(addressBook);
+}
+
+async function searchAddressBook(query) {
+  await ensureUiSession();
+  if (!query) {
+    await refreshAddresses();
+    return;
+  }
+  const res = await apiPost("/ui/addresses/search", { query });
+  renderAddressList(res.matches || []);
+}
+
+async function saveAddress() {
+  await ensureUiSession();
+  const payload = buildAddressPayload();
+  if (selectedAddressId) {
+    const res = await apiPatch(`/ui/addresses/${selectedAddressId}`, payload);
+    setAddressForm(res);
+  } else {
+    const res = await apiPost("/ui/addresses", payload);
+    setAddressForm(res);
+  }
+  await refreshAddresses();
 }
 
 function renderProfileLanguages() {
@@ -2881,6 +3170,235 @@ async function uploadProfilePhoto(kind, fileInputId) {
   const res = await apiUpload(`/ui/profile/photos/${kind}/upload`, file);
   setProfileForm(res.profile || {});
   input.value = "";
+}
+
+/* ===================== File Manager ===================== */
+const fileMgrState = {
+  path: "/",
+  searchResults: [],
+};
+
+function fileMgrStatus(msg) {
+  const el = document.getElementById("filemgrStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function normalizeFolderPath(path) {
+  const trimmed = (path || "").trim();
+  if (!trimmed || trimmed === "/") return "/";
+  return trimmed.endsWith("/") ? trimmed : trimmed + "/";
+}
+
+function currentFileMgrPath() {
+  const input = document.getElementById("filemgrPath");
+  return normalizeFolderPath(input ? input.value : fileMgrState.path);
+}
+
+function setFileMgrPath(path) {
+  fileMgrState.path = normalizeFolderPath(path || "/");
+  const input = document.getElementById("filemgrPath");
+  if (input) input.value = fileMgrState.path;
+}
+
+async function apiUploadFileManager(path, file) {
+  const tok = accessToken();
+  if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const form = new FormData();
+  form.append("file", file);
+  const url = `${API_BASE}/v1/fs/upload?path=${encodeURIComponent(path)}`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + tok,
+      "X-SESSION-ID": sid,
+    },
+    body: form,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return await res.json();
+}
+
+async function fileMgrDownload(path, filename) {
+  const tok = accessToken();
+  if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const url = `${API_BASE}/v1/fs/download?path=${encodeURIComponent(path)}`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Authorization": "Bearer " + tok,
+      "X-SESSION-ID": sid,
+    },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const blob = await res.blob();
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename || "download";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+}
+
+function renderFileMgrSearchResults() {
+  const list = document.getElementById("filemgrSearchResults");
+  if (!list) return;
+  list.innerHTML = "";
+  const results = fileMgrState.searchResults || [];
+  if (!results.length) {
+    list.innerHTML = '<div class="muted">No search results.</div>';
+    return;
+  }
+  results.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `
+      <div class="grow">
+        <div class="mono">${escapeHtml(item.name || "")}</div>
+        <div class="muted">${escapeHtml(item.path || "")}</div>
+      </div>
+      <div class="muted">${escapeHtml(item.type || "")}</div>
+      <div class="muted">${item.type === "file" ? fmtBytes(item.size || 0) : ""}</div>
+      <div><button data-path="${escapeHtml(item.path || "")}" data-type="${escapeHtml(item.type || "")}">Open</button></div>
+    `;
+    row.querySelector("button").onclick = async (ev) => {
+      const p = ev.target.getAttribute("data-path");
+      const t = ev.target.getAttribute("data-type");
+      if (!p) return;
+      if (t === "folder") {
+        setFileMgrPath(p);
+      } else {
+        const parent = p.split("/").slice(0, -1).join("/") + "/";
+        setFileMgrPath(parent || "/");
+      }
+      await refreshFileManager();
+    };
+    list.appendChild(row);
+  });
+}
+
+function renderFileMgrList(items) {
+  const tbody = document.querySelector("#filemgrTable tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  (items || []).forEach((item) => {
+    const row = document.createElement("tr");
+    const isFolder = item.type === "folder";
+    row.innerHTML = `
+      <td class="mono">${escapeHtml(item.name || "")}</td>
+      <td>${escapeHtml(item.type || "")}</td>
+      <td>${isFolder ? "" : fmtBytes(item.size || 0)}</td>
+      <td class="muted">${escapeHtml(item.updated_at || "")}</td>
+      <td>
+        <div class="row-inline">
+          ${isFolder ? '<button data-action="open">Open</button>' : '<button data-action="download">Download</button>'}
+          <button data-action="rename">Rename</button>
+          <button data-action="delete" class="danger">Delete</button>
+        </div>
+      </td>
+    `;
+    row.querySelectorAll("button").forEach((btn) => {
+      btn.onclick = async () => {
+        const action = btn.getAttribute("data-action");
+        if (!action) return;
+        try {
+          if (action === "open") {
+            setFileMgrPath(item.path);
+            await refreshFileManager();
+            return;
+          }
+          if (action === "download") {
+            await fileMgrDownload(item.path, item.name);
+            return;
+          }
+          if (action === "rename") {
+            const newName = prompt("New name:", item.name || "");
+            if (!newName) return;
+            const endpoint = isFolder ? "/v1/fs/rename-folder" : "/v1/fs/rename-file";
+            await apiPost(endpoint, { path: item.path, new_name: newName });
+            await refreshFileManager();
+            return;
+          }
+          if (action === "delete") {
+            const ok = confirm(`Delete ${item.type} ${item.name}?`);
+            if (!ok) return;
+            const endpoint = isFolder ? "/v1/fs/folder" : "/v1/fs/file";
+            await apiDelete(`${endpoint}?path=${encodeURIComponent(item.path)}`);
+            await refreshFileManager();
+          }
+        } catch (e) {
+          fileMgrStatus(String(e));
+        }
+      };
+    });
+    tbody.appendChild(row);
+  });
+  if (!items || items.length === 0) {
+    const empty = document.createElement("tr");
+    empty.innerHTML = '<td colspan="5" class="muted">No files in this folder.</td>';
+    tbody.appendChild(empty);
+  }
+}
+
+async function refreshFileManager() {
+  const table = document.getElementById("filemgrTable");
+  if (!table) return;
+  try {
+    fileMgrStatus("Loading...");
+    await ensureUiSession();
+    const path = currentFileMgrPath();
+    const res = await apiGet(`/v1/fs/list?path=${encodeURIComponent(path)}`);
+    setFileMgrPath(res.path || path);
+    renderFileMgrList(res.items || []);
+    fileMgrStatus(`Loaded ${res.items ? res.items.length : 0} items.`);
+  } catch (e) {
+    fileMgrStatus(String(e));
+  }
+}
+
+async function createFileMgrFolder() {
+  const nameInput = document.getElementById("filemgrNewFolder");
+  if (!nameInput) return;
+  const name = nameInput.value.trim();
+  if (!name) return;
+  const path = currentFileMgrPath() + name + "/";
+  await ensureUiSession();
+  await apiPost("/v1/fs/folder", { path });
+  nameInput.value = "";
+  await refreshFileManager();
+}
+
+async function uploadFileMgr() {
+  const input = document.getElementById("filemgrUploadInput");
+  if (!input || !input.files || !input.files.length) return;
+  const file = input.files[0];
+  const path = currentFileMgrPath() + file.name;
+  await ensureUiSession();
+  await apiUploadFileManager(path, file);
+  input.value = "";
+  await refreshFileManager();
+}
+
+async function searchFileMgr() {
+  const input = document.getElementById("filemgrSearch");
+  if (!input) return;
+  const prefix = input.value.trim();
+  if (!prefix) return;
+  await ensureUiSession();
+  const res = await apiGet(`/v1/fs/search?prefix=${encodeURIComponent(prefix)}`);
+  fileMgrState.searchResults = res.results || [];
+  renderFileMgrSearchResults();
+}
+
+function clearFileMgrSearch() {
+  fileMgrState.searchResults = [];
+  const input = document.getElementById("filemgrSearch");
+  if (input) input.value = "";
+  renderFileMgrSearchResults();
 }
 
 /* ===================== Push (FCM Web) =====================
@@ -3129,6 +3647,33 @@ document.getElementById("alertEmailAddBtn").onclick = async () => {
   }
 };
 
+document.getElementById("calendarSetBtn").onclick = async () => {
+  const calendarId = document.getElementById("calendarIdInput").value.trim();
+  setCalendarId(calendarId);
+  if (calendarId) {
+    setCalendarStatus(`Using calendar ${calendarId}`);
+    await refreshCalendarEvents();
+  } else {
+    setCalendarStatus("Calendar cleared.");
+  }
+};
+
+document.getElementById("calendarCreateBtn").onclick = async () => {
+  await createCalendar();
+};
+
+document.getElementById("eventCreateBtn").onclick = async () => {
+  await createCalendarEvent();
+};
+
+document.getElementById("eventsRefreshBtn").onclick = async () => {
+  await refreshCalendarEvents();
+};
+
+document.getElementById("openingsLoadBtn").onclick = async () => {
+  await loadCalendarOpenings();
+};
+
 document.getElementById("alertTypesSaveBtn").onclick = async () => {
   try {
     await ensureUiSession();
@@ -3174,7 +3719,7 @@ document.getElementById("btnRefreshAll").onclick = refreshAll;
 document.getElementById("btnClearSession").onclick = () => { lsDel("session_id"); alert("UI session cleared."); };
 document.getElementById("btnSetTokens").onclick = openTokenModal;
 
-document.getElementById("btnClearTokens").onclick = () => { lsDel("access_token"); lsDel("id_token"); lsDel("refresh_token"); lsDel("session_id"); alert("Tokens cleared."); };
+document.getElementById("btnClearTokens").onclick = () => { clearAuthTokens(); alert("Tokens cleared."); };
 
 document.getElementById("totpRefreshBtn").onclick = async () => { await ensureUiSession(); await refreshTotpDevices(); };
 
@@ -3281,6 +3826,73 @@ document.getElementById("profileAuditRefreshBtn").onclick = async () => {
   }
 };
 
+document.getElementById("filemgrRefreshBtn").onclick = refreshFileManager;
+document.getElementById("filemgrGoBtn").onclick = async () => {
+  setFileMgrPath(currentFileMgrPath());
+  await refreshFileManager();
+};
+document.getElementById("filemgrUpBtn").onclick = async () => {
+  const path = currentFileMgrPath();
+  if (path === "/") return;
+  const parts = path.split("/").filter(Boolean);
+  const parent = parts.length > 1 ? `/${parts.slice(0, -1).join("/")}/` : "/";
+  setFileMgrPath(parent);
+  await refreshFileManager();
+};
+document.getElementById("filemgrCreateFolderBtn").onclick = async () => {
+  try {
+    await createFileMgrFolder();
+  } catch (e) {
+    fileMgrStatus(String(e));
+  }
+};
+document.getElementById("filemgrUploadBtn").onclick = async () => {
+  try {
+    await uploadFileMgr();
+  } catch (e) {
+    fileMgrStatus(String(e));
+  }
+};
+document.getElementById("filemgrSearchBtn").onclick = async () => {
+  try {
+    await searchFileMgr();
+  } catch (e) {
+    fileMgrStatus(String(e));
+  }
+};
+document.getElementById("filemgrClearSearchBtn").onclick = clearFileMgrSearch;
+document.getElementById("addressRefreshBtn").onclick = async () => {
+  try {
+    setAddressStatus("Refreshing...");
+    await refreshAddresses();
+    setAddressStatus("Loaded.");
+  } catch (e) {
+    setAddressStatus(String(e));
+  }
+};
+document.getElementById("addressSaveBtn").onclick = async () => {
+  try {
+    setAddressStatus("Saving...");
+    await saveAddress();
+    setAddressStatus("Saved.");
+  } catch (e) {
+    setAddressStatus(String(e));
+  }
+};
+document.getElementById("addressClearBtn").onclick = () => {
+  clearAddressForm();
+  setAddressStatus("");
+};
+document.getElementById("addressSearchBtn").onclick = async () => {
+  try {
+    setAddressStatus("Searching...");
+    await searchAddressBook(readInput("addressSearchInput"));
+    setAddressStatus("");
+  } catch (e) {
+    setAddressStatus(String(e));
+  }
+};
+
 document.getElementById("accountSuspendBtn").onclick = () => {
   openAccountActionModal({
     title: "Start account suspension",
@@ -3337,6 +3949,7 @@ document.getElementById("msgLoadMessagesBtn").onclick = loadMessagingMessages;
 document.getElementById("msgSendBtn").onclick = sendMessagingMessage;
 
 /* ===================== boot ===================== */
+setCalendarId(getCalendarId());
 if (!accessToken()) { openTokenModal(); } else { refreshAll(); }
 startToastSSE();
 startToastPolling();
