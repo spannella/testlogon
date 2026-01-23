@@ -200,6 +200,47 @@ class SetAutopayIn(BaseModel):
     enabled: bool
 
 
+class CalendarCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    timezone: str = Field(default="UTC", max_length=64)
+
+
+class CalendarOut(BaseModel):
+    calendar_id: str
+    name: str
+    timezone: str
+    owner_user_id: str
+    created_at_utc: str
+
+
+class EventCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=5000)
+    timezone: str | None = Field(default=None, max_length=64)
+    start_utc: str | None = None
+    end_utc: str | None = None
+    all_day: bool = False
+    all_day_date: str | None = None
+
+
+class EventOut(BaseModel):
+    event_id: str
+    calendar_id: str
+    name: str
+    description: str
+    timezone: str
+    start_utc: str | None = None
+    end_utc: str | None = None
+    all_day: bool
+    all_day_date: str | None = None
+    created_at_utc: str
+
+
+class OpeningsOut(BaseModel):
+    start_utc: str
+    end_utc: str
+
+
 class MailingAddress(BaseModel):
     line1: Optional[str] = None
     line2: Optional[str] = None

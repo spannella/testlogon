@@ -21,6 +21,7 @@ class Tables:
     account_state: Any
     profile: Any
     addresses: Any
+    calendar: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -36,4 +37,5 @@ T = Tables(
     account_state=ddb.Table(S.account_state_table_name),
     profile=ddb.Table(S.profile_table_name),
     addresses=ddb.Table(S.addresses_table_name),
+    calendar=ddb.Table(S.calendar_table_name),
 )

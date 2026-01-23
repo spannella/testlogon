@@ -1438,12 +1438,16 @@ async function accountClosureFinalize(challenge_id) {
 }
 
 function handleAccountClosureSuccess() {
+  clearAuthTokens();
+  alert("Account permanently closed. All data deleted for this user.");
+  window.location.reload();
+}
+
+function clearAuthTokens() {
   lsDel("access_token");
   lsDel("id_token");
   lsDel("refresh_token");
   lsDel("session_id");
-  alert("Account permanently closed. All data deleted for this user.");
-  window.location.reload();
 }
 
 async function runAccountClosureChallenge(challengeId, required) {
@@ -2102,14 +2106,6 @@ function openAccountActionModal({ title, confirmText, onConfirm }) {
   });
 }
 
-/* ===================== TOTP add flow ===================== */
-async function totpBegin(label) {
-  return await apiPost("/ui/mfa/totp/devices/begin", { label: label || "" });
-}
-async function totpConfirm(device_id, totp_code) {
-  return await apiPost("/ui/mfa/totp/devices/confirm", { device_id, totp_code });
-}
-
 function openTotpAddModal() {
   modalShow({
     title: "Add TOTP Device",
@@ -2389,6 +2385,7 @@ async function refreshAll() {
       refreshProfile(),
       refreshAddresses(),
       billingRefreshAll(),
+      refreshCalendarEvents(),
     ]);
     await pollToastsOnce();
   } catch (e) {
@@ -2449,6 +2446,137 @@ function renderSmsTypeChecklist(types, enabled) {
 async function beginAddAlertSms(phone) {
   await ensureUiSession();
   return await apiPost("/ui/alerts/sms/begin", { phone });
+}
+
+/* ===================== calendar ===================== */
+function getCalendarId() {
+  return lsGet("calendar_id") || "";
+}
+
+function setCalendarId(calendarId) {
+  if (calendarId) {
+    lsSet("calendar_id", calendarId);
+  } else {
+    lsDel("calendar_id");
+  }
+  const input = document.getElementById("calendarIdInput");
+  if (input) input.value = calendarId || "";
+}
+
+function setCalendarStatus(msg) {
+  const el = document.getElementById("calendarStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function renderCalendarEvents(events) {
+  const wrap = document.getElementById("calendarEventsList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!events || events.length === 0) {
+    wrap.innerHTML = '<div class="muted">No events yet.</div>';
+    return;
+  }
+  events.forEach(evt => {
+    const row = document.createElement("div");
+    row.className = "item";
+    const when = evt.all_day
+      ? `All day ${escapeHtml(evt.all_day_date || "")}`
+      : `${escapeHtml(evt.start_utc || "")} → ${escapeHtml(evt.end_utc || "")}`;
+    row.innerHTML = `
+      <div class="row">
+        <div class="grow"><b>${escapeHtml(evt.name || "")}</b></div>
+        <div class="mono">${escapeHtml(evt.event_id || "")}</div>
+      </div>
+      <div class="muted">${when} (${escapeHtml(evt.timezone || "")})</div>
+      ${evt.description ? `<div class="muted">${escapeHtml(evt.description)}</div>` : ""}
+    `;
+    wrap.appendChild(row);
+  });
+}
+
+function renderCalendarOpenings(openings) {
+  const wrap = document.getElementById("calendarOpeningsList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!openings || openings.length === 0) {
+    wrap.innerHTML = '<div class="muted">No openings for selected window.</div>';
+    return;
+  }
+  openings.forEach(o => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `<div class="mono">${escapeHtml(o.start_utc)} → ${escapeHtml(o.end_utc)}</div>`;
+    wrap.appendChild(row);
+  });
+}
+
+async function createCalendar() {
+  try {
+    await ensureUiSession();
+    const name = document.getElementById("calendarNameInput").value.trim() || "My Calendar";
+    const timezone = document.getElementById("calendarTimezoneInput").value.trim() || "UTC";
+    const res = await apiPost("/ui/calendars", { name, timezone });
+    setCalendarId(res.calendar_id || "");
+    setCalendarStatus(`Created calendar ${res.calendar_id}`);
+    await refreshCalendarEvents();
+  } catch (e) {
+    setCalendarStatus("Error: " + e.message);
+  }
+}
+
+async function refreshCalendarEvents() {
+  const calendarId = getCalendarId();
+  if (!calendarId) return;
+  await ensureUiSession();
+  const events = await apiGet(`/ui/calendars/${encodeURIComponent(calendarId)}/events`);
+  renderCalendarEvents(events || []);
+}
+
+async function createCalendarEvent() {
+  const calendarId = getCalendarId();
+  if (!calendarId) {
+    setCalendarStatus("Set a calendar ID first.");
+    return;
+  }
+  try {
+    await ensureUiSession();
+    const payload = {
+      name: document.getElementById("eventNameInput").value.trim(),
+      description: document.getElementById("eventDescriptionInput").value.trim(),
+      timezone: document.getElementById("eventTimezoneInput").value.trim() || null,
+      all_day: document.getElementById("eventAllDayToggle").checked,
+      all_day_date: document.getElementById("eventAllDayDateInput").value || null,
+      start_utc: document.getElementById("eventStartInput").value.trim() || null,
+      end_utc: document.getElementById("eventEndInput").value.trim() || null,
+    };
+    const res = await apiPost(`/ui/calendars/${encodeURIComponent(calendarId)}/events`, payload);
+    document.getElementById("eventCreateStatus").textContent = `Added event ${res.event_id}`;
+    await refreshCalendarEvents();
+  } catch (e) {
+    document.getElementById("eventCreateStatus").textContent = "Error: " + e.message;
+  }
+}
+
+async function loadCalendarOpenings() {
+  const calendarId = getCalendarId();
+  if (!calendarId) {
+    setCalendarStatus("Set a calendar ID first.");
+    return;
+  }
+  const start = document.getElementById("openingsStartInput").value.trim();
+  const end = document.getElementById("openingsEndInput").value.trim();
+  if (!start || !end) {
+    setCalendarStatus("Enter start and end window.");
+    return;
+  }
+  try {
+    await ensureUiSession();
+    const qs = `?start_utc=${encodeURIComponent(start)}&end_utc=${encodeURIComponent(end)}`;
+    const res = await apiGet(`/ui/calendars/${encodeURIComponent(calendarId)}/openings${qs}`);
+    renderCalendarOpenings(res || []);
+  } catch (e) {
+    setCalendarStatus("Error: " + e.message);
+  }
 }
 async function confirmAddAlertSms(challenge_id, code) {
   await ensureUiSession();
@@ -3088,6 +3216,33 @@ document.getElementById("alertEmailAddBtn").onclick = async () => {
   }
 };
 
+document.getElementById("calendarSetBtn").onclick = async () => {
+  const calendarId = document.getElementById("calendarIdInput").value.trim();
+  setCalendarId(calendarId);
+  if (calendarId) {
+    setCalendarStatus(`Using calendar ${calendarId}`);
+    await refreshCalendarEvents();
+  } else {
+    setCalendarStatus("Calendar cleared.");
+  }
+};
+
+document.getElementById("calendarCreateBtn").onclick = async () => {
+  await createCalendar();
+};
+
+document.getElementById("eventCreateBtn").onclick = async () => {
+  await createCalendarEvent();
+};
+
+document.getElementById("eventsRefreshBtn").onclick = async () => {
+  await refreshCalendarEvents();
+};
+
+document.getElementById("openingsLoadBtn").onclick = async () => {
+  await loadCalendarOpenings();
+};
+
 document.getElementById("alertTypesSaveBtn").onclick = async () => {
   try {
     await ensureUiSession();
@@ -3133,7 +3288,7 @@ document.getElementById("btnRefreshAll").onclick = refreshAll;
 document.getElementById("btnClearSession").onclick = () => { lsDel("session_id"); alert("UI session cleared."); };
 document.getElementById("btnSetTokens").onclick = openTokenModal;
 
-document.getElementById("btnClearTokens").onclick = () => { lsDel("access_token"); lsDel("id_token"); lsDel("refresh_token"); lsDel("session_id"); alert("Tokens cleared."); };
+document.getElementById("btnClearTokens").onclick = () => { clearAuthTokens(); alert("Tokens cleared."); };
 
 document.getElementById("totpRefreshBtn").onclick = async () => { await ensureUiSession(); await refreshTotpDevices(); };
 
@@ -3321,6 +3476,7 @@ document.getElementById("stripeVerifyByDescriptorBtn").onclick = verifyBillingBy
 document.getElementById("stripeLoadLedgerBtn").onclick = loadBillingLedger;
 
 /* ===================== boot ===================== */
+setCalendarId(getCalendarId());
 if (!accessToken()) { openTokenModal(); } else { refreshAll(); }
 startToastSSE();
 startToastPolling();
