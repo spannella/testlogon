@@ -11,6 +11,7 @@ from app.core.normalize import client_ip_from_request
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
+from app.metrics import record_session_created
 from app.services.ttl import with_ttl
 
 def is_real_ui_session_id(session_id: str) -> bool:
@@ -54,6 +55,7 @@ def create_real_session(req: Request, user_sub: str) -> str:
     session_id = str(uuid.uuid4())
     ts = now_ts()
     ttl = ts + S.ui_session_ttl_seconds
+    is_new_user = _is_new_user(user_sub)
     T.sessions.put_item(Item=with_ttl({
         "user_sub": user_sub,
         "session_id": session_id,
@@ -64,7 +66,20 @@ def create_real_session(req: Request, user_sub: str) -> str:
         "revoked": False,
         "pending_auth": False,
     }, ttl_epoch=ttl))
+    record_session_created(user_sub, is_new_user)
     return session_id
+
+
+def _is_new_user(user_sub: str) -> bool:
+    try:
+        r = T.sessions.query(KeyConditionExpression=Key("user_sub").eq(user_sub), Limit=200)
+        for it in r.get("Items", []):
+            sid = it.get("session_id", "")
+            if is_real_ui_session_id(sid) and not it.get("pending_auth", False):
+                return False
+        return True
+    except Exception:
+        return False
 
 def load_challenge_or_401(user_sub: str, challenge_id: str) -> Dict[str, Any]:
     it = T.sessions.get_item(Key={"user_sub": user_sub, "session_id": challenge_id}).get("Item")

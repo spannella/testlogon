@@ -1,0 +1,975 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Newsfeed Demo (FastAPI + DDB + SSE)</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --panel: #111826;
+      --panel2: #0f1520;
+      --text: #e6edf3;
+      --muted: #93a4b8;
+      --border: #233044;
+      --accent: #5cc8ff;
+      --accent2: #7cffc1;
+      --danger: #ff6b6b;
+      --warn: #ffcc66;
+      --ok: #7cffc1;
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --radius: 14px;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji","Segoe UI Emoji";
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background: radial-gradient(1200px 800px at 15% 10%, rgba(92,200,255,.12), transparent 60%),
+                  radial-gradient(1200px 800px at 90% 0%, rgba(124,255,193,.10), transparent 55%),
+                  var(--bg);
+      color: var(--text);
+    }
+    header {
+      padding: 18px 18px 10px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(15,21,32,.75);
+      backdrop-filter: blur(8px);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .spacer { flex: 1; }
+    h1 { font-size: 16px; margin: 0; letter-spacing: .2px; color: var(--text); }
+    .chip {
+      font-size: 12px;
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(17,24,38,.7);
+    }
+    .chip strong { color: var(--text); font-weight: 600; }
+    main { padding: 18px; max-width: 1180px; margin: 0 auto; }
+    .grid {
+      display: grid;
+      grid-template-columns: 420px 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+    @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+
+    .card {
+      background: linear-gradient(180deg, rgba(17,24,38,.95), rgba(15,21,32,.95));
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .card .hd {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    .card .hd h2 { font-size: 13px; margin: 0; color: var(--text); font-weight: 650; }
+    .card .bd { padding: 14px; }
+    .muted { color: var(--muted); }
+    .mono { font-family: var(--mono); }
+
+    label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 6px; }
+    input, textarea, select {
+      width: 100%;
+      background: rgba(9,13,20,.65);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      color: var(--text);
+      padding: 10px 10px;
+      outline: none;
+    }
+    textarea { min-height: 90px; resize: vertical; }
+    input:focus, textarea:focus, select:focus { border-color: rgba(92,200,255,.55); box-shadow: 0 0 0 3px rgba(92,200,255,.14); }
+    .btn {
+      border: 1px solid var(--border);
+      background: rgba(9,13,20,.7);
+      color: var(--text);
+      border-radius: 10px;
+      padding: 9px 11px;
+      cursor: pointer;
+      font-size: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      user-select: none;
+    }
+    .btn:hover { border-color: rgba(92,200,255,.55); }
+    .btn.primary { background: rgba(92,200,255,.12); border-color: rgba(92,200,255,.35); }
+    .btn.danger  { background: rgba(255,107,107,.12); border-color: rgba(255,107,107,.35); }
+    .btn.ok      { background: rgba(124,255,193,.10); border-color: rgba(124,255,193,.35); }
+    .btn.warn    { background: rgba(255,204,102,.10); border-color: rgba(255,204,102,.35); }
+    .btn.small { padding: 6px 9px; border-radius: 9px; font-size: 12px; }
+    .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+    .stack { display: flex; flex-direction: column; gap: 10px; }
+    .hr { height: 1px; background: var(--border); margin: 10px 0; }
+
+    .feedItem {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 12px;
+      background: rgba(9,13,20,.55);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .feedMeta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .pill {
+      font-size: 11px;
+      padding: 3px 8px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(17,24,38,.5);
+    }
+    .titleLine {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: baseline;
+    }
+    .titleLine .pid { font-size: 12px; color: var(--muted); }
+    .bodyText { white-space: pre-wrap; line-height: 1.35; }
+    .attachments { display: flex; gap: 10px; flex-wrap: wrap; }
+    .att {
+      border: 1px dashed rgba(92,200,255,.35);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: var(--muted);
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      background: rgba(92,200,255,.06);
+    }
+    .att strong { color: var(--text); font-weight: 600; }
+    .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    @media (max-width: 600px) { .cols { grid-template-columns: 1fr; } }
+
+    .notifItem {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px;
+      background: rgba(9,13,20,.55);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .log {
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.35;
+      color: rgba(230,237,243,.9);
+      background: rgba(9,13,20,.55);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px;
+      max-height: 240px;
+      overflow: auto;
+      white-space: pre-wrap;
+    }
+    .rightActions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .hint { font-size: 12px; color: var(--muted); }
+    .kbd {
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 2px 6px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(17,24,38,.6);
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>Newsfeed Demo <span class="muted">— FastAPI + DynamoDB + SSE</span></h1>
+    <div class="spacer"></div>
+    <div class="chip">API: <strong id="apiChip">same-origin</strong></div>
+    <div class="chip">User: <strong id="userChip">—</strong></div>
+    <div class="chip">SSE: <strong id="sseChip">disconnected</strong></div>
+  </div>
+</header>
+
+<main>
+  <div class="grid">
+
+    <!-- Left column -->
+    <div class="stack">
+
+      <div class="card">
+        <div class="hd">
+          <h2>Connection</h2>
+          <div class="rightActions">
+            <button class="btn small" id="btnHealth">Health</button>
+          </div>
+        </div>
+        <div class="bd stack">
+          <div class="cols">
+            <div>
+              <label>API Base URL</label>
+              <input id="apiBase" placeholder="http://localhost:8000" />
+              <div class="hint" style="margin-top:6px">
+                Leave blank for same-origin.
+              </div>
+            </div>
+            <div>
+              <label>User ID</label>
+              <input id="userId" placeholder="u_demo" />
+              <div class="hint" style="margin-top:6px">
+                Used as <span class="kbd">X-User-Id</span> header for fetch calls.
+                For SSE, this demo uses <span class="kbd">/sse?user_id=...</span>.
+              </div>
+            </div>
+          </div>
+
+          <div class="cols">
+            <div>
+              <label>SSE</label>
+              <div class="row">
+                <button class="btn ok" id="btnConnectSse">Connect</button>
+                <button class="btn" id="btnDisconnectSse">Disconnect</button>
+              </div>
+            </div>
+            <div>
+              <label>Notifications Inbox</label>
+              <div class="row">
+                <button class="btn" id="btnLoadNotifs">Load</button>
+                <button class="btn" id="btnClearNotifs">Clear UI</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="hr"></div>
+          <div class="hint">
+            Tip: open two tabs with different User IDs and post/comment between them to see live SSE pushes.
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="hd">
+          <h2>Create Post</h2>
+        </div>
+        <div class="bd stack">
+          <div class="cols">
+            <div>
+              <label>Visibility</label>
+              <select id="postVisibility">
+                <option value="followers">followers</option>
+                <option value="public">public</option>
+              </select>
+            </div>
+            <div>
+              <label>Unlock Price (cents) — optional</label>
+              <input id="postPrice" placeholder="e.g. 199" inputmode="numeric" />
+            </div>
+          </div>
+
+          <div>
+            <label>Body (plain text; stored into RichTextDoc)</label>
+            <textarea id="postBody" placeholder="Write something..."></textarea>
+          </div>
+
+          <div class="cols">
+            <div>
+              <label>Attachment (optional)</label>
+              <input type="file" id="fileInput" />
+              <div class="hint" style="margin-top:6px">
+                Uses <span class="kbd">/uploads/presign</span> then PUT to S3 (requires server UPLOAD_BUCKET).
+              </div>
+            </div>
+            <div class="rightActions" style="align-items:flex-end">
+              <button class="btn primary" id="btnCreatePost">Create Post</button>
+            </div>
+          </div>
+
+          <div id="uploadStatus" class="hint"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="hd">
+          <h2>Social</h2>
+        </div>
+        <div class="bd stack">
+          <div class="cols">
+            <div>
+              <label>Target User ID</label>
+              <input id="targetUserId" placeholder="u_friend" />
+            </div>
+            <div class="rightActions" style="align-items:flex-end">
+              <button class="btn danger" id="btnUnfollow">Unfollow</button>
+              <button class="btn ok" id="btnRefollow">Refollow</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="hd">
+          <h2>Debug Log</h2>
+          <button class="btn small" id="btnClearLog">Clear</button>
+        </div>
+        <div class="bd">
+          <div class="log" id="log"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Right column -->
+    <div class="stack">
+
+      <div class="card">
+        <div class="hd">
+          <h2>Newsfeed</h2>
+          <div class="rightActions">
+            <button class="btn" id="btnLoadFeed">Load</button>
+            <button class="btn" id="btnLoadMoreFeed">Load More</button>
+          </div>
+        </div>
+        <div class="bd stack">
+          <div class="hint">
+            Feed is served from <span class="kbd">GET /feed</span>. This demo shows locked posts as redacted.
+          </div>
+          <div id="feed" class="stack"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="hd">
+          <h2>Selected Post</h2>
+          <div class="rightActions">
+            <button class="btn warn" id="btnUnlock">Unlock</button>
+            <button class="btn danger" id="btnHide">Hide</button>
+          </div>
+        </div>
+        <div class="bd stack">
+          <div class="cols">
+            <div>
+              <label>Post ID</label>
+              <input id="selectedPostId" placeholder="Click a post in feed..." />
+            </div>
+            <div>
+              <label>Comment ID (for edit/delete/tip)</label>
+              <input id="selectedCommentId" placeholder="Click a comment..." />
+            </div>
+          </div>
+
+          <div class="cols">
+            <div>
+              <label>Parent Comment ID (optional reply)</label>
+              <input id="replyParentId" placeholder="leave blank for top-level" />
+            </div>
+            <div class="rightActions" style="align-items:flex-end">
+              <button class="btn" id="btnLoadComments">Load Comments</button>
+              <button class="btn" id="btnLoadMoreComments">More</button>
+            </div>
+          </div>
+
+          <div>
+            <label>Comment body (plain text; stored into RichTextDoc)</label>
+            <textarea id="commentBody" placeholder="Write a comment..."></textarea>
+          </div>
+
+          <div class="cols">
+            <div>
+              <label>Edit expected_version</label>
+              <input id="commentVersion" placeholder="e.g. 1" inputmode="numeric" />
+              <div class="hint" style="margin-top:6px">
+                Your backend uses optimistic concurrency on edit.
+              </div>
+            </div>
+            <div class="rightActions" style="align-items:flex-end">
+              <button class="btn primary" id="btnSendComment">Send</button>
+              <button class="btn" id="btnEditComment">Edit</button>
+              <button class="btn danger" id="btnDeleteComment">Delete</button>
+            </div>
+          </div>
+
+          <div class="cols">
+            <div>
+              <label>Tip amount (cents)</label>
+              <input id="tipAmount" placeholder="e.g. 100" inputmode="numeric" />
+            </div>
+            <div class="rightActions" style="align-items:flex-end">
+              <button class="btn ok" id="btnTip">Tip Comment</button>
+            </div>
+          </div>
+
+          <div class="hr"></div>
+          <div id="comments" class="stack"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="hd">
+          <h2>Live Notifications (UI)</h2>
+        </div>
+        <div class="bd stack">
+          <div id="notifs" class="stack"></div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</main>
+
+<script>
+(() => {
+  // ---------------------------
+  // State
+  // ---------------------------
+  let feedCursor = null;
+  let commentsCursor = null;
+  let es = null;
+
+  const $ = (id) => document.getElementById(id);
+
+  // ---------------------------
+  // Helpers
+  // ---------------------------
+  function apiBase() {
+    const v = $("apiBase").value.trim();
+    return v ? v.replace(/\/+$/,"") : "";
+  }
+  function userId() {
+    return $("userId").value.trim();
+  }
+
+  function updateChips() {
+    $("apiChip").textContent = apiBase() || "same-origin";
+    $("userChip").textContent = userId() || "—";
+  }
+
+  function log(...args) {
+    const line = args.map(a => (typeof a === "string" ? a : JSON.stringify(a, null, 0))).join(" ");
+    const el = $("log");
+    el.textContent += line + "\n";
+    el.scrollTop = el.scrollHeight;
+  }
+
+  async function apiFetch(path, { method="GET", qs=null, body=null, headers={} } = {}) {
+    const base = apiBase();
+    const url = new URL((base || "") + path, window.location.origin);
+    if (qs) Object.entries(qs).forEach(([k,v]) => (v !== null && v !== undefined && v !== "") && url.searchParams.set(k, v));
+
+    const uid = userId();
+    if (uid) headers["X-User-Id"] = uid;
+
+    if (body && !(body instanceof FormData)) {
+      headers["Content-Type"] = "application/json";
+      body = JSON.stringify(body);
+    }
+
+    const resp = await fetch(url.toString(), { method, headers, body });
+    const text = await resp.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+
+    if (!resp.ok) {
+      log("[ERR]", method, path, resp.status, data?.detail ?? data);
+      throw new Error(data?.detail ?? ("HTTP " + resp.status));
+    }
+    return data;
+  }
+
+  function richTextFromPlain(text) {
+    return { format: "plain-v1", doc: { text } };
+  }
+
+  function escapeHtml(s) {
+    return (s ?? "").toString()
+      .replaceAll("&","&amp;")
+      .replaceAll("<","&lt;")
+      .replaceAll(">","&gt;")
+      .replaceAll('"',"&quot;")
+      .replaceAll("'","&#39;");
+  }
+
+  // ---------------------------
+  // SSE
+  // ---------------------------
+  function connectSSE() {
+    disconnectSSE();
+
+    const uid = userId();
+    if (!uid) {
+      alert("Set User ID first");
+      return;
+    }
+
+    // NOTE: browser EventSource can't send custom headers.
+    // This demo uses query param /sse?user_id=... (your server allows it for dev/testing).
+    const base = apiBase();
+    const url = (base || "") + "/sse?user_id=" + encodeURIComponent(uid);
+
+    es = new EventSource(url);
+    $("sseChip").textContent = "connecting";
+
+    es.onopen = () => {
+      $("sseChip").textContent = "connected";
+      log("[SSE] connected", url);
+    };
+    es.onerror = () => {
+      $("sseChip").textContent = "error";
+      log("[SSE] error");
+    };
+    es.onmessage = (e) => {
+      try {
+        const evt = JSON.parse(e.data);
+        log("[SSE]", evt.type, evt.data?.notif_type || "", evt);
+        renderLiveNotif(evt);
+      } catch (err) {
+        log("[SSE] bad message", e.data);
+      }
+    };
+  }
+
+  function disconnectSSE() {
+    if (es) {
+      es.close();
+      es = null;
+      log("[SSE] disconnected");
+    }
+    $("sseChip").textContent = "disconnected";
+  }
+
+  // ---------------------------
+  // Rendering
+  // ---------------------------
+  function renderAttachment(att) {
+    const name = escapeHtml(att.filename);
+    const ct = escapeHtml(att.content_type);
+    const size = att.size_bytes ? `${att.size_bytes} bytes` : "";
+    return `
+      <div class="att" title="${escapeHtml(att.s3_key)}">
+        <strong>${name}</strong>
+        <span class="muted">${ct}</span>
+        ${size ? `<span class="muted">• ${size}</span>` : ""}
+      </div>
+    `;
+  }
+
+  function postText(post) {
+    // Our backend redacts locked body with {doc:{locked:true}}
+    const doc = post?.body?.doc || {};
+    if (doc.locked) return "🔒 Locked — unlock to view content.";
+    if (typeof doc.text === "string") return doc.text;
+    return JSON.stringify(doc);
+  }
+
+  function renderFeedItem(post) {
+    const locked = !!post.locked;
+    const price = post.unlock_price_cents ? `${post.unlock_price_cents}¢` : "";
+    const atts = (post.attachments || []).map(renderAttachment).join("");
+    return `
+      <div class="feedItem" data-post-id="${escapeHtml(post.post_id)}">
+        <div class="titleLine">
+          <div class="feedMeta">
+            <span class="pill mono">${escapeHtml(post.post_id)}</span>
+            <span class="pill">by <span class="mono">${escapeHtml(post.user_id)}</span></span>
+            <span class="pill">${escapeHtml(post.created_at)}</span>
+            ${locked ? `<span class="pill" style="border-color: rgba(255,204,102,.35); background: rgba(255,204,102,.07)">locked ${price}</span>` : `<span class="pill" style="border-color: rgba(124,255,193,.35); background: rgba(124,255,193,.06)">unlocked</span>`}
+          </div>
+          <button class="btn small" data-action="select">Select</button>
+        </div>
+
+        <div class="bodyText">${escapeHtml(postText(post))}</div>
+
+        ${atts ? `<div class="attachments">${atts}</div>` : ""}
+        <div class="rightActions">
+          <button class="btn small warn" data-action="unlock">Unlock</button>
+          <button class="btn small danger" data-action="hide">Hide</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderCommentItem(c) {
+    const deleted = !!c.deleted;
+    const text = deleted ? "🗑️ deleted" : (c?.body?.doc?.text ?? (c?.body ? JSON.stringify(c.body.doc) : ""));
+    const parent = c.parent_comment_id ? `reply to ${c.parent_comment_id}` : "top-level";
+    return `
+      <div class="feedItem" data-comment-id="${escapeHtml(c.comment_id)}" style="padding:10px">
+        <div class="feedMeta">
+          <span class="pill mono">${escapeHtml(c.comment_id)}</span>
+          <span class="pill">by <span class="mono">${escapeHtml(c.user_id)}</span></span>
+          <span class="pill">${escapeHtml(c.created_at)}</span>
+          <span class="pill">${escapeHtml(parent)}</span>
+          <span class="pill">v${escapeHtml(c.version)}</span>
+          <span class="pill">tips ${escapeHtml(c.tip_total_cents)}¢</span>
+          ${deleted ? `<span class="pill" style="border-color: rgba(255,107,107,.35); background: rgba(255,107,107,.07)">deleted</span>` : ""}
+          <button class="btn small" data-action="select-comment" style="margin-left:auto">Select</button>
+        </div>
+        <div class="bodyText">${escapeHtml(text)}</div>
+      </div>
+    `;
+  }
+
+  function renderNotifItem(n) {
+    const t = n?.data?.notif_type || n?.type || "event";
+    const created = n.created_at || n.ts || "";
+    return `
+      <div class="notifItem">
+        <div class="feedMeta">
+          <span class="pill">${escapeHtml(t)}</span>
+          ${created ? `<span class="pill">${escapeHtml(created)}</span>` : ""}
+        </div>
+        <div class="mono" style="font-size:12px; color: rgba(230,237,243,.85)">${escapeHtml(JSON.stringify(n, null, 0))}</div>
+      </div>
+    `;
+  }
+
+  function setSelectedPostId(pid) {
+    $("selectedPostId").value = pid || "";
+    commentsCursor = null;
+    $("comments").innerHTML = "";
+    $("selectedCommentId").value = "";
+  }
+
+  function setSelectedComment(c) {
+    $("selectedCommentId").value = c.comment_id || "";
+    $("replyParentId").value = c.comment_id || "";
+    $("commentVersion").value = c.version || 1;
+    const text = c?.body?.doc?.text ?? "";
+    $("commentBody").value = text;
+  }
+
+  function renderLiveNotif(evt) {
+    // Only display actual notification events (ignore hello, etc.)
+    if (!evt || (evt.type === "hello")) return;
+    const el = $("notifs");
+    el.insertAdjacentHTML("afterbegin", renderNotifItem(evt));
+  }
+
+  // ---------------------------
+  // Actions
+  // ---------------------------
+  async function doHealth() {
+    const data = await apiFetch("/health");
+    updateChips();
+    log("[health]", data);
+    alert("OK: " + JSON.stringify(data));
+  }
+
+  async function loadFeed(reset=true) {
+    if (reset) feedCursor = null;
+    const data = await apiFetch("/feed", { qs: { limit: 10, cursor: feedCursor } });
+    feedCursor = data.next_cursor || null;
+
+    if (reset) $("feed").innerHTML = "";
+    const html = (data.items || []).map(renderFeedItem).join("");
+    $("feed").insertAdjacentHTML("beforeend", html);
+
+    log("[feed] items", (data.items || []).length, "next_cursor", !!feedCursor);
+  }
+
+  async function hideSelectedPost() {
+    const pid = $("selectedPostId").value.trim();
+    if (!pid) return alert("Select a post first");
+    await apiFetch("/feed/hide", { method: "POST", body: { post_id: pid } });
+    log("[hide]", pid);
+    await loadFeed(true);
+  }
+
+  async function unlockSelectedPost() {
+    const pid = $("selectedPostId").value.trim();
+    if (!pid) return alert("Select a post first");
+    const data = await apiFetch("/posts/unlock", { method: "POST", body: { post_id: pid } });
+    log("[unlock]", data);
+    alert("Unlock result: " + JSON.stringify(data.payment_intent));
+    await loadFeed(true);
+  }
+
+  async function createPost() {
+    const text = $("postBody").value.trim();
+    if (!text) return alert("Post body required");
+
+    const visibility = $("postVisibility").value;
+    const priceStr = $("postPrice").value.trim();
+    const unlock_price_cents = priceStr ? parseInt(priceStr, 10) : null;
+
+    let attachments = [];
+
+    // If file selected, do presign and upload
+    const f = $("fileInput").files?.[0];
+    if (f) {
+      $("uploadStatus").textContent = "Presigning upload...";
+      const pres = await apiFetch("/uploads/presign", {
+        method: "POST",
+        body: { filename: f.name, content_type: f.type || "application/octet-stream", size_bytes: f.size }
+      });
+
+      $("uploadStatus").textContent = "Uploading to S3...";
+      const putResp = await fetch(pres.put_url, {
+        method: "PUT",
+        headers: pres.put_headers || { "Content-Type": f.type || "application/octet-stream" },
+        body: f
+      });
+      if (!putResp.ok) {
+        $("uploadStatus").textContent = "Upload failed.";
+        const t = await putResp.text();
+        log("[upload ERR]", putResp.status, t);
+        throw new Error("Upload failed");
+      }
+      $("uploadStatus").textContent = "Upload complete.";
+      attachments.push(pres.attachment);
+    } else {
+      $("uploadStatus").textContent = "";
+    }
+
+    const body = richTextFromPlain(text);
+    const payload = { body, attachments, visibility };
+    if (unlock_price_cents !== null && !Number.isNaN(unlock_price_cents)) payload.unlock_price_cents = unlock_price_cents;
+
+    const data = await apiFetch("/posts", { method: "POST", body: payload });
+    log("[create_post]", data);
+    $("postBody").value = "";
+    $("fileInput").value = "";
+    $("postPrice").value = "";
+    await loadFeed(true);
+  }
+
+  async function unfollow() {
+    const target = $("targetUserId").value.trim();
+    if (!target) return alert("Target user required");
+    await apiFetch("/social/unfollow", { method: "POST", body: { target_user_id: target } });
+    log("[unfollow]", target);
+    alert("Unfollowed " + target);
+    await loadFeed(true);
+  }
+
+  async function refollow() {
+    const target = $("targetUserId").value.trim();
+    if (!target) return alert("Target user required");
+    await apiFetch("/social/refollow", { method: "POST", body: { target_user_id: target } });
+    log("[refollow]", target);
+    alert("Refollowed " + target);
+    await loadFeed(true);
+  }
+
+  async function loadComments(reset=true) {
+    const pid = $("selectedPostId").value.trim();
+    if (!pid) return alert("Select a post first");
+    if (reset) commentsCursor = null;
+
+    const data = await apiFetch(`/posts/${encodeURIComponent(pid)}/comments`, {
+      qs: { limit: 10, cursor: commentsCursor }
+    });
+
+    commentsCursor = data.next_cursor || null;
+    if (reset) $("comments").innerHTML = "";
+
+    const html = (data.items || []).map(renderCommentItem).join("");
+    $("comments").insertAdjacentHTML("beforeend", html);
+    log("[comments] items", (data.items || []).length, "next_cursor", !!commentsCursor);
+  }
+
+  async function sendComment() {
+    const pid = $("selectedPostId").value.trim();
+    if (!pid) return alert("Select a post first");
+    const text = $("commentBody").value.trim();
+    if (!text) return alert("Comment body required");
+    const parent = $("replyParentId").value.trim();
+
+    const body = richTextFromPlain(text);
+    const payload = { body };
+    if (parent) payload.parent_comment_id = parent;
+
+    const data = await apiFetch(`/posts/${encodeURIComponent(pid)}/comments`, { method: "POST", body: payload });
+    log("[comment]", data);
+    $("commentBody").value = "";
+    $("replyParentId").value = "";
+    await loadComments(true);
+  }
+
+  async function editComment() {
+    const pid = $("selectedPostId").value.trim();
+    if (!pid) return alert("Select a post first");
+    const cid = $("selectedCommentId").value.trim();
+    if (!cid) return alert("Select a comment first");
+    const verStr = $("commentVersion").value.trim();
+    const expected_version = verStr ? parseInt(verStr, 10) : 1;
+
+    const text = $("commentBody").value.trim();
+    if (!text) return alert("New comment body required");
+    const body = richTextFromPlain(text);
+
+    const data = await apiFetch(`/posts/${encodeURIComponent(pid)}/comments/${encodeURIComponent(cid)}`, {
+      method: "PATCH",
+      body: { body, expected_version }
+    });
+    log("[edit_comment]", data);
+    await loadComments(true);
+  }
+
+  async function deleteComment() {
+    const pid = $("selectedPostId").value.trim();
+    if (!pid) return alert("Select a post first");
+    const cid = $("selectedCommentId").value.trim();
+    if (!cid) return alert("Select a comment first");
+    if (!confirm("Delete comment " + cid + "?")) return;
+
+    const data = await apiFetch(`/posts/${encodeURIComponent(pid)}/comments/${encodeURIComponent(cid)}`, { method: "DELETE" });
+    log("[delete_comment]", data);
+    await loadComments(true);
+  }
+
+  async function tipComment() {
+    const pid = $("selectedPostId").value.trim();
+    if (!pid) return alert("Select a post first");
+    const cid = $("selectedCommentId").value.trim();
+    if (!cid) return alert("Select a comment first");
+    const amtStr = $("tipAmount").value.trim();
+    const amount_cents = parseInt(amtStr, 10);
+    if (!amount_cents || Number.isNaN(amount_cents) || amount_cents <= 0) return alert("Enter a valid tip amount");
+
+    const data = await apiFetch(`/posts/${encodeURIComponent(pid)}/comments/${encodeURIComponent(cid)}/tip`, {
+      method: "POST",
+      body: { amount_cents, currency: "usd" }
+    });
+    log("[tip]", data);
+    alert("Tipped! New total: " + data.tip_total_cents + "¢");
+    await loadComments(true);
+  }
+
+  async function loadNotifs() {
+    const data = await apiFetch("/notifications", { qs: { limit: 10 } });
+    log("[notifications]", data.items?.length ?? 0);
+    $("notifs").innerHTML = "";
+    (data.items || []).forEach(n => {
+      // Convert inbox items to the same-ish shape as SSE events for display
+      const evt = {
+        type: "notification",
+        user_id: userId(),
+        created_at: n.created_at,
+        data: { notif_type: n.type, payload: n.payload, notif_id: n.notif_id }
+      };
+      $("notifs").insertAdjacentHTML("beforeend", renderNotifItem(evt));
+    });
+  }
+
+  // ---------------------------
+  // Event wiring
+  // ---------------------------
+  function wire() {
+    $("btnHealth").addEventListener("click", () => doHealth().catch(err => alert(err.message)));
+    $("btnConnectSse").addEventListener("click", connectSSE);
+    $("btnDisconnectSse").addEventListener("click", disconnectSSE);
+
+    $("btnCreatePost").addEventListener("click", () => createPost().catch(err => alert(err.message)));
+
+    $("btnUnfollow").addEventListener("click", () => unfollow().catch(err => alert(err.message)));
+    $("btnRefollow").addEventListener("click", () => refollow().catch(err => alert(err.message)));
+
+    $("btnLoadFeed").addEventListener("click", () => loadFeed(true).catch(err => alert(err.message)));
+    $("btnLoadMoreFeed").addEventListener("click", () => loadFeed(false).catch(err => alert(err.message)));
+
+    $("btnHide").addEventListener("click", () => hideSelectedPost().catch(err => alert(err.message)));
+    $("btnUnlock").addEventListener("click", () => unlockSelectedPost().catch(err => alert(err.message)));
+
+    $("btnLoadComments").addEventListener("click", () => loadComments(true).catch(err => alert(err.message)));
+    $("btnLoadMoreComments").addEventListener("click", () => loadComments(false).catch(err => alert(err.message)));
+
+    $("btnSendComment").addEventListener("click", () => sendComment().catch(err => alert(err.message)));
+    $("btnEditComment").addEventListener("click", () => editComment().catch(err => alert(err.message)));
+    $("btnDeleteComment").addEventListener("click", () => deleteComment().catch(err => alert(err.message)));
+    $("btnTip").addEventListener("click", () => tipComment().catch(err => alert(err.message)));
+
+    $("btnLoadNotifs").addEventListener("click", () => loadNotifs().catch(err => alert(err.message)));
+    $("btnClearNotifs").addEventListener("click", () => ($("notifs").innerHTML = ""));
+    $("btnClearLog").addEventListener("click", () => ($("log").textContent = ""));
+
+    // click handlers inside feed/comments
+    $("feed").addEventListener("click", (e) => {
+      const btn = e.target.closest("button");
+      const item = e.target.closest(".feedItem");
+      if (!item) return;
+      const pid = item.getAttribute("data-post-id");
+      if (!pid) return;
+
+      if (btn && btn.dataset.action === "select") {
+        setSelectedPostId(pid);
+        log("[select post]", pid);
+      } else if (btn && btn.dataset.action === "hide") {
+        setSelectedPostId(pid);
+        hideSelectedPost().catch(err => alert(err.message));
+      } else if (btn && btn.dataset.action === "unlock") {
+        setSelectedPostId(pid);
+        unlockSelectedPost().catch(err => alert(err.message));
+      } else {
+        // clicking anywhere selects
+        setSelectedPostId(pid);
+      }
+    });
+
+    $("comments").addEventListener("click", (e) => {
+      const btn = e.target.closest("button");
+      const item = e.target.closest("[data-comment-id]");
+      if (!item) return;
+      const cid = item.getAttribute("data-comment-id");
+      if (!cid) return;
+
+      if (btn && btn.dataset.action === "select-comment") {
+        // We need comment details; easiest is parse from DOM? Instead reload comments and find in last render?
+        // Here: quick hack - fetch comments page again and search.
+        const pid = $("selectedPostId").value.trim();
+        if (!pid) return;
+
+        apiFetch(`/posts/${encodeURIComponent(pid)}/comments`, { qs: { limit: 50 } })
+          .then(data => {
+            const found = (data.items || []).find(x => x.comment_id === cid);
+            if (found) {
+              setSelectedComment(found);
+              log("[select comment]", cid);
+            } else {
+              $("selectedCommentId").value = cid;
+              $("replyParentId").value = cid;
+              log("[select comment id only]", cid);
+            }
+          })
+          .catch(err => alert(err.message));
+      } else {
+        $("selectedCommentId").value = cid;
+        $("replyParentId").value = cid;
+      }
+    });
+
+    // update chips on change
+    $("apiBase").addEventListener("input", updateChips);
+    $("userId").addEventListener("input", updateChips);
+  }
+
+  // ---------------------------
+  // Init
+  // ---------------------------
+  function init() {
+    $("apiBase").value = "";     // same-origin by default
+    $("userId").value = "u_demo";
+    updateChips();
+    wire();
+    log("Ready. Set User ID, then Connect SSE, then Load Feed.");
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

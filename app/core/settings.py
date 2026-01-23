@@ -100,6 +100,14 @@ class Settings:
     paypal_client_secret: str = os.environ.get("PAYPAL_CLIENT_SECRET", "")
     paypal_webhook_id: str = os.environ.get("PAYPAL_WEBHOOK_ID", "")
     paypal_plan_map: str = os.environ.get("PAYPAL_PLAN_MAP", "")
+    # Stripe
+    stripe_secret_key: str = os.environ.get("STRIPE_SECRET_KEY", "")
+    stripe_publishable_key: str = os.environ.get("STRIPE_PUBLISHABLE_KEY", "")
+    stripe_webhook_secret: str = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+    stripe_default_currency: str = os.environ.get("STRIPE_DEFAULT_CURRENCY", "usd")
+    stripe_success_url: str = os.environ.get("STRIPE_SUCCESS_URL", "")
+    stripe_cancel_url: str = os.environ.get("STRIPE_CANCEL_URL", "")
+    billing_table_name: str = os.environ.get("BILLING_TABLE_NAME", "billing")
 
 
 S = Settings()

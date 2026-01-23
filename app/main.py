@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.metrics import metrics_endpoint, metrics_middleware, set_app_info
 from app.routers.ui_session import router as ui_session_router
 from app.routers.ui_mfa import router as ui_mfa_router
 from app.routers.mfa_devices import router as mfa_devices_router
@@ -16,6 +17,7 @@ from app.routers.push import router as push_router
 from app.routers.recovery import router as recovery_router
 from app.routers.misc import router as misc_router
 from app.routers.paypal import router as paypal_router
+from app.routers.billing import router as billing_router
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Security Backend (refactored)", version="0.1.0")
@@ -34,6 +36,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.middleware("http")(metrics_middleware)
+    set_app_info(app.title, app.version)
+
+    app.get("/metrics")(metrics_endpoint)
 
     app.include_router(ui_session_router)
     app.include_router(ui_mfa_router)
@@ -44,6 +50,7 @@ def create_app() -> FastAPI:
     app.include_router(recovery_router)
     app.include_router(misc_router)
     app.include_router(paypal_router)
+    app.include_router(billing_router)
 
     return app
 

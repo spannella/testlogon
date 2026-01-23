@@ -1,0 +1,641 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Profile Admin</title>
+  <style>
+    :root { --bg:#0b0d12; --card:#111522; --muted:#97a3b6; --text:#e7ecf5; --line:#243049; --good:#35d07f; --bad:#ff5c7a; --btn:#2a3a66; --btn2:#1c2849; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; background:var(--bg); color:var(--text); }
+    .wrap { max-width: 1100px; margin: 18px auto; padding: 0 14px 60px; }
+    h1 { font-size: 20px; margin: 0 0 12px; }
+    h2 { font-size: 14px; margin: 0 0 10px; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius: 14px; padding: 14px; }
+    .row { display:flex; gap:10px; align-items:center; margin: 10px 0; flex-wrap: wrap; }
+    .row > label { min-width: 170px; color: var(--muted); font-size: 12px; }
+    input, textarea, select {
+      background:#0c1020; border:1px solid #26314d; color: var(--text);
+      border-radius: 10px; padding: 10px 10px; font-size: 13px; outline: none;
+    }
+    input:focus, textarea:focus, select:focus { border-color: #4967c9; box-shadow: 0 0 0 3px rgba(73,103,201,.2); }
+    input[type="text"], input[type="date"], input[type="number"], textarea, select { width: min(520px, 100%); }
+    textarea { min-height: 90px; resize: vertical; }
+    .btn {
+      background: linear-gradient(180deg, var(--btn), var(--btn2));
+      border:1px solid #3a4f85; color: var(--text);
+      padding: 10px 12px; border-radius: 12px; font-size: 13px; cursor:pointer;
+    }
+    .btn:disabled { opacity: .55; cursor:not-allowed; }
+    .btn.secondary { background: transparent; border-color:#2b3656; }
+    .btn.good { border-color: rgba(53,208,127,.55); }
+    .btn.bad { border-color: rgba(255,92,122,.55); }
+    .pill { display:inline-block; border:1px solid #2b3656; padding: 5px 8px; border-radius: 999px; color: var(--muted); font-size: 12px; }
+    .muted { color: var(--muted); font-size: 12px; }
+    .status { margin-left:auto; font-size:12px; }
+    .status.ok { color: var(--good); }
+    .status.err { color: var(--bad); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New"; font-size: 12px; }
+    .langs { display:flex; flex-direction:column; gap:8px; margin-top: 8px; }
+    .langItem { display:flex; gap:10px; align-items:center; padding: 10px; border:1px solid #243049; border-radius: 12px; background:#0c1020; }
+    .langItem b { min-width: 140px; }
+    .langItem .spacer { flex:1; }
+    .photos { display:flex; gap:12px; flex-wrap: wrap; margin-top: 8px; }
+    .photoBox { border:1px solid #243049; border-radius: 12px; padding: 10px; background:#0c1020; width: min(520px, 100%); }
+    .thumb { width: 100%; max-height: 240px; object-fit: cover; border-radius: 10px; border:1px solid #243049; display:block; margin-top: 8px; background:#080b12; }
+    .audit { display:flex; flex-direction:column; gap:10px; margin-top: 8px; }
+    .auditItem { border:1px solid #243049; border-radius: 12px; background:#0c1020; padding: 10px; }
+    .auditTop { display:flex; gap:10px; align-items:center; flex-wrap: wrap; }
+    .auditTop .field { font-weight: 700; }
+    .auditTop .ts { color: var(--muted); font-size:12px; margin-left:auto; }
+    .toast { position: fixed; right: 16px; bottom: 16px; background:#0c1020; border:1px solid #2b3656; padding: 12px 12px; border-radius: 12px; min-width: 220px; max-width: 420px; }
+    .toast.good { border-color: rgba(53,208,127,.55); }
+    .toast.bad { border-color: rgba(255,92,122,.55); }
+    .hide { display:none; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .row > label { min-width: 120px; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Profile Service Frontend</h1>
+
+    <div class="card" style="margin-bottom:12px;">
+      <div class="row">
+        <label>API Base URL</label>
+        <input id="apiBase" type="text" value="http://localhost:8000" />
+        <label style="min-width:110px;">X-User-Id</label>
+        <input id="userId" type="text" placeholder="abc123" />
+        <button class="btn good" id="btnLoad">Load Profile</button>
+        <button class="btn secondary" id="btnReset">Reset Form</button>
+        <span class="status" id="globalStatus"></span>
+      </div>
+      <div class="muted">
+        Assumes auth is handled elsewhere; this UI sends <span class="mono">X-User-Id</span> on requests.
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Profile Fields</h2>
+
+        <div class="row"><label>Display name</label><input id="display_name" type="text" /></div>
+        <div class="row"><label>First name</label><input id="first_name" type="text" /></div>
+        <div class="row"><label>Middle name</label><input id="middle_name" type="text" /></div>
+        <div class="row"><label>Last name</label><input id="last_name" type="text" /></div>
+
+        <div class="row"><label>Title</label><input id="title" type="text" /></div>
+        <div class="row"><label>Description</label><textarea id="description"></textarea></div>
+
+        <div class="row"><label>Birthday</label><input id="birthday" type="date" /></div>
+        <div class="row"><label>Gender</label>
+          <select id="gender">
+            <option value="">(unset)</option>
+            <option value="male">male</option>
+            <option value="female">female</option>
+            <option value="non_binary">non_binary</option>
+            <option value="other">other</option>
+            <option value="prefer_not_to_say">prefer_not_to_say</option>
+          </select>
+        </div>
+
+        <div class="row"><label>Location</label><input id="location" type="text" /></div>
+        <div class="row"><label>Displayed email</label><input id="displayed_email" type="text" placeholder="me@example.com" /></div>
+        <div class="row"><label>Displayed phone</label><input id="displayed_telephone_number" type="text" placeholder="+1 212 555 1212" /></div>
+
+        <h2 style="margin-top:14px;">Mailing Address</h2>
+        <div class="row"><label>Line 1</label><input id="addr_line1" type="text" /></div>
+        <div class="row"><label>Line 2</label><input id="addr_line2" type="text" /></div>
+        <div class="row"><label>City</label><input id="addr_city" type="text" /></div>
+        <div class="row"><label>State</label><input id="addr_state" type="text" /></div>
+        <div class="row"><label>Postal code</label><input id="addr_postal" type="text" /></div>
+        <div class="row"><label>Country (ISO-2)</label><input id="addr_country" type="text" placeholder="US" /></div>
+
+        <div class="row" style="margin-top:14px;">
+          <button class="btn good" id="btnPatch">Save (PATCH)</button>
+          <button class="btn" id="btnPut">Save (PUT replace)</button>
+          <button class="btn bad" id="btnClearField">Clear a field…</button>
+          <span class="status" id="profileStatus"></span>
+        </div>
+
+        <div class="muted">
+          <span class="pill">PATCH</span> updates only non-empty form fields.<br/>
+          <span class="pill">PUT</span> replaces the entire profile with what’s in the form (empty fields become null/removed by server normalization).
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Languages</h2>
+
+        <div class="row">
+          <label>Language</label>
+          <input id="lang_name" type="text" placeholder="English" />
+        </div>
+        <div class="row">
+          <label>Level</label>
+          <select id="lang_level">
+            <option value="native">native</option>
+            <option value="fluent">fluent</option>
+            <option value="advanced">advanced</option>
+            <option value="intermediate">intermediate</option>
+            <option value="basic">basic</option>
+            <option value="A1">A1</option>
+            <option value="A2">A2</option>
+            <option value="B1">B1</option>
+            <option value="B2">B2</option>
+            <option value="C1">C1</option>
+            <option value="C2">C2</option>
+          </select>
+          <button class="btn good" id="btnAddLang">Add / Update</button>
+          <span class="status" id="langStatus"></span>
+        </div>
+
+        <div class="langs" id="langsList"></div>
+
+        <h2 style="margin-top:16px;">Photos</h2>
+        <div class="photos">
+          <div class="photoBox">
+            <div class="row" style="margin:0;">
+              <label style="min-width:auto;">Profile photo</label>
+              <input id="file_profile" type="file" accept="image/*" />
+              <button class="btn good" id="btnUploadProfile">Upload</button>
+            </div>
+            <img id="img_profile" class="thumb hide" alt="profile photo preview" />
+            <div class="muted mono" id="profilePhotoUrl"></div>
+          </div>
+
+          <div class="photoBox">
+            <div class="row" style="margin:0;">
+              <label style="min-width:auto;">Cover photo</label>
+              <input id="file_cover" type="file" accept="image/*" />
+              <button class="btn good" id="btnUploadCover">Upload</button>
+            </div>
+            <img id="img_cover" class="thumb hide" alt="cover photo preview" />
+            <div class="muted mono" id="coverPhotoUrl"></div>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top: 14px;">
+          <button class="btn" id="btnLoadAudit">Refresh Audit</button>
+          <span class="status" id="auditStatus"></span>
+        </div>
+
+        <h2 style="margin-top: 10px;">Audit History (latest)</h2>
+        <div class="audit" id="auditList"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hide"></div>
+
+<script>
+  // -----------------------
+  // Small utilities
+  // -----------------------
+  const $ = (id) => document.getElementById(id);
+
+  function toast(msg, ok=true) {
+    const el = $("toast");
+    el.className = "toast " + (ok ? "good" : "bad");
+    el.textContent = msg;
+    el.classList.remove("hide");
+    setTimeout(() => el.classList.add("hide"), 3200);
+  }
+
+  function setStatus(el, msg, ok=true) {
+    el.textContent = msg || "";
+    el.classList.toggle("ok", !!ok);
+    el.classList.toggle("err", !ok);
+  }
+
+  function apiBase() {
+    return $("apiBase").value.replace(/\/+$/, "");
+  }
+
+  function userId() {
+    return $("userId").value.trim();
+  }
+
+  function headersJson() {
+    const uid = userId();
+    if (!uid) throw new Error("Missing X-User-Id");
+    return {
+      "Content-Type": "application/json",
+      "X-User-Id": uid,
+    };
+  }
+
+  async function httpJson(method, path, bodyObj=null) {
+    const url = apiBase() + path;
+    const opts = { method, headers: headersJson() };
+    if (bodyObj !== null) opts.body = JSON.stringify(bodyObj);
+    const res = await fetch(url, opts);
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { /* ignore */ }
+    if (!res.ok) {
+      const detail = (data && (data.detail || data.message)) ? (data.detail || data.message) : text;
+      throw new Error(`${res.status} ${res.statusText}: ${detail}`);
+    }
+    return data;
+  }
+
+  function clearForm() {
+    const ids = [
+      "display_name","first_name","middle_name","last_name","title","description",
+      "birthday","location","displayed_email","displayed_telephone_number"
+    ];
+    ids.forEach(id => $(id).value = "");
+    $("gender").value = "";
+
+    // address
+    ["addr_line1","addr_line2","addr_city","addr_state","addr_postal","addr_country"].forEach(id => $(id).value = "");
+
+    // languages UI
+    $("langsList").innerHTML = "";
+    $("lang_name").value = "";
+    $("lang_level").value = "native";
+
+    // photos
+    $("file_profile").value = "";
+    $("file_cover").value = "";
+    $("img_profile").classList.add("hide");
+    $("img_cover").classList.add("hide");
+    $("img_profile").src = "";
+    $("img_cover").src = "";
+    $("profilePhotoUrl").textContent = "";
+    $("coverPhotoUrl").textContent = "";
+
+    // audit
+    $("auditList").innerHTML = "";
+  }
+
+  function formToProfilePut() {
+    // For PUT we include everything (including nulls when empty).
+    const addr = {
+      line1: $("addr_line1").value.trim() || null,
+      line2: $("addr_line2").value.trim() || null,
+      city: $("addr_city").value.trim() || null,
+      state: $("addr_state").value.trim() || null,
+      postal_code: $("addr_postal").value.trim() || null,
+      country: $("addr_country").value.trim() || null,
+    };
+    const addrProvided = Object.values(addr).some(v => v);
+
+    const profile = {
+      display_name: $("display_name").value.trim() || null,
+      first_name: $("first_name").value.trim() || null,
+      middle_name: $("middle_name").value.trim() || null,
+      last_name: $("last_name").value.trim() || null,
+      title: $("title").value.trim() || null,
+      description: $("description").value.trim() || null,
+      birthday: $("birthday").value || null,
+      gender: $("gender").value || null,
+      location: $("location").value.trim() || null,
+      displayed_email: $("displayed_email").value.trim() || null,
+      displayed_telephone_number: $("displayed_telephone_number").value.trim() || null,
+      mailing_address: addrProvided ? addr : null,
+      // photos are set by commit endpoints; leaving null here is fine.
+    };
+    return profile;
+  }
+
+  function formToProfilePatch() {
+    // For PATCH only send non-empty fields (so you don't nuke values unintentionally).
+    const p = {};
+    const setIf = (k, v) => { if (v !== null && v !== "" && typeof v !== "undefined") p[k] = v; };
+
+    setIf("display_name", $("display_name").value.trim() || null);
+    setIf("first_name", $("first_name").value.trim() || null);
+    setIf("middle_name", $("middle_name").value.trim() || null);
+    setIf("last_name", $("last_name").value.trim() || null);
+    setIf("title", $("title").value.trim() || null);
+    setIf("description", $("description").value.trim() || null);
+    setIf("birthday", $("birthday").value || null);
+    setIf("location", $("location").value.trim() || null);
+    setIf("displayed_email", $("displayed_email").value.trim() || null);
+    setIf("displayed_telephone_number", $("displayed_telephone_number").value.trim() || null);
+    if ($("gender").value) setIf("gender", $("gender").value);
+
+    // address only if any field is present
+    const addr = {
+      line1: $("addr_line1").value.trim() || null,
+      line2: $("addr_line2").value.trim() || null,
+      city: $("addr_city").value.trim() || null,
+      state: $("addr_state").value.trim() || null,
+      postal_code: $("addr_postal").value.trim() || null,
+      country: $("addr_country").value.trim() || null,
+    };
+    const addrProvided = Object.values(addr).some(v => v);
+    if (addrProvided) setIf("mailing_address", addr);
+
+    return p;
+  }
+
+  function fillFormFromProfile(profile) {
+    $("display_name").value = profile.display_name || "";
+    $("first_name").value = profile.first_name || "";
+    $("middle_name").value = profile.middle_name || "";
+    $("last_name").value = profile.last_name || "";
+    $("title").value = profile.title || "";
+    $("description").value = profile.description || "";
+    $("birthday").value = profile.birthday || "";
+    $("gender").value = profile.gender || "";
+    $("location").value = profile.location || "";
+    $("displayed_email").value = profile.displayed_email || "";
+    $("displayed_telephone_number").value = profile.displayed_telephone_number || "";
+
+    const addr = profile.mailing_address || {};
+    $("addr_line1").value = addr.line1 || "";
+    $("addr_line2").value = addr.line2 || "";
+    $("addr_city").value = addr.city || "";
+    $("addr_state").value = addr.state || "";
+    $("addr_postal").value = addr.postal_code || "";
+    $("addr_country").value = addr.country || "";
+
+    renderLanguages(profile.languages || []);
+
+    renderPhoto("profile", profile.profile_photo || "");
+    renderPhoto("cover", profile.cover_photo || "");
+
+    $("profilePhotoUrl").textContent = profile.profile_photo ? `profile_photo: ${profile.profile_photo}` : "";
+    $("coverPhotoUrl").textContent = profile.cover_photo ? `cover_photo: ${profile.cover_photo}` : "";
+  }
+
+  function renderLanguages(langs) {
+    const list = $("langsList");
+    list.innerHTML = "";
+    if (!langs || !langs.length) {
+      list.innerHTML = `<div class="muted">No languages set.</div>`;
+      return;
+    }
+    for (const e of langs) {
+      const div = document.createElement("div");
+      div.className = "langItem";
+      div.innerHTML = `
+        <b>${escapeHtml(e.language)}</b>
+        <span class="pill">${escapeHtml(e.level)}</span>
+        <span class="spacer"></span>
+        <button class="btn bad" data-lang="${escapeAttr(e.language)}">Remove</button>
+      `;
+      div.querySelector("button").onclick = async () => {
+        try {
+          setStatus($("langStatus"), "Removing…", true);
+          const prof = await httpJson("DELETE", "/v1/profile/languages", { language: e.language });
+          renderLanguages(prof.languages || []);
+          setStatus($("langStatus"), "Removed.", true);
+          toast("Language removed", true);
+          await refreshAudit();
+        } catch (err) {
+          setStatus($("langStatus"), err.message, false);
+          toast(err.message, false);
+        }
+      };
+      list.appendChild(div);
+    }
+  }
+
+  function renderPhoto(kind, url) {
+    const img = kind === "profile" ? $("img_profile") : $("img_cover");
+    if (url) {
+      img.src = url;
+      img.classList.remove("hide");
+    } else {
+      img.src = "";
+      img.classList.add("hide");
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function escapeAttr(s) {
+    return escapeHtml(s).replace(/"/g, "&quot;");
+  }
+
+  // -----------------------
+  // Photo upload flow
+  // -----------------------
+  async function uploadPhoto(kind /* profile_photo | cover_photo */, file) {
+    if (!file) throw new Error("No file selected");
+    const ct = file.type || "application/octet-stream";
+    const size = file.size || 0;
+
+    // 1) presign
+    const presign = await httpJson("POST", "/v1/profile/photos/presign", {
+      kind,
+      content_type: ct,
+      size_bytes: size,
+      filename: file.name || null
+    });
+
+    // 2) PUT to S3 with required headers
+    const putRes = await fetch(presign.upload_url, {
+      method: "PUT",
+      headers: presign.headers || { "Content-Type": ct },
+      body: file
+    });
+    if (!putRes.ok) {
+      const t = await putRes.text();
+      throw new Error(`S3 upload failed: ${putRes.status} ${putRes.statusText} ${t}`);
+    }
+
+    // 3) commit
+    const prof = await httpJson("POST", "/v1/profile/photos/commit", {
+      kind,
+      s3_key: presign.s3_key
+    });
+
+    return prof;
+  }
+
+  // -----------------------
+  // Audit
+  // -----------------------
+  function fmtTs(ms) {
+    try { return new Date(ms).toLocaleString(); } catch { return String(ms); }
+  }
+
+  async function refreshAudit() {
+    try {
+      setStatus($("auditStatus"), "Loading audit…", true);
+      const events = await httpJson("GET", "/v1/profile/audit?limit=30");
+      renderAudit(events || []);
+      setStatus($("auditStatus"), `Loaded ${events.length}`, true);
+    } catch (err) {
+      setStatus($("auditStatus"), err.message, false);
+    }
+  }
+
+  function renderAudit(events) {
+    const list = $("auditList");
+    list.innerHTML = "";
+    if (!events || !events.length) {
+      list.innerHTML = `<div class="muted">No audit events yet.</div>`;
+      return;
+    }
+    for (const e of events) {
+      const div = document.createElement("div");
+      div.className = "auditItem";
+      div.innerHTML = `
+        <div class="auditTop">
+          <span class="pill">${escapeHtml(e.event || "EVENT")}</span>
+          <span class="field">${escapeHtml(e.field || "")}</span>
+          <span class="ts">${escapeHtml(fmtTs(e.ts_ms))}</span>
+        </div>
+        <div class="muted" style="margin-top:8px;">
+          <div><span class="mono">reason</span>: ${escapeHtml(e.reason || "")}</div>
+          <div><span class="mono">actor</span>: ${escapeHtml(e.actor_user_id || "")} &nbsp; <span class="mono">ip</span>: ${escapeHtml(e.ip || "")}</div>
+          <details style="margin-top:8px;">
+            <summary class="muted">old/new</summary>
+            <pre class="mono" style="white-space:pre-wrap; margin:8px 0 0;">old: ${escapeHtml(JSON.stringify(e.old_value, null, 2))}\nnew: ${escapeHtml(JSON.stringify(e.new_value, null, 2))}</pre>
+          </details>
+        </div>
+      `;
+      list.appendChild(div);
+    }
+  }
+
+  // -----------------------
+  // Actions / wiring
+  // -----------------------
+  async function loadProfile() {
+    try {
+      setStatus($("globalStatus"), "Loading…", true);
+      const prof = await httpJson("GET", "/v1/profile");
+      fillFormFromProfile(prof || {});
+      setStatus($("globalStatus"), "Loaded.", true);
+      toast("Profile loaded", true);
+      await refreshAudit();
+    } catch (err) {
+      setStatus($("globalStatus"), err.message, false);
+      toast(err.message, false);
+    }
+  }
+
+  async function savePatch() {
+    try {
+      setStatus($("profileStatus"), "Saving (PATCH)…", true);
+      const patch = formToProfilePatch();
+      if (!Object.keys(patch).length) throw new Error("Nothing to PATCH (fill at least one field).");
+      const prof = await httpJson("PATCH", "/v1/profile", patch);
+      fillFormFromProfile(prof || {});
+      setStatus($("profileStatus"), "Saved (PATCH).", true);
+      toast("Saved (PATCH)", true);
+      await refreshAudit();
+    } catch (err) {
+      setStatus($("profileStatus"), err.message, false);
+      toast(err.message, false);
+    }
+  }
+
+  async function savePut() {
+    try {
+      setStatus($("profileStatus"), "Saving (PUT)…", true);
+      const put = formToProfilePut();
+      const prof = await httpJson("PUT", "/v1/profile", put);
+      fillFormFromProfile(prof || {});
+      setStatus($("profileStatus"), "Saved (PUT).", true);
+      toast("Saved (PUT)", true);
+      await refreshAudit();
+    } catch (err) {
+      setStatus($("profileStatus"), err.message, false);
+      toast(err.message, false);
+    }
+  }
+
+  async function addLang() {
+    try {
+      const name = $("lang_name").value.trim();
+      const level = $("lang_level").value;
+      if (!name) throw new Error("Language is required");
+      setStatus($("langStatus"), "Saving…", true);
+      const prof = await httpJson("POST", "/v1/profile/languages", { language: name, level });
+      renderLanguages(prof.languages || []);
+      setStatus($("langStatus"), "Saved.", true);
+      toast("Language saved", true);
+      await refreshAudit();
+    } catch (err) {
+      setStatus($("langStatus"), err.message, false);
+      toast(err.message, false);
+    }
+  }
+
+  async function upload(kind) {
+    const fileEl = kind === "profile_photo" ? $("file_profile") : $("file_cover");
+    const statusEl = $("langStatus"); // reuse area near languages
+    try {
+      setStatus(statusEl, `Uploading ${kind}…`, true);
+      const file = fileEl.files && fileEl.files[0] ? fileEl.files[0] : null;
+      const prof = await uploadPhoto(kind, file);
+      fillFormFromProfile(prof || {});
+      setStatus(statusEl, `Uploaded ${kind}.`, true);
+      toast(`${kind} updated`, true);
+      await refreshAudit();
+    } catch (err) {
+      setStatus(statusEl, err.message, false);
+      toast(err.message, false);
+    }
+  }
+
+  async function clearFieldPrompt() {
+    // Uses /v1/profile/clear
+    const fields = [
+      "display_name","first_name","middle_name","last_name","title","description","birthday",
+      "location","mailing_address","profile_photo","cover_photo","displayed_email",
+      "displayed_telephone_number","languages","gender"
+    ];
+    const choice = prompt("Enter field to clear:\n\n" + fields.join(", "));
+    if (!choice) return;
+    const field = choice.trim();
+    if (!fields.includes(field)) {
+      toast("Invalid field name", false);
+      return;
+    }
+    if (!confirm(`Clear field "${field}"?`)) return;
+
+    try {
+      setStatus($("profileStatus"), `Clearing ${field}…`, true);
+      const prof = await httpJson("POST", "/v1/profile/clear", { field });
+      fillFormFromProfile(prof || {});
+      setStatus($("profileStatus"), `Cleared ${field}.`, true);
+      toast(`Cleared ${field}`, true);
+      await refreshAudit();
+    } catch (err) {
+      setStatus($("profileStatus"), err.message, false);
+      toast(err.message, false);
+    }
+  }
+
+  // Wire buttons
+  $("btnLoad").onclick = loadProfile;
+  $("btnReset").onclick = () => { clearForm(); setStatus($("globalStatus"), "Form reset.", true); };
+  $("btnPatch").onclick = savePatch;
+  $("btnPut").onclick = savePut;
+  $("btnAddLang").onclick = addLang;
+  $("btnUploadProfile").onclick = () => upload("profile_photo");
+  $("btnUploadCover").onclick = () => upload("cover_photo");
+  $("btnLoadAudit").onclick = refreshAudit;
+  $("btnClearField").onclick = clearFieldPrompt;
+
+  // Previews for selected files
+  $("file_profile").addEventListener("change", () => {
+    const f = $("file_profile").files && $("file_profile").files[0];
+    if (!f) return;
+    const url = URL.createObjectURL(f);
+    $("img_profile").src = url;
+    $("img_profile").classList.remove("hide");
+  });
+  $("file_cover").addEventListener("change", () => {
+    const f = $("file_cover").files && $("file_cover").files[0];
+    if (!f) return;
+    const url = URL.createObjectURL(f);
+    $("img_cover").src = url;
+    $("img_cover").classList.remove("hide");
+  });
+
+  // Initial UI
+  clearForm();
+  setStatus($("globalStatus"), "Ready.", true);
+</script>
+</body>
+</html>
