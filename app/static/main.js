@@ -1,8 +1,10 @@
 // Optional WebSocket fanout (set window.WS_URL = "wss://.../prod")
 const WS_URL = window.WS_URL || null;
 
-
-
+let stripe = null;
+let stripeElements = null;
+let stripeCard = null;
+let lastPendingSetupIntentId = null;
 
 let toastSse = null;
 
@@ -247,6 +249,12 @@ function fmtTs(ts) {
   try { return new Date(ts*1000).toLocaleString(); } catch(e) { return String(ts); }
 }
 
+function fmtMoney(cents, currency="usd") {
+  const sign = cents < 0 ? "-" : "";
+  const v = Math.abs(cents) / 100.0;
+  return sign + v.toFixed(2) + " " + currency.toUpperCase();
+}
+
 function renderAlertRow(a) {
   const row = document.createElement("button");
   row.type = "button";
@@ -269,6 +277,305 @@ function renderAlertRow(a) {
     }
   };
   return row;
+}
+
+function setBillingStatus(msg) {
+  const el = document.getElementById("billingStatus");
+  if (el) el.textContent = msg || "";
+}
+
+async function initStripeBilling() {
+  if (stripe) return;
+  const cfg = await apiGet("/api/billing/config");
+  stripe = Stripe(cfg.publishable_key);
+  stripeElements = stripe.elements();
+  stripeCard = stripeElements.create("card");
+  stripeCard.mount("#card-element");
+}
+
+function showBillingPane(name) {
+  document.querySelectorAll(".pane").forEach(p => p.classList.add("hidden"));
+  const el = document.getElementById("pane_" + name);
+  if (el) el.classList.remove("hidden");
+  if (name === "list_methods") {
+    loadBillingPaymentMethods();
+  }
+}
+
+async function loadBillingSettings() {
+  const res = await apiGet("/api/billing/settings");
+  const chk = document.getElementById("autopay");
+  if (chk) chk.checked = !!res.autopay_enabled;
+}
+
+async function loadBillingBalance() {
+  const b = await apiGet("/api/billing/balance");
+  const currency = b.currency || "usd";
+  document.getElementById("due_settled").innerText = fmtMoney(b.due_settled_cents || 0, currency);
+  document.getElementById("due_all").innerText = fmtMoney(b.due_if_all_settles_cents || 0, currency);
+  document.getElementById("owed_pending").innerText = fmtMoney(b.owed_pending_cents || 0, currency);
+  document.getElementById("owed_settled").innerText = fmtMoney(b.owed_settled_cents || 0, currency);
+  document.getElementById("pay_pending").innerText = fmtMoney(b.payments_pending_cents || 0, currency);
+  document.getElementById("pay_settled").innerText = fmtMoney(b.payments_settled_cents || 0, currency);
+}
+
+async function loadBillingPaymentMethods() {
+  const wrap = document.getElementById("methods");
+  wrap.innerHTML = "";
+  const list = await apiGet("/api/billing/payment-methods");
+  if (!list || list.length === 0) {
+    wrap.innerHTML = "<div class=\"muted\">No payment methods yet.</div>";
+    return;
+  }
+
+  list.forEach(pm => {
+    const div = document.createElement("div");
+    div.className = "item";
+    div.innerHTML = `
+      <div class="row">
+        <div class="mono">${escapeHtml(pm.label || pm.payment_method_id)}</div>
+        <div class="muted">(${escapeHtml(pm.method_type)})</div>
+        <div class="right">
+          <button type="button" data-action="set-default" data-pm="${pm.payment_method_id}">Set default</button>
+          <button type="button" class="danger" data-action="remove" data-pm="${pm.payment_method_id}">Remove</button>
+        </div>
+      </div>
+      <div class="row">
+        <div class="muted">Priority:</div>
+        <input id="prio_${pm.payment_method_id}" value="${pm.priority}" style="width:90px"/>
+        <button type="button" data-action="priority" data-pm="${pm.payment_method_id}">Save priority</button>
+        <span id="pm_msg_${pm.payment_method_id}" class="muted"></span>
+      </div>
+    `;
+    wrap.appendChild(div);
+  });
+
+  wrap.querySelectorAll("button[data-action]").forEach(btn => {
+    const action = btn.getAttribute("data-action");
+    const pm = btn.getAttribute("data-pm");
+    if (!pm) return;
+    if (action === "priority") {
+      btn.onclick = () => updateBillingPriority(pm);
+    } else if (action === "set-default") {
+      btn.onclick = () => setBillingDefault(pm);
+    } else if (action === "remove") {
+      btn.onclick = () => removeBillingPM(pm);
+    }
+  });
+}
+
+async function updateBillingPriority(pm) {
+  try {
+    const val = parseInt(document.getElementById("prio_" + pm).value, 10);
+    await apiPost("/api/billing/payment-methods/priority", { payment_method_id: pm, priority: val });
+    document.getElementById("pm_msg_" + pm).innerText = "Priority saved";
+  } catch (e) {
+    document.getElementById("pm_msg_" + pm).innerText = "Error: " + String(e);
+  }
+}
+
+async function setBillingDefault(pm) {
+  try {
+    await apiPost("/api/billing/payment-methods/default", { payment_method_id: pm });
+    document.getElementById("pm_msg_" + pm).innerText = "Default set";
+  } catch (e) {
+    document.getElementById("pm_msg_" + pm).innerText = "Error: " + String(e);
+  }
+}
+
+async function removeBillingPM(pm) {
+  try {
+    await api("/api/billing/payment-methods/" + pm, { method: "DELETE" });
+    await loadBillingPaymentMethods();
+  } catch (e) {
+    alert("Remove failed: " + String(e));
+  }
+}
+
+async function addBillingCard() {
+  document.getElementById("add_card_result").innerText = "";
+  try {
+    const si = await apiPost("/api/billing/setup-intent/card", {});
+    const res = await stripe.confirmCardSetup(si.client_secret, { payment_method: { card: stripeCard } });
+    if (res.error) throw new Error(res.error.message);
+
+    document.getElementById("add_card_result").innerText = "Saved. (Will appear after webhook)";
+    setTimeout(refreshBillingAll, 800);
+  } catch (e) {
+    document.getElementById("add_card_result").innerText = "Error: " + String(e);
+  }
+}
+
+async function addBillingBankAccount() {
+  document.getElementById("add_bank_result").innerText = "";
+  document.getElementById("bank_next").innerText = "";
+  try {
+    const name = document.getElementById("bank_name").value || "Customer";
+    const email = document.getElementById("bank_email").value || undefined;
+
+    const si = await apiPost("/api/billing/setup-intent/us-bank", {});
+
+    const collected = await stripe.collectBankAccountForSetup({
+      clientSecret: si.client_secret,
+      params: {
+        payment_method_type: "us_bank_account",
+        payment_method_data: {
+          billing_details: { name, email },
+        },
+      },
+    });
+    if (collected.error) throw new Error(collected.error.message);
+
+    const confirmed = await stripe.confirmUsBankAccountSetup(si.client_secret);
+    if (confirmed.error) throw new Error(confirmed.error.message);
+
+    const setupIntent = confirmed.setupIntent;
+    document.getElementById("add_bank_result").innerText = "Submitted. Status: " + setupIntent.status;
+
+    if (setupIntent.status === "requires_action" &&
+        setupIntent.next_action &&
+        setupIntent.next_action.type === "verify_with_microdeposits") {
+      lastPendingSetupIntentId = setupIntent.id;
+      document.getElementById("bank_next").innerHTML =
+        "Microdeposits required. SetupIntent: <code>" + setupIntent.id + "</code>. " +
+        "Go to “Verify microdeposits” tab after deposits arrive.";
+      document.getElementById("verify_si").value = setupIntent.id;
+      showBillingPane("verify_bank");
+    } else {
+      document.getElementById("bank_next").innerText = "If it succeeded, it will appear after webhook.";
+      setTimeout(refreshBillingAll, 800);
+    }
+  } catch (e) {
+    document.getElementById("add_bank_result").innerText = "Error: " + String(e);
+  }
+}
+
+function useBillingPendingSetupIntent() {
+  if (lastPendingSetupIntentId) {
+    document.getElementById("verify_si").value = lastPendingSetupIntentId;
+  } else {
+    alert("No pending SetupIntent stored in this browser session.");
+  }
+}
+
+async function verifyBillingByAmounts() {
+  document.getElementById("verify_result").innerText = "";
+  try {
+    const setup_intent_id = document.getElementById("verify_si").value.trim();
+    const a1 = parseInt(document.getElementById("amt1").value.trim(), 10);
+    const a2 = parseInt(document.getElementById("amt2").value.trim(), 10);
+    if (!setup_intent_id) throw new Error("Missing setup_intent_id");
+    if (!Number.isFinite(a1) || !Number.isFinite(a2)) throw new Error("Enter both amounts (cents)");
+
+    const res = await apiPost("/api/billing/us-bank/verify-microdeposits", {
+      setup_intent_id,
+      amounts: [a1, a2],
+    });
+
+    document.getElementById("verify_result").innerText = "Verify result: " + res.status + " (PM will appear after webhook if succeeded)";
+    setTimeout(refreshBillingAll, 800);
+  } catch (e) {
+    document.getElementById("verify_result").innerText = "Error: " + String(e);
+  }
+}
+
+async function verifyBillingByDescriptor() {
+  document.getElementById("verify_result").innerText = "";
+  try {
+    const setup_intent_id = document.getElementById("verify_si").value.trim();
+    const descriptor_code = document.getElementById("desc").value.trim();
+    if (!setup_intent_id) throw new Error("Missing setup_intent_id");
+    if (!descriptor_code) throw new Error("Missing descriptor code");
+
+    const res = await apiPost("/api/billing/us-bank/verify-microdeposits", {
+      setup_intent_id,
+      descriptor_code,
+    });
+
+    document.getElementById("verify_result").innerText = "Verify result: " + res.status + " (PM will appear after webhook if succeeded)";
+    setTimeout(refreshBillingAll, 800);
+  } catch (e) {
+    document.getElementById("verify_result").innerText = "Error: " + String(e);
+  }
+}
+
+async function setBillingAutopay() {
+  try {
+    const enabled = document.getElementById("autopay").checked;
+    await apiPost("/api/billing/autopay", { enabled });
+  } catch (e) {
+    alert("Autopay update failed: " + String(e));
+  }
+}
+
+async function payBillingSettledBalance() {
+  document.getElementById("pay_result").innerText = "";
+  try {
+    const amtTxt = document.getElementById("pay_amount").value.trim();
+    const amount_cents = amtTxt ? parseInt(amtTxt, 10) : null;
+
+    const payload = {};
+    if (amount_cents) payload.amount_cents = amount_cents;
+
+    const res = await apiPost("/api/billing/pay-balance", payload);
+    document.getElementById("pay_result").innerText = "PI status: " + res.status + " (" + (res.payment_intent_id || "") + ")";
+    setTimeout(refreshBillingAll, 800);
+  } catch (e) {
+    document.getElementById("pay_result").innerText = "Error: " + String(e);
+  }
+}
+
+async function loadBillingLedger() {
+  const wrap = document.getElementById("ledger");
+  wrap.innerHTML = "";
+  try {
+    const limitTxt = document.getElementById("ledger_limit").value.trim();
+    const limit = limitTxt ? parseInt(limitTxt, 10) : 50;
+    const res = await apiGet("/api/billing/ledger?limit=" + encodeURIComponent(limit));
+    const items = res.items || [];
+
+    for (const it of items) {
+      const div = document.createElement("div");
+      div.className = "item";
+
+      let pill = "<span class=\"pill\">" + (it.state || "") + "</span>";
+      if (it.state === "settled") pill = "<span class=\"pill ok\">settled</span>";
+      if (it.state === "pending") pill = "<span class=\"pill warn\">pending</span>";
+      if (it.state === "reversed") pill = "<span class=\"pill bad\">reversed</span>";
+
+      div.innerHTML = `
+        <div class="row">
+          ${pill}
+          <div class="muted">${new Date((it.ts || 0) * 1000).toISOString()}</div>
+          <div class="mono">${escapeHtml(it.type)}</div>
+          <div class="mono">${escapeHtml(it.reason || "")}</div>
+          <div class="right mono">${it.amount_cents}</div>
+        </div>
+        <div class="muted mono w100">
+          ${it.stripe_payment_intent_id ? ("pi=" + escapeHtml(it.stripe_payment_intent_id) + " ") : ""}
+          ${it.stripe_charge_id ? ("ch=" + escapeHtml(it.stripe_charge_id) + " ") : ""}
+          ${it.entry_id ? ("entry=" + escapeHtml(it.entry_id)) : ""}
+        </div>
+      `;
+      wrap.appendChild(div);
+    }
+
+    if (items.length === 0) wrap.innerHTML = "<div class=\"muted\">No ledger entries yet.</div>";
+  } catch (e) {
+    wrap.innerHTML = "<div class=\"muted\">Error loading ledger: " + String(e) + "</div>";
+  }
+}
+
+async function refreshBillingAll() {
+  try {
+    setBillingStatus("Refreshing billing…");
+    await ensureUiSession();
+    await initStripeBilling();
+    await Promise.all([loadBillingBalance(), loadBillingPaymentMethods(), loadBillingSettings(), loadBillingLedger()]);
+    setBillingStatus("Ready.");
+  } catch (e) {
+    setBillingStatus(String(e));
+  }
 }
 
 /* ===================== session start ===================== */
@@ -1554,6 +1861,20 @@ document.getElementById("smsAddBtn").onclick = async () => { await ensureUiSessi
 
 document.getElementById("emailRefreshBtn").onclick = async () => { await ensureUiSession(); await refreshEmailDevices(); };
 document.getElementById("emailAddBtn").onclick = async () => { await ensureUiSession(); openEmailAddModal(); };
+
+document.getElementById("billingRefreshBtn").onclick = refreshBillingAll;
+document.getElementById("paySettledBalanceBtn").onclick = payBillingSettledBalance;
+document.getElementById("autopay").onchange = setBillingAutopay;
+document.getElementById("paneAddCardBtn").onclick = () => showBillingPane("add_card");
+document.getElementById("paneAddBankBtn").onclick = () => showBillingPane("add_bank");
+document.getElementById("paneVerifyBankBtn").onclick = () => showBillingPane("verify_bank");
+document.getElementById("paneListMethodsBtn").onclick = () => showBillingPane("list_methods");
+document.getElementById("addCardBtn").onclick = addBillingCard;
+document.getElementById("addBankAccountBtn").onclick = addBillingBankAccount;
+document.getElementById("usePendingSetupIntentBtn").onclick = useBillingPendingSetupIntent;
+document.getElementById("verifyByAmountsBtn").onclick = verifyBillingByAmounts;
+document.getElementById("verifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
+document.getElementById("loadLedgerBtn").onclick = loadBillingLedger;
 
 /* ===================== boot ===================== */
 if (!accessToken()) { openTokenModal(); } else { refreshAll(); }
