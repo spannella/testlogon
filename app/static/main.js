@@ -227,12 +227,18 @@ async function apiPublic(path, { method = "GET", body = null } = {}) {
   const txt = await res.text();
   if (!res.ok) throw new Error(res.status + ": " + txt);
   return txt ? JSON.parse(txt) : {};
+}
+
 function apiPatch(path, body, { includeSession = true } = {}) {
   return api(path, { method: "PATCH", body, includeSession });
 }
 
 function apiPut(path, body, { includeSession = true } = {}) {
   return api(path, { method: "PUT", body, includeSession });
+}
+
+function apiDelete(path, { includeSession = true } = {}) {
+  return api(path, { method: "DELETE", includeSession });
 }
 
 function parseHttpError(errStr){
@@ -2381,6 +2387,7 @@ async function refreshAll() {
       refreshPushUI(),
       refreshAlerts(),
       refreshProfile(),
+      refreshAddresses(),
       billingRefreshAll(),
     ]);
     await pollToastsOnce();
@@ -2474,6 +2481,8 @@ function openConfirmSmsModal(sentTo, challenge_id) {
 
 /* ===================== Profile ===================== */
 let profileLanguages = [];
+let addressBook = [];
+let selectedAddressId = null;
 
 function setProfileStatus(msg) {
   const el = document.getElementById("profileStatus");
@@ -2500,6 +2509,150 @@ function setInputValue(id, value) {
   const el = document.getElementById(id);
   if (!el) return;
   el.value = value || "";
+}
+
+function setAddressStatus(msg) {
+  const el = document.getElementById("addressStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function setAddressForm(address) {
+  const addr = address || {};
+  const postal = String(addr.postal_code || "");
+  const zip5 = postal.includes("-") ? postal.split("-")[0] : postal.slice(0, 5);
+  const zip4 = postal.includes("-") ? postal.split("-")[1] : postal.slice(5, 9);
+  selectedAddressId = addr.address_id || null;
+  setInputValue("addressName", addr.name);
+  setInputValue("addressLabel", addr.label);
+  setInputValue("addressLine1", addr.line1);
+  setInputValue("addressLine2", addr.line2);
+  setInputValue("addressCity", addr.city);
+  setInputValue("addressState", addr.state);
+  setInputValue("addressZip5", zip5 || "");
+  setInputValue("addressZip4", zip4 || "");
+  setInputValue("addressCountry", addr.country || "US");
+  setInputValue("addressNotes", addr.notes);
+}
+
+function clearAddressForm() {
+  selectedAddressId = null;
+  setAddressForm({});
+}
+
+function buildAddressPayload() {
+  const zip5 = readInputOrNull("addressZip5");
+  const zip4 = readInputOrNull("addressZip4");
+  const postalCode = zip5 ? (zip4 ? `${zip5}-${zip4}` : zip5) : null;
+  return {
+    name: readInputOrNull("addressName"),
+    label: readInputOrNull("addressLabel"),
+    line1: readInputOrNull("addressLine1"),
+    line2: readInputOrNull("addressLine2"),
+    city: readInputOrNull("addressCity"),
+    state: readInputOrNull("addressState"),
+    postal_code: postalCode,
+    country: readInputOrNull("addressCountry"),
+    notes: readInputOrNull("addressNotes"),
+  };
+}
+
+function renderAddressList(addresses) {
+  const el = document.getElementById("addressList");
+  if (!el) return;
+  el.innerHTML = "";
+  (addresses || []).forEach((addr) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    const label = addr.label || addr.name || "Saved address";
+    const meta = [
+      addr.line1,
+      addr.line2,
+      [addr.city, addr.state].filter(Boolean).join(", "),
+      addr.postal_code,
+      addr.country,
+    ].filter(Boolean).join(" · ");
+    const primaryBadge = addr.is_primary_mailing
+      ? `<span class="pill" style="font-size:11px;">Primary</span>`
+      : "";
+    row.innerHTML = `
+      <div class="grow">
+        <div><b>${escapeHtml(label)}</b> ${primaryBadge}</div>
+        <div class="muted">${escapeHtml(meta)}</div>
+      </div>
+      <div class="row-inline">
+        <button data-action="edit" data-id="${escapeHtml(addr.address_id)}">Edit</button>
+        <button data-action="primary" data-id="${escapeHtml(addr.address_id)}">Set primary</button>
+        <button class="danger" data-action="delete" data-id="${escapeHtml(addr.address_id)}">Delete</button>
+      </div>
+    `;
+    row.querySelectorAll("button").forEach((btn) => {
+      btn.onclick = async () => {
+        const action = btn.getAttribute("data-action");
+        const id = btn.getAttribute("data-id");
+        if (action === "edit") {
+          setAddressForm(addr);
+          setAddressStatus("Editing address " + id);
+          return;
+        }
+        if (action === "primary") {
+          try {
+            setAddressStatus("Setting primary...");
+            await ensureUiSession();
+            await apiPut("/ui/addresses/primary", { address_id: id });
+            await refreshAddresses();
+            setAddressStatus("Primary address updated.");
+          } catch (e) {
+            setAddressStatus(String(e));
+          }
+          return;
+        }
+        if (action === "delete") {
+          if (!confirm("Delete this address?")) return;
+          try {
+            setAddressStatus("Deleting...");
+            await ensureUiSession();
+            await apiDelete(`/ui/addresses/${id}`);
+            if (selectedAddressId === id) clearAddressForm();
+            await refreshAddresses();
+            setAddressStatus("Address deleted.");
+          } catch (e) {
+            setAddressStatus(String(e));
+          }
+        }
+      };
+    });
+    el.appendChild(row);
+  });
+}
+
+async function refreshAddresses() {
+  await ensureUiSession();
+  const res = await apiGet("/ui/addresses");
+  addressBook = Array.isArray(res) ? res : [];
+  renderAddressList(addressBook);
+}
+
+async function searchAddressBook(query) {
+  await ensureUiSession();
+  if (!query) {
+    await refreshAddresses();
+    return;
+  }
+  const res = await apiPost("/ui/addresses/search", { query });
+  renderAddressList(res.matches || []);
+}
+
+async function saveAddress() {
+  await ensureUiSession();
+  const payload = buildAddressPayload();
+  if (selectedAddressId) {
+    const res = await apiPatch(`/ui/addresses/${selectedAddressId}`, payload);
+    setAddressForm(res);
+  } else {
+    const res = await apiPost("/ui/addresses", payload);
+    setAddressForm(res);
+  }
+  await refreshAddresses();
 }
 
 function renderProfileLanguages() {
@@ -3084,6 +3237,38 @@ document.getElementById("profileAuditRefreshBtn").onclick = async () => {
     setProfileAuditStatus("");
   } catch (e) {
     setProfileAuditStatus(String(e));
+  }
+};
+
+document.getElementById("addressRefreshBtn").onclick = async () => {
+  try {
+    setAddressStatus("Refreshing...");
+    await refreshAddresses();
+    setAddressStatus("Loaded.");
+  } catch (e) {
+    setAddressStatus(String(e));
+  }
+};
+document.getElementById("addressSaveBtn").onclick = async () => {
+  try {
+    setAddressStatus("Saving...");
+    await saveAddress();
+    setAddressStatus("Saved.");
+  } catch (e) {
+    setAddressStatus(String(e));
+  }
+};
+document.getElementById("addressClearBtn").onclick = () => {
+  clearAddressForm();
+  setAddressStatus("");
+};
+document.getElementById("addressSearchBtn").onclick = async () => {
+  try {
+    setAddressStatus("Searching...");
+    await searchAddressBook(readInput("addressSearchInput"));
+    setAddressStatus("");
+  } catch (e) {
+    setAddressStatus(String(e));
   }
 };
 
