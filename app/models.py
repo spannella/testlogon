@@ -142,3 +142,42 @@ class PushRegisterReq(BaseModel):
 
 class PushRevokeReq(BaseModel):
     device_id: str
+
+class BillingCheckoutReq(BaseModel):
+    amount_cents: int
+    currency: Optional[str] = None
+    description: Optional[str] = None
+
+class PaymentMethodOut(BaseModel):
+    payment_method_id: str
+    method_type: str
+    label: Optional[str] = None
+    brand: Optional[str] = None
+    last4: Optional[str] = None
+    exp_month: Optional[int] = None
+    exp_year: Optional[int] = None
+    priority: int
+
+class SetPriorityReq(BaseModel):
+    payment_method_id: str
+    priority: int = Field(ge=0, le=100000)
+
+class SetDefaultReq(BaseModel):
+    payment_method_id: str
+
+class SetAutopayReq(BaseModel):
+    enabled: bool
+
+class PayBalanceReq(BaseModel):
+    amount_cents: Optional[int] = Field(default=None, ge=1)
+    idempotency_key: Optional[str] = None
+
+class VerifyMicrodepositsReq(BaseModel):
+    setup_intent_id: str
+    amounts: Optional[List[int]] = None
+    descriptor_code: Optional[str] = None
+
+class AddChargeReq(BaseModel):
+    amount_cents: int = Field(ge=1)
+    state: str = Field(pattern="^(pending|settled)$")
+    reason: str = "usage"
