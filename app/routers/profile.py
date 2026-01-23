@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import importlib.util
+
 from fastapi import APIRouter, Depends, HTTPException, File, Request, UploadFile
 
 from app.models import ProfilePatchReq, ProfilePutReq
@@ -9,11 +11,7 @@ from app.services.sessions import require_ui_session
 
 router = APIRouter(prefix="/ui/profile", tags=["profile"])
 
-try:  # pragma: no cover - optional dependency for file uploads
-    import multipart  # type: ignore  # noqa: F401
-    _MULTIPART_AVAILABLE = True
-except Exception:  # pragma: no cover
-    _MULTIPART_AVAILABLE = False
+_MULTIPART_AVAILABLE = importlib.util.find_spec("multipart") is not None
 
 @router.get("")
 async def ui_get_profile(ctx=Depends(require_ui_session)):
