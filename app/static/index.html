@@ -298,6 +298,44 @@
 </div>
 
 <div class="row">
+  <div class="card" style="width:100%">
+    <h3>File Manager</h3>
+    <div class="muted">Browse folders, upload files, and manage downloads.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <input id="filemgrPath" class="mono" placeholder="/path/" style="flex:1;" />
+      <button id="filemgrGoBtn">Go</button>
+      <button id="filemgrUpBtn">Up</button>
+      <button id="filemgrRefreshBtn">Refresh</button>
+    </div>
+    <div class="row-inline" style="margin-top:10px;">
+      <input id="filemgrNewFolder" placeholder="New folder name" />
+      <button id="filemgrCreateFolderBtn">Create folder</button>
+      <input id="filemgrUploadInput" type="file" />
+      <button id="filemgrUploadBtn">Upload</button>
+    </div>
+    <div class="row-inline" style="margin-top:10px;">
+      <input id="filemgrSearch" placeholder="Search prefix" />
+      <button id="filemgrSearchBtn">Search</button>
+      <button id="filemgrClearSearchBtn">Clear</button>
+      <span id="filemgrStatus" class="muted"></span>
+    </div>
+    <div id="filemgrSearchResults" class="list" style="margin-top:10px;"></div>
+    <table id="filemgrTable">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Size</th>
+          <th>Updated</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="row">
   <div class="card">
     <h3>Alert Recipients</h3>
     <div class="section">

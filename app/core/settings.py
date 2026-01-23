@@ -129,5 +129,9 @@ class Settings:
     # Profile
     profile_table_name: str = os.environ.get("PROFILE_TABLE_NAME", "profiles")
 
+    # File manager
+    filemgr_table_name: str = os.environ.get("FILEMGR_TABLE", "")
+    filemgr_bucket: str = os.environ.get("FILEMGR_BUCKET", "")
+
 
 S = Settings()
