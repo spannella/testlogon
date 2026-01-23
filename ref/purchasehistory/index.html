@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Purchase Transactions</title>
+  <style>
+    :root { --bg:#0b0f14; --panel:#121926; --panel2:#0f1622; --text:#e6edf3; --muted:#9aa7b2; --line:#223044; --good:#2bd576; --bad:#ff5a5f; --warn:#ffcc00; --accent:#4aa3ff; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; background:var(--bg); color:var(--text); }
+    header { padding:16px 18px; border-bottom:1px solid var(--line); display:flex; gap:14px; align-items:center; }
+    header h1 { font-size:16px; margin:0; letter-spacing:.2px; color:var(--text); }
+    header .sub { color:var(--muted); font-size:12px; }
+    .wrap { display:grid; grid-template-columns: 360px 1fr; gap:14px; padding:14px; height: calc(100vh - 58px); }
+    .card { background: linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02)); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+    .card .hd { padding:12px 12px 10px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .card .hd h2 { margin:0; font-size:13px; color:var(--text); }
+    .card .bd { padding:12px; }
+    .row { display:flex; gap:10px; align-items:center; }
+    .row > * { flex:1; }
+    label { display:block; font-size:11px; color:var(--muted); margin:0 0 6px; }
+    input, select, textarea {
+      width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--text);
+      padding:10px 10px; border-radius:10px; outline:none; font-size:13px;
+    }
+    textarea { min-height: 86px; resize: vertical; }
+    button {
+      background: rgba(74,163,255,.12);
+      border:1px solid rgba(74,163,255,.35);
+      color: var(--text);
+      padding:10px 12px;
+      border-radius:10px;
+      cursor:pointer;
+      font-size:13px;
+      transition: .15s ease;
+      white-space:nowrap;
+    }
+    button:hover { background: rgba(74,163,255,.18); }
+    button.secondary { background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.12); }
+    button.danger { background: rgba(255,90,95,.12); border-color: rgba(255,90,95,.35); }
+    button.ok { background: rgba(43,213,118,.12); border-color: rgba(43,213,118,.35); }
+    .pill { font-size:11px; padding:4px 8px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
+    .pill.good { color: var(--good); border-color: rgba(43,213,118,.35); background: rgba(43,213,118,.07); }
+    .pill.bad { color: var(--bad); border-color: rgba(255,90,95,.35); background: rgba(255,90,95,.07); }
+    .pill.warn { color: var(--warn); border-color: rgba(255,204,0,.35); background: rgba(255,204,0,.07); }
+    .list { max-height: calc(100vh - 210px); overflow:auto; }
+    .txn {
+      padding:10px 12px;
+      border-bottom:1px solid rgba(34,48,68,.8);
+      cursor:pointer;
+      display:grid;
+      grid-template-columns: 1fr auto;
+      gap:10px;
+    }
+    .txn:hover { background: rgba(255,255,255,.03); }
+    .txn .t { font-size:12px; color:var(--text); }
+    .txn .m { font-size:11px; color:var(--muted); margin-top:3px; }
+    .txn .r { display:flex; align-items:center; gap:8px; }
+    .muted { color:var(--muted); }
+    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+    .grid3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px; }
+    .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+    .kvs { display:grid; grid-template-columns: 160px 1fr; gap:8px; font-size:12px; margin-top:10px; }
+    .kvs .k { color: var(--muted); }
+    .kvs .v { color: var(--text); overflow-wrap:anywhere; }
+    pre {
+      margin:0; padding:10px; border-radius:10px;
+      background: rgba(0,0,0,.25);
+      border:1px solid var(--line);
+      overflow:auto;
+      max-height: 220px;
+      font-size: 12px;
+    }
+    .toast {
+      position: fixed; right: 14px; bottom: 14px;
+      background: rgba(18,25,38,.95);
+      border: 1px solid var(--line);
+      padding: 10px 12px;
+      border-radius: 12px;
+      color: var(--text);
+      min-width: 260px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      display:none;
+    }
+    .toast .t { font-size: 12px; }
+    .toast .s { font-size: 11px; color: var(--muted); margin-top: 4px; }
+    @media (max-width: 980px) {
+      .wrap { grid-template-columns: 1fr; height:auto; }
+      .list { max-height: 40vh; }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Purchase Transactions</h1>
+    <div class="sub">FastAPI + DynamoDB • Bearer token assumed as <span class="muted">user_id</span></div>
+  </div>
+  <div style="margin-left:auto; display:flex; gap:10px; align-items:center;">
+    <span class="pill" id="apiState">API: not set</span>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- LEFT: Auth + Create + List -->
+  <div class="card">
+    <div class="hd">
+      <h2>Connection</h2>
+      <button class="secondary" id="btnPing">Ping</button>
+    </div>
+    <div class="bd">
+      <div class="grid2">
+        <div>
+          <label>API Base URL</label>
+          <input id="apiBase" placeholder="http://127.0.0.1:8000" value="http://127.0.0.1:8000" />
+        </div>
+        <div>
+          <label>Bearer Token (user_id)</label>
+          <input id="token" placeholder="user_123" value="user_123" />
+        </div>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <div class="row">
+        <div>
+          <label>Status Filter</label>
+          <select id="statusFilter">
+            <option value="">(all)</option>
+            <option value="PENDING">PENDING</option>
+            <option value="COMPLETED">COMPLETED</option>
+            <option value="REVERTED">REVERTED</option>
+            <option value="CANCEL_REQUESTED">CANCEL_REQUESTED</option>
+            <option value="CANCELLED">CANCELLED</option>
+            <option value="CANCEL_DENIED">CANCEL_DENIED</option>
+          </select>
+        </div>
+        <div style="flex:0 0 120px;">
+          <label>Limit</label>
+          <input id="limit" type="number" min="1" max="100" value="25" />
+        </div>
+        <div style="flex:0 0 130px;">
+          <label>&nbsp;</label>
+          <button id="btnRefresh">Refresh</button>
+        </div>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <div class="card" style="border-radius:12px;">
+        <div class="hd">
+          <h2>Add Transaction</h2>
+          <span class="pill" id="createHint">POST /transactions</span>
+        </div>
+        <div class="bd">
+          <div class="grid2">
+            <div>
+              <label>Amount</label>
+              <input id="newAmount" type="number" step="0.01" value="19.99" />
+            </div>
+            <div>
+              <label>Currency</label>
+              <input id="newCurrency" value="USD" />
+            </div>
+          </div>
+
+          <div style="height:10px"></div>
+
+          <div class="grid2">
+            <div>
+              <label>Merchant ID (optional)</label>
+              <input id="newMerchant" placeholder="m_9" value="m_9" />
+            </div>
+            <div>
+              <label>External Ref (optional)</label>
+              <input id="newExternal" placeholder="stripe_pi_..." />
+            </div>
+          </div>
+
+          <div style="height:10px"></div>
+
+          <div>
+            <label>Description (optional)</label>
+            <input id="newDesc" placeholder="T-shirt" value="T-shirt" />
+          </div>
+
+          <div style="height:10px"></div>
+
+          <div>
+            <label>Metadata JSON (optional)</label>
+            <textarea id="newMeta" placeholder='{"size":"M","color":"black"}'></textarea>
+          </div>
+
+          <div style="height:10px"></div>
+          <button class="ok" id="btnCreate">Create Transaction</button>
+        </div>
+      </div>
+
+      <div style="height:12px"></div>
+
+      <div class="card" style="border-radius:12px;">
+        <div class="hd">
+          <h2>Transactions</h2>
+          <span class="pill" id="txnCount">0</span>
+        </div>
+        <div class="bd" style="padding:0;">
+          <div class="list" id="txnList"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- RIGHT: Details + actions -->
+  <div class="card">
+    <div class="hd">
+      <h2>Transaction Details</h2>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <span class="pill" id="selStatus">No selection</span>
+        <button class="secondary" id="btnLoadEvents" disabled>Load Events</button>
+      </div>
+    </div>
+    <div class="bd">
+      <div id="noSel" class="muted">Select a transaction on the left.</div>
+
+      <div id="details" style="display:none;">
+        <div class="kvs">
+          <div class="k">txn_id</div><div class="v" id="d_txn"></div>
+          <div class="k">status</div><div class="v" id="d_status"></div>
+          <div class="k">amount</div><div class="v" id="d_money"></div>
+          <div class="k">merchant_id</div><div class="v" id="d_merchant"></div>
+          <div class="k">external_ref</div><div class="v" id="d_external"></div>
+          <div class="k">created_at</div><div class="v" id="d_created"></div>
+          <div class="k">updated_at</div><div class="v" id="d_updated"></div>
+          <div class="k">version</div><div class="v" id="d_version"></div>
+          <div class="k">description</div><div class="v" id="d_desc"></div>
+        </div>
+
+        <div style="height:12px"></div>
+
+        <div class="card" style="border-radius:12px;">
+          <div class="hd"><h2>Actions</h2><span class="pill" id="actHint">Uses your auth as owner</span></div>
+          <div class="bd">
+            <div class="actions">
+              <button class="ok" id="btnComplete">Mark Completed</button>
+              <button class="danger" id="btnRevert">Mark Reverted</button>
+              <button id="btnCancelReq">Request Cancel</button>
+              <button class="ok" id="btnCancelApprove">Approve Cancel</button>
+              <button class="danger" id="btnCancelDeny">Deny Cancel</button>
+            </div>
+
+            <div style="height:12px"></div>
+
+            <div class="grid2">
+              <div>
+                <label>Complete: processor_ref (optional)</label>
+                <input id="completeProcessorRef" placeholder="processor_ref" />
+              </div>
+              <div>
+                <label>Complete: note (optional)</label>
+                <input id="completeNote" placeholder="note" />
+              </div>
+            </div>
+
+            <div style="height:10px"></div>
+
+            <div class="grid2">
+              <div>
+                <label>Revert: reason (optional)</label>
+                <input id="revertReason" placeholder="reason" />
+              </div>
+              <div>
+                <label>Cancel: reason / note (optional)</label>
+                <input id="cancelReason" placeholder="reason or note" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style="height:12px"></div>
+
+        <div class="card" style="border-radius:12px;">
+          <div class="hd"><h2>Shipping</h2><span class="pill">PUT /transactions/{id}/shipping</span></div>
+          <div class="bd">
+            <div class="grid3">
+              <div>
+                <label>Carrier</label>
+                <input id="shipCarrier" placeholder="UPS" />
+              </div>
+              <div>
+                <label>Tracking #</label>
+                <input id="shipTracking" placeholder="1Z..." />
+              </div>
+              <div>
+                <label>Shipped At (ISO)</label>
+                <input id="shipShippedAt" placeholder="2026-01-23T05:00:00Z" />
+              </div>
+            </div>
+
+            <div style="height:10px"></div>
+
+            <div class="grid2">
+              <div>
+                <label>Delivered At (ISO)</label>
+                <input id="shipDeliveredAt" placeholder="2026-01-26T18:10:00Z" />
+              </div>
+              <div>
+                <label>Address JSON (optional)</label>
+                <input id="shipAddress" placeholder='{"line1":"...","city":"..."}' />
+              </div>
+            </div>
+
+            <div style="height:10px"></div>
+            <button id="btnSaveShipping">Save Shipping</button>
+          </div>
+        </div>
+
+        <div style="height:12px"></div>
+
+        <div class="card" style="border-radius:12px;">
+          <div class="hd"><h2>Raw JSON</h2><span class="pill">GET /transactions/{id}</span></div>
+          <div class="bd">
+            <pre id="rawJson">{}</pre>
+          </div>
+        </div>
+
+        <div style="height:12px"></div>
+
+        <div class="card" style="border-radius:12px;">
+          <div class="hd"><h2>Events (Streams Audit)</h2><span class="pill">GET /transactions/{id}/events</span></div>
+          <div class="bd">
+            <pre id="eventsJson">Load events to view stream audit.</pre>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast">
+  <div class="t" id="toastTitle">Notice</div>
+  <div class="s" id="toastSub"></div>
+</div>
+
+<script>
+  // ----------------------------
+  // Tiny helpers
+  // ----------------------------
+  const el = (id) => document.getElementById(id);
+
+  function toast(title, sub="", ms=2600) {
+    el("toastTitle").textContent = title;
+    el("toastSub").textContent = sub;
+    const t = el("toast");
+    t.style.display = "block";
+    clearTimeout(window.__toastTimer);
+    window.__toastTimer = setTimeout(() => t.style.display = "none", ms);
+  }
+
+  function pillForStatus(status) {
+    // matches backend statuses
+    if (status === "COMPLETED") return ["good", status];
+    if (status === "REVERTED" || status === "CANCELLED" || status === "CANCEL_DENIED") return ["bad", status];
+    if (status === "CANCEL_REQUESTED") return ["warn", status];
+    return ["", status || "—"];
+  }
+
+  function apiBase() { return el("apiBase").value.trim().replace(/\/+$/, ""); }
+  function token() { return el("token").value.trim(); }
+
+  function headersJson() {
+    return {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token()}`
+    };
+  }
+
+  async function apiFetch(path, opts = {}) {
+    const url = apiBase() + path;
+    const res = await fetch(url, opts);
+    const text = await res.text();
+    let data = null;
+    try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+    if (!res.ok) {
+      const detail = (data && (data.detail || data.message)) ? (data.detail || data.message) : (res.status + " " + res.statusText);
+      throw new Error(detail);
+    }
+    return data;
+  }
+
+  function parseJsonOrNull(s) {
+    const t = (s || "").trim();
+    if (!t) return null;
+    try { return JSON.parse(t); } catch (e) { throw new Error("Invalid JSON"); }
+  }
+
+  // ----------------------------
+  // State
+  // ----------------------------
+  let selectedTxnId = null;
+  let selectedTxnObj = null;
+
+  // ----------------------------
+  // UI actions
+  // ----------------------------
+  async function ping() {
+    // No /health in backend; just list with limit=1 to validate
+    try {
+      await apiFetch(`/transactions?limit=1`, { headers: headersJson() });
+      el("apiState").textContent = "API: connected";
+      el("apiState").className = "pill good";
+      toast("Connected", apiBase());
+    } catch (e) {
+      el("apiState").textContent = "API: error";
+      el("apiState").className = "pill bad";
+      toast("API error", e.message);
+    }
+  }
+
+  async function refreshList() {
+    const lim = Number(el("limit").value || 25);
+    const st = el("statusFilter").value;
+    const qs = new URLSearchParams();
+    qs.set("limit", String(lim));
+    if (st) qs.set("status", st);
+
+    el("txnList").innerHTML = `<div class="txn"><div class="t">Loading…</div><div class="r"><span class="pill">…</span></div></div>`;
+    try {
+      const items = await apiFetch(`/transactions?${qs.toString()}`, { headers: headersJson() });
+      el("txnCount").textContent = String(items.length);
+      renderList(items);
+    } catch (e) {
+      el("txnList").innerHTML = `<div class="txn"><div class="t">Failed to load</div><div class="r"><span class="pill bad">error</span></div></div>`;
+      toast("List failed", e.message);
+    }
+  }
+
+  function renderList(items) {
+    const list = el("txnList");
+    list.innerHTML = "";
+    if (!items.length) {
+      list.innerHTML = `<div class="txn"><div class="t">No transactions</div><div class="r"><span class="pill">0</span></div></div>`;
+      return;
+    }
+
+    for (const it of items) {
+      const [cls, label] = pillForStatus(it.status);
+      const div = document.createElement("div");
+      div.className = "txn";
+      div.dataset.txn = it.txn_id;
+      div.innerHTML = `
+        <div>
+          <div class="t">${escapeHtml(it.txn_id)}</div>
+          <div class="m">${escapeHtml(it.currency)} ${Number(it.amount).toFixed(2)} • ${escapeHtml(it.created_at)}</div>
+        </div>
+        <div class="r">
+          <span class="pill ${cls}">${escapeHtml(label)}</span>
+        </div>
+      `;
+      div.onclick = () => selectTxn(it.txn_id);
+      list.appendChild(div);
+    }
+  }
+
+  async function selectTxn(txnId) {
+    selectedTxnId = txnId;
+    el("btnLoadEvents").disabled = false;
+    try {
+      const info = await apiFetch(`/transactions/${encodeURIComponent(txnId)}`, { headers: headersJson() });
+      selectedTxnObj = info;
+      renderDetails(info);
+    } catch (e) {
+      toast("Load failed", e.message);
+    }
+  }
+
+  function renderDetails(info) {
+    el("noSel").style.display = "none";
+    el("details").style.display = "block";
+
+    el("d_txn").textContent = info.txn_id || "";
+    el("d_status").textContent = info.status || "";
+    el("d_money").textContent = `${info.currency} ${Number(info.amount).toFixed(2)}`;
+    el("d_merchant").textContent = info.merchant_id || "—";
+    el("d_external").textContent = info.external_ref || "—";
+    el("d_created").textContent = info.created_at || "";
+    el("d_updated").textContent = info.updated_at || "";
+    el("d_version").textContent = String(info.version ?? "");
+    el("d_desc").textContent = info.description || "—";
+
+    const [cls, label] = pillForStatus(info.status);
+    el("selStatus").textContent = label;
+    el("selStatus").className = `pill ${cls}`;
+
+    // shipping fields
+    const sh = info.shipping || {};
+    el("shipCarrier").value = sh.carrier || "";
+    el("shipTracking").value = sh.tracking_number || "";
+    el("shipShippedAt").value = sh.shipped_at || "";
+    el("shipDeliveredAt").value = sh.delivered_at || "";
+    el("shipAddress").value = sh.address ? JSON.stringify(sh.address) : "";
+
+    el("rawJson").textContent = JSON.stringify(info, null, 2);
+    el("eventsJson").textContent = "Load events to view stream audit.";
+  }
+
+  async function createTxn() {
+    const amount = Number(el("newAmount").value);
+    const currency = el("newCurrency").value.trim();
+    const merchant_id = el("newMerchant").value.trim() || null;
+    const external_ref = el("newExternal").value.trim() || null;
+    const description = el("newDesc").value.trim() || null;
+
+    let metadata = null;
+    try { metadata = parseJsonOrNull(el("newMeta").value); } catch (e) { toast("Bad metadata JSON", e.message); return; }
+
+    if (!amount || amount <= 0) { toast("Invalid amount", "Must be > 0"); return; }
+    if (!currency) { toast("Invalid currency", "Required"); return; }
+
+    const body = {
+      money: { amount, currency },
+      merchant_id,
+      external_ref,
+      description,
+      metadata
+    };
+
+    try {
+      const resp = await apiFetch(`/transactions`, {
+        method: "POST",
+        headers: headersJson(),
+        body: JSON.stringify(body),
+      });
+      toast("Created", resp.txn_id);
+      await refreshList();
+      await selectTxn(resp.txn_id);
+    } catch (e) {
+      toast("Create failed", e.message);
+    }
+  }
+
+  async function markCompleted() {
+    if (!selectedTxnId) return;
+    const processor_ref = el("completeProcessorRef").value.trim() || null;
+    const note = el("completeNote").value.trim() || null;
+
+    try {
+      const resp = await apiFetch(`/transactions/${encodeURIComponent(selectedTxnId)}/complete`, {
+        method: "POST",
+        headers: headersJson(),
+        body: JSON.stringify({ processor_ref, note }),
+      });
+      toast("Completed", selectedTxnId);
+      renderDetails(resp);
+      await refreshList();
+    } catch (e) {
+      toast("Complete failed", e.message);
+    }
+  }
+
+  async function markReverted() {
+    if (!selectedTxnId) return;
+    const reason = el("revertReason").value.trim() || null;
+    try {
+      const resp = await apiFetch(`/transactions/${encodeURIComponent(selectedTxnId)}/revert`, {
+        method: "POST",
+        headers: headersJson(),
+        body: JSON.stringify({ reason }),
+      });
+      toast("Reverted", selectedTxnId);
+      renderDetails(resp);
+      await refreshList();
+    } catch (e) {
+      toast("Revert failed", e.message);
+    }
+  }
+
+  async function requestCancel() {
+    if (!selectedTxnId) return;
+    const reason = el("cancelReason").value.trim() || null;
+    try {
+      const resp = await apiFetch(`/transactions/${encodeURIComponent(selectedTxnId)}/cancel/request`, {
+        method: "POST",
+        headers: headersJson(),
+        body: JSON.stringify({ reason }),
+      });
+      toast("Cancel requested", selectedTxnId);
+      renderDetails(resp);
+      await refreshList();
+    } catch (e) {
+      toast("Cancel request failed", e.message);
+    }
+  }
+
+  async function respondCancel(decision) {
+    if (!selectedTxnId) return;
+    const note = el("cancelReason").value.trim() || null;
+    try {
+      const resp = await apiFetch(`/transactions/${encodeURIComponent(selectedTxnId)}/cancel/respond`, {
+        method: "POST",
+        headers: headersJson(),
+        body: JSON.stringify({ decision, note }),
+      });
+      toast(`Cancel ${decision === "APPROVE" ? "approved" : "denied"}`, selectedTxnId);
+      renderDetails(resp);
+      await refreshList();
+    } catch (e) {
+      toast("Cancel respond failed", e.message);
+    }
+  }
+
+  async function saveShipping() {
+    if (!selectedTxnId) return;
+
+    let addr = null;
+    try { addr = parseJsonOrNull(el("shipAddress").value); } catch (e) { toast("Bad address JSON", e.message); return; }
+
+    const shipping = {
+      carrier: el("shipCarrier").value.trim() || null,
+      tracking_number: el("shipTracking").value.trim() || null,
+      shipped_at: el("shipShippedAt").value.trim() || null,
+      delivered_at: el("shipDeliveredAt").value.trim() || null,
+      address: addr
+    };
+
+    // remove nulls
+    for (const k of Object.keys(shipping)) {
+      if (shipping[k] === null) delete shipping[k];
+    }
+
+    try {
+      const resp = await apiFetch(`/transactions/${encodeURIComponent(selectedTxnId)}/shipping`, {
+        method: "PUT",
+        headers: headersJson(),
+        body: JSON.stringify({ shipping }),
+      });
+      toast("Shipping saved", selectedTxnId);
+      renderDetails(resp);
+      await refreshList();
+    } catch (e) {
+      toast("Shipping failed", e.message);
+    }
+  }
+
+  async function loadEvents() {
+    if (!selectedTxnId) return;
+    try {
+      const resp = await apiFetch(`/transactions/${encodeURIComponent(selectedTxnId)}/events?limit=50`, {
+        headers: headersJson(),
+      });
+      el("eventsJson").textContent = JSON.stringify(resp, null, 2);
+      toast("Events loaded", `${resp.events?.length || 0} records`);
+    } catch (e) {
+      toast("Events failed", e.message);
+    }
+  }
+
+  // ----------------------------
+  // Security: minimal HTML escape
+  // ----------------------------
+  function escapeHtml(str) {
+    return String(str || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  // ----------------------------
+  // Wire up UI
+  // ----------------------------
+  el("btnPing").onclick = ping;
+  el("btnRefresh").onclick = refreshList;
+  el("btnCreate").onclick = createTxn;
+
+  el("btnComplete").onclick = markCompleted;
+  el("btnRevert").onclick = markReverted;
+  el("btnCancelReq").onclick = requestCancel;
+  el("btnCancelApprove").onclick = () => respondCancel("APPROVE");
+  el("btnCancelDeny").onclick = () => respondCancel("DENY");
+
+  el("btnSaveShipping").onclick = saveShipping;
+  el("btnLoadEvents").onclick = loadEvents;
+
+  // Auto-load
+  ping().then(refreshList);
+</script>
+</body>
+</html>
