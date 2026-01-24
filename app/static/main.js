@@ -2672,8 +2672,17 @@ function setMsgStatus(id, msg) {
 
 async function msgRequest(path, { method = "GET", body = null } = {}) {
   const uid = msgUserId();
-  if (!uid) throw new Error("Messaging user ID is required.");
-  const headers = { Authorization: `Bearer ${uid}` };
+  const headers = {};
+  if (uid) {
+    headers.Authorization = `Bearer ${uid}`;
+  } else {
+    const tok = accessToken();
+    if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
+    const sid = sessionId();
+    if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+    headers.Authorization = `Bearer ${tok}`;
+    headers["X-SESSION-ID"] = sid;
+  }
   if (body) headers["Content-Type"] = "application/json";
   const res = await fetch(`${msgApiBase()}${path}`, {
     method,

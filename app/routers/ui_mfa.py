@@ -23,6 +23,17 @@ from app.core.time import now_ts
 
 router = APIRouter(prefix="/ui/mfa", tags=["ui-mfa"])
 
+def _challenge_progress(chal: dict, passed_factor: str) -> dict:
+    required = list(chal.get("required_factors") or [])
+    passed = dict(chal.get("passed") or {})
+    passed[passed_factor] = True
+    remaining = [f for f in required if not passed.get(f)]
+    return {
+        "required_factors": required,
+        "passed": passed,
+        "remaining_factors": remaining,
+    }
+
 @router.post("/totp/verify")
 async def ui_totp_verify(req: Request, body: TotpVerifyReq, user_sub: str = Depends(get_authenticated_user_sub)):
     chal = load_challenge_or_401(user_sub, body.challenge_id)
@@ -35,7 +46,7 @@ async def ui_totp_verify(req: Request, body: TotpVerifyReq, user_sub: str = Depe
     mark_factor_passed(user_sub, body.challenge_id, "totp")
     sid = maybe_finalize(req, user_sub, body.challenge_id)
     audit_event("mfa_totp_verify", user_sub, req, outcome="success", challenge_id=body.challenge_id, device_id=dev)
-    return {"status":"ok","session_id": sid}
+    return {"status":"ok","session_id": sid, **_challenge_progress(chal, "totp")}
 
 @router.post("/sms/begin")
 async def ui_sms_begin(req: Request, body: SmsBeginReq, user_sub: str = Depends(get_authenticated_user_sub)):
@@ -77,7 +88,7 @@ async def ui_sms_verify(req: Request, body: SmsVerifyReq, user_sub: str = Depend
     mark_factor_passed(user_sub, body.challenge_id, "sms")
     sid = maybe_finalize(req, user_sub, body.challenge_id)
     audit_event("mfa_sms_verify", user_sub, req, outcome="success", challenge_id=body.challenge_id)
-    return {"status":"ok","session_id": sid}
+    return {"status":"ok","session_id": sid, **_challenge_progress(chal, "sms")}
 
 @router.post("/email/begin")
 async def ui_email_begin(req: Request, body: EmailBeginReq, user_sub: str = Depends(get_authenticated_user_sub)):
@@ -118,10 +129,18 @@ async def ui_email_verify(req: Request, body: EmailVerifyReq, user_sub: str = De
         T.sessions.update_item(Key={"user_sub": user_sub, "session_id": body.challenge_id}, UpdateExpression="SET email_code_attempts = :n", ExpressionAttributeValues={":n": attempts + 1})
         audit_event("mfa_email_verify", user_sub, req, outcome="failure", challenge_id=body.challenge_id)
         raise HTTPException(401, "Bad email code")
+    try:
+        T.sessions.update_item(
+            Key={"user_sub": user_sub, "session_id": body.challenge_id},
+            UpdateExpression="REMOVE email_code_hash, email_code_sent_at SET email_code_attempts = :z",
+            ExpressionAttributeValues={":z": 0},
+        )
+    except Exception:
+        pass
     mark_factor_passed(user_sub, body.challenge_id, "email")
     sid = maybe_finalize(req, user_sub, body.challenge_id)
     audit_event("mfa_email_verify", user_sub, req, outcome="success", challenge_id=body.challenge_id)
-    return {"status":"ok","session_id": sid}
+    return {"status":"ok","session_id": sid, **_challenge_progress(chal, "email")}
 
 @router.post("/recovery/{factor}")
 async def ui_recovery_factor(req: Request, factor: str, body: RecoveryReq, user_sub: str = Depends(get_authenticated_user_sub)):
@@ -134,4 +153,4 @@ async def ui_recovery_factor(req: Request, factor: str, body: RecoveryReq, user_
     mark_factor_passed(user_sub, body.challenge_id, factor)
     sid = maybe_finalize(req, user_sub, body.challenge_id)
     audit_event("mfa_recovery", user_sub, req, outcome="success", challenge_id=body.challenge_id, factor=factor)
-    return {"status":"ok","session_id": sid}
+    return {"status":"ok","session_id": sid, **_challenge_progress(chal, factor)}
