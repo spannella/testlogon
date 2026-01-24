@@ -10,12 +10,14 @@ from typing import Any, Dict, List, Literal, Optional
 import anyio
 import boto3
 from boto3.dynamodb.conditions import Key
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.auth.deps import extract_bearer_token, get_authenticated_user_sub
 from app.core.aws import ddb
 from app.core.settings import S
+from app.services.sessions import require_ui_session
 
 # -------------------------
 # Config / AWS clients
@@ -71,12 +73,19 @@ def get_current_user_id(authorization: Optional[str] = Header(default=None)) -> 
     Replace with real JWT verification.
     Dev behavior: Authorization: Bearer <user_id>
     """
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Missing Authorization header")
-    parts = authorization.split(" ", 1)
-    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
-        raise HTTPException(status_code=401, detail="Invalid Authorization header")
-    return parts[1].strip()
+    return extract_bearer_token(authorization)
+
+
+async def get_messaging_user_id(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    x_session_id: Optional[str] = Header(default=None, alias="X-SESSION-ID"),
+) -> str:
+    if x_session_id:
+        user_sub = await get_authenticated_user_sub(request)
+        ctx = await require_ui_session(request, user_sub=user_sub, x_session_id=x_session_id)
+        return ctx["user_sub"]
+    return get_current_user_id(authorization)
 
 
 # -------------------------
@@ -415,7 +424,7 @@ def admin_upsert_user(inp: UpsertUserIn):
 def search_contact(
     q: str = Query(..., min_length=1, max_length=64),
     limit: int = Query(10, ge=1, le=50),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_messaging_user_id),
 ):
     token = _norm(q)
     if not token:
@@ -437,7 +446,7 @@ def search_contact(
 # Conversations
 # -------------------------
 @router.post("/conversations", response_model=ConversationOut)
-def start_conversation(inp: StartConversationIn, user_id: str = Depends(get_current_user_id)):
+def start_conversation(inp: StartConversationIn, user_id: str = Depends(get_messaging_user_id)):
     cid = "c_" + new_id()
     created_at = now_ts()
 
@@ -492,7 +501,7 @@ def start_conversation(inp: StartConversationIn, user_id: str = Depends(get_curr
 
 
 @router.post("/conversations/group", response_model=ConversationOut)
-def start_group_conversation(inp: StartGroupConversationIn, user_id: str = Depends(get_current_user_id)):
+def start_group_conversation(inp: StartGroupConversationIn, user_id: str = Depends(get_messaging_user_id)):
     return start_conversation(
         StartConversationIn(
             participant_ids=inp.participant_ids,
@@ -504,7 +513,7 @@ def start_group_conversation(inp: StartGroupConversationIn, user_id: str = Depen
 
 
 @router.post("/conversations/{conversation_id}/accept")
-def accept_conversation(conversation_id: str, user_id: str = Depends(get_current_user_id)):
+def accept_conversation(conversation_id: str, user_id: str = Depends(get_messaging_user_id)):
     part = get_participant_any(user_id, conversation_id)
     if not part:
         raise HTTPException(404, "Not invited")
@@ -525,7 +534,7 @@ def accept_conversation(conversation_id: str, user_id: str = Depends(get_current
 
 
 @router.get("/conversations", response_model=List[ConversationOut])
-def list_conversations(user_id: str = Depends(get_current_user_id)):
+def list_conversations(user_id: str = Depends(get_messaging_user_id)):
     resp = tbl_parts.query(KeyConditionExpression=Key("user_id").eq(user_id), Limit=200)
     parts = resp.get("Items", [])
     out: List[ConversationOut] = []
@@ -556,7 +565,7 @@ def list_conversations(user_id: str = Depends(get_current_user_id)):
 
 
 @router.post("/conversations/{conversation_id}/mute")
-def mute_conversation(conversation_id: str, inp: MuteIn, user_id: str = Depends(get_current_user_id)):
+def mute_conversation(conversation_id: str, inp: MuteIn, user_id: str = Depends(get_messaging_user_id)):
     part = get_participant_any(user_id, conversation_id)
     if not part:
         raise HTTPException(404, "Conversation not found for user")
@@ -569,7 +578,7 @@ def mute_conversation(conversation_id: str, inp: MuteIn, user_id: str = Depends(
 
 
 @router.post("/conversations/{conversation_id}/leave")
-def leave_conversation(conversation_id: str, user_id: str = Depends(get_current_user_id)):
+def leave_conversation(conversation_id: str, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
     ts = now_ts()
 
@@ -590,7 +599,7 @@ def leave_conversation(conversation_id: str, user_id: str = Depends(get_current_
 
 
 @router.delete("/conversations/{conversation_id}")
-def delete_conversation_if_last(conversation_id: str, user_id: str = Depends(get_current_user_id)):
+def delete_conversation_if_last(conversation_id: str, user_id: str = Depends(get_messaging_user_id)):
     resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
     items = resp.get("Items", [])
     active = [x for x in items if x.get("status") == "active"]
@@ -608,7 +617,7 @@ def delete_conversation_if_last(conversation_id: str, user_id: str = Depends(get
 
 
 @router.get("/conversations/{conversation_id}/participants", response_model=List[ParticipantOut])
-def list_participants(conversation_id: str, user_id: str = Depends(get_current_user_id)):
+def list_participants(conversation_id: str, user_id: str = Depends(get_messaging_user_id)):
     part = get_participant_any(user_id, conversation_id)
     if not part:
         raise HTTPException(403, "Not a participant")
@@ -643,7 +652,7 @@ def list_messages(
     conversation_id: str,
     limit: int = Query(50, ge=1, le=200),
     before: Optional[str] = None,
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, conversation_id)
 
@@ -688,7 +697,7 @@ def list_messages(
 
 
 @router.post("/conversations/{conversation_id}/messages", response_model=MessageOut)
-def send_text_message(conversation_id: str, inp: SendTextMessageIn, user_id: str = Depends(get_current_user_id)):
+def send_text_message(conversation_id: str, inp: SendTextMessageIn, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
@@ -729,7 +738,7 @@ def send_text_message(conversation_id: str, inp: SendTextMessageIn, user_id: str
 
 
 @router.post("/conversations/{conversation_id}/images/presign", response_model=PresignOut)
-def presign_image_upload(conversation_id: str, inp: SendImagePresignIn, user_id: str = Depends(get_current_user_id)):
+def presign_image_upload(conversation_id: str, inp: SendImagePresignIn, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
     key = f"{conversation_id}/{user_id}/{now_ts()}_{uuid.uuid4().hex}_{inp.filename}"
     upload_url = s3.generate_presigned_url(
@@ -741,7 +750,7 @@ def presign_image_upload(conversation_id: str, inp: SendImagePresignIn, user_id:
 
 
 @router.post("/conversations/{conversation_id}/messages/image", response_model=MessageOut)
-def create_image_message(conversation_id: str, inp: CreateImageMessageIn, user_id: str = Depends(get_current_user_id)):
+def create_image_message(conversation_id: str, inp: CreateImageMessageIn, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
@@ -787,7 +796,7 @@ def create_image_message(conversation_id: str, inp: CreateImageMessageIn, user_i
 
 
 @router.post("/conversations/{conversation_id}/read")
-def mark_read(conversation_id: str, inp: MarkReadIn, user_id: str = Depends(get_current_user_id)):
+def mark_read(conversation_id: str, inp: MarkReadIn, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
 
     part = get_participant_any(user_id, conversation_id) or {}
@@ -803,7 +812,7 @@ def mark_read(conversation_id: str, inp: MarkReadIn, user_id: str = Depends(get_
 
 
 @router.delete("/conversations/{conversation_id}/messages/{message_id}")
-def delete_message_for_me(conversation_id: str, message_id: str, user_id: str = Depends(get_current_user_id)):
+def delete_message_for_me(conversation_id: str, message_id: str, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
     tbl_msgs.update_item(
         Key={"conversation_id": conversation_id, "message_id": message_id},
@@ -817,7 +826,7 @@ def delete_message_for_me(conversation_id: str, message_id: str, user_id: str = 
 # React to message
 # -------------------------
 @router.post("/conversations/{conversation_id}/messages/{message_id}/reactions")
-def react_to_message(conversation_id: str, message_id: str, inp: ReactIn, user_id: str = Depends(get_current_user_id)):
+def react_to_message(conversation_id: str, message_id: str, inp: ReactIn, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
 
     expr_names = {"#e": inp.emoji}
@@ -860,7 +869,7 @@ def react_to_message(conversation_id: str, message_id: str, inp: ReactIn, user_i
 # Edit message (+ edit history)
 # -------------------------
 @router.patch("/conversations/{conversation_id}/messages/{message_id}", response_model=MessageOut)
-def edit_message(conversation_id: str, message_id: str, inp: EditMessageIn, user_id: str = Depends(get_current_user_id)):
+def edit_message(conversation_id: str, message_id: str, inp: EditMessageIn, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
 
     msg = _get_message_or_404(conversation_id, message_id)
@@ -952,7 +961,7 @@ def get_edit_history(
     conversation_id: str,
     message_id: str,
     limit: int = Query(50, ge=1, le=200),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, conversation_id)
 
@@ -985,7 +994,7 @@ def get_edit_history(
 def forward_message(
     target_conversation_id: str,
     inp: ForwardMessageIn,
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, target_conversation_id)
     require_participant_active(user_id, inp.source_conversation_id)
@@ -1071,7 +1080,7 @@ def mark_message_viewed(
     conversation_id: str,
     message_id: str,
     inp: ViewMessageIn,
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_messaging_user_id),
 ):
     """
     Call when a message becomes visible in the UI.
@@ -1124,7 +1133,7 @@ def get_message_views(
     conversation_id: str,
     message_id: str,
     limit: int = Query(200, ge=1, le=500),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_messaging_user_id),
 ):
     """
     Returns who has viewed a message and their last_viewed_at (timestamp) + count.
@@ -1158,7 +1167,7 @@ def get_message_views(
 # Typing indicator
 # -------------------------
 @router.post("/conversations/{conversation_id}/typing")
-def set_typing(conversation_id: str, inp: TypingIn, user_id: str = Depends(get_current_user_id)):
+def set_typing(conversation_id: str, inp: TypingIn, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
     ts = now_ts()
 
@@ -1183,7 +1192,7 @@ def set_typing(conversation_id: str, inp: TypingIn, user_id: str = Depends(get_c
 
 
 @router.get("/conversations/{conversation_id}/typing", response_model=List[TypingUser])
-def get_typing(conversation_id: str, user_id: str = Depends(get_current_user_id)):
+def get_typing(conversation_id: str, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
 
     resp = tbl_typing.query(KeyConditionExpression=Key("conversation_id").eq(conversation_id), Limit=200)
@@ -1205,7 +1214,7 @@ def get_typing(conversation_id: str, user_id: str = Depends(get_current_user_id)
 # Presence (online)
 # -------------------------
 @router.post("/presence/heartbeat")
-def presence_heartbeat(inp: PresenceHeartbeatIn, user_id: str = Depends(get_current_user_id)):
+def presence_heartbeat(inp: PresenceHeartbeatIn, user_id: str = Depends(get_messaging_user_id)):
     ts = now_ts()
     tbl_presence.put_item(
         Item={
@@ -1222,7 +1231,7 @@ def presence_heartbeat(inp: PresenceHeartbeatIn, user_id: str = Depends(get_curr
 @router.get("/presence", response_model=List[PresenceOut])
 def presence_get(
     user_ids: str = Query(..., description="Comma-separated user_ids"),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_messaging_user_id),
 ):
     ids = [x.strip() for x in user_ids.split(",") if x.strip()]
     if len(ids) > 200:
@@ -1250,7 +1259,7 @@ def presence_get(
 def fetch_events(
     after: Optional[str] = None,
     limit: int = Query(50, ge=1, le=200),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_messaging_user_id),
 ):
     items = _ddb_fetch_events(user_id, after, limit)
     return {"events": items, "next_after": items[-1]["event_id"] if items else after}
@@ -1261,7 +1270,7 @@ async def events_stream(
     after: Optional[str] = None,
     limit: int = Query(50, ge=1, le=200),
     poll_ms: int = Query(1000, ge=200, le=5000),
-    user_id: str = Depends(get_current_user_id),
+    user_id: str = Depends(get_messaging_user_id),
 ):
     async def gen():
         cursor = after

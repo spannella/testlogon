@@ -61,8 +61,6 @@ class TestProfileRoutes(unittest.TestCase):
 
     def test_upload_photo_requires_multipart(self):
         ctx = build_ctx()
-        if profile._MULTIPART_AVAILABLE:
-            self.skipTest("python-multipart is installed; upload route is available")
         with self.assertRaises(HTTPException) as exc:
             run_async(profile.ui_upload_profile_photo_unavailable(ctx=ctx))
         self.assertEqual(exc.exception.status_code, 501)
