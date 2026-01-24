@@ -9,3 +9,4 @@ requests==2.31.0
 stripe==8.5.0
 pytest==8.2.2
 prometheus-client==0.20.0
+PyJWT==2.8.0

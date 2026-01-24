@@ -4,6 +4,12 @@ This backend includes a CCBill-based billing subsystem with a simple UI embedded
 The billing UI uses the CCBill Advanced Widget to tokenize cards, then calls backend endpoints to save payment tokens,
 charge once, subscribe, and reconcile via webhooks.
 
+## Architecture at a glance
+- **Frontend tokenization**: the CCBill Advanced Widget runs in the control panel and returns a payment token.
+- **Backend storage**: tokens and billing artifacts are saved in the billing DynamoDB table.
+- **Charges + subscriptions**: UI actions call backend routes that invoke CCBill APIs.
+- **Webhooks**: CCBill posts events to `/api/ccbill/webhook` for reconciliation.
+
 ## Quick Start (UI)
 
 1. Load the control panel page at `/`.
@@ -30,6 +36,13 @@ charge once, subscribe, and reconcile via webhooks.
 | `DEFAULT_CURRENCY_CODE` | ISO numeric currency code (e.g., 840 for USD). |
 | `DEFAULT_CURRENCY` | Currency string (e.g., `usd`). |
 | `CCBILL_WEBHOOK_IP_ENFORCE` | Set to `true` to enforce CCBill webhook IP ranges. |
+
+## Optional environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `PUBLIC_BASE_URL` | Base URL used when generating webhook and redirect URLs. |
+| `BILLING_TABLE_TTL_DAYS` | Optional TTL for billing records. |
 
 ## API Endpoints (Billing)
 
@@ -76,6 +89,12 @@ All endpoints below require a valid UI session (`X-SESSION-ID`) + auth token.
 | Method | Path | Description |
 | --- | --- | --- |
 | `POST` | `/api/ccbill/webhook` | CCBill webhook handler. |
+
+## Troubleshooting
+
+- **Widget loads but tokenization fails**: confirm `CCBILL_FRONTEND_CLIENT_ID` and `CCBILL_FRONTEND_CLIENT_SECRET` and ensure the widget config in `/api/billing/config` matches your CCBill account.
+- **Charges failing**: validate `CCBILL_BACKEND_CLIENT_ID` and `CCBILL_BACKEND_CLIENT_SECRET` and confirm account/sub-account numbers.
+- **Webhook rejected**: set `CCBILL_WEBHOOK_IP_ENFORCE=false` temporarily to validate payloads, then enable IP enforcement after confirming the CCBill IP range list.
 
 ## DynamoDB Table Layout
 

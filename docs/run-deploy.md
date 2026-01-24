@@ -44,9 +44,35 @@ This service is a FastAPI application with DynamoDB-backed storage and optional 
 
 5. Open the UI at `http://localhost:8000/`.
 
+### Local config tips
+- Keep secrets (e.g., `API_KEY_PEPPER`, `WS_TOKEN_SECRET`) in a `.env` file and export them via your shell or a dotenv loader.
+- When debugging billing flows, make sure billing tables and env vars are set before opening the UI.
+- If Cognito is not configured, you can pass `X-User-Sub` headers for local testing.
+
+## Stripe billing
+
+The dashboard includes a Stripe billing panel for cards, ACH setup intents, charges, and ledger visibility. For a full walkthrough and troubleshooting guidance, see [Stripe billing](stripe.md).
+
+### Required environment variables
+
+```bash
+export BILLING_TABLE_NAME=your_billing_table
+export STRIPE_SECRET_KEY=sk_test_...
+export STRIPE_PUBLISHABLE_KEY=pk_test_...
+export STRIPE_WEBHOOK_SECRET=whsec_...
+```
+
+### Optional environment variables
+
+```bash
+export STRIPE_DEFAULT_CURRENCY=usd
+export STRIPE_SUCCESS_URL=http://localhost:8000/?stripe=success
+export STRIPE_CANCEL_URL=http://localhost:8000/?stripe=cancel
+```
+
 ## PayPal billing
 
-The dashboard includes a PayPal billing panel for vaulting payment methods, one-time charges, subscriptions, and ledger visibility.
+The dashboard includes a PayPal billing panel for vaulting payment methods, one-time charges, subscriptions, and ledger visibility. For a full walkthrough and troubleshooting guidance, see [PayPal billing](paypal.md).
 
 ### Required environment variables
 
