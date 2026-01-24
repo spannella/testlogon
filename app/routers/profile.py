@@ -35,6 +35,10 @@ async def ui_put_profile(req: Request, body: ProfilePutReq, ctx=Depends(require_
     audit_event("profile_update", ctx["user_sub"], req, outcome="success", mode="replace")
     return {"profile": profile}
 
+async def ui_upload_profile_photo_unavailable(ctx=Depends(require_ui_session)):
+    raise HTTPException(501, "python-multipart is required for uploads")
+
+
 if _MULTIPART_AVAILABLE:
     @router.post("/photos/{kind}/upload")
     async def ui_upload_profile_photo(
@@ -50,6 +54,4 @@ if _MULTIPART_AVAILABLE:
         audit_event("profile_photo_upload", ctx["user_sub"], req, outcome="success", kind=kind)
         return {"profile": profile, "url": url}
 else:
-    @router.post("/photos/{kind}/upload")
-    async def ui_upload_profile_photo_unavailable(ctx=Depends(require_ui_session)):
-        raise HTTPException(501, "python-multipart is required for uploads")
+    router.post("/photos/{kind}/upload")(ui_upload_profile_photo_unavailable)

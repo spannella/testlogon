@@ -1,7 +1,7 @@
 import asyncio
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
@@ -14,6 +14,28 @@ class TestMessagingRoutes(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             messaging.get_current_user_id(None)
         self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_get_messaging_user_id_uses_bearer(self):
+        req = SimpleNamespace()
+        user_id = asyncio.run(
+            messaging.get_messaging_user_id(req, authorization="Bearer user-123", x_session_id=None)
+        )
+        self.assertEqual(user_id, "user-123")
+
+    def test_get_messaging_user_id_prefers_session(self):
+        req = SimpleNamespace()
+        with (
+            patch.object(messaging, "get_authenticated_user_sub", AsyncMock(return_value="user-1")),
+            patch.object(
+                messaging,
+                "require_ui_session",
+                AsyncMock(return_value={"user_sub": "user-1", "session_id": "sid"}),
+            ),
+        ):
+            user_id = asyncio.run(
+                messaging.get_messaging_user_id(req, authorization="Bearer ignored", x_session_id="sid")
+            )
+        self.assertEqual(user_id, "user-1")
 
     def test_start_conversation_creates_participants(self):
         with (

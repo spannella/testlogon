@@ -187,6 +187,7 @@ def upload_file(user: str, path: str, file: UploadFile) -> Dict[str, Any]:
     p = norm_path(path, is_folder=False)
     parent, name = split_parent_name(p)
     ensure_folder_exists(user, parent)
+    require_not_exists(user, p)
 
     obj_id = str(uuid.uuid4())
     s3_key = f"{user}/objects/{obj_id}"
@@ -382,6 +383,7 @@ def upload_zip(user: str, dest_folder: str, zip_file: UploadFile) -> List[str]:
         raise HTTPException(400, "invalid zip") from exc
 
     created: List[str] = []
+    created_set = set()
     for info in zf.infolist():
         name = info.filename
         if name.endswith("/"):
@@ -411,6 +413,9 @@ def upload_zip(user: str, dest_folder: str, zip_file: UploadFile) -> List[str]:
 
         file_bytes = zf.read(info)
         out_path = norm_path(folder + name, is_folder=False)
+        if out_path in created_set:
+            raise HTTPException(409, f"already exists: {out_path}")
+        require_not_exists(user, out_path)
         out_parent, _ = split_parent_name(out_path)
         _auto_create_parents(user, out_parent)
 
@@ -439,6 +444,7 @@ def upload_zip(user: str, dest_folder: str, zip_file: UploadFile) -> List[str]:
         }
         put_node(item)
         created.append(out_path)
+        created_set.add(out_path)
 
     return created
 
