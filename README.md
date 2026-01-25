@@ -14,8 +14,8 @@ session management, MFA, billing, notifications, and a lightweight control panel
 - [UPS integration](docs/ups.md)
 
 ## What ships in this service
-- **FastAPI API surface**: routers for account management, MFA, alerts, billing, file management, and more.
-- **Service layer**: DynamoDB-backed helpers for sessions, API keys, alerts, and billing.
+- **FastAPI API surface**: routers for account management, MFA, alerts, messaging, catalog, shopping cart, purchase history, billing, and file management.
+- **Service layer**: DynamoDB-backed helpers for sessions, API keys, alerts, billing, profiles, and commerce flows.
 - **Static control panel UI**: browser-based dashboard served from `/` for testing and ops.
 - **Billing integrations**: Stripe, PayPal endpoints, and a dedicated CCBill flow.
 
