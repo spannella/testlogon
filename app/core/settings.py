@@ -24,6 +24,7 @@ class Settings:
     api_keys_table_name: str = os.environ.get("API_KEYS_TABLE_NAME", "api_keys")
     api_keys_user_index: str = os.environ.get("API_KEYS_USER_INDEX", "user_sub-index")
     api_key_pepper: str = os.environ.get("API_KEY_PEPPER", "")
+    api_key_ttl_days: int = int(os.environ.get("API_KEY_TTL_DAYS", "365"))
 
     alerts_table_name: str = os.environ.get("ALERTS_TABLE_NAME", "alerts")
     alert_prefs_table_name: str = os.environ.get("ALERT_PREFS_TABLE_NAME", "alert_prefs")
