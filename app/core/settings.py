@@ -134,6 +134,8 @@ class Settings:
     # Calendar
     calendar_table_name: str = os.environ.get("CALENDAR_TABLE_NAME", "calendar")
 
+    # Shopping cart
+    shopping_cart_table_name: str = os.environ.get("SHOPPING_CART_TABLE_NAME", "shopping_cart")
     # Catalog
     catalog_table_name: str = os.environ.get("CATALOG_TABLE_NAME", "shopping_catalog")
 
