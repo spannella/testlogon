@@ -3958,7 +3958,9 @@ document.getElementById("msgLoadMessagesBtn").onclick = loadMessagingMessages;
 document.getElementById("msgSendBtn").onclick = sendMessagingMessage;
 
 /* ===================== boot ===================== */
-setCalendarId(getCalendarId());
-if (!accessToken()) { openTokenModal(); } else { refreshAll(); }
-startToastSSE();
-startToastPolling();
+if (!window.__SKIP_BOOT__) {
+  setCalendarId(getCalendarId());
+  if (!accessToken()) { openTokenModal(); } else { refreshAll(); }
+  startToastSSE();
+  startToastPolling();
+}
