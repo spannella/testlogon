@@ -22,6 +22,7 @@ class Tables:
     profile: Any
     addresses: Any
     calendar: Any
+    shopping_cart: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -38,4 +39,5 @@ T = Tables(
     profile=ddb.Table(S.profile_table_name),
     addresses=ddb.Table(S.addresses_table_name),
     calendar=ddb.Table(S.calendar_table_name),
+    shopping_cart=ddb.Table(S.shopping_cart_table_name),
 )
