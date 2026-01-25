@@ -1,17 +1,21 @@
 from __future__ import annotations
 
 import base64
+import importlib.util
 import json
 import time
 import uuid
+from urllib.parse import quote, unquote
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 
 from app.core.tables import T
+from app.core.settings import S
 from app.models import (
     CatalogCategoryCreateIn,
     CatalogCategoryListOut,
@@ -24,9 +28,12 @@ from app.models import (
     CatalogReviewListOut,
     CatalogReviewOut,
 )
+from app.services.filemanager import download_file, upload_catalog_image
 from app.services.sessions import require_ui_session
 
 router = APIRouter(prefix="/ui/catalog", tags=["catalog"])
+
+_MULTIPART_AVAILABLE = importlib.util.find_spec("multipart") is not None
 
 
 def now_iso() -> str:
@@ -89,6 +96,10 @@ def decode_next_token(token: Optional[str]) -> Optional[Dict[str, Any]]:
         raise HTTPException(status_code=400, detail="Invalid next_token") from exc
 
 
+def _catalog_image_url(path: str) -> str:
+    return f"{S.public_base_url}/ui/catalog/images?path={quote(path, safe='')}"
+
+
 def _query_page(
     *,
     pk: str,
@@ -125,6 +136,26 @@ def _scan_categories(limit: int, start_key: Optional[Dict[str, Any]]) -> Tuple[L
     resp = T.catalog.scan(**kwargs)
     items = [item for item in resp.get("Items", []) if item.get("entity") == "category"]
     return items, resp.get("LastEvaluatedKey")
+
+
+def _stream_catalog_image(path: str) -> StreamingResponse:
+    result = download_file("catalog", path)
+    node = result["node"]
+    obj = result["object"]
+
+    def gen():
+        body = obj["Body"]
+        while True:
+            chunk = body.read(1024 * 1024)
+            if not chunk:
+                break
+            yield chunk
+
+    return StreamingResponse(
+        gen(),
+        media_type=node.get("content_type", "application/octet-stream"),
+        headers={"Content-Disposition": f'inline; filename="{node["name"]}"'},
+    )
 
 
 @router.post("/categories", response_model=CatalogCategoryOut)
@@ -276,6 +307,17 @@ async def list_items(
     return CatalogItemListOut(items=out, next_token=encode_next_token(lek))
 
 
+@router.get("/images")
+async def get_catalog_image(
+    path: str = Query(..., description="Catalog image path"),
+    ctx=Depends(require_ui_session),
+):
+    decoded = unquote(path)
+    if not decoded.startswith("/catalog/items/"):
+        raise HTTPException(status_code=400, detail="Invalid catalog image path")
+    return _stream_catalog_image(decoded)
+
+
 @router.patch("/categories/{category_id}/items/{item_id}", response_model=CatalogItemOut)
 async def update_item(
     category_id: str,
@@ -345,6 +387,64 @@ async def update_item(
         created_at=item["created_at"],
         updated_at=item["updated_at"],
     )
+
+
+async def _catalog_upload_unavailable(ctx=Depends(require_ui_session)):
+    raise HTTPException(501, "python-multipart is required for uploads")
+
+
+if _MULTIPART_AVAILABLE:
+    @router.post("/categories/{category_id}/items/{item_id}/images/upload", response_model=CatalogItemOut)
+    async def upload_item_image(
+        category_id: str,
+        item_id: str,
+        file: UploadFile = File(...),
+        ctx=Depends(require_ui_session),
+    ):
+        if not S.filemgr_table_name or not S.filemgr_bucket:
+            raise HTTPException(status_code=501, detail="file manager not configured")
+        content = await file.read()
+        result = upload_catalog_image(
+            item_id,
+            file_name=file.filename or "upload.bin",
+            content=content,
+            content_type=file.content_type,
+        )
+        image_url = _catalog_image_url(result["path"])
+        now = now_iso()
+        try:
+            resp = T.catalog.update_item(
+                Key={"PK": cat_pk(category_id), "SK": item_sk(item_id)},
+                ConditionExpression="attribute_exists(PK) AND attribute_exists(SK)",
+                UpdateExpression=(
+                    "SET #image_urls = list_append(if_not_exists(#image_urls, :empty), :new), "
+                    "#updated_at = :updated_at"
+                ),
+                ExpressionAttributeNames={"#image_urls": "image_urls", "#updated_at": "updated_at"},
+                ExpressionAttributeValues={":new": [image_url], ":empty": [], ":updated_at": now},
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                raise HTTPException(status_code=404, detail="Item not found.") from exc
+            raise HTTPException(status_code=500, detail="Catalog storage error.") from exc
+        item = resp.get("Attributes")
+        if not item:
+            raise HTTPException(status_code=404, detail="Item not found.")
+        return CatalogItemOut(
+            category_id=item["category_id"],
+            item_id=item["item_id"],
+            name=item["name"],
+            description=item.get("description"),
+            price_cents=ddb_to_int(item["price_cents"]),
+            currency=item.get("currency", "USD"),
+            image_urls=item.get("image_urls", []),
+            attributes=item.get("attributes", {}),
+            created_at=item["created_at"],
+            updated_at=item["updated_at"],
+        )
+else:
+    router.post("/categories/{category_id}/items/{item_id}/images/upload")(_catalog_upload_unavailable)
 
 
 @router.delete("/categories/{category_id}/items/{item_id}")

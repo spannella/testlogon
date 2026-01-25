@@ -154,6 +154,7 @@ class PurchaseTransactionSummary(BaseModel):
 
 class PurchaseTransactionInfo(PurchaseTransactionSummary):
     buyer_id: str
+    buyer_profile: Optional[ProfileBase] = None
     shipping: Optional[PurchaseShippingIn] = None
     cancel: Optional[Dict[str, Any]] = None
     completed_at: Optional[int] = None
@@ -362,6 +363,12 @@ class ShoppingCartItemIn(BaseModel):
     unit_price_cents: conint(ge=0, le=100000000)
 
 
+class CatalogCartItemIn(BaseModel):
+    category_id: str = Field(min_length=1, max_length=128)
+    item_id: str = Field(min_length=1, max_length=128)
+    quantity: conint(ge=1, le=1000) = 1
+
+
 class ShoppingCartItemOut(BaseModel):
     sku: str
     name: str
@@ -392,6 +399,8 @@ class ShoppingCartPurchaseOut(BaseModel):
     purchased_at: str
     purchased_total_cents: int
     currency: str = "USD"
+    buyer: Optional[ShoppingCartBuyer] = None
+    purchase_txn_id: Optional[str] = None
 
 
 class CalendarCreateIn(BaseModel):
@@ -442,6 +451,13 @@ class MailingAddress(BaseModel):
     state: Optional[str] = None
     postal_code: Optional[str] = None
     country: Optional[str] = None
+
+
+class ShoppingCartBuyer(BaseModel):
+    display_name: Optional[str] = None
+    displayed_email: Optional[str] = None
+    displayed_telephone_number: Optional[str] = None
+    mailing_address: Optional[MailingAddress] = None
 
 
 class AddressBase(BaseModel):

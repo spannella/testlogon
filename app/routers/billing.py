@@ -31,6 +31,7 @@ from app.models import (
     VerifyMicrodepositsReq,
 )
 from app.services.sessions import require_ui_session
+from app.services.alerts import audit_event
 from app.services.billing_shared import (
     apply_balance_delta,
     compute_due,
@@ -42,6 +43,8 @@ from app.services.billing_shared import (
     ensure_balance_row,
     user_pk,
 )
+from app.services.profile import get_profile
+from app.services.purchase_history import mark_completed, mark_reverted, record_billing_transaction
 from app.services.ttl import with_ttl
 
 router = APIRouter(tags=["billing"])
@@ -81,11 +84,25 @@ def ulidish() -> str:
 
 def get_or_create_customer(user_id: str) -> str:
     pk = user_pk(user_id)
+    try:
+        profile = get_profile(user_id)
+    except Exception:
+        profile = {}
+    customer_payload = {}
+    if profile.get("display_name"):
+        customer_payload["name"] = profile["display_name"]
+    if profile.get("displayed_email"):
+        customer_payload["email"] = profile["displayed_email"]
     prof = ddb_get(T.billing, pk, "PROFILE")
     if prof and prof.get("stripe_customer_id"):
+        if customer_payload:
+            try:
+                stripe.Customer.modify(prof["stripe_customer_id"], **customer_payload)
+            except Exception:
+                pass
         return prof["stripe_customer_id"]
 
-    cust = stripe.Customer.create(metadata={"app_user_id": user_id})
+    cust = stripe.Customer.create(metadata={"app_user_id": user_id}, **customer_payload)
     ddb_put(T.billing, {"pk": pk, "sk": "PROFILE", "stripe_customer_id": cust["id"], "created_at": now_ts()})
     return cust["id"]
 
@@ -148,6 +165,7 @@ def put_payment_record(
     pi: Dict[str, Any],
     ledger_sk_value: str,
     payment_method_type: str,
+    purchase_txn_id: Optional[str] = None,
 ) -> None:
     pk = user_pk(user_id)
     item = {
@@ -164,6 +182,8 @@ def put_payment_record(
         "created_at": now_ts(),
         "updated_at": now_ts(),
     }
+    if purchase_txn_id:
+        item["purchase_txn_id"] = purchase_txn_id
     ddb_put(T.billing, item)
 
 
@@ -190,6 +210,26 @@ def update_payment_status(
         sets.append("#le = :le")
 
     ddb_update(T.billing, pk, pay_sk(pi_id), "SET " + ", ".join(sets), values, names=names)
+
+
+def _sync_purchase_history_status(
+    *,
+    user_id: str,
+    purchase_txn_id: Optional[str],
+    status: str,
+    charge_id: Optional[str],
+    last_error: Optional[Dict[str, Any]] = None,
+) -> None:
+    if not purchase_txn_id:
+        return
+    try:
+        if status == "succeeded":
+            mark_completed(user_id, purchase_txn_id, charge_id, "Stripe payment succeeded")
+        elif status in ("canceled", "payment_failed", "requires_payment_method"):
+            reason = last_error.get("message") if last_error else status
+            mark_reverted(user_id, purchase_txn_id, reason)
+    except HTTPException:
+        return
 
 
 def pm_sk(payment_method_id: str) -> str:
@@ -255,12 +295,13 @@ def get_settings(ctx=Depends(require_ui_session)) -> Dict[str, Any]:
 
 
 @dual_route("POST", "/billing/autopay")
-def set_autopay(body: SetAutopayReq, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
+def set_autopay(body: SetAutopayReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
     if not ddb_get(T.billing, pk, "BILLING"):
         ddb_put(T.billing, {"pk": pk, "sk": "BILLING", "autopay_enabled": False, "currency": "usd", "default_payment_method_id": None})
     ddb_update(T.billing, pk, "BILLING", "SET autopay_enabled = :e", {":e": bool(body.enabled)})
+    audit_event("billing_autopay_set", user_id, req, outcome="success", enabled=bool(body.enabled))
     return {"ok": True}
 
 
@@ -354,7 +395,7 @@ def set_priority(body: SetPriorityReq, ctx=Depends(require_ui_session)) -> Dict[
 
 
 @dual_route("POST", "/billing/payment-methods/default")
-def set_default(body: SetDefaultReq, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
+def set_default(body: SetDefaultReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
     ensure_stripe_configured()
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
@@ -364,11 +405,12 @@ def set_default(body: SetDefaultReq, ctx=Depends(require_ui_session)) -> Dict[st
     customer_id = get_or_create_customer(user_id)
     set_default_pm(user_id, body.payment_method_id)
     stripe.Customer.modify(customer_id, invoice_settings={"default_payment_method": body.payment_method_id})
+    audit_event("billing_payment_method_default", user_id, req, outcome="success", payment_method_id=body.payment_method_id)
     return {"ok": True}
 
 
 @dual_route("DELETE", "/billing/payment-methods/{payment_method_id}")
-def remove_payment_method(payment_method_id: str, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
+def remove_payment_method(payment_method_id: str, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
     ensure_stripe_configured()
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
@@ -391,12 +433,21 @@ def remove_payment_method(payment_method_id: str, ctx=Depends(require_ui_session
 
         customer_id = get_or_create_customer(user_id)
         stripe.Customer.modify(customer_id, invoice_settings={"default_payment_method": new_default})
-
+        audit_event(
+            "billing_payment_method_removed",
+            user_id,
+            req,
+            outcome="success",
+            payment_method_id=payment_method_id,
+            new_default_payment_method_id=new_default,
+        )
+    else:
+        audit_event("billing_payment_method_removed", user_id, req, outcome="success", payment_method_id=payment_method_id)
     return {"ok": True}
 
 
 @dual_route("POST", "/billing/pay-balance")
-def pay_balance(body: PayBalanceReq, ctx=Depends(require_ui_session)) -> Dict[str, str]:
+def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, str]:
     ensure_stripe_configured()
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
@@ -431,6 +482,15 @@ def pay_balance(body: PayBalanceReq, ctx=Depends(require_ui_session)) -> Dict[st
             idempotency_key=idem,
         )
     except stripe.error.CardError as exc:
+        audit_event(
+            "billing_pay_balance",
+            user_id,
+            req,
+            outcome="failure",
+            amount_cents=amount,
+            currency=billing.get("currency", "usd"),
+            reason=str(exc),
+        )
         return {"status": "failed", "reason": str(exc)}
 
     pm_type = "unknown"
@@ -457,13 +517,34 @@ def pay_balance(body: PayBalanceReq, ctx=Depends(require_ui_session)) -> Dict[st
     else:
         apply_balance_delta(T.billing, pk, {"payments_pending_cents": amount}, currency=billing.get("currency", "usd"))
 
-    put_payment_record(user_id, pi, led_sk, payment_method_type=pm_type)
+    purchase_txn_id = record_billing_transaction(
+        user_sub=user_id,
+        amount_cents=amount,
+        currency=billing.get("currency", "usd"),
+        description=f"Pay settled balance for {user_id}",
+        status="COMPLETED" if pi.get("status") == "succeeded" else "PENDING",
+        external_ref=pi["id"],
+        metadata={"purpose": "pay_balance", "payment_intent_id": pi["id"], "ledger_sk": led_sk},
+    )
 
+    put_payment_record(user_id, pi, led_sk, payment_method_type=pm_type, purchase_txn_id=purchase_txn_id)
+    audit_event(
+        "billing_pay_balance",
+        user_id,
+        req,
+        outcome="success",
+        amount_cents=amount,
+        currency=billing.get("currency", "usd"),
+        payment_intent_id=pi.get("id"),
+        status=pi.get("status"),
+        ledger_sk=led_sk,
+        purchase_txn_id=purchase_txn_id,
+    )
     return {"status": pi.get("status"), "payment_intent_id": pi["id"]}
 
 
 @dual_route("POST", "/billing/charge-once")
-def charge_once(body: StripeChargeReq, ctx=Depends(require_ui_session)) -> Dict[str, Any]:
+def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, Any]:
     ensure_stripe_configured()
     user_id = ctx["user_sub"]
     pk = user_pk(user_id)
@@ -491,6 +572,15 @@ def charge_once(body: StripeChargeReq, ctx=Depends(require_ui_session)) -> Dict[
             idempotency_key=idem,
         )
     except stripe.error.CardError as exc:
+        audit_event(
+            "billing_charge_once",
+            user_id,
+            req,
+            outcome="failure",
+            amount_cents=int(body.amount_cents),
+            currency=billing.get("currency", "usd"),
+            reason=str(exc),
+        )
         return {"status": "failed", "reason": str(exc)}
 
     pm_type = "unknown"
@@ -523,13 +613,34 @@ def charge_once(body: StripeChargeReq, ctx=Depends(require_ui_session)) -> Dict[
     else:
         apply_balance_delta(T.billing, pk, {"payments_pending_cents": int(body.amount_cents)}, currency=billing.get("currency", "usd"))
 
-    put_payment_record(user_id, pi, led_sk, payment_method_type=pm_type)
+    purchase_txn_id = record_billing_transaction(
+        user_sub=user_id,
+        amount_cents=int(body.amount_cents),
+        currency=billing.get("currency", "usd"),
+        description=description,
+        status="COMPLETED" if pi.get("status") == "succeeded" else "PENDING",
+        external_ref=pi["id"],
+        metadata={"purpose": "charge_once", "payment_intent_id": pi["id"], "ledger_sk": led_sk},
+    )
 
+    put_payment_record(user_id, pi, led_sk, payment_method_type=pm_type, purchase_txn_id=purchase_txn_id)
+    audit_event(
+        "billing_charge_once",
+        user_id,
+        req,
+        outcome="success",
+        amount_cents=int(body.amount_cents),
+        currency=billing.get("currency", "usd"),
+        payment_intent_id=pi.get("id"),
+        status=pi.get("status"),
+        ledger_sk=led_sk,
+        purchase_txn_id=purchase_txn_id,
+    )
     return {"status": pi.get("status"), "payment_intent_id": pi["id"]}
 
 
 @dual_route("POST", "/billing/checkout_session")
-def create_checkout_session(body: BillingCheckoutReq, req: Request, ctx=Depends(require_ui_session)) -> Dict[str, str]:
+def create_checkout_session(body: BillingCheckoutReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, str]:
     ensure_stripe_configured()
     if body.amount_cents <= 0:
         raise HTTPException(400, "amount_cents must be greater than zero")
@@ -555,6 +666,15 @@ def create_checkout_session(body: BillingCheckoutReq, req: Request, ctx=Depends(
             }
         ],
         metadata={"user_sub": ctx["user_sub"]},
+    )
+    audit_event(
+        "billing_checkout_session",
+        ctx["user_sub"],
+        req,
+        outcome="success",
+        amount_cents=body.amount_cents,
+        currency=currency,
+        session_id=session.id,
     )
     return {"session_id": session.id, "url": session.url}
 
@@ -658,6 +778,7 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
 
         amount = int(pay.get("amount_cents", 0))
         led_sk_value = pay.get("ledger_sk")
+        purchase_txn_id = pay.get("purchase_txn_id")
 
         charge_id = None
         try:
@@ -672,28 +793,83 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
 
         elif status == "succeeded":
             update_payment_status(user_id, pi_id, "succeeded", charge_id=charge_id)
+            _sync_purchase_history_status(
+                user_id=user_id,
+                purchase_txn_id=purchase_txn_id,
+                status="succeeded",
+                charge_id=charge_id,
+            )
             if pay.get("status") in ("processing", "requires_action"):
                 apply_balance_delta(T.billing, pk, {"payments_pending_cents": -amount, "payments_settled_cents": amount}, currency=pay.get("currency", "usd"))
             if led_sk_value:
                 settle_or_reverse_ledger(user_id, led_sk_value, "settled")
+            audit_event(
+                "billing_payment_intent_update",
+                user_id,
+                None,
+                outcome="success",
+                payment_intent_id=pi_id,
+                status=status,
+                charge_id=charge_id,
+                amount_cents=amount,
+                purchase_txn_id=purchase_txn_id,
+            )
 
         elif status in ("requires_payment_method", "canceled"):
             update_payment_status(user_id, pi_id, status, charge_id=charge_id, last_error=pi.get("last_payment_error"))
+            _sync_purchase_history_status(
+                user_id=user_id,
+                purchase_txn_id=purchase_txn_id,
+                status=status,
+                charge_id=charge_id,
+                last_error=pi.get("last_payment_error"),
+            )
             if pay.get("status") in ("processing", "requires_action"):
                 apply_balance_delta(T.billing, pk, {"payments_pending_cents": -amount}, currency=pay.get("currency", "usd"))
             elif pay.get("status") == "succeeded":
                 apply_balance_delta(T.billing, pk, {"payments_settled_cents": -amount}, currency=pay.get("currency", "usd"))
             if led_sk_value:
                 settle_or_reverse_ledger(user_id, led_sk_value, "reversed")
+            audit_event(
+                "billing_payment_intent_update",
+                user_id,
+                None,
+                outcome="failure",
+                payment_intent_id=pi_id,
+                status=status,
+                charge_id=charge_id,
+                amount_cents=amount,
+                purchase_txn_id=purchase_txn_id,
+                reason=(pi.get("last_payment_error") or {}).get("message"),
+            )
 
         elif status == "payment_failed":
             update_payment_status(user_id, pi_id, "payment_failed", charge_id=charge_id, last_error=pi.get("last_payment_error"))
+            _sync_purchase_history_status(
+                user_id=user_id,
+                purchase_txn_id=purchase_txn_id,
+                status="payment_failed",
+                charge_id=charge_id,
+                last_error=pi.get("last_payment_error"),
+            )
             if pay.get("status") in ("processing", "requires_action"):
                 apply_balance_delta(T.billing, pk, {"payments_pending_cents": -amount}, currency=pay.get("currency", "usd"))
             elif pay.get("status") == "succeeded":
                 apply_balance_delta(T.billing, pk, {"payments_settled_cents": -amount}, currency=pay.get("currency", "usd"))
             if led_sk_value:
                 settle_or_reverse_ledger(user_id, led_sk_value, "reversed")
+            audit_event(
+                "billing_payment_intent_update",
+                user_id,
+                None,
+                outcome="failure",
+                payment_intent_id=pi_id,
+                status=status,
+                charge_id=charge_id,
+                amount_cents=amount,
+                purchase_txn_id=purchase_txn_id,
+                reason=(pi.get("last_payment_error") or {}).get("message"),
+            )
 
         else:
             update_payment_status(user_id, pi_id, status, charge_id=charge_id)
@@ -737,6 +913,17 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
             )
             ddb_put(T.billing, led_item)
             apply_balance_delta(T.billing, pk, {"owed_settled_cents": amount}, currency=currency)
+            audit_event(
+                "billing_dispute_funds_withdrawn",
+                user_id,
+                None,
+                outcome="info",
+                charge_id=charge_id,
+                payment_intent_id=pi_id,
+                amount_cents=amount,
+                currency=currency,
+                dispute_id=dispute.get("id"),
+            )
 
         elif event_type == "charge.dispute.funds_reinstated":
             led_sk_value, led_item = new_ledger_entry(
@@ -751,6 +938,17 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
             )
             ddb_put(T.billing, led_item)
             apply_balance_delta(T.billing, pk, {"owed_settled_cents": -amount}, currency=currency)
+            audit_event(
+                "billing_dispute_funds_reinstated",
+                user_id,
+                None,
+                outcome="info",
+                charge_id=charge_id,
+                payment_intent_id=pi_id,
+                amount_cents=amount,
+                currency=currency,
+                dispute_id=dispute.get("id"),
+            )
 
     return {"received": True}
 

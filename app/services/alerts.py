@@ -14,6 +14,7 @@ from app.core.tables import T
 from app.core.time import now_ts
 from app.metrics import record_auth_event
 from app.services.rate_limit import can_send_alert_channel
+from app.services.profile import get_profile_identity
 from app.services.push import send_push_for_alert
 from app.services.ttl import with_ttl
 
@@ -230,6 +231,19 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
     if request is not None:
         payload["ip"] = client_ip_from_request(request)
         payload["user_agent"] = (request.headers.get("user-agent", "")[:256])
+    try:
+        identity = get_profile_identity(user_sub)
+    except Exception:
+        identity = {}
+    if identity:
+        if identity.get("display_name"):
+            payload["profile_display_name"] = identity["display_name"]
+        if identity.get("email"):
+            payload["profile_email"] = identity["email"]
+        if identity.get("phone"):
+            payload["profile_phone"] = identity["phone"]
+        if identity.get("profile_photo_url"):
+            payload["profile_photo_url"] = identity["profile_photo_url"]
 
     outcome = str(fields.get("outcome", "info"))
     status_code = fields.get("status_code")
@@ -273,6 +287,13 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
                 f"Outcome: {outcome}",
                 f"Time: {payload.get('ts')}",
             ]
+            if identity:
+                display_name = identity.get("display_name")
+                if display_name:
+                    lines.append(f"User: {display_name}")
+                email = identity.get("email")
+                if email:
+                    lines.append(f"Profile email: {email}")
             if request is not None:
                 lines.append(f"IP: {payload.get('ip','')}")
                 lines.append(f"User-Agent: {payload.get('user_agent','')}")

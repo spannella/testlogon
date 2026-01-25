@@ -6,6 +6,7 @@ import uuid
 import zipfile
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import boto3
 from boto3.dynamodb.conditions import Key
@@ -227,6 +228,102 @@ def upload_file(user: str, path: str, file: UploadFile) -> Dict[str, Any]:
     }
     put_node(item)
     return {"path": p, "size": size}
+
+
+def build_download_url(path: str) -> str:
+    return f"{S.public_base_url}/v1/fs/download?path={quote(path, safe='')}"
+
+
+def upload_profile_photo(
+    user: str,
+    *,
+    kind: str,
+    file_name: str,
+    content: bytes,
+    content_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    bucket = _bucket()
+    safe_name = file_name.replace("/", "_")
+    obj_id = str(uuid.uuid4())
+    folder = norm_path(f"/profile/photos/{kind}/", is_folder=True)
+    _auto_create_parents(user, folder)
+    path = norm_path(f"{folder}{obj_id}_{safe_name}", is_folder=False)
+    require_not_exists(user, path)
+
+    extra_args = {"ContentType": content_type or "application/octet-stream"}
+    resp = _s3.put_object(Bucket=bucket, Key=f"{user}/objects/{obj_id}", Body=content, **extra_args)
+    etag = resp.get("ETag")
+    size = len(content)
+
+    parent, name = split_parent_name(path)
+    item = {
+        "PK": pk_user(user),
+        "SK": sk_node(path),
+        "type": "file",
+        "path": path,
+        "name": name,
+        "name_lc": name.lower(),
+        "parent": parent,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "upload_at": now_iso(),
+        "upload_by": user,
+        "size": size,
+        "content_type": content_type or "application/octet-stream",
+        "s3_bucket": bucket,
+        "s3_key": f"{user}/objects/{obj_id}",
+        "etag": etag,
+        "GSI1PK": pk_user(user),
+        "GSI1SK": f"NAME#{name.lower()}#PATH#{path}",
+    }
+    put_node(item)
+    return {"path": path, "size": size}
+
+
+def upload_catalog_image(
+    item_id: str,
+    *,
+    file_name: str,
+    content: bytes,
+    content_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    bucket = _bucket()
+    owner = "catalog"
+    safe_name = file_name.replace("/", "_")
+    obj_id = str(uuid.uuid4())
+    folder = norm_path(f"/catalog/items/{item_id}/", is_folder=True)
+    _auto_create_parents(owner, folder)
+    path = norm_path(f"{folder}{obj_id}_{safe_name}", is_folder=False)
+    require_not_exists(owner, path)
+
+    extra_args = {"ContentType": content_type or "application/octet-stream"}
+    resp = _s3.put_object(Bucket=bucket, Key=f"{owner}/objects/{obj_id}", Body=content, **extra_args)
+    etag = resp.get("ETag")
+    size = len(content)
+
+    parent, name = split_parent_name(path)
+    item = {
+        "PK": pk_user(owner),
+        "SK": sk_node(path),
+        "type": "file",
+        "path": path,
+        "name": name,
+        "name_lc": name.lower(),
+        "parent": parent,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "upload_at": now_iso(),
+        "upload_by": owner,
+        "size": size,
+        "content_type": content_type or "application/octet-stream",
+        "s3_bucket": bucket,
+        "s3_key": f"{owner}/objects/{obj_id}",
+        "etag": etag,
+        "GSI1PK": pk_user(owner),
+        "GSI1SK": f"NAME#{name.lower()}#PATH#{path}",
+    }
+    put_node(item)
+    return {"path": path, "size": size}
 
 
 def download_file(user: str, path: str) -> Dict[str, Any]:
