@@ -2617,6 +2617,354 @@ function openConfirmSmsModal(sentTo, challenge_id) {
   });
 }
 
+/* ===================== Newsfeed ===================== */
+const newsfeedState = {
+  feedCursor: null,
+  feedItems: [],
+  commentItems: [],
+  commentsCursor: null,
+  activePostId: null,
+  notifCursor: null,
+  sse: null,
+};
+
+function newsfeedApiBase() {
+  const base = readInput("newsfeedApiBase") || API_BASE;
+  return base.replace(/\/+$/, "");
+}
+
+function newsfeedUserId() {
+  return readInput("newsfeedUserId");
+}
+
+function setNewsfeedStatus(msg) {
+  const el = document.getElementById("newsfeedStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function setNewsfeedCommentStatus(msg) {
+  const el = document.getElementById("newsfeedCommentStatus");
+  if (el) el.textContent = msg || "";
+}
+
+async function newsfeedRequest(path, { method = "GET", qs = null, body = null } = {}) {
+  const base = newsfeedApiBase();
+  const url = new URL(`${base}${path}`, window.location.origin);
+  if (qs) {
+    Object.entries(qs).forEach(([k, v]) => {
+      if (v !== null && v !== undefined && v !== "") url.searchParams.set(k, v);
+    });
+  }
+  const headers = {};
+  const uid = newsfeedUserId();
+  if (uid) headers["X-User-Id"] = uid;
+  if (body) headers["Content-Type"] = "application/json";
+  const res = await fetch(url.toString(), {
+    method,
+    headers,
+    body: body ? JSON.stringify(body) : null,
+  });
+  const text = await res.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch (e) {
+    data = text;
+  }
+  if (!res.ok) {
+    throw new Error(data?.detail || text || `Request failed: ${res.status}`);
+  }
+  return data;
+}
+
+function newsfeedBodyText(body) {
+  if (!body) return "";
+  if (body.doc && typeof body.doc.text === "string") return body.doc.text;
+  if (body.doc && body.doc.locked) return "🔒 Locked content";
+  return JSON.stringify(body.doc || body);
+}
+
+function setActivePost(postId) {
+  newsfeedState.activePostId = postId;
+  newsfeedState.commentsCursor = null;
+  newsfeedState.commentItems = [];
+  const label = document.getElementById("newsfeedActivePostLabel");
+  if (label) {
+    label.textContent = postId ? `Post ${postId}` : "No post selected";
+  }
+}
+
+function renderNewsfeed(items) {
+  const wrap = document.getElementById("newsfeedList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!items || items.length === 0) {
+    wrap.innerHTML = '<div class="muted">No feed items.</div>';
+    return;
+  }
+  items.forEach(item => {
+    const el = document.createElement("div");
+    el.className = "item newsfeed-item";
+    const locked = item.body?.doc?.locked;
+    const unlockPrice = item.unlock_price_cents ? `${item.unlock_price_cents}¢` : "—";
+    el.innerHTML = `
+      <div class="row">
+        <div class="grow"><b>${escapeHtml(item.user_id || "")}</b></div>
+        <div class="mono">${escapeHtml(item.post_id || "")}</div>
+      </div>
+      <div class="newsfeed-meta">
+        <span>${escapeHtml(item.created_at || "")}</span>
+        <span>comments: ${escapeHtml(item.comment_count ?? 0)}</span>
+        ${item.locked ? `<span class="pill warn">locked ${escapeHtml(unlockPrice)}</span>` : ""}
+      </div>
+      <div class="newsfeed-body">${escapeHtml(newsfeedBodyText(item.body))}</div>
+      <div class="newsfeed-actions">
+        <button data-action="comments" data-id="${escapeHtml(item.post_id)}">View comments</button>
+        <button data-action="hide" data-id="${escapeHtml(item.post_id)}">Hide</button>
+        ${item.locked ? `<button data-action="unlock" data-id="${escapeHtml(item.post_id)}">Unlock</button>` : ""}
+        ${item.user_id && item.user_id !== newsfeedUserId() ? `
+          <button data-action="unfollow" data-user="${escapeHtml(item.user_id)}">Unfollow</button>
+          <button data-action="refollow" data-user="${escapeHtml(item.user_id)}">Refollow</button>
+        ` : ""}
+      </div>
+    `;
+    wrap.appendChild(el);
+  });
+
+  wrap.querySelectorAll("button[data-action]").forEach(btn => {
+    btn.onclick = async () => {
+      const action = btn.getAttribute("data-action");
+      const postId = btn.getAttribute("data-id");
+      const userId = btn.getAttribute("data-user");
+      try {
+        if (action === "comments" && postId) {
+          setActivePost(postId);
+          await loadNewsfeedComments(true);
+        } else if (action === "hide" && postId) {
+          await newsfeedRequest("/feed/hide", { method: "POST", body: { post_id: postId } });
+          await refreshNewsfeed(true);
+        } else if (action === "unlock" && postId) {
+          await newsfeedRequest("/posts/unlock", { method: "POST", body: { post_id: postId } });
+          await refreshNewsfeed(true);
+        } else if (action === "unfollow" && userId) {
+          await newsfeedRequest("/social/unfollow", { method: "POST", body: { target_user_id: userId } });
+          await refreshNewsfeed(true);
+        } else if (action === "refollow" && userId) {
+          await newsfeedRequest("/social/refollow", { method: "POST", body: { target_user_id: userId } });
+          await refreshNewsfeed(true);
+        }
+      } catch (e) {
+        setNewsfeedStatus(String(e.message || e));
+      }
+    };
+  });
+}
+
+async function refreshNewsfeed(reset = false) {
+  if (!newsfeedUserId()) {
+    setNewsfeedStatus("Set a user ID first.");
+    return;
+  }
+  if (reset) newsfeedState.feedCursor = null;
+  const res = await newsfeedRequest("/feed", {
+    qs: { limit: 20, cursor: newsfeedState.feedCursor },
+  });
+  const items = res?.items || [];
+  if (reset) {
+    newsfeedState.feedItems = items;
+  } else {
+    newsfeedState.feedItems = newsfeedState.feedItems.concat(items);
+  }
+  renderNewsfeed(newsfeedState.feedItems);
+  newsfeedState.feedCursor = res?.next_cursor || null;
+  setNewsfeedStatus(`Loaded ${items.length} items.`);
+}
+
+async function createNewsfeedPost() {
+  if (!newsfeedUserId()) {
+    setNewsfeedStatus("Set a user ID first.");
+    return;
+  }
+  const text = readInput("newsfeedPostText");
+  if (!text) {
+    setNewsfeedStatus("Enter post text.");
+    return;
+  }
+  const unlockPriceRaw = readInput("newsfeedPostUnlockPrice");
+  const unlockPrice = unlockPriceRaw ? parseInt(unlockPriceRaw, 10) : null;
+  const body = { format: "plain-v1", doc: { text } };
+  await newsfeedRequest("/posts", {
+    method: "POST",
+    body: {
+      body,
+      attachments: [],
+      visibility: "followers",
+      unlock_price_cents: Number.isFinite(unlockPrice) ? unlockPrice : null,
+    },
+  });
+  setInputValue("newsfeedPostText", "");
+  setInputValue("newsfeedPostUnlockPrice", "");
+  await refreshNewsfeed(true);
+}
+
+function renderComments(items) {
+  const wrap = document.getElementById("newsfeedCommentsList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!items || items.length === 0) {
+    wrap.innerHTML = '<div class="muted">No comments yet.</div>';
+    return;
+  }
+  items.forEach(item => {
+    const row = document.createElement("div");
+    row.className = "item newsfeed-item";
+    const bodyText = item.deleted ? "Comment deleted" : newsfeedBodyText(item.body);
+    row.innerHTML = `
+      <div class="row">
+        <div class="grow"><b>${escapeHtml(item.user_id || "")}</b></div>
+        <div class="mono">${escapeHtml(item.comment_id || "")}</div>
+      </div>
+      <div class="newsfeed-meta">
+        <span>${escapeHtml(item.created_at || "")}</span>
+        ${item.parent_comment_id ? `<span>reply to ${escapeHtml(item.parent_comment_id)}</span>` : ""}
+      </div>
+      <div class="newsfeed-body">${escapeHtml(bodyText)}</div>
+      <div class="newsfeed-actions">
+        <button data-action="delete" data-id="${escapeHtml(item.comment_id)}">Delete</button>
+      </div>
+    `;
+    wrap.appendChild(row);
+  });
+
+  wrap.querySelectorAll("button[data-action='delete']").forEach(btn => {
+    btn.onclick = async () => {
+      const commentId = btn.getAttribute("data-id");
+      if (!commentId || !newsfeedState.activePostId) return;
+      try {
+        await newsfeedRequest(`/posts/${encodeURIComponent(newsfeedState.activePostId)}/comments/${encodeURIComponent(commentId)}`, {
+          method: "DELETE",
+        });
+        await loadNewsfeedComments(true);
+      } catch (e) {
+        setNewsfeedCommentStatus(String(e.message || e));
+      }
+    };
+  });
+}
+
+async function loadNewsfeedComments(reset = false) {
+  if (!newsfeedState.activePostId) {
+    setNewsfeedCommentStatus("Select a post first.");
+    return;
+  }
+  if (reset) newsfeedState.commentsCursor = null;
+  const res = await newsfeedRequest(`/posts/${encodeURIComponent(newsfeedState.activePostId)}/comments`, {
+    qs: { limit: 20, cursor: newsfeedState.commentsCursor },
+  });
+  const items = res?.items || [];
+  if (reset) {
+    newsfeedState.commentItems = items;
+  } else {
+    newsfeedState.commentItems = newsfeedState.commentItems.concat(items);
+  }
+  renderComments(newsfeedState.commentItems);
+  newsfeedState.commentsCursor = res?.next_cursor || null;
+}
+
+async function sendNewsfeedComment() {
+  if (!newsfeedState.activePostId) {
+    setNewsfeedCommentStatus("Select a post first.");
+    return;
+  }
+  const text = readInput("newsfeedCommentText");
+  if (!text) {
+    setNewsfeedCommentStatus("Enter a comment.");
+    return;
+  }
+  const body = { format: "plain-v1", doc: { text } };
+  await newsfeedRequest(`/posts/${encodeURIComponent(newsfeedState.activePostId)}/comments`, {
+    method: "POST",
+    body: { body },
+  });
+  setInputValue("newsfeedCommentText", "");
+  await loadNewsfeedComments(true);
+  setNewsfeedCommentStatus("Comment sent.");
+}
+
+function renderNewsfeedNotifs(items) {
+  const wrap = document.getElementById("newsfeedNotifsList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!items || items.length === 0) {
+    wrap.innerHTML = '<div class="muted">No notifications.</div>';
+    return;
+  }
+  items.forEach(item => {
+    const row = document.createElement("div");
+    row.className = "item newsfeed-item";
+    row.innerHTML = `
+      <div class="row">
+        <div class="grow"><b>${escapeHtml(item.type || "")}</b></div>
+        <div class="mono">${escapeHtml(item.notif_id || "")}</div>
+      </div>
+      <div class="newsfeed-meta">${escapeHtml(item.created_at || "")}</div>
+      <div class="newsfeed-body">${escapeHtml(JSON.stringify(item.payload || {}))}</div>
+    `;
+    wrap.appendChild(row);
+  });
+}
+
+async function refreshNewsfeedNotifs(reset = true) {
+  if (!newsfeedUserId()) {
+    setNewsfeedStatus("Set a user ID first.");
+    return;
+  }
+  if (reset) newsfeedState.notifCursor = null;
+  const res = await newsfeedRequest("/notifications", {
+    qs: { limit: 20, cursor: newsfeedState.notifCursor },
+  });
+  renderNewsfeedNotifs(res?.items || []);
+  newsfeedState.notifCursor = res?.next_cursor || null;
+}
+
+function logNewsfeedSse(msg) {
+  const el = document.getElementById("newsfeedSseLog");
+  if (!el) return;
+  const line = `[${new Date().toISOString()}] ${msg}`;
+  el.textContent = (el.textContent ? `${el.textContent}\n${line}` : line);
+  el.scrollTop = el.scrollHeight;
+}
+
+function disconnectNewsfeedSse() {
+  if (newsfeedState.sse) {
+    newsfeedState.sse.close();
+    newsfeedState.sse = null;
+  }
+}
+
+function connectNewsfeedSse() {
+  disconnectNewsfeedSse();
+  if (!newsfeedUserId()) {
+    setNewsfeedStatus("Set a user ID first.");
+    return;
+  }
+  const url = `${newsfeedApiBase()}/sse?user_id=${encodeURIComponent(newsfeedUserId())}`;
+  const es = new EventSource(url);
+  newsfeedState.sse = es;
+  logNewsfeedSse("Connecting to SSE...");
+  es.onmessage = (ev) => {
+    try {
+      const payload = JSON.parse(ev.data || "{}");
+      logNewsfeedSse(JSON.stringify(payload));
+    } catch (e) {
+      logNewsfeedSse(ev.data || "");
+    }
+  };
+  es.onerror = () => {
+    logNewsfeedSse("SSE connection error.");
+  };
+}
+
 /* ===================== Profile ===================== */
 let profileLanguages = [];
 let addressBook = [];
@@ -3956,6 +4304,67 @@ document.getElementById("msgCreateConvoBtn").onclick = createMessagingConvo;
 document.getElementById("msgAcceptConvoBtn").onclick = acceptMessagingConvo;
 document.getElementById("msgLoadMessagesBtn").onclick = loadMessagingMessages;
 document.getElementById("msgSendBtn").onclick = sendMessagingMessage;
+
+setInputValue("newsfeedApiBase", API_BASE);
+setInputValue("newsfeedUserId", lsGet("newsfeed_user_id"));
+document.getElementById("newsfeedUserId").onchange = () => {
+  const uid = readInput("newsfeedUserId");
+  if (uid) {
+    lsSet("newsfeed_user_id", uid);
+  } else {
+    lsDel("newsfeed_user_id");
+  }
+};
+document.getElementById("newsfeedApiBase").onchange = () => {
+  setInputValue("newsfeedApiBase", newsfeedApiBase());
+};
+document.getElementById("newsfeedRefreshBtn").onclick = async () => {
+  try {
+    await refreshNewsfeed(true);
+  } catch (e) {
+    setNewsfeedStatus(String(e.message || e));
+  }
+};
+document.getElementById("newsfeedLoadMoreBtn").onclick = async () => {
+  try {
+    await refreshNewsfeed(false);
+  } catch (e) {
+    setNewsfeedStatus(String(e.message || e));
+  }
+};
+document.getElementById("newsfeedCreateBtn").onclick = async () => {
+  try {
+    await createNewsfeedPost();
+  } catch (e) {
+    setNewsfeedStatus(String(e.message || e));
+  }
+};
+document.getElementById("newsfeedCommentSendBtn").onclick = async () => {
+  try {
+    await sendNewsfeedComment();
+  } catch (e) {
+    setNewsfeedCommentStatus(String(e.message || e));
+  }
+};
+document.getElementById("newsfeedCommentsLoadMoreBtn").onclick = async () => {
+  try {
+    await loadNewsfeedComments(false);
+  } catch (e) {
+    setNewsfeedCommentStatus(String(e.message || e));
+  }
+};
+document.getElementById("newsfeedNotifsRefreshBtn").onclick = async () => {
+  try {
+    await refreshNewsfeedNotifs(true);
+  } catch (e) {
+    setNewsfeedStatus(String(e.message || e));
+  }
+};
+document.getElementById("newsfeedConnectBtn").onclick = connectNewsfeedSse;
+document.getElementById("newsfeedDisconnectBtn").onclick = () => {
+  disconnectNewsfeedSse();
+  logNewsfeedSse("Disconnected.");
+};
 
 /* ===================== boot ===================== */
 if (!window.__SKIP_BOOT__) {
