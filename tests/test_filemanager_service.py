@@ -1,5 +1,6 @@
 import io
 import unittest
+import warnings
 import zipfile
 from unittest.mock import Mock, patch
 
@@ -24,9 +25,11 @@ class TestFileManagerService(unittest.TestCase):
 
     def test_upload_zip_rejects_duplicate_paths(self):
         buf = io.BytesIO()
-        with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("dup.txt", b"one")
-            zf.writestr("dup.txt", b"two")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            with zipfile.ZipFile(buf, "w") as zf:
+                zf.writestr("dup.txt", b"one")
+                zf.writestr("dup.txt", b"two")
         buf.seek(0)
         upload = UploadFile(filename="files.zip", file=buf)
 
