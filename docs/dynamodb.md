@@ -15,9 +15,20 @@ This service uses multiple DynamoDB tables to store sessions, MFA devices, recov
 | Alerts | `ALERTS_TABLE_NAME` | Default: `alerts`. |
 | Alert preferences | `ALERT_PREFS_TABLE_NAME` | Default: `alert_prefs`. |
 | Billing data | `BILLING_TABLE_NAME` | Required for Stripe/PayPal/CCBill billing features. |
+| Newsfeed (single-table) | `APP_TABLE` | Required for the newsfeed demo endpoints; default: `app_single_table`. |
 
 ## Table schema overview
 Most tables use a partition key (PK) and optional sort key (SK). The services store JSON-like items that include timestamps (`created_at`, `updated_at`) and user identifiers (`user_sub`, `user_id`).
+
+### Newsfeed single-table layout
+The newsfeed router uses a single-table design with `pk`/`sk` keys and a few item families:
+
+- **Posts**: `pk = POST#<post_id>`, `sk = META` with body, attachments, visibility, and unlock price.
+- **Post comments**: `pk = POST#<post_id>#COMMENTS`, `sk = COMMENT#<created_at>#<comment_id>`.
+- **User feeds**: `pk = USER#<user_id>`, `sk = FEED#<created_at>#<post_id>`.
+- **Notifications**: `pk = NOTIF#<user_id>`, `sk = NOTIF#<created_at>#<notification_id>`.
+- **Hidden posts**: `pk = HIDE#<user_id>`, `sk = POST#<post_id>`.
+- **Unlock records**: `pk = UNLOCK#<user_id>`, `sk = POST#<post_id>`.
 
 ### Billing table
 The billing table is a single-table design storing:

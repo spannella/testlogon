@@ -41,6 +41,11 @@ code.mono, pre.mono, .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Mona
 .right { margin-left:auto; }
 .w100 { width:100%; }
 .hidden { display:none; }
+.newsfeed-item { display:flex; flex-direction:column; gap:6px; }
+.newsfeed-meta { display:flex; gap:8px; flex-wrap:wrap; font-size:12px; color:#555; }
+.newsfeed-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.newsfeed-body { white-space:pre-wrap; }
+.newsfeed-log { max-height:200px; overflow:auto; background:#fafafa; }
 
 a.btnlink { display:inline-block; padding:8px 12px; border:1px solid #999; border-radius:8px; background:#f7f7f7; color:#111; text-decoration:none; }
 a.btnlink.primary { background:#111; color:#fff; border-color:#111; }

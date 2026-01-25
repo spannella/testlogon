@@ -74,6 +74,57 @@
   </div>
 </div>
 
+<div class="row" id="newsfeedSection">
+  <div class="card">
+    <h3>Newsfeed</h3>
+    <div class="muted">Create posts, browse your feed, and manage follows. Uses X-User-Id for identity.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <input id="newsfeedApiBase" placeholder="API base URL" style="flex:1;" />
+      <input id="newsfeedUserId" placeholder="User ID" style="flex:1;" />
+      <button id="newsfeedRefreshBtn">Refresh feed</button>
+    </div>
+    <div class="row-inline" style="margin-top:8px;">
+      <button id="newsfeedConnectBtn">Connect SSE</button>
+      <button id="newsfeedDisconnectBtn">Disconnect</button>
+      <button id="newsfeedLoadMoreBtn">Load more</button>
+    </div>
+    <div class="muted" id="newsfeedStatus" style="margin-top:8px;"></div>
+    <div class="hr"></div>
+    <h4 style="margin:0 0 6px 0;">Create post</h4>
+    <textarea id="newsfeedPostText" placeholder="Share an update..."></textarea>
+    <div class="row-inline" style="margin-top:8px;">
+      <input id="newsfeedPostUnlockPrice" placeholder="Unlock price (cents, optional)" />
+      <button id="newsfeedCreateBtn">Post</button>
+    </div>
+    <div class="section">
+      <h4 style="margin:0 0 6px 0;">Feed</h4>
+      <div id="newsfeedList" class="list"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Newsfeed Details</h3>
+    <div class="row-inline">
+      <span id="newsfeedActivePostLabel" class="pill">No post selected</span>
+      <button id="newsfeedCommentsLoadMoreBtn">Load more comments</button>
+    </div>
+    <div id="newsfeedCommentsList" class="section"></div>
+    <div class="hr"></div>
+    <h4 style="margin:0 0 6px 0;">Add comment</h4>
+    <textarea id="newsfeedCommentText" placeholder="Write a comment..."></textarea>
+    <div class="row-inline" style="margin-top:8px;">
+      <button id="newsfeedCommentSendBtn">Send</button>
+      <span class="muted" id="newsfeedCommentStatus"></span>
+    </div>
+    <div class="hr"></div>
+    <div class="row-inline">
+      <h4 style="margin:0;">Notifications</h4>
+      <button id="newsfeedNotifsRefreshBtn">Refresh</button>
+    </div>
+    <div id="newsfeedNotifsList" class="section"></div>
+    <div class="hr"></div>
+    <h4 style="margin:0 0 6px 0;">Live SSE</h4>
+    <div id="newsfeedSseLog" class="item mono newsfeed-log"></div>
 <div class="row" id="shoppingCartSection">
   <div class="card" style="width:100%">
     <h3>Shopping Cart</h3>
