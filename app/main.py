@@ -27,6 +27,7 @@ from app.routers.messaging import router as messaging_router
 from app.routers.filemanager import router as filemanager_router
 from app.routers.addresses import router as addresses_router
 from app.routers.calendar import router as calendar_router
+from app.routers.purchase_history import router as purchase_history_router
 from app.routers.shoppingcart import router as shoppingcart_router
 from app.routers.catalog import router as catalog_router
 
@@ -71,6 +72,7 @@ def create_app() -> FastAPI:
     app.include_router(filemanager_router)
     app.include_router(addresses_router)
     app.include_router(calendar_router)
+    app.include_router(purchase_history_router)
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)
 

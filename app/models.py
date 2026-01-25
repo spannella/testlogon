@@ -119,6 +119,72 @@ class AlertEmailConfirmReq(BaseModel):
     code: str
 
 
+class PurchaseMoneyIn(BaseModel):
+    amount: float = Field(..., gt=0)
+    currency: str = Field(..., min_length=3, max_length=10)
+
+
+class PurchaseShippingIn(BaseModel):
+    carrier: Optional[str] = None
+    tracking_number: Optional[str] = None
+    shipped_at: Optional[int] = None
+    delivered_at: Optional[int] = None
+    address: Optional[Dict[str, Any]] = None
+
+
+class PurchaseTransactionIn(BaseModel):
+    merchant_id: Optional[str] = None
+    external_ref: Optional[str] = None
+    money: PurchaseMoneyIn
+    description: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class PurchaseTransactionSummary(BaseModel):
+    txn_id: str
+    created_at: int
+    updated_at: int
+    status: str
+    amount: float
+    currency: str
+    merchant_id: Optional[str] = None
+    external_ref: Optional[str] = None
+    description: Optional[str] = None
+
+
+class PurchaseTransactionInfo(PurchaseTransactionSummary):
+    buyer_id: str
+    shipping: Optional[PurchaseShippingIn] = None
+    cancel: Optional[Dict[str, Any]] = None
+    completed_at: Optional[int] = None
+    reverted_at: Optional[int] = None
+    version: int
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class PurchaseTransactionCreated(BaseModel):
+    txn_id: str
+    status: str
+    created_at: int
+
+
+class PurchaseTransactionStatusReq(BaseModel):
+    note: Optional[str] = None
+    reason: Optional[str] = None
+    processor_ref: Optional[str] = None
+
+
+class PurchaseShippingReq(BaseModel):
+    shipping: PurchaseShippingIn
+
+
+class PurchaseCancelReq(BaseModel):
+    reason: Optional[str] = None
+
+
+class PurchaseCancelRespondReq(BaseModel):
+    decision: str
+    note: Optional[str] = None
 class CatalogPageOut(BaseModel):
     next_token: Optional[str] = None
 
