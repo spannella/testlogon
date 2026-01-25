@@ -22,6 +22,8 @@ class Tables:
     profile: Any
     addresses: Any
     calendar: Any
+    purchase_transactions: Any
+    purchase_events: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -38,4 +40,6 @@ T = Tables(
     profile=ddb.Table(S.profile_table_name),
     addresses=ddb.Table(S.addresses_table_name),
     calendar=ddb.Table(S.calendar_table_name),
+    purchase_transactions=ddb.Table(S.purchase_transactions_table_name),
+    purchase_events=ddb.Table(S.purchase_events_table_name),
 )
