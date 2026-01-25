@@ -17,6 +17,7 @@ def new_api_key_secret() -> str:
     return secrets.token_urlsafe(32)
 
 def parse_api_key(api_key: str) -> Dict[str, str]:
+    api_key = (api_key or "").strip()
     if not api_key or not api_key.startswith("ak_") or "." not in api_key:
         raise HTTPException(401, "Invalid API key format")
     kid, secret = api_key.split(".", 1)
@@ -35,24 +36,36 @@ def create_api_key(user_sub: str, label: str) -> Dict[str, Any]:
     key_id = secrets.token_hex(16)
     secret = new_api_key_secret()
     secret_hash = api_key_hash(secret)
-    ttl = ts + 365 * 86400  # 1y; rotate as you like
+    ttl_days = max(S.api_key_ttl_days, 0)
+    ttl = ts + ttl_days * 86400 if ttl_days else 0
 
-    item = with_ttl({
+    item = {
         "key_id": key_id,
         "user_sub": user_sub,
         "secret_hash": secret_hash,
         "label": (label or "")[:64],
         "created_at": ts,
+        "updated_at": ts,
         "last_used_at": 0,
+        "last_used_ip": "",
         "revoked": False,
         "revoked_at": 0,
+        "expires_at": ttl,
         "prefix": f"ak_{key_id[:8]}",
         "allow_cidrs": [],
         "deny_cidrs": [],
-    }, ttl_epoch=ttl)
+    }
+    if ttl:
+        item = with_ttl(item, ttl_epoch=ttl)
 
     T.api_keys.put_item(Item=item)
-    return {"key_id": key_id, "api_key": f"ak_{key_id}.{secret}", "label": item["label"], "created_at": ts}
+    return {
+        "key_id": key_id,
+        "api_key": f"ak_{key_id}.{secret}",
+        "label": item["label"],
+        "created_at": ts,
+        "expires_at": item["expires_at"],
+    }
 
 def revoke_api_key(user_sub: str, key_id: str) -> None:
     try:
@@ -88,8 +101,10 @@ def list_api_keys(user_sub: str) -> List[Dict[str, Any]]:
             "label": it.get("label",""),
             "created_at": it.get("created_at",0),
             "last_used_at": it.get("last_used_at", 0),
+            "last_used_ip": it.get("last_used_ip", ""),
             "revoked": it.get("revoked",False),
             "revoked_at": it.get("revoked_at",0),
+            "expires_at": it.get("expires_at", 0),
             "prefix": it.get("prefix",""),
             "allow_cidrs": it.get("allow_cidrs", []),
             "deny_cidrs": it.get("deny_cidrs", []),
@@ -111,7 +126,26 @@ def check_api_key_allowed(api_key_id: str, api_key_secret: str, client_ip: str) 
     it = T.api_keys.get_item(Key={"key_id": api_key_id}).get("Item")
     if not it or it.get("revoked", False):
         raise HTTPException(401, "Invalid API key")
+    expires_at = int(it.get("expires_at") or 0)
+    if expires_at and now_ts() > expires_at:
+        try:
+            T.api_keys.update_item(
+                Key={"key_id": api_key_id},
+                UpdateExpression="SET revoked = :t, revoked_at = :now",
+                ExpressionAttributeValues={":t": True, ":now": now_ts()},
+            )
+        except Exception:
+            pass
+        raise HTTPException(401, "API key expired")
     enforce_api_key_ip_rules(client_ip, it)
     if api_key_hash(api_key_secret) != it.get("secret_hash"):
         raise HTTPException(401, "Invalid API key")
+    try:
+        T.api_keys.update_item(
+            Key={"key_id": api_key_id},
+            UpdateExpression="SET last_used_at = :now, last_used_ip = :ip",
+            ExpressionAttributeValues={":now": now_ts(), ":ip": client_ip},
+        )
+    except Exception:
+        pass
     return it
