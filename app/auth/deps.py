@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
 from functools import lru_cache
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import jwt
 import requests
@@ -64,29 +65,6 @@ def _decode_cognito_token(token: str) -> Dict[str, Any]:
 
     return payload
 
-async def get_authenticated_user_sub(request: Request) -> str:
-    if _cognito_enabled():
-        auth_header = request.headers.get("authorization", "")
-        if not auth_header.lower().startswith("bearer "):
-            raise HTTPException(401, "Missing bearer token")
-        token = auth_header.split(" ", 1)[1].strip()
-        payload = _decode_cognito_token(token)
-        user_sub = payload.get("sub") or payload.get("cognito:username") or payload.get("username")
-        if not user_sub:
-            raise HTTPException(401, "Token missing subject")
-        return str(user_sub)
-
-    fallback_user = request.headers.get("x-user-sub")
-    if fallback_user:
-        return fallback_user
-
-    raise HTTPException(401, "Auth not configured; provide X-User-Sub for local testing")
-import base64
-import json
-from typing import Optional
-
-from fastapi import HTTPException, Request
-
 
 def _decode_jwt_sub(token: str) -> Optional[str]:
     if token.count(".") != 2:
@@ -112,12 +90,28 @@ def extract_bearer_token(auth_header: Optional[str]) -> str:
         raise HTTPException(401, "Invalid Authorization header")
     return token.strip()
 
+
 async def get_authenticated_user_sub(request: Request) -> str:
     """
     Wire this into your real authentication (Cognito JWT validation, cookies, etc.)
 
     Dev fallback: Authorization: Bearer <user_id>
     """
+    if _cognito_enabled() and isinstance(request, Request):
+        auth_header = request.headers.get("authorization", "")
+        if not auth_header.lower().startswith("bearer "):
+            raise HTTPException(401, "Missing bearer token")
+        token = auth_header.split(" ", 1)[1].strip()
+        payload = _decode_cognito_token(token)
+        user_sub = payload.get("sub") or payload.get("cognito:username") or payload.get("username")
+        if not user_sub:
+            raise HTTPException(401, "Token missing subject")
+        return str(user_sub)
+
+    fallback_user = request.headers.get("x-user-sub")
+    if fallback_user:
+        return fallback_user
+
     auth = request.headers.get("authorization", "")
     token = extract_bearer_token(auth)
     return _decode_jwt_sub(token) or token
