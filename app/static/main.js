@@ -2716,13 +2716,13 @@ function renderNewsfeed(items) {
       <div class="newsfeed-meta">
         <span>${escapeHtml(item.created_at || "")}</span>
         <span>comments: ${escapeHtml(item.comment_count ?? 0)}</span>
-        ${item.locked ? `<span class="pill warn">locked ${escapeHtml(unlockPrice)}</span>` : ""}
+        ${locked ? `<span class="pill warn">locked ${escapeHtml(unlockPrice)}</span>` : ""}
       </div>
       <div class="newsfeed-body">${escapeHtml(newsfeedBodyText(item.body))}</div>
       <div class="newsfeed-actions">
         <button data-action="comments" data-id="${escapeHtml(item.post_id)}">View comments</button>
         <button data-action="hide" data-id="${escapeHtml(item.post_id)}">Hide</button>
-        ${item.locked ? `<button data-action="unlock" data-id="${escapeHtml(item.post_id)}">Unlock</button>` : ""}
+        ${locked ? `<button data-action="unlock" data-id="${escapeHtml(item.post_id)}">Unlock</button>` : ""}
         ${item.user_id && item.user_id !== newsfeedUserId() ? `
           <button data-action="unfollow" data-user="${escapeHtml(item.user_id)}">Unfollow</button>
           <button data-action="refollow" data-user="${escapeHtml(item.user_id)}">Refollow</button>
@@ -2761,6 +2761,17 @@ function renderNewsfeed(items) {
   });
 }
 
+function applyNewsfeedPage(result, { listKey, cursorKey, reset }) {
+  const items = result?.items || [];
+  if (reset) {
+    newsfeedState[listKey] = items;
+  } else {
+    newsfeedState[listKey] = newsfeedState[listKey].concat(items);
+  }
+  newsfeedState[cursorKey] = result?.next_cursor || null;
+  return items;
+}
+
 async function refreshNewsfeed(reset = false) {
   if (!newsfeedUserId()) {
     setNewsfeedStatus("Set a user ID first.");
@@ -2770,14 +2781,12 @@ async function refreshNewsfeed(reset = false) {
   const res = await newsfeedRequest("/feed", {
     qs: { limit: 20, cursor: newsfeedState.feedCursor },
   });
-  const items = res?.items || [];
-  if (reset) {
-    newsfeedState.feedItems = items;
-  } else {
-    newsfeedState.feedItems = newsfeedState.feedItems.concat(items);
-  }
+  const items = applyNewsfeedPage(res, {
+    listKey: "feedItems",
+    cursorKey: "feedCursor",
+    reset,
+  });
   renderNewsfeed(newsfeedState.feedItems);
-  newsfeedState.feedCursor = res?.next_cursor || null;
   setNewsfeedStatus(`Loaded ${items.length} items.`);
 }
 
@@ -2862,14 +2871,12 @@ async function loadNewsfeedComments(reset = false) {
   const res = await newsfeedRequest(`/posts/${encodeURIComponent(newsfeedState.activePostId)}/comments`, {
     qs: { limit: 20, cursor: newsfeedState.commentsCursor },
   });
-  const items = res?.items || [];
-  if (reset) {
-    newsfeedState.commentItems = items;
-  } else {
-    newsfeedState.commentItems = newsfeedState.commentItems.concat(items);
-  }
+  const items = applyNewsfeedPage(res, {
+    listKey: "commentItems",
+    cursorKey: "commentsCursor",
+    reset,
+  });
   renderComments(newsfeedState.commentItems);
-  newsfeedState.commentsCursor = res?.next_cursor || null;
 }
 
 async function sendNewsfeedComment() {
