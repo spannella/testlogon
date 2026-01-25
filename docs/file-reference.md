@@ -71,9 +71,11 @@ This document lists each file in the repository with a short description of its 
 | `app/services/filemanager.py` | File upload/download helpers. |
 | `app/services/mfa.py` | MFA operations (TOTP enrollment, SMS/email verification, recovery codes). |
 | `app/services/profile.py` | User profile helpers. |
+| `app/services/purchase_history.py` | Purchase history data helpers. |
 | `app/services/push.py` | Push notification registration and FCM delivery helpers. |
 | `app/services/rate_limit.py` | Rate limit checks for MFA and alert channels. |
 | `app/services/sessions.py` | UI session creation, step-up challenges, and session revocation helpers. |
+| `app/services/shoppingcart.py` | Shopping cart helpers. |
 | `app/services/ttl.py` | TTL utilities for DynamoDB items. |
 
 ### Routers (`app/routers/`)
@@ -89,15 +91,19 @@ This document lists each file in the repository with a short description of its 
 | `app/routers/billing.py` | Shared billing routes (config, balance, payment methods). |
 | `app/routers/billing_ccbill.py` | CCBill-specific billing routes. |
 | `app/routers/calendar.py` | Calendar event routes. |
+| `app/routers/catalog.py` | Catalog browsing and product detail routes. |
 | `app/routers/filemanager.py` | File manager routes. |
 | `app/routers/messaging.py` | Messaging routes. |
 | `app/routers/mfa_devices.py` | Device management routes for TOTP, SMS, email, and recovery codes. |
 | `app/routers/misc.py` | Miscellaneous routes (health ping, WS token mint). |
+| `app/routers/newsfeed.py` | Newsfeed routes and startup tasks. |
 | `app/routers/password_recovery.py` | Password recovery routes. |
 | `app/routers/paypal.py` | PayPal billing routes and webhooks. |
 | `app/routers/profile.py` | Profile routes. |
+| `app/routers/purchase_history.py` | Purchase history routes. |
 | `app/routers/push.py` | Push device registration and test push routes. |
 | `app/routers/recovery.py` | Recovery code verification routes. |
+| `app/routers/shoppingcart.py` | Shopping cart routes. |
 | `app/routers/ui_mfa.py` | UI step-up MFA routes for TOTP/SMS/email challenges. |
 | `app/routers/ui_session.py` | UI session start/finalize, list, and revoke endpoints. |
 
@@ -121,7 +127,10 @@ This document lists each file in the repository with a short description of its 
 | `tests/test_billing_ccbill.py` | CCBill billing workflow coverage. |
 | `tests/test_billing_routes.py` | Billing endpoint tests. |
 | `tests/test_calendar_routes.py` | Calendar route coverage. |
+| `tests/test_auth_cognito.py` | Cognito auth helper coverage. |
+| `tests/test_auth_deps.py` | Auth dependency behavior coverage. |
 | `tests/test_filemanager_routes.py` | File manager route coverage. |
+| `tests/test_filemanager_service.py` | File manager service helper coverage. |
 | `tests/test_messaging_routes.py` | Messaging route coverage. |
 | `tests/test_normalize.py` | Input normalization coverage. |
 | `tests/test_paypal_helpers.py` | PayPal helper coverage. |
