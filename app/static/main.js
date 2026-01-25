@@ -2394,6 +2394,7 @@ async function refreshAll() {
       refreshProfile(),
       refreshFileManager(),
       refreshAddresses(),
+      refreshShoppingCart(),
       billingRefreshAll(),
       refreshCalendarEvents(),
     ]);
@@ -3342,6 +3343,249 @@ async function saveAddress() {
   await refreshAddresses();
 }
 
+/* ===================== Shopping Cart ===================== */
+const cartState = {
+  carts: [],
+  cartId: "",
+  items: [],
+  totalCents: 0,
+};
+
+function fmtIso(ts) {
+  if (!ts) return "";
+  try { return new Date(ts).toLocaleString(); } catch (e) { return String(ts); }
+}
+
+function setCartStatus(msg) {
+  const el = document.getElementById("cartStatusMsg");
+  if (el) el.textContent = msg || "";
+}
+
+function setCartTotal(cents) {
+  const el = document.getElementById("cartTotal");
+  if (!el) return;
+  el.textContent = fmtMoney(cents || 0, "usd");
+}
+
+function updateCartMeta() {
+  const statusEl = document.getElementById("cartStatus");
+  const metaEl = document.getElementById("cartMeta");
+  if (!statusEl || !metaEl) return;
+  const cart = cartState.carts.find((c) => c.cart_id === cartState.cartId);
+  if (!cart) {
+    statusEl.textContent = "—";
+    statusEl.className = "pill";
+    metaEl.textContent = "";
+    return;
+  }
+  statusEl.textContent = cart.status || "—";
+  const statusClass = cart.status === "OPEN" ? "ok" : cart.status === "PURCHASED" ? "warn" : "bad";
+  statusEl.className = `pill ${statusClass}`;
+  const created = cart.created_at ? `Created ${fmtIso(cart.created_at)}` : "";
+  const purchased = cart.purchased_at ? ` • Purchased ${fmtIso(cart.purchased_at)}` : "";
+  metaEl.textContent = `${created}${purchased}`;
+}
+
+function renderCartSelect() {
+  const sel = document.getElementById("cartSelect");
+  if (!sel) return;
+  sel.innerHTML = "";
+  if (!cartState.carts.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No carts";
+    sel.appendChild(opt);
+    cartState.cartId = "";
+    updateCartMeta();
+    return;
+  }
+  cartState.carts.forEach((cart) => {
+    const opt = document.createElement("option");
+    opt.value = cart.cart_id;
+    opt.textContent = `${cart.cart_id.slice(0, 8)} (${cart.status})`;
+    if (cart.cart_id === cartState.cartId) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  updateCartMeta();
+}
+
+async function refreshCartDetails() {
+  if (!cartState.cartId) {
+    renderCartItems([]);
+    setCartTotal(0);
+    return;
+  }
+  await ensureUiSession();
+  const itemsResp = await apiGet(`/ui/shoppingcart/carts/${cartState.cartId}/items`);
+  cartState.items = itemsResp.items || [];
+  renderCartItems(cartState.items);
+  const totalResp = await apiGet(`/ui/shoppingcart/carts/${cartState.cartId}/total`);
+  cartState.totalCents = totalResp.total_cents || 0;
+  setCartTotal(cartState.totalCents);
+  updateCartMeta();
+}
+
+async function refreshShoppingCart() {
+  const section = document.getElementById("shoppingCartSection");
+  if (!section) return;
+  await ensureUiSession();
+  const carts = await apiGet("/ui/shoppingcart/carts");
+  cartState.carts = Array.isArray(carts) ? carts : [];
+  if (!cartState.cartId || !cartState.carts.find((c) => c.cart_id === cartState.cartId)) {
+    const openCart = cartState.carts.find((c) => c.status === "OPEN");
+    cartState.cartId = (openCart || cartState.carts[0] || {}).cart_id || "";
+  }
+  renderCartSelect();
+  await refreshCartDetails();
+}
+
+function renderCartItems(items) {
+  const body = document.querySelector("#cartItemsTbl tbody");
+  if (!body) return;
+  body.innerHTML = "";
+  if (!items.length) {
+    const row = document.createElement("tr");
+    row.innerHTML = `<td colspan=\"6\" class=\"muted\">No items yet.</td>`;
+    body.appendChild(row);
+    return;
+  }
+  items.forEach((item) => {
+    const row = document.createElement("tr");
+    const qtyId = `cartQty_${item.sku}`;
+    row.innerHTML = `
+      <td class=\"mono\">${escapeHtml(item.sku)}</td>
+      <td>${escapeHtml(item.name)}</td>
+      <td><input id=\"${qtyId}\" type=\"number\" min=\"0\" value=\"${item.quantity}\" style=\"width:80px\"/></td>
+      <td>${fmtMoney(item.unit_price_cents, \"usd\")}</td>
+      <td>${fmtMoney(item.line_total_cents, \"usd\")}</td>
+      <td>
+        <button data-action=\"update\" data-sku=\"${escapeHtml(item.sku)}\">Update</button>
+        <button class=\"danger\" data-action=\"remove\" data-sku=\"${escapeHtml(item.sku)}\">Remove</button>
+      </td>
+    `;
+    row.querySelectorAll("button").forEach((btn) => {
+      btn.onclick = async () => {
+        const action = btn.getAttribute("data-action");
+        const sku = btn.getAttribute("data-sku");
+        if (!sku || !cartState.cartId) return;
+        if (action === "update") {
+          const qtyVal = parseInt(document.getElementById(`cartQty_${sku}`).value, 10);
+          if (Number.isNaN(qtyVal)) return;
+          try {
+            setCartStatus("Updating item...");
+            await ensureUiSession();
+            await apiPatch(`/ui/shoppingcart/carts/${cartState.cartId}/items/${sku}`, { quantity: qtyVal });
+            await refreshCartDetails();
+            setCartStatus("Item updated.");
+          } catch (e) {
+            setCartStatus(String(e));
+          }
+        }
+        if (action === "remove") {
+          if (!confirm(`Remove ${sku} from cart?`)) return;
+          try {
+            setCartStatus("Removing item...");
+            await ensureUiSession();
+            await apiDelete(`/ui/shoppingcart/carts/${cartState.cartId}/items/${sku}`);
+            await refreshCartDetails();
+            setCartStatus("Item removed.");
+          } catch (e) {
+            setCartStatus(String(e));
+          }
+        }
+      };
+    });
+    body.appendChild(row);
+  });
+}
+
+async function startNewCart() {
+  try {
+    setCartStatus("Starting new cart...");
+    await ensureUiSession();
+    const cart = await apiPost("/ui/shoppingcart/carts", {});
+    cartState.cartId = cart.cart_id;
+    await refreshShoppingCart();
+    setCartStatus("Cart created.");
+  } catch (e) {
+    setCartStatus(String(e));
+  }
+}
+
+async function addCartItem() {
+  if (!cartState.cartId) {
+    setCartStatus("No active cart. Start a cart first.");
+    return;
+  }
+  const sku = readInput("cartSku");
+  const name = readInput("cartName");
+  const qty = parseInt(readInput("cartQty"), 10);
+  const price = parseInt(readInput("cartPrice"), 10);
+  if (!sku || !name) {
+    setCartStatus("SKU and name are required.");
+    return;
+  }
+  if (Number.isNaN(qty) || qty <= 0) {
+    setCartStatus("Quantity must be at least 1.");
+    return;
+  }
+  if (Number.isNaN(price) || price < 0) {
+    setCartStatus("Unit price must be 0 or higher.");
+    return;
+  }
+  try {
+    setCartStatus("Adding item...");
+    await ensureUiSession();
+    await apiPost(`/ui/shoppingcart/carts/${cartState.cartId}/items`, {
+      sku,
+      name,
+      quantity: qty,
+      unit_price_cents: price,
+    });
+    await refreshCartDetails();
+    setInputValue("cartSku", "");
+    setInputValue("cartName", "");
+    setCartStatus("Item added.");
+  } catch (e) {
+    setCartStatus(String(e));
+  }
+}
+
+async function purchaseCart() {
+  if (!cartState.cartId) {
+    setCartStatus("No active cart.");
+    return;
+  }
+  if (!confirm("Purchase this cart?")) return;
+  try {
+    setCartStatus("Purchasing...");
+    await ensureUiSession();
+    const res = await apiPost(`/ui/shoppingcart/carts/${cartState.cartId}/purchase`, {});
+    await refreshShoppingCart();
+    setCartStatus(`Purchased cart (order ${res.order_id}).`);
+  } catch (e) {
+    setCartStatus(String(e));
+  }
+}
+
+async function deleteActiveCart() {
+  if (!cartState.cartId) {
+    setCartStatus("No active cart.");
+    return;
+  }
+  if (!confirm("Delete this cart?")) return;
+  try {
+    setCartStatus("Deleting cart...");
+    await ensureUiSession();
+    await apiDelete(`/ui/shoppingcart/carts/${cartState.cartId}`);
+    cartState.cartId = "";
+    await refreshShoppingCart();
+    setCartStatus("Cart deleted.");
+  } catch (e) {
+    setCartStatus(String(e));
+  }
+}
+
 function renderProfileLanguages() {
   const el = document.getElementById("profileLangList");
   if (!el) return;
@@ -4248,6 +4492,24 @@ document.getElementById("addressSearchBtn").onclick = async () => {
   } catch (e) {
     setAddressStatus(String(e));
   }
+};
+
+document.getElementById("cartRefreshBtn").onclick = async () => {
+  try {
+    setCartStatus("Refreshing...");
+    await refreshShoppingCart();
+    setCartStatus("");
+  } catch (e) {
+    setCartStatus(String(e));
+  }
+};
+document.getElementById("cartStartBtn").onclick = startNewCart;
+document.getElementById("cartAddItemBtn").onclick = addCartItem;
+document.getElementById("cartPurchaseBtn").onclick = purchaseCart;
+document.getElementById("cartDeleteBtn").onclick = deleteActiveCart;
+document.getElementById("cartSelect").onchange = async (ev) => {
+  cartState.cartId = ev.target.value || "";
+  await refreshCartDetails();
 };
 
 document.getElementById("accountSuspendBtn").onclick = () => {

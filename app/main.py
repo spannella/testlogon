@@ -28,6 +28,9 @@ from app.routers.filemanager import router as filemanager_router
 from app.routers.addresses import router as addresses_router
 from app.routers.calendar import router as calendar_router
 from app.routers.newsfeed import router as newsfeed_router, startup as newsfeed_startup
+from app.routers.purchase_history import router as purchase_history_router
+from app.routers.shoppingcart import router as shoppingcart_router
+from app.routers.catalog import router as catalog_router
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Security Backend (refactored)", version="0.1.0")
@@ -71,8 +74,10 @@ def create_app() -> FastAPI:
     app.include_router(addresses_router)
     app.include_router(calendar_router)
     app.include_router(newsfeed_router)
-
     app.add_event_handler("startup", newsfeed_startup)
+    app.include_router(purchase_history_router)
+    app.include_router(shoppingcart_router)
+    app.include_router(catalog_router)
 
     return app
 

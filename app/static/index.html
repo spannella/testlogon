@@ -125,6 +125,53 @@
     <div class="hr"></div>
     <h4 style="margin:0 0 6px 0;">Live SSE</h4>
     <div id="newsfeedSseLog" class="item mono newsfeed-log"></div>
+<div class="row" id="shoppingCartSection">
+  <div class="card" style="width:100%">
+    <h3>Shopping Cart</h3>
+    <div class="muted">Create carts, add items, and purchase the active cart.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <button id="cartRefreshBtn">Refresh</button>
+      <button id="cartStartBtn">Start cart</button>
+      <button id="cartPurchaseBtn">Purchase</button>
+      <button id="cartDeleteBtn" class="danger">Delete cart</button>
+    </div>
+    <div class="row-inline" style="margin-top:10px;">
+      <label class="muted">Active cart</label>
+      <select id="cartSelect"></select>
+      <span id="cartStatus" class="pill">—</span>
+      <span class="muted" id="cartMeta"></span>
+    </div>
+    <div class="hr"></div>
+    <div class="section">
+      <h4 style="margin:0 0 6px 0;">Add Item</h4>
+      <div class="row-inline">
+        <input id="cartSku" placeholder="SKU" />
+        <input id="cartName" placeholder="Item name" />
+      </div>
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="cartQty" type="number" min="1" value="1" />
+        <input id="cartPrice" type="number" min="0" value="1999" />
+        <button id="cartAddItemBtn">Add / increment</button>
+      </div>
+      <div class="muted" id="cartStatusMsg" style="margin-top:8px;"></div>
+    </div>
+    <table id="cartItemsTbl">
+      <thead>
+        <tr>
+          <th>SKU</th>
+          <th>Name</th>
+          <th>Qty</th>
+          <th>Unit</th>
+          <th>Line total</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div class="row-inline" style="margin-top:10px;">
+      <span class="muted">Total</span>
+      <span id="cartTotal" class="pill">0.00 USD</span>
+    </div>
   </div>
 </div>
 
