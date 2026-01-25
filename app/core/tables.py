@@ -24,6 +24,8 @@ class Tables:
     calendar: Any
     purchase_transactions: Any
     purchase_events: Any
+    shopping_cart: Any
+    catalog: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -42,4 +44,6 @@ T = Tables(
     calendar=ddb.Table(S.calendar_table_name),
     purchase_transactions=ddb.Table(S.purchase_transactions_table_name),
     purchase_events=ddb.Table(S.purchase_events_table_name),
+    shopping_cart=ddb.Table(S.shopping_cart_table_name),
+    catalog=ddb.Table(S.catalog_table_name),
 )

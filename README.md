@@ -49,6 +49,7 @@ uvicorn app.main:app --reload
 - `TWILIO_*` for SMS MFA.
 - `ALERTS_*` for outbound alert fanout.
 - `PUSH_*` for push notifications (FCM).
+- `API_KEY_TTL_DAYS` to control API key expiration (set to 0 for non-expiring keys).
 
 ## Related docs
 - **Billing**: Stripe details live in [Stripe billing](docs/stripe.md). PayPal details live in [PayPal billing](docs/paypal.md). CCBill details live in [CCBill billing](docs/ccbill.md).

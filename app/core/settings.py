@@ -24,6 +24,7 @@ class Settings:
     api_keys_table_name: str = os.environ.get("API_KEYS_TABLE_NAME", "api_keys")
     api_keys_user_index: str = os.environ.get("API_KEYS_USER_INDEX", "user_sub-index")
     api_key_pepper: str = os.environ.get("API_KEY_PEPPER", "")
+    api_key_ttl_days: int = int(os.environ.get("API_KEY_TTL_DAYS", "365"))
 
     alerts_table_name: str = os.environ.get("ALERTS_TABLE_NAME", "alerts")
     alert_prefs_table_name: str = os.environ.get("ALERT_PREFS_TABLE_NAME", "alert_prefs")
@@ -142,6 +143,10 @@ class Settings:
         "PURCHASE_EVENTS_TABLE_NAME",
         "purchase_transaction_events",
     )
+    # Shopping cart
+    shopping_cart_table_name: str = os.environ.get("SHOPPING_CART_TABLE_NAME", "shopping_cart")
+    # Catalog
+    catalog_table_name: str = os.environ.get("CATALOG_TABLE_NAME", "shopping_catalog")
 
     # File manager
     filemgr_table_name: str = os.environ.get("FILEMGR_TABLE", "")

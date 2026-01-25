@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, conint
 
 class UiSessionStartReq(BaseModel):
     # You can include client metadata; auth is handled separately.
@@ -185,6 +185,84 @@ class PurchaseCancelReq(BaseModel):
 class PurchaseCancelRespondReq(BaseModel):
     decision: str
     note: Optional[str] = None
+class CatalogPageOut(BaseModel):
+    next_token: Optional[str] = None
+
+
+class CatalogCategoryCreateIn(BaseModel):
+    category_id: Optional[str] = None
+    name: str
+    description: Optional[str] = None
+
+
+class CatalogCategoryOut(BaseModel):
+    category_id: str
+    name: str
+    description: Optional[str] = None
+    created_at: str
+
+
+class CatalogCategoryListOut(CatalogPageOut):
+    items: List[CatalogCategoryOut]
+
+
+class CatalogItemCreateIn(BaseModel):
+    item_id: Optional[str] = None
+    name: str
+    description: Optional[str] = None
+    price_cents: int = Field(ge=0, le=10_000_000_00)
+    currency: str = "USD"
+    image_urls: List[str] = Field(default_factory=list)
+    attributes: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CatalogItemPatchIn(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    price_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000_00)
+    currency: Optional[str] = None
+    image_urls: Optional[List[str]] = None
+    attributes: Optional[Dict[str, Any]] = None
+
+
+class CatalogItemOut(BaseModel):
+    category_id: str
+    item_id: str
+    name: str
+    description: Optional[str] = None
+    price_cents: int
+    currency: str
+    image_urls: List[str]
+    attributes: Dict[str, Any]
+    created_at: str
+    updated_at: str
+
+
+class CatalogItemListOut(CatalogPageOut):
+    items: List[CatalogItemOut]
+
+
+class CatalogReviewCreateIn(BaseModel):
+    review_id: Optional[str] = None
+    rating: int = Field(ge=1, le=5)
+    title: Optional[str] = None
+    body: Optional[str] = None
+    reviewer: Optional[str] = None
+
+
+class CatalogReviewOut(BaseModel):
+    item_id: str
+    review_id: str
+    rating: int
+    title: Optional[str] = None
+    body: Optional[str] = None
+    reviewer: Optional[str] = None
+    created_at: str
+
+
+class CatalogReviewListOut(CatalogPageOut):
+    items: List[CatalogReviewOut]
+
 
 class TotpDeviceBeginReq(BaseModel):
     label: Optional[str] = None
@@ -266,6 +344,54 @@ class SetDefaultIn(BaseModel):
 
 class SetAutopayIn(BaseModel):
     enabled: bool
+
+
+class ShoppingCartSummary(BaseModel):
+    cart_id: str
+    status: str
+    created_at: str
+    purchased_at: Optional[str] = None
+    purchased_total_cents: Optional[int] = None
+    currency: str = "USD"
+
+
+class ShoppingCartItemIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=256)
+    quantity: conint(ge=1, le=1000) = 1
+    unit_price_cents: conint(ge=0, le=100000000)
+
+
+class ShoppingCartItemOut(BaseModel):
+    sku: str
+    name: str
+    quantity: int
+    unit_price_cents: int
+    line_total_cents: int
+    updated_at: str
+
+
+class ShoppingCartItemsOut(BaseModel):
+    cart_id: str
+    items: List[ShoppingCartItemOut]
+
+
+class ShoppingCartUpdateQtyIn(BaseModel):
+    quantity: conint(ge=0, le=1000)
+
+
+class ShoppingCartTotalOut(BaseModel):
+    cart_id: str
+    total_cents: int
+    currency: str = "USD"
+
+
+class ShoppingCartPurchaseOut(BaseModel):
+    cart_id: str
+    order_id: str
+    purchased_at: str
+    purchased_total_cents: int
+    currency: str = "USD"
 
 
 class CalendarCreateIn(BaseModel):
