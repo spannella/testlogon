@@ -22,6 +22,7 @@ class Tables:
     profile: Any
     addresses: Any
     calendar: Any
+    catalog: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -38,4 +39,5 @@ T = Tables(
     profile=ddb.Table(S.profile_table_name),
     addresses=ddb.Table(S.addresses_table_name),
     calendar=ddb.Table(S.calendar_table_name),
+    catalog=ddb.Table(S.catalog_table_name),
 )
