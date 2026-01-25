@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import os
 import time
@@ -16,6 +15,7 @@ from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from app.core.aws import ddb
+from app.core.cursor import decode_cursor, encode_cursor
 from app.core.settings import S
 
 # -----------------------------
@@ -45,21 +45,13 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
-def encode_cursor(last_evaluated_key: Optional[Dict[str, Any]]) -> Optional[str]:
-    if not last_evaluated_key:
-        return None
-    raw = json.dumps(last_evaluated_key).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("utf-8")
-
-
-def decode_cursor(cursor: Optional[str]) -> Optional[Dict[str, Any]]:
+def decode_cursor_or_400(cursor: Optional[str]) -> Optional[Dict[str, Any]]:
     if not cursor:
         return None
-    try:
-        raw = base64.urlsafe_b64decode(cursor.encode("utf-8"))
-        return json.loads(raw.decode("utf-8"))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid cursor") from exc
+    decoded = decode_cursor(cursor)
+    if decoded is None:
+        raise HTTPException(status_code=400, detail="Invalid cursor")
+    return decoded
 
 
 def require_user(x_user_id: Optional[str], user_id_qs: Optional[str] = None) -> str:
@@ -611,7 +603,7 @@ def view_feed(
     x_user_id: Optional[str] = Header(default=None),
 ):
     user_id = require_user(x_user_id)
-    eks = decode_cursor(cursor)
+    eks = decode_cursor_or_400(cursor)
 
     resp = ddb_query(
         IndexName="GSI1",
@@ -796,7 +788,7 @@ def list_comments(
     if post.get("locked") and post.get("user_id") != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required to view comments")
 
-    eks = decode_cursor(cursor)
+    eks = decode_cursor_or_400(cursor)
     resp = ddb_query(
         IndexName="GSI2",
         KeyConditionExpression="GSI2PK = :pk",
@@ -1017,7 +1009,7 @@ def list_notifications(
     x_user_id: Optional[str] = Header(default=None),
 ):
     user_id = require_user(x_user_id)
-    eks = decode_cursor(cursor)
+    eks = decode_cursor_or_400(cursor)
 
     resp = ddb_query(
         IndexName="GSI3",

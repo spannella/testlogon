@@ -10,6 +10,7 @@ from app.core.normalize import normalize_email, normalize_phone
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
+from app.services.filemanager import upload_profile_photo
 
 PROFILE_FIELDS = (
     "display_name",
@@ -186,6 +187,20 @@ def get_profile(user_sub: str) -> Dict[str, Any]:
     return merged
 
 
+def get_profile_identity(user_sub: str) -> Dict[str, Optional[str]]:
+    profile = get_profile(user_sub)
+    display_name = profile.get("display_name")
+    if not display_name:
+        parts = [profile.get("first_name"), profile.get("last_name")]
+        display_name = " ".join(p for p in parts if p) or None
+    return {
+        "display_name": display_name,
+        "email": profile.get("displayed_email"),
+        "phone": profile.get("displayed_telephone_number"),
+        "profile_photo_url": profile.get("profile_photo_url"),
+    }
+
+
 def get_audit_log(user_sub: str) -> List[Dict[str, Any]]:
     item = T.profile.get_item(Key={"user_sub": user_sub}).get("Item")
     return list(item.get("audit", [])) if item else []
@@ -224,11 +239,27 @@ def apply_profile_update(user_sub: str, updates: Dict[str, Any], *, replace: boo
     return updated
 
 
-def store_profile_photo(user_sub: str, kind: str, file_name: str, content: bytes) -> str:
+def store_profile_photo(
+    user_sub: str,
+    kind: str,
+    file_name: str,
+    content: bytes,
+    *,
+    content_type: Optional[str] = None,
+) -> str:
     if kind not in {"profile", "cover"}:
         raise HTTPException(400, "invalid photo kind")
     if len(content) > MAX_PHOTO_BYTES:
         raise HTTPException(400, "photo too large")
+    if S.filemgr_table_name and S.filemgr_bucket:
+        result = upload_profile_photo(
+            user_sub,
+            kind=kind,
+            file_name=file_name,
+            content=content,
+            content_type=content_type,
+        )
+        return result["url"]
     safe_name = file_name.replace("/", "_")
     upload_dir = Path(__file__).resolve().parents[1] / "static" / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)

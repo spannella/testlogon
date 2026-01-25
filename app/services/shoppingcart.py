@@ -10,6 +10,8 @@ from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
 from app.core.tables import T
+from app.services.profile import get_profile
+from app.services.purchase_history import record_cart_purchase
 
 
 def _now_iso() -> str:
@@ -26,6 +28,10 @@ def _cart_sk(cart_id: str) -> str:
 
 def _item_sk(cart_id: str, sku: str) -> str:
     return f"CART#{cart_id}#ITEM#{sku}"
+
+
+def _catalog_item_key(category_id: str, item_id: str) -> Dict[str, str]:
+    return {"PK": f"CAT#{category_id}", "SK": f"ITEM#{item_id}"}
 
 
 def _ddb_int(value: Any) -> int:
@@ -56,6 +62,18 @@ def _item_from_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "line_total_cents": qty * unit,
         "updated_at": item.get("updated_at"),
     }
+
+
+def _buyer_snapshot(profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    buyer = {
+        "display_name": profile.get("display_name"),
+        "displayed_email": profile.get("displayed_email"),
+        "displayed_telephone_number": profile.get("displayed_telephone_number"),
+        "mailing_address": profile.get("mailing_address"),
+    }
+    if not any(buyer.values()):
+        return None
+    return buyer
 
 
 def get_cart(user_sub: str, cart_id: str) -> Dict[str, Any]:
@@ -149,6 +167,35 @@ def add_item(user_sub: str, cart_id: str, payload: Dict[str, Any]) -> Dict[str, 
     return _item_from_item(item)
 
 
+def add_catalog_item(
+    user_sub: str,
+    cart_id: str,
+    *,
+    category_id: str,
+    item_id: str,
+    quantity: int = 1,
+) -> Dict[str, Any]:
+    cart = get_cart(user_sub, cart_id)
+    _require_open_cart(cart)
+
+    resp = T.catalog.get_item(Key=_catalog_item_key(category_id, item_id))
+    item = resp.get("Item")
+    if not item or item.get("entity") != "item":
+        raise HTTPException(status_code=404, detail="Catalog item not found")
+
+    currency = item.get("currency", "USD")
+    if cart.get("currency") and cart.get("currency") != currency:
+        raise HTTPException(status_code=409, detail="Cart currency mismatch")
+
+    payload = {
+        "sku": f"catalog:{item_id}",
+        "name": item.get("name", "Catalog item"),
+        "quantity": quantity,
+        "unit_price_cents": int(item.get("price_cents", 0)),
+    }
+    return add_item(user_sub, cart_id, payload)
+
+
 def set_item_quantity(user_sub: str, cart_id: str, sku: str, quantity: int) -> Optional[Dict[str, Any]]:
     cart = get_cart(user_sub, cart_id)
     _require_open_cart(cart)
@@ -213,19 +260,28 @@ def purchase_cart(user_sub: str, cart_id: str) -> Dict[str, Any]:
     total_cents = cart_total_cents(user_sub, cart_id)
     now = _now_iso()
     order_id = uuid.uuid4().hex
+    buyer = _buyer_snapshot(get_profile(user_sub))
 
     try:
+        update_expr = (
+            "SET #status = :status, purchased_at = :purchased_at, "
+            "purchased_total_cents = :total, last_order_id = :order_id"
+        )
+        expr_values = {
+            ":status": "PURCHASED",
+            ":purchased_at": now,
+            ":total": total_cents,
+            ":order_id": order_id,
+            ":open": "OPEN",
+        }
+        if buyer:
+            update_expr = f"{update_expr}, buyer_profile = :buyer"
+            expr_values[":buyer"] = buyer
         T.shopping_cart.update_item(
             Key={"PK": cart["PK"], "SK": cart["SK"]},
-            UpdateExpression="SET #status = :status, purchased_at = :purchased_at, purchased_total_cents = :total, last_order_id = :order_id",
+            UpdateExpression=update_expr,
             ExpressionAttributeNames={"#status": "status"},
-            ExpressionAttributeValues={
-                ":status": "PURCHASED",
-                ":purchased_at": now,
-                ":total": total_cents,
-                ":order_id": order_id,
-                ":open": "OPEN",
-            },
+            ExpressionAttributeValues=expr_values,
             ConditionExpression="#status = :open",
         )
     except ClientError as exc:
@@ -233,10 +289,23 @@ def purchase_cart(user_sub: str, cart_id: str) -> Dict[str, Any]:
             raise HTTPException(status_code=409, detail="Cart is not open") from exc
         raise HTTPException(status_code=500, detail="Failed to purchase cart") from exc
 
+    items = list_items(user_sub, cart_id)
+    txn_id = record_cart_purchase(
+        user_sub=user_sub,
+        cart_id=cart_id,
+        order_id=order_id,
+        total_cents=total_cents,
+        currency=cart.get("currency", "USD"),
+        items=items,
+        buyer=buyer,
+    )
+
     return {
         "cart_id": cart_id,
         "order_id": order_id,
         "purchased_at": now,
         "purchased_total_cents": total_cents,
         "currency": cart.get("currency", "USD"),
+        "buyer": buyer,
+        "purchase_txn_id": txn_id,
     }

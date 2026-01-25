@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from app.auth.deps import extract_bearer_token, get_authenticated_user_sub
 from app.core.aws import ddb
 from app.core.settings import S
+from app.services.alerts import audit_event
 from app.services.sessions import require_ui_session
 
 # -------------------------
@@ -446,7 +447,11 @@ def search_contact(
 # Conversations
 # -------------------------
 @router.post("/conversations", response_model=ConversationOut)
-def start_conversation(inp: StartConversationIn, user_id: str = Depends(get_messaging_user_id)):
+def start_conversation(
+    inp: StartConversationIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
     cid = "c_" + new_id()
     created_at = now_ts()
 
@@ -485,7 +490,7 @@ def start_conversation(inp: StartConversationIn, user_id: str = Depends(get_mess
             }
         )
 
-    return ConversationOut(
+    convo = ConversationOut(
         conversation_id=cid,
         type=inp.type,
         title=inp.title,
@@ -498,22 +503,37 @@ def start_conversation(inp: StartConversationIn, user_id: str = Depends(get_mess
         muted_until=0,
         last_read_at=0,
     )
+    audit_event(
+        "messaging_conversation_started",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=cid,
+        conversation_type=inp.type,
+        participant_count=len(participant_ids),
+    )
+    return convo
 
 
 @router.post("/conversations/group", response_model=ConversationOut)
-def start_group_conversation(inp: StartGroupConversationIn, user_id: str = Depends(get_messaging_user_id)):
+def start_group_conversation(
+    inp: StartGroupConversationIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
     return start_conversation(
         StartConversationIn(
             participant_ids=inp.participant_ids,
             type="group",
             title=inp.title,
         ),
+        req,
         user_id=user_id,
     )
 
 
 @router.post("/conversations/{conversation_id}/accept")
-def accept_conversation(conversation_id: str, user_id: str = Depends(get_messaging_user_id)):
+def accept_conversation(conversation_id: str, req: Request = None, user_id: str = Depends(get_messaging_user_id)):
     part = get_participant_any(user_id, conversation_id)
     if not part:
         raise HTTPException(404, "Not invited")
@@ -529,6 +549,13 @@ def accept_conversation(conversation_id: str, user_id: str = Depends(get_messagi
         ExpressionAttributeNames={"#s": "status"},
         ExpressionAttributeValues={":active": "active", ":ts": ts, ":pending": "pending"},
         ConditionExpression="#s = :pending",
+    )
+    audit_event(
+        "messaging_conversation_accepted",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
     )
     return {"ok": True}
 
@@ -565,7 +592,7 @@ def list_conversations(user_id: str = Depends(get_messaging_user_id)):
 
 
 @router.post("/conversations/{conversation_id}/mute")
-def mute_conversation(conversation_id: str, inp: MuteIn, user_id: str = Depends(get_messaging_user_id)):
+def mute_conversation(conversation_id: str, inp: MuteIn, req: Request = None, user_id: str = Depends(get_messaging_user_id)):
     part = get_participant_any(user_id, conversation_id)
     if not part:
         raise HTTPException(404, "Conversation not found for user")
@@ -574,11 +601,19 @@ def mute_conversation(conversation_id: str, inp: MuteIn, user_id: str = Depends(
         UpdateExpression="SET muted_until = :mu",
         ExpressionAttributeValues={":mu": int(inp.muted_until)},
     )
+    audit_event(
+        "messaging_conversation_muted",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        muted_until=int(inp.muted_until),
+    )
     return {"ok": True, "muted_until": int(inp.muted_until)}
 
 
 @router.post("/conversations/{conversation_id}/leave")
-def leave_conversation(conversation_id: str, user_id: str = Depends(get_messaging_user_id)):
+def leave_conversation(conversation_id: str, req: Request = None, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
     ts = now_ts()
 
@@ -595,11 +630,18 @@ def leave_conversation(conversation_id: str, user_id: str = Depends(get_messagin
         UpdateExpression="ADD participant_count :neg",
         ExpressionAttributeValues={":neg": -1},
     )
+    audit_event(
+        "messaging_conversation_left",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+    )
     return {"ok": True}
 
 
 @router.delete("/conversations/{conversation_id}")
-def delete_conversation_if_last(conversation_id: str, user_id: str = Depends(get_messaging_user_id)):
+def delete_conversation_if_last(conversation_id: str, req: Request = None, user_id: str = Depends(get_messaging_user_id)):
     resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
     items = resp.get("Items", [])
     active = [x for x in items if x.get("status") == "active"]
@@ -613,6 +655,13 @@ def delete_conversation_if_last(conversation_id: str, user_id: str = Depends(get
     for p in items:
         tbl_parts.delete_item(Key={"user_id": p["user_id"], "conversation_id": conversation_id})
 
+    audit_event(
+        "messaging_conversation_deleted",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+    )
     return {"ok": True, "deleted": True}
 
 
@@ -697,7 +746,12 @@ def list_messages(
 
 
 @router.post("/conversations/{conversation_id}/messages", response_model=MessageOut)
-def send_text_message(conversation_id: str, inp: SendTextMessageIn, user_id: str = Depends(get_messaging_user_id)):
+def send_text_message(
+    conversation_id: str,
+    inp: SendTextMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
     require_participant_active(user_id, conversation_id)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
@@ -726,7 +780,7 @@ def send_text_message(conversation_id: str, inp: SendTextMessageIn, user_id: str
         ExpressionAttributeValues={":ts": ts, ":p": preview},
     )
 
-    return MessageOut(
+    message = MessageOut(
         conversation_id=conversation_id,
         message_id=mid,
         sender_id=user_id,
@@ -735,6 +789,17 @@ def send_text_message(conversation_id: str, inp: SendTextMessageIn, user_id: str
         text=inp.text,
         reply_to_message_id=inp.reply_to_message_id,
     )
+    audit_event(
+        "messaging_message_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=mid,
+        kind="text",
+        reply_to_message_id=inp.reply_to_message_id,
+    )
+    return message
 
 
 @router.post("/conversations/{conversation_id}/images/presign", response_model=PresignOut)
@@ -750,7 +815,12 @@ def presign_image_upload(conversation_id: str, inp: SendImagePresignIn, user_id:
 
 
 @router.post("/conversations/{conversation_id}/messages/image", response_model=MessageOut)
-def create_image_message(conversation_id: str, inp: CreateImageMessageIn, user_id: str = Depends(get_messaging_user_id)):
+def create_image_message(
+    conversation_id: str,
+    inp: CreateImageMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
     require_participant_active(user_id, conversation_id)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
@@ -784,7 +854,7 @@ def create_image_message(conversation_id: str, inp: CreateImageMessageIn, user_i
         ExpressionAttributeValues={":ts": ts, ":p": "[image]"},
     )
 
-    return MessageOut(
+    message = MessageOut(
         conversation_id=conversation_id,
         message_id=mid,
         sender_id=user_id,
@@ -793,10 +863,21 @@ def create_image_message(conversation_id: str, inp: CreateImageMessageIn, user_i
         image=item["image"],
         reply_to_message_id=inp.reply_to_message_id,
     )
+    audit_event(
+        "messaging_message_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=mid,
+        kind="image",
+        reply_to_message_id=inp.reply_to_message_id,
+    )
+    return message
 
 
 @router.post("/conversations/{conversation_id}/read")
-def mark_read(conversation_id: str, inp: MarkReadIn, user_id: str = Depends(get_messaging_user_id)):
+def mark_read(conversation_id: str, inp: MarkReadIn, req: Request = None, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
 
     part = get_participant_any(user_id, conversation_id) or {}
@@ -808,16 +889,37 @@ def mark_read(conversation_id: str, inp: MarkReadIn, user_id: str = Depends(get_
         UpdateExpression="SET last_read_at = :v",
         ExpressionAttributeValues={":v": newv},
     )
+    audit_event(
+        "messaging_conversation_read",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        last_read_at=newv,
+    )
     return {"ok": True, "last_read_at": newv}
 
 
 @router.delete("/conversations/{conversation_id}/messages/{message_id}")
-def delete_message_for_me(conversation_id: str, message_id: str, user_id: str = Depends(get_messaging_user_id)):
+def delete_message_for_me(
+    conversation_id: str,
+    message_id: str,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
     require_participant_active(user_id, conversation_id)
     tbl_msgs.update_item(
         Key={"conversation_id": conversation_id, "message_id": message_id},
         UpdateExpression="ADD deleted_for :u",
         ExpressionAttributeValues={":u": {user_id}},
+    )
+    audit_event(
+        "messaging_message_deleted",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
     )
     return {"ok": True}
 
@@ -826,7 +928,13 @@ def delete_message_for_me(conversation_id: str, message_id: str, user_id: str = 
 # React to message
 # -------------------------
 @router.post("/conversations/{conversation_id}/messages/{message_id}/reactions")
-def react_to_message(conversation_id: str, message_id: str, inp: ReactIn, user_id: str = Depends(get_messaging_user_id)):
+def react_to_message(
+    conversation_id: str,
+    message_id: str,
+    inp: ReactIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
     require_participant_active(user_id, conversation_id)
 
     expr_names = {"#e": inp.emoji}
@@ -862,6 +970,16 @@ def react_to_message(conversation_id: str, message_id: str, inp: ReactIn, user_i
         },
         respect_mute=False,
     )
+    audit_event(
+        "messaging_message_reaction",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+        emoji=inp.emoji,
+        action=inp.action,
+    )
     return {"ok": True}
 
 
@@ -869,7 +987,13 @@ def react_to_message(conversation_id: str, message_id: str, inp: ReactIn, user_i
 # Edit message (+ edit history)
 # -------------------------
 @router.patch("/conversations/{conversation_id}/messages/{message_id}", response_model=MessageOut)
-def edit_message(conversation_id: str, message_id: str, inp: EditMessageIn, user_id: str = Depends(get_messaging_user_id)):
+def edit_message(
+    conversation_id: str,
+    message_id: str,
+    inp: EditMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
     require_participant_active(user_id, conversation_id)
 
     msg = _get_message_or_404(conversation_id, message_id)
@@ -935,7 +1059,7 @@ def edit_message(conversation_id: str, message_id: str, inp: EditMessageIn, user
         respect_mute=False,
     )
 
-    return MessageOut(
+    message = MessageOut(
         conversation_id=item["conversation_id"],
         message_id=item["message_id"],
         sender_id=item["sender_id"],
@@ -951,6 +1075,15 @@ def edit_message(conversation_id: str, message_id: str, inp: EditMessageIn, user
         reactions_counts=counts if counts else None,
         my_reactions=mine if mine else None,
     )
+    audit_event(
+        "messaging_message_edited",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+    )
+    return message
 
 
 # -------------------------
@@ -994,6 +1127,7 @@ def get_edit_history(
 def forward_message(
     target_conversation_id: str,
     inp: ForwardMessageIn,
+    req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, target_conversation_id)
@@ -1058,7 +1192,7 @@ def forward_message(
         respect_mute=False,
     )
 
-    return MessageOut(
+    message = MessageOut(
         conversation_id=target_conversation_id,
         message_id=mid,
         sender_id=user_id,
@@ -1070,6 +1204,17 @@ def forward_message(
         forwarded_from=item.get("forwarded_from"),
         forward_note=item.get("forward_note"),
     )
+    audit_event(
+        "messaging_message_forwarded",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=target_conversation_id,
+        message_id=mid,
+        source_conversation_id=inp.source_conversation_id,
+        source_message_id=inp.source_message_id,
+    )
+    return message
 
 
 # -------------------------
@@ -1080,6 +1225,7 @@ def mark_message_viewed(
     conversation_id: str,
     message_id: str,
     inp: ViewMessageIn,
+    req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
 ):
     """
@@ -1119,13 +1265,23 @@ def mark_message_viewed(
         respect_mute=False,
     )
 
-    return ViewAckOut(
+    ack = ViewAckOut(
         ok=True,
         conversation_id=conversation_id,
         message_id=message_id,
         viewer_id=user_id,
         viewed_at=ts,
     )
+    audit_event(
+        "messaging_message_viewed",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+        viewed_at=ts,
+    )
+    return ack
 
 
 @router.get("/conversations/{conversation_id}/messages/{message_id}/views", response_model=List[MessageViewOut])

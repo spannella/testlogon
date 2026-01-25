@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile, Body
+from fastapi import APIRouter, Depends, File, Query, UploadFile, Body, Request
 from fastapi.responses import StreamingResponse
 
 from app.services.filemanager import (
@@ -23,6 +23,7 @@ from app.services.filemanager import (
     upload_zip,
     get_node,
 )
+from app.services.alerts import audit_event
 from app.services.sessions import require_ui_session
 
 router = APIRouter(prefix="/v1/fs", tags=["filemanager"])
@@ -81,25 +82,45 @@ def search_filenames(
 
 
 @router.post("/folder")
-def create_folder(path: str = Body(..., embed=True), user: str = Depends(_current_user)):
-    return {"ok": True, "path": create_empty_folder(user, path)}
+def create_folder(path: str = Body(..., embed=True), req: Request = None, user: str = Depends(_current_user)):
+    folder = create_empty_folder(user, path)
+    audit_event("filemgr_folder_created", user, req, outcome="success", path=folder)
+    return {"ok": True, "path": folder}
 
 
 @router.post("/upload")
 def upload_fs_file(
     path: str = Query(..., description="Full file path, e.g. /docs/a.txt"),
     file: UploadFile = File(...),
+    req: Request = None,
     user: str = Depends(_current_user),
 ):
     result = upload_file(user, path, file)
+    audit_event(
+        "filemgr_file_uploaded",
+        user,
+        req,
+        outcome="success",
+        path=result.get("path"),
+        size=result.get("size"),
+        content_type=file.content_type,
+    )
     return {"ok": True, **result}
 
 
 @router.get("/download")
-def download_fs_file(path: str = Query(...), user: str = Depends(_current_user)):
+def download_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
     result = download_file(user, path)
     node = result["node"]
     obj = result["object"]
+    audit_event(
+        "filemgr_file_downloaded",
+        user,
+        req,
+        outcome="success",
+        path=node.get("path"),
+        size=node.get("size"),
+    )
 
     def gen():
         body = obj["Body"]
@@ -117,28 +138,64 @@ def download_fs_file(path: str = Query(...), user: str = Depends(_current_user))
 
 
 @router.delete("/file")
-def remove_fs_file(path: str = Query(...), user: str = Depends(_current_user)):
+def remove_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
     remove_file(user, path)
+    audit_event("filemgr_file_removed", user, req, outcome="success", path=path)
     return {"ok": True}
 
 
 @router.delete("/folder")
-def remove_fs_folder(path: str = Query(...), user: str = Depends(_current_user)):
+def remove_fs_folder(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
     deleted_count = remove_folder(user, path)
+    audit_event(
+        "filemgr_folder_removed",
+        user,
+        req,
+        outcome="success",
+        path=path,
+        deleted_count=deleted_count,
+    )
     return {"ok": True, "deleted_count": deleted_count}
 
 
 @router.post("/move")
-def move_fs_node(src: str = Body(..., embed=True), dst: str = Body(..., embed=True), user: str = Depends(_current_user)):
+def move_fs_node(
+    src: str = Body(..., embed=True),
+    dst: str = Body(..., embed=True),
+    req: Request = None,
+    user: str = Depends(_current_user),
+):
     result = move_node(user, src, dst)
+    audit_event(
+        "filemgr_node_moved",
+        user,
+        req,
+        outcome="success",
+        src=result.get("src"),
+        dst=result.get("dst"),
+        node_type=result.get("type"),
+    )
     return {"ok": True, **result}
 
 
 @router.post("/rename-file")
-def rename_file(path: str = Body(..., embed=True), new_name: str = Body(..., embed=True), user: str = Depends(_current_user)):
+def rename_file(
+    path: str = Body(..., embed=True),
+    new_name: str = Body(..., embed=True),
+    req: Request = None,
+    user: str = Depends(_current_user),
+):
     parent, _ = split_parent_name(norm_path(path, is_folder=False))
     dst = parent + new_name
     result = move_node(user, path, dst)
+    audit_event(
+        "filemgr_file_renamed",
+        user,
+        req,
+        outcome="success",
+        src=result.get("src"),
+        dst=result.get("dst"),
+    )
     return {"ok": True, **result}
 
 
@@ -146,18 +203,34 @@ def rename_file(path: str = Body(..., embed=True), new_name: str = Body(..., emb
 def rename_folder(
     path: str = Body(..., embed=True),
     new_name: str = Body(..., embed=True),
+    req: Request = None,
     user: str = Depends(_current_user),
 ):
     folder = norm_path(path, is_folder=True)
     parent, _ = split_parent_name(folder)
     dst = parent + new_name + "/"
     result = move_node(user, folder, dst)
+    audit_event(
+        "filemgr_folder_renamed",
+        user,
+        req,
+        outcome="success",
+        src=result.get("src"),
+        dst=result.get("dst"),
+    )
     return {"ok": True, **result}
 
 
 @router.post("/download-zip")
-def download_multiple_as_zip(paths: List[str] = Body(...), user: str = Depends(_current_user)):
+def download_multiple_as_zip(paths: List[str] = Body(...), req: Request = None, user: str = Depends(_current_user)):
     buf = download_zip(user, paths)
+    audit_event(
+        "filemgr_zip_downloaded",
+        user,
+        req,
+        outcome="success",
+        count=len(paths),
+    )
 
     def zip_stream():
         yield from iter(lambda: buf.read(1024 * 1024), b"")
@@ -173,9 +246,18 @@ def download_multiple_as_zip(paths: List[str] = Body(...), user: str = Depends(_
 def upload_zip_and_extract(
     dest_folder: str = Query("/", description="Folder to extract into"),
     zip_file: UploadFile = File(...),
+    req: Request = None,
     user: str = Depends(_current_user),
 ):
     created = upload_zip(user, dest_folder, zip_file)
+    audit_event(
+        "filemgr_zip_uploaded",
+        user,
+        req,
+        outcome="success",
+        dest_folder=dest_folder,
+        count=len(created),
+    )
     return {"ok": True, "created": created, "count": len(created)}
 
 
@@ -183,9 +265,18 @@ def upload_zip_and_extract(
 def share_fs_node(
     path: str = Body(..., embed=True),
     to_user: str = Body(..., embed=True),
+    req: Request = None,
     user: str = Depends(_current_user),
 ):
     share_node(user, path, to_user)
+    audit_event(
+        "filemgr_node_shared",
+        user,
+        req,
+        outcome="success",
+        path=path,
+        shared_with=to_user,
+    )
     return {"ok": True}
 
 

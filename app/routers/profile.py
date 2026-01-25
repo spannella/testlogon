@@ -48,7 +48,13 @@ if _MULTIPART_AVAILABLE:
         ctx=Depends(require_ui_session),
     ):
         content = await file.read()
-        url = store_profile_photo(ctx["user_sub"], kind, file.filename or "upload.bin", content)
+        url = store_profile_photo(
+            ctx["user_sub"],
+            kind,
+            file.filename or "upload.bin",
+            content,
+            content_type=file.content_type,
+        )
         updates = {"profile_photo_url": url} if kind == "profile" else {"cover_photo_url": url}
         profile = apply_profile_update(ctx["user_sub"], updates, replace=False)
         audit_event("profile_photo_upload", ctx["user_sub"], req, outcome="success", kind=kind)

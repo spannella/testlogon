@@ -8,6 +8,14 @@ from fastapi import HTTPException
 
 from app.core.tables import T
 from app.core.time import now_ts
+from app.services.profile import get_profile
+
+
+def _safe_profile(user_sub: str) -> Dict[str, Any]:
+    try:
+        return get_profile(user_sub)
+    except Exception:
+        return {}
 
 def _txn_sk(created_at: int, txn_id: str) -> str:
     return f"TXN#{created_at}#{txn_id}"
@@ -20,17 +28,20 @@ def _event_sk(ts: int, event_id: str) -> str:
 def _record_event(txn_id: str, user_sub: str, event_name: str, payload: Dict[str, Any]) -> None:
     ts = now_ts()
     event_id = uuid4().hex
-    T.purchase_events.put_item(
-        Item={
-            "pk": f"TXN#{txn_id}",
-            "sk": _event_sk(ts, event_id),
-            "txn_id": txn_id,
-            "user_sub": user_sub,
-            "event_name": event_name,
-            "payload": payload,
-            "created_at": ts,
-        },
-    )
+    try:
+        T.purchase_events.put_item(
+            Item={
+                "pk": f"TXN#{txn_id}",
+                "sk": _event_sk(ts, event_id),
+                "txn_id": txn_id,
+                "user_sub": user_sub,
+                "event_name": event_name,
+                "payload": payload,
+                "created_at": ts,
+            },
+        )
+    except Exception:
+        return
 
 
 def _item_to_summary(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -52,6 +63,7 @@ def _item_to_info(item: Dict[str, Any]) -> Dict[str, Any]:
     summary.update(
         {
             "buyer_id": item["buyer_id"],
+            "buyer_profile": item.get("buyer_profile"),
             "shipping": item.get("shipping"),
             "cancel": item.get("cancel"),
             "completed_at": item.get("completed_at"),
@@ -77,11 +89,14 @@ def _fetch_txn(user_sub: str, txn_id: str) -> Optional[Dict[str, Any]]:
 def create_transaction(user_sub: str, body: Dict[str, Any]) -> Dict[str, Any]:
     txn_id = uuid4().hex
     created_at = now_ts()
+    profile = _safe_profile(user_sub)
+    buyer_profile = profile if any(profile.values()) else None
     item = {
         "user_sub": user_sub,
         "sk": _txn_sk(created_at, txn_id),
         "txn_id": txn_id,
         "buyer_id": user_sub,
+        "buyer_profile": buyer_profile,
         "created_at": created_at,
         "updated_at": created_at,
         "status": "PENDING",
@@ -99,9 +114,109 @@ def create_transaction(user_sub: str, body: Dict[str, Any]) -> Dict[str, Any]:
         )
     except ClientError as exc:
         raise HTTPException(500, f"DDB error: {exc.response.get('Error', {}).get('Message')}") from exc
+    except Exception:
+        pass
 
     _record_event(txn_id, user_sub, "transaction_created", {"txn_id": txn_id, "status": "PENDING"})
     return {"txn_id": txn_id, "status": "PENDING", "created_at": created_at}
+
+
+def record_cart_purchase(
+    *,
+    user_sub: str,
+    cart_id: str,
+    order_id: str,
+    total_cents: int,
+    currency: str,
+    items: List[Dict[str, Any]],
+    buyer: Optional[Dict[str, Any]],
+) -> str:
+    txn_id = uuid4().hex
+    created_at = now_ts()
+    amount = total_cents / 100.0
+    item = {
+        "user_sub": user_sub,
+        "sk": _txn_sk(created_at, txn_id),
+        "txn_id": txn_id,
+        "buyer_id": user_sub,
+        "buyer_profile": buyer,
+        "created_at": created_at,
+        "updated_at": created_at,
+        "completed_at": created_at,
+        "status": "COMPLETED",
+        "amount": str(amount),
+        "currency": currency,
+        "merchant_id": "shopping_cart",
+        "external_ref": order_id,
+        "description": f"Shopping cart {cart_id}",
+        "version": 1,
+        "metadata": {
+            "cart_id": cart_id,
+            "order_id": order_id,
+            "items": items,
+            "buyer": buyer,
+        },
+    }
+    try:
+        T.purchase_transactions.put_item(
+            Item=item,
+            ConditionExpression="attribute_not_exists(user_sub) AND attribute_not_exists(sk)",
+        )
+    except ClientError as exc:
+        raise HTTPException(500, f"DDB error: {exc.response.get('Error', {}).get('Message')}") from exc
+    except Exception:
+        pass
+
+    _record_event(txn_id, user_sub, "cart_purchased", {"cart_id": cart_id, "order_id": order_id})
+    return txn_id
+
+
+def record_billing_transaction(
+    *,
+    user_sub: str,
+    amount_cents: int,
+    currency: str,
+    description: str,
+    status: str,
+    external_ref: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> str:
+    txn_id = uuid4().hex
+    created_at = now_ts()
+    profile = _safe_profile(user_sub)
+    buyer_profile = profile if any(profile.values()) else None
+    item = {
+        "user_sub": user_sub,
+        "sk": _txn_sk(created_at, txn_id),
+        "txn_id": txn_id,
+        "buyer_id": user_sub,
+        "buyer_profile": buyer_profile,
+        "created_at": created_at,
+        "updated_at": created_at,
+        "status": status,
+        "amount": str(amount_cents / 100.0),
+        "currency": currency,
+        "merchant_id": "billing",
+        "external_ref": external_ref,
+        "description": description,
+        "version": 1,
+    }
+    if metadata:
+        item["metadata"] = metadata
+    if status == "COMPLETED":
+        item["completed_at"] = created_at
+    try:
+        T.purchase_transactions.put_item(
+            Item=item,
+            ConditionExpression="attribute_not_exists(user_sub) AND attribute_not_exists(sk)",
+        )
+    except ClientError as exc:
+        raise HTTPException(500, f"DDB error: {exc.response.get('Error', {}).get('Message')}") from exc
+    except Exception:
+        pass
+
+    _record_event(txn_id, user_sub, "billing_transaction_recorded", {"status": status, "external_ref": external_ref})
+    return txn_id
 
 
 def list_transactions(user_sub: str, limit: int, status: Optional[str]) -> List[Dict[str, Any]]:
