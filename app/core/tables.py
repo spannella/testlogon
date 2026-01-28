@@ -26,6 +26,7 @@ class Tables:
     purchase_events: Any
     shopping_cart: Any
     catalog: Any
+    subscriptions: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -46,4 +47,5 @@ T = Tables(
     purchase_events=ddb.Table(S.purchase_events_table_name),
     shopping_cart=ddb.Table(S.shopping_cart_table_name),
     catalog=ddb.Table(S.catalog_table_name),
+    subscriptions=ddb.Table(S.subscriptions_table_name),
 )

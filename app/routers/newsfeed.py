@@ -17,6 +17,7 @@ from starlette.responses import StreamingResponse
 from app.core.aws import ddb
 from app.core.cursor import decode_cursor, encode_cursor
 from app.core.settings import S
+from app.services.subscription_access import can_access_creator
 
 # -----------------------------
 # Config
@@ -668,6 +669,8 @@ def view_feed(
 
         author = post.get("user_id")
         if author and author != user_id:
+            if not can_access_creator(user_id, author):
+                continue
             if not is_following(user_id, author):
                 continue
 
@@ -692,6 +695,10 @@ def create_comment(post_id: str, req: CreateCommentRequest, x_user_id: Optional[
     post = ddb_get_item({"PK": pk_post(post_id), "SK": sk_post()})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
+
+    post_author = post.get("user_id")
+    if post_author and post_author != user_id and not can_access_creator(user_id, post_author):
+        raise HTTPException(status_code=403, detail="Subscription required to comment")
 
     if post.get("locked") and post.get("user_id") != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required to comment")
@@ -725,7 +732,6 @@ def create_comment(post_id: str, req: CreateCommentRequest, x_user_id: Optional[
         expr_vals={":z": 0, ":one": 1},
     )
 
-    post_author = post.get("user_id")
     if post_author and post_author != user_id and parent is None:
         put_notification(
             recipient_user_id=post_author,

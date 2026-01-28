@@ -152,5 +152,8 @@ class Settings:
     filemgr_table_name: str = os.environ.get("FILEMGR_TABLE", "")
     filemgr_bucket: str = os.environ.get("FILEMGR_BUCKET", "")
 
+    # Subscriptions
+    subscriptions_table_name: str = os.environ.get("SUBSCRIPTIONS_TABLE_NAME", "subscriptions")
+
 
 S = Settings()

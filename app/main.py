@@ -31,6 +31,7 @@ from app.routers.newsfeed import router as newsfeed_router, startup as newsfeed_
 from app.routers.purchase_history import router as purchase_history_router
 from app.routers.shoppingcart import router as shoppingcart_router
 from app.routers.catalog import router as catalog_router
+from app.routers.subscription_server import router as subscription_server_router
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Security Backend (refactored)", version="0.1.0")
@@ -78,6 +79,7 @@ def create_app() -> FastAPI:
     app.include_router(purchase_history_router)
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)
+    app.include_router(subscription_server_router)
 
     return app
 

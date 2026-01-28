@@ -30,6 +30,7 @@ from app.models import (
 )
 from app.services.filemanager import download_file, upload_catalog_image
 from app.services.sessions import require_ui_session
+from app.services.subscription_access import can_access_creator
 
 router = APIRouter(prefix="/ui/catalog", tags=["catalog"])
 
@@ -158,6 +159,26 @@ def _stream_catalog_image(path: str) -> StreamingResponse:
     )
 
 
+def _get_category_meta(category_id: str) -> Dict[str, Any]:
+    item = T.catalog.get_item(Key={"PK": cat_pk(category_id), "SK": "META"}).get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail="Category not found.")
+    return item
+
+
+def _require_category_owner(category_id: str, user_id: str) -> Dict[str, Any]:
+    item = _get_category_meta(category_id)
+    creator_id = item.get("creator_id")
+    if creator_id and creator_id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to manage this category.")
+    return item
+
+
+def _get_item_meta(item_id: str) -> Dict[str, Any]:
+    items, _ = _query_page(pk=item_pk(item_id), sk_begins="ITEM#", limit=1, start_key=None)
+    return items[0] if items else {}
+
+
 @router.post("/categories", response_model=CatalogCategoryOut)
 async def create_category(body: CatalogCategoryCreateIn, ctx=Depends(require_ui_session)):
     category_id = body.category_id or uuid.uuid4().hex
@@ -168,6 +189,7 @@ async def create_category(body: CatalogCategoryCreateIn, ctx=Depends(require_ui_
         "category_id": category_id,
         "name": body.name,
         "description": body.description,
+        "creator_id": ctx["user_sub"],
         "created_at": now_iso(),
         "GSI1PK": "CATS",
         "GSI1SK": f"{body.name.lower()}#{category_id}",
@@ -185,6 +207,7 @@ async def create_category(body: CatalogCategoryCreateIn, ctx=Depends(require_ui_
         category_id=category_id,
         name=body.name,
         description=body.description,
+        creator_id=item.get("creator_id"),
         created_at=item["created_at"],
     )
 
@@ -207,10 +230,15 @@ async def list_categories(
             category_id=item["category_id"],
             name=item["name"],
             description=item.get("description"),
+            creator_id=item.get("creator_id"),
             created_at=item["created_at"],
         )
         for item in items
         if item.get("entity") == "category"
+        and (
+            not item.get("creator_id")
+            or can_access_creator(ctx["user_sub"], item.get("creator_id"))
+        )
     ]
     return CatalogCategoryListOut(items=out, next_token=encode_next_token(lek))
 
@@ -221,6 +249,7 @@ async def delete_category(
     cascade: bool = Query(default=False, description="Delete items in the category before removing it."),
     ctx=Depends(require_ui_session),
 ):
+    _require_category_owner(category_id, ctx["user_sub"])
     if cascade:
         items, _ = _query_page(pk=cat_pk(category_id), sk_begins="ITEM#", limit=200, start_key=None)
         with T.catalog.batch_writer() as batch:
@@ -248,6 +277,7 @@ async def create_item(
     body: CatalogItemCreateIn,
     ctx=Depends(require_ui_session),
 ):
+    category = _require_category_owner(category_id, ctx["user_sub"])
     item_id = body.item_id or ulid_like()
     now = now_iso()
     item = {
@@ -256,6 +286,7 @@ async def create_item(
         "entity": "item",
         "category_id": category_id,
         "item_id": item_id,
+        "creator_id": category.get("creator_id"),
         "name": body.name,
         "description": body.description,
         "price_cents": int(body.price_cents),
@@ -284,6 +315,10 @@ async def list_items(
     page_size: int = Query(default=50, ge=1, le=200),
     next_token: Optional[str] = Query(default=None),
 ):
+    category = _get_category_meta(category_id)
+    creator_id = category.get("creator_id")
+    if creator_id and not can_access_creator(ctx["user_sub"], creator_id):
+        raise HTTPException(status_code=403, detail="Subscription required to view this catalog.")
     start_key = decode_next_token(next_token)
     items, lek = _query_page(pk=cat_pk(category_id), sk_begins="ITEM#", limit=page_size, start_key=start_key)
     out: List[CatalogItemOut] = []
@@ -300,6 +335,7 @@ async def list_items(
                 currency=item.get("currency", "USD"),
                 image_urls=item.get("image_urls", []),
                 attributes=item.get("attributes", {}),
+                creator_id=item.get("creator_id"),
                 created_at=item["created_at"],
                 updated_at=item["updated_at"],
             )
@@ -315,6 +351,13 @@ async def get_catalog_image(
     decoded = unquote(path)
     if not decoded.startswith("/catalog/items/"):
         raise HTTPException(status_code=400, detail="Invalid catalog image path")
+    parts = decoded.strip("/").split("/")
+    item_id = parts[2] if len(parts) > 2 else None
+    if item_id:
+        item_meta = _get_item_meta(item_id)
+        creator_id = item_meta.get("creator_id")
+        if creator_id and not can_access_creator(ctx["user_sub"], creator_id):
+            raise HTTPException(status_code=403, detail="Subscription required to view this catalog image.")
     return _stream_catalog_image(decoded)
 
 
@@ -325,6 +368,7 @@ async def update_item(
     body: CatalogItemPatchIn,
     ctx=Depends(require_ui_session),
 ):
+    _require_category_owner(category_id, ctx["user_sub"])
     updates: List[str] = []
     values: Dict[str, Any] = {":updated_at": now_iso()}
     names: Dict[str, str] = {"#updated_at": "updated_at"}
@@ -384,6 +428,7 @@ async def update_item(
         currency=item.get("currency", "USD"),
         image_urls=item.get("image_urls", []),
         attributes=item.get("attributes", {}),
+        creator_id=item.get("creator_id"),
         created_at=item["created_at"],
         updated_at=item["updated_at"],
     )
@@ -401,6 +446,7 @@ if _MULTIPART_AVAILABLE:
         file: UploadFile = File(...),
         ctx=Depends(require_ui_session),
     ):
+        _require_category_owner(category_id, ctx["user_sub"])
         if not S.filemgr_table_name or not S.filemgr_bucket:
             raise HTTPException(status_code=501, detail="file manager not configured")
         content = await file.read()
@@ -440,6 +486,7 @@ if _MULTIPART_AVAILABLE:
             currency=item.get("currency", "USD"),
             image_urls=item.get("image_urls", []),
             attributes=item.get("attributes", {}),
+            creator_id=item.get("creator_id"),
             created_at=item["created_at"],
             updated_at=item["updated_at"],
         )
@@ -454,6 +501,7 @@ async def delete_item(
     cascade_reviews: bool = Query(default=True, description="Delete item reviews before removing item."),
     ctx=Depends(require_ui_session),
 ):
+    _require_category_owner(category_id, ctx["user_sub"])
     if cascade_reviews:
         reviews, _ = _query_page(pk=item_pk(item_id), sk_begins="REVIEW#", limit=200, start_key=None)
         with T.catalog.batch_writer() as batch:
@@ -474,6 +522,10 @@ async def list_reviews(
     page_size: int = Query(default=50, ge=1, le=200),
     next_token: Optional[str] = Query(default=None),
 ):
+    item_meta = _get_item_meta(item_id)
+    creator_id = item_meta.get("creator_id")
+    if creator_id and not can_access_creator(ctx["user_sub"], creator_id):
+        raise HTTPException(status_code=403, detail="Subscription required to view reviews.")
     start_key = decode_next_token(next_token)
     items, lek = _query_page(pk=item_pk(item_id), sk_begins="REVIEW#", limit=page_size, start_key=start_key)
     out: List[CatalogReviewOut] = []
@@ -500,6 +552,10 @@ async def add_review(
     body: CatalogReviewCreateIn,
     ctx=Depends(require_ui_session),
 ):
+    item_meta = _get_item_meta(item_id)
+    creator_id = item_meta.get("creator_id")
+    if creator_id and not can_access_creator(ctx["user_sub"], creator_id):
+        raise HTTPException(status_code=403, detail="Subscription required to review.")
     review_id = body.review_id or ulid_like()
     item = {
         "PK": item_pk(item_id),
