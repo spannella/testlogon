@@ -159,6 +159,61 @@ def search_prefix(user: str, prefix: str, *, limit: int = 50) -> List[Dict[str, 
     ]
 
 
+def _search_tokens(text: str) -> List[str]:
+    return [t for t in re.findall(r"[a-z0-9@._-]+", (text or "").lower()) if t]
+
+
+def _node_haystack(item: Dict[str, Any]) -> str:
+    return " ".join(
+        [
+            str(item.get("name", "")),
+            str(item.get("path", "")),
+            str(item.get("type", "")),
+        ]
+    ).lower()
+
+
+def _node_matches(tokens: List[str], item: Dict[str, Any]) -> bool:
+    if not tokens:
+        return False
+    haystack = _node_haystack(item)
+    return all(token in haystack for token in tokens)
+
+
+def search_text(user: str, query: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+    tokens = _search_tokens(query)
+    if not tokens:
+        return []
+    tbl = _table()
+    out: List[Dict[str, Any]] = []
+    start_key: Optional[Dict[str, Any]] = None
+    while len(out) < limit:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("PK").eq(pk_user(user)) & Key("SK").begins_with("NODE#"),
+            "Limit": max(50, min(200, limit * 4)),
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = tbl.query(**kwargs)
+        for item in resp.get("Items", []):
+            if _node_matches(tokens, item):
+                out.append(
+                    {
+                        "path": item.get("path"),
+                        "type": item.get("type"),
+                        "name": item.get("name"),
+                        "size": item.get("size"),
+                        "updated_at": item.get("updated_at"),
+                    }
+                )
+                if len(out) >= limit:
+                    break
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
+    return out
+
+
 def create_empty_folder(user: str, path: str) -> str:
     folder = norm_path(path, is_folder=True)
     if folder == "/":

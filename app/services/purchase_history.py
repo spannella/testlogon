@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -16,6 +17,54 @@ def _safe_profile(user_sub: str) -> Dict[str, Any]:
         return get_profile(user_sub)
     except Exception:
         return {}
+
+
+def _search_tokens(text: str) -> List[str]:
+    return [t for t in re.findall(r"[a-z0-9@._-]+", (text or "").lower()) if t]
+
+
+def _metadata_strings(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        parts: List[str] = []
+        for key, val in value.items():
+            parts.extend([str(key), *(_metadata_strings(val))])
+        return parts
+    if isinstance(value, list):
+        parts = []
+        for entry in value:
+            parts.extend(_metadata_strings(entry))
+        return parts
+    return [str(value)]
+
+
+def _transaction_haystack(item: Dict[str, Any]) -> str:
+    metadata_parts = _metadata_strings(item.get("metadata"))
+    cancel_parts = _metadata_strings(item.get("cancel"))
+    shipping_parts = _metadata_strings(item.get("shipping"))
+    return " ".join(
+        [
+            str(item.get("txn_id", "")),
+            str(item.get("status", "")),
+            str(item.get("merchant_id", "")),
+            str(item.get("external_ref", "")),
+            str(item.get("description", "")),
+            str(item.get("processor_ref", "")),
+            str(item.get("completion_note", "")),
+            str(item.get("revert_reason", "")),
+            " ".join(metadata_parts),
+            " ".join(cancel_parts),
+            " ".join(shipping_parts),
+        ]
+    ).lower()
+
+
+def _transaction_matches(query_tokens: List[str], item: Dict[str, Any]) -> bool:
+    if not query_tokens:
+        return False
+    haystack = _transaction_haystack(item)
+    return all(token in haystack for token in query_tokens)
 
 def _txn_sk(created_at: int, txn_id: str) -> str:
     return f"TXN#{created_at}#{txn_id}"
@@ -230,6 +279,19 @@ def list_transactions(user_sub: str, limit: int, status: Optional[str]) -> List[
     if status:
         summaries = [summary for summary in summaries if summary["status"] == status]
     return summaries
+
+
+def search_transactions(user_sub: str, query: str, limit: int) -> List[Dict[str, Any]]:
+    query_tokens = _search_tokens(query)
+    if not query_tokens:
+        return []
+    resp = T.purchase_transactions.query(
+        KeyConditionExpression="user_sub = :u AND begins_with(sk, :p)",
+        ExpressionAttributeValues={":u": user_sub, ":p": "TXN#"},
+    )
+    items = resp.get("Items", [])
+    matches = [item for item in items if _transaction_matches(query_tokens, item)]
+    return [_item_to_summary(item) for item in matches[:limit]]
 
 
 def get_transaction_info(user_sub: str, txn_id: str) -> Dict[str, Any]:

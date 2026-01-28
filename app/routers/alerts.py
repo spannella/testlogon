@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Dict, List, Optional
 
 from boto3.dynamodb.conditions import Key
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.core.crypto import sha256_str
@@ -43,6 +44,48 @@ from app.services.sessions import create_action_challenge, load_challenge_or_401
 router = APIRouter(prefix="/ui", tags=["alerts"])
 
 
+def _alert_query_tokens(query: str) -> list[str]:
+    return [t for t in re.findall(r"[a-z0-9@._-]+", (query or "").lower()) if t]
+
+
+def _alert_haystack(item: Dict[str, Any]) -> str:
+    details = item.get("details") or {}
+    detail_parts = []
+    if isinstance(details, dict):
+        for key, value in details.items():
+            detail_parts.append(str(key))
+            detail_parts.append(str(value))
+    return " ".join(
+        [
+            str(item.get("event", "")),
+            str(item.get("outcome", "")),
+            str(item.get("title", "")),
+            " ".join(detail_parts),
+        ]
+    ).lower()
+
+
+def _alert_matches(query_tokens: list[str], item: Dict[str, Any]) -> bool:
+    if not query_tokens:
+        return False
+    haystack = _alert_haystack(item)
+    return all(token in haystack for token in query_tokens)
+
+
+def _alert_out(item: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "alert_id": item.get("alert_id"),
+        "ts": item.get("ts"),
+        "event": item.get("event"),
+        "outcome": item.get("outcome"),
+        "title": item.get("title"),
+        "details": item.get("details", {}),
+        "read": item.get("read", False),
+        "read_at": item.get("read_at", 0),
+        "toast_delivered": item.get("toast_delivered", False),
+    }
+
+
 @router.get("/alerts/types")
 async def alert_types(_: Dict[str, str] = Depends(require_ui_session)):
     return {"types": ALERT_EVENT_TYPES, "event_types": ALERT_EVENT_TYPES}
@@ -68,17 +111,40 @@ async def list_alerts(
     for it in items:
         if unread_only and it.get("read", False):
             continue
-        out.append({
-            "alert_id": it.get("alert_id"),
-            "ts": it.get("ts"),
-            "event": it.get("event"),
-            "outcome": it.get("outcome"),
-            "title": it.get("title"),
-            "details": it.get("details", {}),
-            "read": it.get("read", False),
-            "read_at": it.get("read_at", 0),
-            "toast_delivered": it.get("toast_delivered", False),
-        })
+        out.append(_alert_out(it))
+    return {"alerts": out, "next_cursor": next_cursor}
+
+
+@router.get("/alerts/search")
+async def search_alerts(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(200, ge=1, le=200),
+    cursor: Optional[str] = None,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    query_tokens = _alert_query_tokens(q)
+    if not query_tokens:
+        raise HTTPException(status_code=400, detail="Search query must include searchable text")
+    start_key = decode_cursor(cursor)
+    out: List[Dict[str, Any]] = []
+    page_limit = max(25, min(200, limit * 4))
+    while len(out) < limit:
+        resp = T.alerts.query(
+            KeyConditionExpression=Key("user_sub").eq(ctx["user_sub"]),
+            ScanIndexForward=False,
+            Limit=page_limit,
+            ExclusiveStartKey=start_key or None,
+        )
+        items = resp.get("Items", [])
+        for item in items:
+            if _alert_matches(query_tokens, item):
+                out.append(_alert_out(item))
+                if len(out) >= limit:
+                    break
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
+    next_cursor = encode_cursor(start_key)
     return {"alerts": out, "next_cursor": next_cursor}
 
 

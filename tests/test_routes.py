@@ -461,6 +461,38 @@ class TestAlertRoutes(unittest.TestCase):
             with self.assertRaises(HTTPException):
                 run_async(alerts.alert_sms_add_confirm(req, AlertSmsConfirmReq(challenge_id="chal", code="bad"), ctx=build_ctx()))
 
+    def test_alert_search_matches(self):
+        alerts_table = Mock()
+        alerts_table.query.return_value = {
+            "Items": [
+                {
+                    "alert_id": "a1",
+                    "ts": 1,
+                    "event": "profile_update",
+                    "outcome": "success",
+                    "title": "Profile updated",
+                    "details": {"field": "display_name", "to": "Ada Lovelace"},
+                },
+                {
+                    "alert_id": "a2",
+                    "ts": 2,
+                    "event": "ui_session_start",
+                    "outcome": "success",
+                    "title": "Session start",
+                    "details": {"ip": "203.0.113.1"},
+                },
+            ],
+            "LastEvaluatedKey": None,
+        }
+        fake_tables = SimpleNamespace(alerts=alerts_table)
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(alerts, "decode_cursor", return_value=None))
+            stack.enter_context(patch.object(alerts, "encode_cursor", return_value=None))
+            stack.enter_context(patch.object(alerts, "T", fake_tables))
+            resp = run_async(alerts.search_alerts(q="ada", limit=50, ctx=build_ctx()))
+        self.assertEqual(len(resp["alerts"]), 1)
+        self.assertEqual(resp["alerts"][0]["alert_id"], "a1")
+
 
 class TestPushRoutes(unittest.TestCase):
     def test_push_routes(self):

@@ -10,6 +10,7 @@ This service primarily uses AWS-managed infrastructure for data storage, encrypt
 - **SES**: sends email MFA codes when `SES_FROM_EMAIL` and SES credentials are configured.
 - **Cognito**: used for JWT validation when `COGNITO_*` env vars are configured (optional for local testing).
 - **CloudWatch Logs**: captures stdout/stderr logs when running in AWS (optional, via platform).
+- **OpenSearch**: provides scalable full-text message search when `OPENSEARCH_ENDPOINT` is configured.
 
 ## Related configuration
 - See `docs/dynamodb.md` for table setup details.

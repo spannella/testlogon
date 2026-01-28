@@ -42,6 +42,12 @@ class TestFileManagerRoutes(unittest.TestCase):
             self.assertEqual(resp["prefix"], "a")
             self.assertEqual(resp["results"][0]["path"], "/a")
 
+        with patch.object(filemanager, "search_text", return_value=[{"path": "/docs/a.txt", "type": "file", "name": "a.txt"}]):
+            resp = filemanager.search_text_files(q="docs", limit=10, user="user")
+            self.assertEqual(resp["query"], "docs")
+            self.assertEqual(resp["results"][0]["path"], "/docs/a.txt")
+            filemanager.search_text.assert_called_once_with("user", "docs", limit=10)
+
         with patch.object(filemanager, "create_empty_folder", return_value="/docs/"):
             resp = filemanager.create_folder(path="/docs", user="user")
             self.assertTrue(resp["ok"])

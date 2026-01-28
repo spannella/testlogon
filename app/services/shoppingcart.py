@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -64,6 +65,33 @@ def _item_from_item(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _search_tokens(text: str) -> List[str]:
+    return [t for t in re.findall(r"[a-z0-9@._-]+", (text or "").lower()) if t]
+
+
+def _item_haystack(item: Dict[str, Any]) -> str:
+    return " ".join(
+        [
+            str(item.get("sku", "")),
+            str(item.get("name", "")),
+            str(item.get("cart_id", "")),
+        ]
+    ).lower()
+
+
+def _item_matches(query_tokens: List[str], item: Dict[str, Any]) -> bool:
+    if not query_tokens:
+        return False
+    haystack = _item_haystack(item)
+    return all(token in haystack for token in query_tokens)
+
+
+def _item_search_out(item: Dict[str, Any]) -> Dict[str, Any]:
+    out = _item_from_item(item)
+    out["cart_id"] = item.get("cart_id")
+    return out
+
+
 def _buyer_snapshot(profile: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     buyer = {
         "display_name": profile.get("display_name"),
@@ -120,6 +148,19 @@ def list_items(user_sub: str, cart_id: str) -> List[Dict[str, Any]]:
     items = [_item_from_item(item) for item in resp.get("Items", [])]
     items.sort(key=lambda item: item.get("sku") or "")
     return items
+
+
+def search_items(user_sub: str, query: str, limit: int) -> List[Dict[str, Any]]:
+    tokens = _search_tokens(query)
+    if not tokens:
+        return []
+    pk = _user_pk(user_sub)
+    resp = T.shopping_cart.query(
+        KeyConditionExpression=Key("PK").eq(pk) & Key("SK").begins_with("CART#"),
+    )
+    items = [item for item in resp.get("Items", []) if item.get("type") == "item"]
+    matches = [item for item in items if _item_matches(tokens, item)]
+    return [_item_search_out(item) for item in matches[:limit]]
 
 
 def cart_total_cents(user_sub: str, cart_id: str) -> int:
