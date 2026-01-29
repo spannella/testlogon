@@ -23,6 +23,7 @@ from app.services.shoppingcart import (
     list_carts,
     list_items,
     purchase_cart,
+    search_items,
     set_item_quantity,
     start_cart,
 )
@@ -53,6 +54,16 @@ async def ui_delete_cart(cart_id: str, req: Request = None, ctx=Depends(require_
 async def ui_list_items(cart_id: str, ctx=Depends(require_ui_session)):
     items = list_items(ctx["user_sub"], cart_id)
     return {"cart_id": cart_id, "items": items}
+
+
+@router.get("/carts/items/search")
+async def ui_search_items(
+    q: str = Query(..., min_length=1),
+    ctx=Depends(require_ui_session),
+    limit: int = Query(100, ge=1, le=200),
+):
+    items = search_items(ctx["user_sub"], q, limit)
+    return {"items": items, "count": len(items)}
 
 
 @router.post("/carts/{cart_id}/items", response_model=ShoppingCartItemOut)

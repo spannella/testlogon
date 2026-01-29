@@ -49,7 +49,17 @@ uvicorn app.main:app --reload
 - `TWILIO_*` for SMS MFA.
 - `ALERTS_*` for outbound alert fanout.
 - `PUSH_*` for push notifications (FCM).
+- `OPENSEARCH_ENDPOINT`, `OPENSEARCH_INDEX`, and `OPENSEARCH_REGION` for OpenSearch-backed message search.
 - `API_KEY_TTL_DAYS` to control API key expiration (set to 0 for non-expiring keys).
+
+## Search capabilities
+- **Messaging search**: full-text search within a conversation and across all conversations a user participates in, with optional OpenSearch indexing for scalable queries plus sender/after filters. Contact search also tokenizes names so searching by last name or name fragments works better.
+- **Alerts history search**: full-text search across alert records and details.
+- **Purchase history search**: full-text lookup over purchase descriptions, metadata, and related fields.
+- **Shopping cart search**: text search across cart items (SKU/name) and cart IDs.
+- **Catalog search**: full-text search across catalog item names and descriptions.
+- **File manager search**: text search by file name, path, and type.
+- **Control panel UI**: the `/` UI exposes search inputs for each of the areas above for quick validation and troubleshooting.
 
 ## Related docs
 - **Billing**: Stripe details live in [Stripe billing](docs/stripe.md). PayPal details live in [PayPal billing](docs/paypal.md). CCBill details live in [CCBill billing](docs/ccbill.md).

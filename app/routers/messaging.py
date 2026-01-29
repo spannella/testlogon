@@ -3,13 +3,18 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 import uuid
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence
 
 import anyio
 import boto3
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+from botocore.exceptions import ClientError, NoCredentialsError
+import requests
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -32,6 +37,10 @@ DDB_USER_EVENTS = os.getenv("DDB_USER_EVENTS", "UserEvents")
 
 DDB_USERS = os.getenv("DDB_USERS", "Users")
 DDB_USER_SEARCH = os.getenv("DDB_USER_SEARCH", "UserSearch")
+DDB_MESSAGE_SEARCH = os.getenv("DDB_MESSAGE_SEARCH", "MessageSearch")
+OPENSEARCH_ENDPOINT = os.getenv("OPENSEARCH_ENDPOINT", "").strip()
+OPENSEARCH_INDEX = os.getenv("OPENSEARCH_INDEX", "messages")
+OPENSEARCH_REGION = os.getenv("OPENSEARCH_REGION", AWS_REGION)
 
 DDB_PRESENCE = os.getenv("DDB_PRESENCE", "UserPresence")
 DDB_TYPING = os.getenv("DDB_TYPING", "Typing")
@@ -57,6 +66,7 @@ tbl_msgs = ddb.Table(DDB_MESSAGES)
 tbl_events = ddb.Table(DDB_USER_EVENTS)
 tbl_users = ddb.Table(DDB_USERS)
 tbl_search = ddb.Table(DDB_USER_SEARCH)
+tbl_msg_search = ddb.Table(DDB_MESSAGE_SEARCH)
 tbl_presence = ddb.Table(DDB_PRESENCE)
 tbl_typing = ddb.Table(DDB_TYPING)
 
@@ -269,15 +279,315 @@ def _norm(s: str) -> str:
 
 
 def build_prefix_tokens(text: str, max_len: int = 12) -> list[str]:
-    t = _norm(text)
-    if not t:
+    tokens = re.findall(r"[a-z0-9@._-]+", (text or "").lower())
+    if not tokens:
         return []
-    parts = [p for p in t.replace("@", " @").split() if p]
+    parts = [p for p in tokens if p]
     out: list[str] = []
     for p in parts:
         for i in range(1, min(len(p), max_len) + 1):
             out.append(p[:i])
     return list(dict.fromkeys(out))
+
+
+def _tokenize_message(text: str, max_len: int = 32) -> list[str]:
+    tokens = re.findall(r"[a-z0-9@._-]+", (text or "").lower())
+    return [t[:max_len] for t in tokens if t]
+
+
+def build_message_search_tokens(text: str, *, max_len: int = 32, max_prefix_len: int = 8) -> list[str]:
+    tokens = _tokenize_message(text, max_len=max_len)
+    out: list[str] = []
+    for token in tokens:
+        out.append(token)
+        for i in range(1, min(len(token), max_prefix_len) + 1):
+            out.append(token[:i])
+    return list(dict.fromkeys(out))
+
+
+def build_message_query_tokens(query: str, *, max_len: int = 32) -> list[str]:
+    return list(dict.fromkeys(_tokenize_message(query, max_len=max_len)))
+
+
+def _message_search_key(conversation_id: str, message_id: str) -> str:
+    return f"{conversation_id}#{message_id}"
+
+
+def _message_search_enabled() -> bool:
+    return bool(DDB_MESSAGE_SEARCH) and _aws_credentials_available()
+
+
+def _aws_credentials_available() -> bool:
+    session = boto3.session.Session()
+    return session.get_credentials() is not None
+
+
+def _opensearch_enabled() -> bool:
+    return bool(OPENSEARCH_ENDPOINT)
+
+
+def _opensearch_request(method: str, path: str, *, body: Optional[dict] = None) -> Optional[dict]:
+    if not _opensearch_enabled():
+        return None
+    url = f"{OPENSEARCH_ENDPOINT.rstrip('/')}{path}"
+    data = json.dumps(body) if body is not None else None
+    session = boto3.session.Session()
+    credentials = session.get_credentials()
+    if not credentials:
+        return None
+    frozen = credentials.get_frozen_credentials()
+    headers = {"Content-Type": "application/json"}
+    request = AWSRequest(method=method, url=url, data=data, headers=headers)
+    SigV4Auth(frozen, "es", OPENSEARCH_REGION).add_auth(request)
+    prepared = request.prepare()
+    try:
+        resp = requests.request(
+            method,
+            url,
+            data=data,
+            headers=dict(prepared.headers),
+            timeout=2,
+        )
+    except requests.RequestException:
+        return None
+    if resp.status_code >= 400:
+        return None
+    if not resp.text:
+        return None
+    try:
+        return resp.json()
+    except ValueError:
+        return None
+
+
+def _opensearch_index_message(
+    conversation_id: str,
+    message_id: str,
+    sender_id: str,
+    created_at: int,
+    text: str,
+) -> None:
+    if not _opensearch_enabled():
+        return
+    doc_id = _message_search_key(conversation_id, message_id)
+    body = {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "sender_id": sender_id,
+        "created_at": int(created_at),
+        "text": text,
+    }
+    _opensearch_request("PUT", f"/{OPENSEARCH_INDEX}/_doc/{doc_id}", body=body)
+
+
+def _opensearch_search_messages(
+    query: str,
+    *,
+    limit: int,
+    conversation_id: Optional[str] = None,
+    allowed_conversation_ids: Optional[set[str]] = None,
+    sender_id: Optional[str] = None,
+    after_ts: Optional[int] = None,
+) -> Optional[list[str]]:
+    if not _opensearch_enabled():
+        return None
+    filters: list[dict[str, Any]] = []
+    if conversation_id:
+        filters.append({"term": {"conversation_id": conversation_id}})
+    if allowed_conversation_ids is not None:
+        filters.append({"terms": {"conversation_id": list(allowed_conversation_ids)}})
+    if sender_id:
+        filters.append({"term": {"sender_id": sender_id}})
+    if after_ts is not None:
+        filters.append({"range": {"created_at": {"gte": int(after_ts)}}})
+    body: Dict[str, Any] = {
+        "size": limit,
+        "query": {
+            "bool": {
+                "must": {"simple_query_string": {"query": query, "fields": ["text"]}},
+                "filter": filters,
+            }
+        },
+        "sort": [{"created_at": "desc"}],
+    }
+    resp = _opensearch_request("POST", f"/{OPENSEARCH_INDEX}/_search", body=body)
+    if not resp:
+        return None
+    hits = resp.get("hits", {}).get("hits", [])
+    return [hit.get("_id") for hit in hits if hit.get("_id")]
+
+
+def index_message_search(
+    conversation_id: str,
+    message_id: str,
+    sender_id: str,
+    created_at: int,
+    text: str,
+) -> None:
+    if _message_search_enabled():
+        tokens = build_message_search_tokens(text)
+        if not tokens:
+            return
+        try:
+            with tbl_msg_search.batch_writer() as bw:
+                for token in tokens:
+                    bw.put_item(
+                        Item={
+                            "token": token,
+                            "message_key": _message_search_key(conversation_id, message_id),
+                            "conversation_id": conversation_id,
+                            "message_id": message_id,
+                            "sender_id": sender_id,
+                            "created_at": int(created_at),
+                        }
+                    )
+        except ClientError:
+            return
+    _opensearch_index_message(conversation_id, message_id, sender_id, created_at, text)
+
+
+def remove_message_search(
+    conversation_id: str,
+    message_id: str,
+    text: str,
+) -> None:
+    if not _message_search_enabled():
+        return
+    tokens = build_message_search_tokens(text)
+    if not tokens:
+        return
+    try:
+        with tbl_msg_search.batch_writer() as bw:
+            for token in tokens:
+                bw.delete_item(Key={"token": token, "message_key": _message_search_key(conversation_id, message_id)})
+    except ClientError:
+        return
+
+
+def _filter_message_visible(message_item: dict, user_id: str) -> bool:
+    deleted_for = set(message_item.get("deleted_for", []))
+    return user_id not in deleted_for
+
+
+def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOut:
+    counts, mine = _reaction_summaries(message_item, viewer_user_id)
+    return MessageOut(
+        conversation_id=message_item["conversation_id"],
+        message_id=message_item["message_id"],
+        sender_id=message_item["sender_id"],
+        created_at=int(message_item["created_at"]),
+        kind=message_item["kind"],
+        text=message_item.get("text"),
+        image=message_item.get("image"),
+        reply_to_message_id=message_item.get("reply_to_message_id"),
+        forwarded_from=message_item.get("forwarded_from"),
+        forward_note=message_item.get("forward_note"),
+        edited_at=int(message_item.get("edited_at", 0)) or None,
+        edited_by=message_item.get("edited_by"),
+        reactions_counts=counts if counts else None,
+        my_reactions=mine if mine else None,
+    )
+
+
+def _fetch_message_items(message_keys: Iterable[str]) -> list[dict]:
+    items: list[dict] = []
+    for key in message_keys:
+        if "#" not in key:
+            continue
+        conversation_id, message_id = key.split("#", 1)
+        resp = tbl_msgs.get_item(Key={"conversation_id": conversation_id, "message_id": message_id})
+        item = resp.get("Item")
+        if item:
+            items.append(item)
+    return items
+
+
+def _search_messages_index(
+    query_tokens: Sequence[str],
+    *,
+    conversation_id: Optional[str] = None,
+    allowed_conversation_ids: Optional[set[str]] = None,
+    sender_id: Optional[str] = None,
+    after_ts: Optional[int] = None,
+    limit: int = 50,
+) -> Optional[list[dict]]:
+    if not query_tokens:
+        return []
+    if not _message_search_enabled():
+        return None
+    message_map: Dict[str, dict] = {}
+    try:
+        for idx, token in enumerate(query_tokens):
+            kwargs: Dict[str, Any] = {"KeyConditionExpression": Key("token").eq(token), "Limit": 200}
+            filters = []
+            if conversation_id:
+                filters.append(Attr("conversation_id").eq(conversation_id))
+            if sender_id:
+                filters.append(Attr("sender_id").eq(sender_id))
+            if after_ts is not None:
+                filters.append(Attr("created_at").gte(int(after_ts)))
+            if filters:
+                expr = filters[0]
+                for extra in filters[1:]:
+                    expr = expr & extra
+                kwargs["FilterExpression"] = expr
+            resp = tbl_msg_search.query(**kwargs)
+            items = resp.get("Items", [])
+            if allowed_conversation_ids is not None:
+                items = [item for item in items if item.get("conversation_id") in allowed_conversation_ids]
+            if idx == 0:
+                message_map = {item["message_key"]: item for item in items}
+            else:
+                allowed = {item["message_key"] for item in items}
+                message_map = {k: v for k, v in message_map.items() if k in allowed}
+            if not message_map:
+                return []
+        results = sorted(message_map.values(), key=lambda x: int(x.get("created_at", 0)), reverse=True)
+        return results[:limit]
+    except ClientError:
+        return None
+
+
+def _fallback_search_messages(
+    conversation_id: str,
+    query: str,
+    *,
+    limit: int,
+    user_id: str,
+    sender_id: Optional[str] = None,
+    after_ts: Optional[int] = None,
+) -> list[dict]:
+    query_lower = query.lower()
+    matches: list[dict] = []
+    last_key = None
+    while len(matches) < limit:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("conversation_id").eq(conversation_id),
+            "ScanIndexForward": False,
+            "Limit": 200,
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        resp = tbl_msgs.query(**kwargs)
+        items = resp.get("Items", [])
+        for item in items:
+            if not _filter_message_visible(item, user_id):
+                continue
+            if sender_id and item.get("sender_id") != sender_id:
+                continue
+            if after_ts is not None and int(item.get("created_at", 0)) < int(after_ts):
+                continue
+            if item.get("kind") != "text":
+                continue
+            text = (item.get("text") or "").lower()
+            if query_lower in text:
+                matches.append(item)
+                if len(matches) >= limit:
+                    break
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+    return matches
 
 
 def get_participant_any(user_id: str, conversation_id: str) -> Optional[dict]:
@@ -718,31 +1028,149 @@ def list_messages(
 
     out: List[MessageOut] = []
     for m in items:
-        deleted_for = set(m.get("deleted_for", []))
-        if user_id in deleted_for:
+        if not _filter_message_visible(m, user_id):
             continue
-
-        counts, mine = _reaction_summaries(m, user_id)
-
-        out.append(
-            MessageOut(
-                conversation_id=m["conversation_id"],
-                message_id=m["message_id"],
-                sender_id=m["sender_id"],
-                created_at=int(m["created_at"]),
-                kind=m["kind"],
-                text=m.get("text"),
-                image=m.get("image"),
-                reply_to_message_id=m.get("reply_to_message_id"),
-                forwarded_from=m.get("forwarded_from"),
-                forward_note=m.get("forward_note"),
-                edited_at=int(m.get("edited_at", 0)) or None,
-                edited_by=m.get("edited_by"),
-                reactions_counts=counts if counts else None,
-                my_reactions=mine if mine else None,
-            )
-        )
+        out.append(_message_out_from_item(m, user_id))
     return out
+
+
+@router.get("/conversations/{conversation_id}/messages/search", response_model=List[MessageOut])
+def search_messages_in_conversation(
+    conversation_id: str,
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = Query(50, ge=1, le=200),
+    sender_id: Optional[str] = Query(None, max_length=64),
+    after_ts: Optional[int] = Query(None, ge=0),
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    if not isinstance(sender_id, str):
+        sender_id = None
+    if not isinstance(after_ts, int):
+        after_ts = None
+    opensearch_keys = _opensearch_search_messages(
+        q,
+        limit=limit,
+        conversation_id=conversation_id,
+        sender_id=sender_id,
+        after_ts=after_ts,
+    )
+    if opensearch_keys is not None:
+        message_items = _fetch_message_items(opensearch_keys)
+        matches = [
+            item
+            for item in message_items
+            if item.get("kind") == "text" and _filter_message_visible(item, user_id)
+            and (not sender_id or item.get("sender_id") == sender_id)
+            and (after_ts is None or int(item.get("created_at", 0)) >= int(after_ts))
+        ]
+    else:
+        query_tokens = build_message_query_tokens(q)
+        indexed = _search_messages_index(
+            query_tokens,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            after_ts=after_ts,
+            limit=limit,
+        )
+        if indexed is None:
+            matches = _fallback_search_messages(
+                conversation_id,
+                q,
+                limit=limit,
+                user_id=user_id,
+                sender_id=sender_id,
+                after_ts=after_ts,
+            )
+        else:
+            message_items = _fetch_message_items([item["message_key"] for item in indexed])
+            matches = [
+                item
+                for item in message_items
+                if item.get("kind") == "text" and _filter_message_visible(item, user_id)
+                and (not sender_id or item.get("sender_id") == sender_id)
+                and (after_ts is None or int(item.get("created_at", 0)) >= int(after_ts))
+            ]
+
+    matches.sort(key=lambda x: int(x.get("created_at", 0)), reverse=True)
+    return [_message_out_from_item(item, user_id) for item in matches[:limit]]
+
+
+@router.get("/messages/search", response_model=List[MessageOut])
+def search_messages_all_conversations(
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = Query(50, ge=1, le=200),
+    sender_id: Optional[str] = Query(None, max_length=64),
+    after_ts: Optional[int] = Query(None, ge=0),
+    user_id: str = Depends(get_messaging_user_id),
+):
+    if not isinstance(sender_id, str):
+        sender_id = None
+    if not isinstance(after_ts, int):
+        after_ts = None
+    parts = tbl_parts.query(KeyConditionExpression=Key("user_id").eq(user_id), Limit=200).get("Items", [])
+    allowed_conversation_ids = {p["conversation_id"] for p in parts if p.get("status") == "active"}
+    if not allowed_conversation_ids:
+        return []
+
+    opensearch_keys = _opensearch_search_messages(
+        q,
+        limit=limit,
+        allowed_conversation_ids=allowed_conversation_ids,
+        sender_id=sender_id,
+        after_ts=after_ts,
+    )
+
+    matches: list[dict]
+    if opensearch_keys is not None:
+        message_items = _fetch_message_items(opensearch_keys)
+        matches = [
+            item
+            for item in message_items
+            if item.get("conversation_id") in allowed_conversation_ids
+            and item.get("kind") == "text"
+            and _filter_message_visible(item, user_id)
+            and (not sender_id or item.get("sender_id") == sender_id)
+            and (after_ts is None or int(item.get("created_at", 0)) >= int(after_ts))
+        ]
+    else:
+        query_tokens = build_message_query_tokens(q)
+        indexed = _search_messages_index(
+            query_tokens,
+            allowed_conversation_ids=allowed_conversation_ids,
+            sender_id=sender_id,
+            after_ts=after_ts,
+            limit=limit,
+        )
+        if indexed is None:
+            matches = []
+            for cid in allowed_conversation_ids:
+                if len(matches) >= limit:
+                    break
+                matches.extend(
+                    _fallback_search_messages(
+                        cid,
+                        q,
+                        limit=limit - len(matches),
+                        user_id=user_id,
+                        sender_id=sender_id,
+                        after_ts=after_ts,
+                    )
+                )
+        else:
+            message_items = _fetch_message_items([item["message_key"] for item in indexed])
+            matches = [
+                item
+                for item in message_items
+                if item.get("conversation_id") in allowed_conversation_ids
+                and item.get("kind") == "text"
+                and _filter_message_visible(item, user_id)
+                and (not sender_id or item.get("sender_id") == sender_id)
+                and (after_ts is None or int(item.get("created_at", 0)) >= int(after_ts))
+            ]
+
+    matches.sort(key=lambda x: int(x.get("created_at", 0)), reverse=True)
+    return [_message_out_from_item(item, user_id) for item in matches[:limit]]
 
 
 @router.post("/conversations/{conversation_id}/messages", response_model=MessageOut)
@@ -772,6 +1200,7 @@ def send_text_message(
         item["reply_to_message_id"] = inp.reply_to_message_id
 
     tbl_msgs.put_item(Item=item)
+    index_message_search(conversation_id, mid, user_id, ts, inp.text)
 
     preview = inp.text[:140]
     tbl_convos.update_item(
@@ -1048,8 +1477,10 @@ def edit_message(
     except Exception as e:
         raise HTTPException(400, f"Edit failed: {str(e)}")
 
+    remove_message_search(conversation_id, message_id, old_text)
+    index_message_search(conversation_id, message_id, user_id, int(msg.get("created_at", ts)), new_text)
+
     item = _get_message_or_404(conversation_id, message_id)
-    counts, mine = _reaction_summaries(item, user_id)
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,
@@ -1059,22 +1490,7 @@ def edit_message(
         respect_mute=False,
     )
 
-    message = MessageOut(
-        conversation_id=item["conversation_id"],
-        message_id=item["message_id"],
-        sender_id=item["sender_id"],
-        created_at=int(item["created_at"]),
-        kind=item["kind"],
-        text=item.get("text"),
-        image=item.get("image"),
-        reply_to_message_id=item.get("reply_to_message_id"),
-        forwarded_from=item.get("forwarded_from"),
-        forward_note=item.get("forward_note"),
-        edited_at=int(item.get("edited_at", 0)) or None,
-        edited_by=item.get("edited_by"),
-        reactions_counts=counts if counts else None,
-        my_reactions=mine if mine else None,
-    )
+    message = _message_out_from_item(item, user_id)
     audit_event(
         "messaging_message_edited",
         user_id,
@@ -1177,6 +1593,8 @@ def forward_message(
         preview = "[fwd image]"
 
     tbl_msgs.put_item(Item=item)
+    if kind == "text":
+        index_message_search(target_conversation_id, mid, user_id, ts, item.get("text", ""))
 
     tbl_convos.update_item(
         Key={"conversation_id": target_conversation_id},

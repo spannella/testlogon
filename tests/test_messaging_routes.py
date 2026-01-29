@@ -138,6 +138,208 @@ class TestMessagingRoutes(unittest.TestCase):
         self.assertEqual(bw.put_item.call_count, 2)
         self.assertEqual(resp["tokens_written"], 2)
 
+    def test_admin_upsert_user_indexes_name_tokens(self):
+        tbl_users = Mock()
+        tbl_search = Mock()
+        bw = Mock()
+        tbl_search.batch_writer = MagicMock()
+        tbl_search.batch_writer.return_value.__enter__.return_value = bw
+        with (
+            patch.object(messaging, "tbl_users", tbl_users),
+            patch.object(messaging, "tbl_search", tbl_search),
+            patch.object(messaging, "now_ts", return_value=50),
+        ):
+            resp = messaging.admin_upsert_user(
+                messaging.UpsertUserIn(user_id="u1", display_name="Ada Lovelace")
+            )
+        tokens = [call.kwargs["Item"]["token"] for call in bw.put_item.mock_calls]
+        self.assertIn("lo", tokens)
+        self.assertGreater(resp["tokens_written"], 0)
+
+    def test_build_message_search_tokens_dedupes_prefixes(self):
+        tokens = messaging.build_message_search_tokens("Hello hello")
+        self.assertIn("hello", tokens)
+        self.assertEqual(len(tokens), len(set(tokens)))
+
+    def test_build_prefix_tokens_splits_names(self):
+        tokens = messaging.build_prefix_tokens("Ada Lovelace")
+        self.assertIn("ad", tokens)
+        self.assertIn("lo", tokens)
+
+    def test_search_messages_in_conversation_prefers_opensearch(self):
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_opensearch_search_messages", return_value=["c1#m1"]),
+            patch.object(
+                messaging,
+                "_fetch_message_items",
+                return_value=[
+                    {
+                        "conversation_id": "c1",
+                        "message_id": "m1",
+                        "sender_id": "u1",
+                        "created_at": 3,
+                        "kind": "text",
+                        "text": "hello",
+                        "deleted_for": [],
+                        "reactions": {},
+                    }
+                ],
+            ),
+            patch.object(messaging, "_search_messages_index") as search_index,
+        ):
+            resp = messaging.search_messages_in_conversation("c1", q="hello", limit=50, user_id="u1")
+        self.assertEqual(resp[0].message_id, "m1")
+        search_index.assert_not_called()
+
+    def test_search_messages_in_conversation_falls_back_to_index(self):
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_opensearch_search_messages", return_value=None),
+            patch.object(
+                messaging,
+                "_search_messages_index",
+                return_value=[{"message_key": "c1#m2", "created_at": 10}],
+            ),
+            patch.object(
+                messaging,
+                "_fetch_message_items",
+                return_value=[
+                    {
+                        "conversation_id": "c1",
+                        "message_id": "m2",
+                        "sender_id": "u1",
+                        "created_at": 10,
+                        "kind": "text",
+                        "text": "searchable",
+                        "deleted_for": [],
+                        "reactions": {},
+                    }
+                ],
+            ),
+        ):
+            resp = messaging.search_messages_in_conversation("c1", q="searchable", limit=50, user_id="u1")
+        self.assertEqual(resp[0].message_id, "m2")
+
+    def test_search_messages_all_conversations_falls_back_to_scan(self):
+        tbl_parts = Mock()
+        tbl_parts.query.return_value = {
+            "Items": [{"conversation_id": "c1", "status": "active"}]
+        }
+        with (
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "_opensearch_search_messages", return_value=None),
+            patch.object(messaging, "_search_messages_index", return_value=None),
+            patch.object(
+                messaging,
+                "_fallback_search_messages",
+                return_value=[
+                    {
+                        "conversation_id": "c1",
+                        "message_id": "m3",
+                        "sender_id": "u1",
+                        "created_at": 8,
+                        "kind": "text",
+                        "text": "fallback",
+                        "deleted_for": [],
+                        "reactions": {},
+                    }
+                ],
+            ),
+        ):
+            resp = messaging.search_messages_all_conversations(q="fallback", limit=50, user_id="u1")
+        self.assertEqual(resp[0].message_id, "m3")
+
+    def test_opensearch_search_builds_filters(self):
+        captured = {}
+
+        def fake_request(method, path, *, body=None):
+            captured["method"] = method
+            captured["path"] = path
+            captured["body"] = body
+            return {"hits": {"hits": [{"_id": "c1#m1"}]}}
+
+        with (
+            patch.object(messaging, "_opensearch_enabled", return_value=True),
+            patch.object(messaging, "_opensearch_request", side_effect=fake_request),
+        ):
+            resp = messaging._opensearch_search_messages(
+                "hello",
+                limit=5,
+                allowed_conversation_ids={"c1", "c2"},
+                sender_id="u1",
+                after_ts=123,
+            )
+        self.assertEqual(resp, ["c1#m1"])
+        filters = captured["body"]["query"]["bool"]["filter"]
+        self.assertEqual(captured["method"], "POST")
+        terms_filter = next((item for item in filters if "terms" in item), {})
+        self.assertEqual(set(terms_filter.get("terms", {}).get("conversation_id", [])), {"c1", "c2"})
+        sender_filter = next((item for item in filters if "term" in item and "sender_id" in item["term"]), {})
+        self.assertEqual(sender_filter.get("term", {}).get("sender_id"), "u1")
+        range_filter = next((item for item in filters if "range" in item), {})
+        self.assertEqual(range_filter.get("range", {}).get("created_at", {}).get("gte"), 123)
+
+    def test_search_messages_in_conversation_passes_filters(self):
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_opensearch_search_messages", return_value=None) as search_messages,
+            patch.object(messaging, "_search_messages_index", return_value=[]),
+        ):
+            messaging.search_messages_in_conversation(
+                "c1",
+                q="hello",
+                limit=10,
+                sender_id="u2",
+                after_ts=50,
+                user_id="u1",
+            )
+        search_messages.assert_called_with(
+            "hello",
+            limit=10,
+            conversation_id="c1",
+            sender_id="u2",
+            after_ts=50,
+        )
+
+    def test_fallback_search_messages_filters_sender_and_time(self):
+        tbl_msgs = Mock()
+        tbl_msgs.query.return_value = {
+            "Items": [
+                {
+                    "conversation_id": "c1",
+                    "message_id": "m1",
+                    "sender_id": "u1",
+                    "created_at": 40,
+                    "kind": "text",
+                    "text": "hello",
+                    "deleted_for": [],
+                    "reactions": {},
+                },
+                {
+                    "conversation_id": "c1",
+                    "message_id": "m2",
+                    "sender_id": "u2",
+                    "created_at": 60,
+                    "kind": "text",
+                    "text": "hello there",
+                    "deleted_for": [],
+                    "reactions": {},
+                },
+            ]
+        }
+        with patch.object(messaging, "tbl_msgs", tbl_msgs):
+            resp = messaging._fallback_search_messages(
+                "c1",
+                "hello",
+                limit=10,
+                user_id="u1",
+                sender_id="u2",
+                after_ts=50,
+            )
+        self.assertEqual(len(resp), 1)
+        self.assertEqual(resp[0]["message_id"], "m2")
+
     def test_search_contact_filters_self(self):
         tbl_search = Mock()
         tbl_search.query.return_value = {

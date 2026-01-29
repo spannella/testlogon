@@ -2409,12 +2409,42 @@ async function refreshAlerts() {
   if (!el) return;
   await ensureUiSession();
   const res = await apiGet("/ui/alerts?limit=20");
+  renderAlertsList(res.alerts || []);
+}
+
+function renderAlertsList(alerts) {
+  const el = document.getElementById("alertsList");
+  if (!el) return;
   el.innerHTML = "";
-  (res.alerts || []).forEach(a => {
+  if (!alerts.length) {
+    el.innerHTML = "<div class='muted'>No alerts found.</div>";
+    return;
+  }
+  alerts.forEach((a) => {
     el.appendChild(renderAlertRow(a));
   });
 }
 
+async function searchAlerts() {
+  const query = readInput("alertsSearchInput");
+  if (!query) {
+    await refreshAlerts();
+    return;
+  }
+  const status = document.getElementById("alertsSearchStatus");
+  if (status) status.textContent = "Searching...";
+  await ensureUiSession();
+  const res = await apiGet(`/ui/alerts/search?q=${encodeURIComponent(query)}&limit=200`);
+  renderAlertsList(res.alerts || []);
+  if (status) status.textContent = `Found ${(res.alerts || []).length} alerts.`;
+}
+
+async function clearAlertSearch() {
+  setInputValue("alertsSearchInput", "");
+  const status = document.getElementById("alertsSearchStatus");
+  if (status) status.textContent = "";
+  await refreshAlerts();
+}
 
 function renderSmsList(nums) {
   const el = document.getElementById("alertSmsList");
@@ -3182,6 +3212,73 @@ async function loadMessagingMessages() {
   }
 }
 
+function renderMessagingSearchResults(messages) {
+  const list = document.getElementById("msgSearchResults");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!messages.length) {
+    list.innerHTML = "<div class='muted'>No search results.</div>";
+    return;
+  }
+  messages.forEach((m) => {
+    const row = document.createElement("div");
+    row.className = "item";
+    const body = m.kind === "image"
+      ? `<em>[image]</em> ${m.image ? (m.image.key || "") : ""}`
+      : (m.text || "");
+    const convo = m.conversation_id ? ` • ${m.conversation_id}` : "";
+    row.innerHTML = `
+      <div class="muted">${m.sender_id}${convo} • ${new Date(m.created_at * 1000).toLocaleString()}</div>
+      <div>${body}</div>
+    `;
+    list.appendChild(row);
+  });
+}
+
+async function searchMessagingMessages({ allConversations }) {
+  const query = readInput("msgSearchQuery");
+  if (!query) {
+    setMsgStatus("msgSearchStatus", "Search text required.");
+    return;
+  }
+  const senderId = readInput("msgSearchSender");
+  const afterRaw = readInput("msgSearchAfter");
+  let afterTs = null;
+  if (afterRaw) {
+    afterTs = parseInt(afterRaw, 10);
+    if (Number.isNaN(afterTs)) {
+      setMsgStatus("msgSearchStatus", "After timestamp must be a number.");
+      return;
+    }
+  }
+  if (!allConversations && !messagingState.activeConversationId) {
+    setMsgStatus("msgSearchStatus", "Select a conversation first.");
+    return;
+  }
+  const params = new URLSearchParams({ q: query, limit: "200" });
+  if (senderId) params.set("sender_id", senderId);
+  if (afterTs !== null) params.set("after_ts", String(afterTs));
+  const path = allConversations
+    ? `/messaging/messages/search?${params.toString()}`
+    : `/messaging/conversations/${messagingState.activeConversationId}/messages/search?${params.toString()}`;
+  setMsgStatus("msgSearchStatus", "Searching...");
+  try {
+    const data = await msgRequest(path);
+    renderMessagingSearchResults(data || []);
+    setMsgStatus("msgSearchStatus", `Found ${(data || []).length} messages.`);
+  } catch (e) {
+    setMsgStatus("msgSearchStatus", String(e));
+  }
+}
+
+function clearMessagingSearch() {
+  setInputValue("msgSearchQuery", "");
+  setInputValue("msgSearchSender", "");
+  setInputValue("msgSearchAfter", "");
+  setMsgStatus("msgSearchStatus", "");
+  renderMessagingSearchResults([]);
+}
+
 async function sendMessagingMessage() {
   const cid = messagingState.activeConversationId;
   if (!cid) {
@@ -3206,6 +3303,8 @@ async function sendMessagingMessage() {
   } catch (e) {
     setMsgStatus("msgMessageStatus", String(e));
   }
+}
+
 function setAddressStatus(msg) {
   const el = document.getElementById("addressStatus");
   if (el) el.textContent = msg || "";
@@ -3504,6 +3603,59 @@ function renderCartItems(items) {
     });
     body.appendChild(row);
   });
+}
+
+function renderCartSearchResults(items) {
+  const list = document.getElementById("cartSearchResults");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!items.length) {
+    list.innerHTML = "<div class='muted'>No matches.</div>";
+    return;
+  }
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `
+      <div class="grow">
+        <div class="mono">${escapeHtml(item.sku || "")}</div>
+        <div class="muted">${escapeHtml(item.name || "")}</div>
+        <div class="muted">Cart ${escapeHtml(item.cart_id || "")}</div>
+      </div>
+      <div class="muted">Qty ${item.quantity || 0}</div>
+      <div><button data-cart="${escapeHtml(item.cart_id || "")}">Open cart</button></div>
+    `;
+    row.querySelector("button").onclick = async (ev) => {
+      const cartId = ev.target.getAttribute("data-cart");
+      if (!cartId) return;
+      cartState.cartId = cartId;
+      renderCartSelect();
+      await refreshCartDetails();
+    };
+    list.appendChild(row);
+  });
+}
+
+async function searchCartItems() {
+  const query = readInput("cartSearchQuery");
+  if (!query) {
+    renderCartSearchResults([]);
+    return;
+  }
+  try {
+    setCartStatus("Searching items...");
+    await ensureUiSession();
+  const res = await apiGet(`/ui/shoppingcart/carts/items/search?q=${encodeURIComponent(query)}&limit=200`);
+    renderCartSearchResults(res.items || []);
+    setCartStatus(`Found ${(res.items || []).length} matching items.`);
+  } catch (e) {
+    setCartStatus(String(e));
+  }
+}
+
+function clearCartSearch() {
+  setInputValue("cartSearchQuery", "");
+  renderCartSearchResults([]);
 }
 
 async function startNewCart() {
@@ -4002,11 +4154,123 @@ async function searchFileMgr() {
   renderFileMgrSearchResults();
 }
 
+async function searchFileMgrText() {
+  const input = document.getElementById("filemgrSearchText");
+  if (!input) return;
+  const query = input.value.trim();
+  if (!query) return;
+  await ensureUiSession();
+  const res = await apiGet(`/v1/fs/search-text?q=${encodeURIComponent(query)}&limit=200`);
+  fileMgrState.searchResults = res.results || [];
+  renderFileMgrSearchResults();
+}
+
 function clearFileMgrSearch() {
   fileMgrState.searchResults = [];
   const input = document.getElementById("filemgrSearch");
   if (input) input.value = "";
+  const textInput = document.getElementById("filemgrSearchText");
+  if (textInput) textInput.value = "";
   renderFileMgrSearchResults();
+}
+
+/* ===================== Catalog Search ===================== */
+function renderCatalogSearchResults(items) {
+  const list = document.getElementById("catalogSearchResults");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!items.length) {
+    list.innerHTML = "<div class='muted'>No catalog matches.</div>";
+    return;
+  }
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `
+      <div class="grow">
+        <div><b>${escapeHtml(item.name || "")}</b></div>
+        <div class="muted">${escapeHtml(item.description || "")}</div>
+      </div>
+      <div class="mono">${fmtMoney(item.price_cents || 0, item.currency || "usd")}</div>
+    `;
+    list.appendChild(row);
+  });
+}
+
+async function searchCatalogItems() {
+  const query = readInput("catalogSearchInput");
+  const status = document.getElementById("catalogSearchStatus");
+  if (!query) {
+    renderCatalogSearchResults([]);
+    if (status) status.textContent = "";
+    return;
+  }
+  try {
+    if (status) status.textContent = "Searching...";
+    await ensureUiSession();
+    const res = await apiGet(`/ui/catalog/items/search?q=${encodeURIComponent(query)}&page_size=200`);
+    renderCatalogSearchResults(res.items || []);
+    if (status) status.textContent = `Found ${(res.items || []).length} items.`;
+  } catch (e) {
+    if (status) status.textContent = String(e);
+  }
+}
+
+function clearCatalogSearch() {
+  setInputValue("catalogSearchInput", "");
+  const status = document.getElementById("catalogSearchStatus");
+  if (status) status.textContent = "";
+  renderCatalogSearchResults([]);
+}
+
+/* ===================== Purchase History Search ===================== */
+function renderPurchaseSearchResults(items) {
+  const list = document.getElementById("purchaseSearchResults");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!items.length) {
+    list.innerHTML = "<div class='muted'>No purchase matches.</div>";
+    return;
+  }
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `
+      <div class="grow">
+        <div class="mono">${escapeHtml(item.txn_id || "")}</div>
+        <div class="muted">${escapeHtml(item.description || "")}</div>
+        <div class="muted">${escapeHtml(item.status || "")}</div>
+      </div>
+      <div class="mono">${fmtMoney(Math.round((item.amount || 0) * 100), item.currency || "usd")}</div>
+    `;
+    list.appendChild(row);
+  });
+}
+
+async function searchPurchaseHistory() {
+  const query = readInput("purchaseSearchInput");
+  const status = document.getElementById("purchaseSearchStatus");
+  if (!query) {
+    renderPurchaseSearchResults([]);
+    if (status) status.textContent = "";
+    return;
+  }
+  try {
+    if (status) status.textContent = "Searching...";
+    await ensureUiSession();
+    const res = await apiGet(`/ui/purchase-history/transactions/search?q=${encodeURIComponent(query)}&limit=200`);
+    renderPurchaseSearchResults(res || []);
+    if (status) status.textContent = `Found ${(res || []).length} transactions.`;
+  } catch (e) {
+    if (status) status.textContent = String(e);
+  }
+}
+
+function clearPurchaseSearch() {
+  setInputValue("purchaseSearchInput", "");
+  const status = document.getElementById("purchaseSearchStatus");
+  if (status) status.textContent = "";
+  renderPurchaseSearchResults([]);
 }
 
 /* ===================== Push (FCM Web) =====================
@@ -4323,6 +4587,15 @@ document.getElementById("alertPushTypesSaveBtn").onclick = async () => {
   }
 };
 
+document.getElementById("alertsSearchBtn").onclick = searchAlerts;
+document.getElementById("alertsSearchClearBtn").onclick = clearAlertSearch;
+
+document.getElementById("catalogSearchBtn").onclick = searchCatalogItems;
+document.getElementById("catalogSearchClearBtn").onclick = clearCatalogSearch;
+
+document.getElementById("purchaseSearchBtn").onclick = searchPurchaseHistory;
+document.getElementById("purchaseSearchClearBtn").onclick = clearPurchaseSearch;
+
 document.getElementById("btnRefreshAll").onclick = refreshAll;
 document.getElementById("btnClearSession").onclick = () => { lsDel("session_id"); alert("UI session cleared."); };
 document.getElementById("btnSetTokens").onclick = openTokenModal;
@@ -4468,6 +4741,13 @@ document.getElementById("filemgrSearchBtn").onclick = async () => {
     fileMgrStatus(String(e));
   }
 };
+document.getElementById("filemgrSearchTextBtn").onclick = async () => {
+  try {
+    await searchFileMgrText();
+  } catch (e) {
+    fileMgrStatus(String(e));
+  }
+};
 document.getElementById("filemgrClearSearchBtn").onclick = clearFileMgrSearch;
 document.getElementById("addressRefreshBtn").onclick = async () => {
   try {
@@ -4514,6 +4794,8 @@ document.getElementById("cartStartBtn").onclick = startNewCart;
 document.getElementById("cartAddItemBtn").onclick = addCartItem;
 document.getElementById("cartPurchaseBtn").onclick = purchaseCart;
 document.getElementById("cartDeleteBtn").onclick = deleteActiveCart;
+document.getElementById("cartSearchBtn").onclick = searchCartItems;
+document.getElementById("cartSearchClearBtn").onclick = clearCartSearch;
 document.getElementById("cartSelect").onchange = async (ev) => {
   cartState.cartId = ev.target.value || "";
   await refreshCartDetails();
@@ -4573,6 +4855,12 @@ document.getElementById("msgCreateConvoBtn").onclick = createMessagingConvo;
 document.getElementById("msgAcceptConvoBtn").onclick = acceptMessagingConvo;
 document.getElementById("msgLoadMessagesBtn").onclick = loadMessagingMessages;
 document.getElementById("msgSendBtn").onclick = sendMessagingMessage;
+document.getElementById("msgSearchConvoBtn").onclick = () => searchMessagingMessages({ allConversations: false });
+document.getElementById("msgSearchAllBtn").onclick = () => searchMessagingMessages({ allConversations: true });
+document.getElementById("msgSearchClearBtn").onclick = clearMessagingSearch;
+document.getElementById("msgSearchConvoBtn").onclick = () => searchMessagingMessages({ allConversations: false });
+document.getElementById("msgSearchAllBtn").onclick = () => searchMessagingMessages({ allConversations: true });
+document.getElementById("msgSearchClearBtn").onclick = clearMessagingSearch;
 
 setInputValue("newsfeedApiBase", API_BASE);
 setInputValue("newsfeedUserId", lsGet("newsfeed_user_id"));

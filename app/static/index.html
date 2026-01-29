@@ -65,6 +65,20 @@
     </div>
     <div id="msgMessagesList" class="section"></div>
     <div class="hr"></div>
+    <h4 style="margin:0 0 6px 0;">Search Messages</h4>
+    <div class="row-inline">
+      <input id="msgSearchQuery" placeholder="Search text" style="flex:1;" />
+      <input id="msgSearchSender" placeholder="Sender ID (optional)" style="flex:1;" />
+      <input id="msgSearchAfter" placeholder="After ts (unix seconds)" class="mono" style="flex:1;" />
+    </div>
+    <div class="row-inline" style="margin-top:8px;">
+      <button id="msgSearchConvoBtn">Search convo</button>
+      <button id="msgSearchAllBtn">Search all</button>
+      <button id="msgSearchClearBtn">Clear</button>
+      <span class="muted" id="msgSearchStatus"></span>
+    </div>
+    <div id="msgSearchResults" class="section"></div>
+    <div class="hr"></div>
     <h4 style="margin:0 0 6px 0;">Send Message</h4>
     <textarea id="msgText" placeholder="Write a message..."></textarea>
     <div class="row-inline" style="margin-top:8px;">
@@ -157,6 +171,15 @@
         <button id="cartAddItemBtn">Add / increment</button>
       </div>
       <div class="muted" id="cartStatusMsg" style="margin-top:8px;"></div>
+    </div>
+    <div class="section">
+      <h4 style="margin:0 0 6px 0;">Search Items</h4>
+      <div class="row-inline">
+        <input id="cartSearchQuery" placeholder="Search items across carts" style="flex:1;" />
+        <button id="cartSearchBtn">Search</button>
+        <button id="cartSearchClearBtn">Clear</button>
+      </div>
+      <div id="cartSearchResults" class="list" style="margin-top:8px;"></div>
     </div>
     <table id="cartItemsTbl">
       <thead>
@@ -469,6 +492,8 @@
     <div class="row-inline" style="margin-top:10px;">
       <input id="filemgrSearch" placeholder="Search prefix" />
       <button id="filemgrSearchBtn">Search</button>
+      <input id="filemgrSearchText" placeholder="Search text" />
+      <button id="filemgrSearchTextBtn">Search text</button>
       <button id="filemgrClearSearchBtn">Clear</button>
       <span id="filemgrStatus" class="muted"></span>
     </div>
@@ -702,7 +727,41 @@
   <div class="card">
     <h3>Recent Alerts</h3>
     <div class="muted">Latest alerts for this account.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <input id="alertsSearchInput" placeholder="Search alerts" style="flex:1;" />
+      <button id="alertsSearchBtn">Search</button>
+      <button id="alertsSearchClearBtn">Clear</button>
+      <span id="alertsSearchStatus" class="muted"></span>
+    </div>
     <div id="alertsList" class="list"></div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card" style="width:100%">
+    <h3>Catalog Search</h3>
+    <div class="muted">Search catalog items by name or description.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <input id="catalogSearchInput" placeholder="Search catalog" style="flex:1;" />
+      <button id="catalogSearchBtn">Search</button>
+      <button id="catalogSearchClearBtn">Clear</button>
+      <span id="catalogSearchStatus" class="muted"></span>
+    </div>
+    <div id="catalogSearchResults" class="list" style="margin-top:10px;"></div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card" style="width:100%">
+    <h3>Purchase History Search</h3>
+    <div class="muted">Search your purchase history transactions.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <input id="purchaseSearchInput" placeholder="Search purchase history" style="flex:1;" />
+      <button id="purchaseSearchBtn">Search</button>
+      <button id="purchaseSearchClearBtn">Clear</button>
+      <span id="purchaseSearchStatus" class="muted"></span>
+    </div>
+    <div id="purchaseSearchResults" class="list" style="margin-top:10px;"></div>
   </div>
 </div>
 

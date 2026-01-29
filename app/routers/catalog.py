@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import re
 import time
 import uuid
 from urllib.parse import quote, unquote
@@ -65,6 +66,37 @@ def ddb_to_int(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError):
         return 0
+
+
+def _catalog_tokens(text: str) -> list[str]:
+    return [t for t in re.findall(r"[a-z0-9@._-]+", (text or "").lower()) if t]
+
+
+def _catalog_matches(query_tokens: list[str], item: dict) -> bool:
+    if not query_tokens:
+        return False
+    haystack = " ".join(
+        [
+            str(item.get("name", "")).lower(),
+            str(item.get("description", "") or "").lower(),
+        ]
+    )
+    return all(token in haystack for token in query_tokens)
+
+
+def _catalog_item_out(item: dict) -> CatalogItemOut:
+    return CatalogItemOut(
+        category_id=item["category_id"],
+        item_id=item["item_id"],
+        name=item["name"],
+        description=item.get("description"),
+        price_cents=ddb_to_int(item["price_cents"]),
+        currency=item.get("currency", "USD"),
+        image_urls=item.get("image_urls", []),
+        attributes=item.get("attributes", {}),
+        created_at=item["created_at"],
+        updated_at=item["updated_at"],
+    )
 
 
 def _b64e(raw: bytes) -> str:
@@ -305,6 +337,38 @@ async def list_items(
             )
         )
     return CatalogItemListOut(items=out, next_token=encode_next_token(lek))
+
+
+@router.get("/items/search", response_model=CatalogItemListOut)
+async def search_items(
+    q: str = Query(..., min_length=1, max_length=200),
+    ctx=Depends(require_ui_session),
+    page_size: int = Query(default=50, ge=1, le=200),
+    next_token: Optional[str] = Query(default=None),
+):
+    start_key = decode_next_token(next_token)
+    query_tokens = _catalog_tokens(q)
+    matches: List[CatalogItemOut] = []
+    last_evaluated: Optional[Dict[str, Any]] = start_key
+
+    while len(matches) < page_size:
+        kwargs: Dict[str, Any] = {"Limit": 200}
+        if last_evaluated:
+            kwargs["ExclusiveStartKey"] = last_evaluated
+        resp = T.catalog.scan(**kwargs)
+        items = resp.get("Items", [])
+        for item in items:
+            if item.get("entity") != "item":
+                continue
+            if _catalog_matches(query_tokens, item):
+                matches.append(_catalog_item_out(item))
+                if len(matches) >= page_size:
+                    break
+        last_evaluated = resp.get("LastEvaluatedKey")
+        if not last_evaluated:
+            break
+
+    return CatalogItemListOut(items=matches, next_token=encode_next_token(last_evaluated))
 
 
 @router.get("/images")

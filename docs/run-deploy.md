@@ -48,6 +48,18 @@ This service is a FastAPI application with DynamoDB-backed storage and optional 
 - Keep secrets (e.g., `API_KEY_PEPPER`, `WS_TOKEN_SECRET`) in a `.env` file and export them via your shell or a dotenv loader.
 - When debugging billing flows, make sure billing tables and env vars are set before opening the UI.
 - If Cognito is not configured, you can pass `X-User-Sub` headers for local testing.
+- OpenSearch-backed message search is optional; configure `OPENSEARCH_ENDPOINT`, `OPENSEARCH_INDEX`, and `OPENSEARCH_REGION` to enable it.
+
+### Search functionality overview
+- **Messaging**: full-text search within a conversation and across all conversations, with optional OpenSearch indexing plus sender/after filters.
+- **Contacts**: name tokenization supports last-name and multi-word matching in contact search.
+- **Alerts**: full-text search across alert history fields and details.
+- **Purchase history**: full-text lookup across transaction metadata and descriptive fields.
+- **Shopping cart**: text search across cart items and cart IDs.
+- **Catalog**: full-text search across item names and descriptions.
+- **File manager**: text search across filenames, paths, and file types.
+
+Use the control panel UI at `/` to exercise these searches locally after seeding sample data.
 
 ## Stripe billing
 

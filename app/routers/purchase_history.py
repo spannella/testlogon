@@ -19,6 +19,7 @@ from app.services.purchase_history import (
     list_transactions,
     mark_completed,
     mark_reverted,
+    search_transactions,
     request_cancel,
     respond_cancel,
     update_shipping,
@@ -40,6 +41,15 @@ async def ui_list_transactions(
     status: str | None = Query(None),
 ):
     return list_transactions(ctx["user_sub"], limit, status)
+
+
+@router.get("/transactions/search", response_model=list[PurchaseTransactionSummary])
+async def ui_search_transactions(
+    q: str = Query(..., min_length=1),
+    ctx=Depends(require_ui_session),
+    limit: int = Query(100, ge=1, le=200),
+):
+    return search_transactions(ctx["user_sub"], q, limit)
 
 
 @router.get("/transactions/{txn_id}", response_model=PurchaseTransactionInfo)

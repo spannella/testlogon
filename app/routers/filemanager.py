@@ -22,6 +22,7 @@ from app.services.filemanager import (
     upload_file,
     upload_zip,
     get_node,
+    search_text,
 )
 from app.services.alerts import audit_event
 from app.services.sessions import require_ui_session
@@ -79,6 +80,15 @@ def search_filenames(
     user: str = Depends(_current_user),
 ):
     return {"prefix": prefix, "results": search_prefix(user, prefix, limit=limit)}
+
+
+@router.get("/search-text")
+def search_text_files(
+    q: str = Query(..., description="Search text"),
+    limit: int = Query(200, ge=1, le=200),
+    user: str = Depends(_current_user),
+):
+    return {"query": q, "results": search_text(user, q, limit=limit)}
 
 
 @router.post("/folder")
