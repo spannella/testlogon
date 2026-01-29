@@ -24,6 +24,7 @@ from app.core.aws import ddb
 from app.core.settings import S
 from app.services.alerts import audit_event
 from app.services.sessions import require_ui_session
+from app.services.subscription_access import require_subscription_access
 
 # -------------------------
 # Config / AWS clients
@@ -770,6 +771,10 @@ def start_conversation(
         raise HTTPException(400, "dm conversation must have exactly 2 unique participants")
     if inp.type == "group" and len(participant_ids) < 3:
         raise HTTPException(400, "group conversation must have at least 3 unique participants")
+    for pid in participant_ids:
+        if pid == user_id:
+            continue
+        require_subscription_access(user_id, pid)
 
     convo_item = {
         "conversation_id": cid,
@@ -1181,6 +1186,11 @@ def send_text_message(
     user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, conversation_id)
+    resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+    for participant in resp.get("Items", []):
+        pid = participant.get("user_id")
+        if pid and pid != user_id:
+            require_subscription_access(user_id, pid)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
     mid = "m_" + new_id()
@@ -1251,6 +1261,11 @@ def create_image_message(
     user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, conversation_id)
+    resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+    for participant in resp.get("Items", []):
+        pid = participant.get("user_id")
+        if pid and pid != user_id:
+            require_subscription_access(user_id, pid)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
     mid = "m_" + new_id()

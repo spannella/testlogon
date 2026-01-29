@@ -200,6 +200,7 @@ class CatalogCategoryOut(BaseModel):
     category_id: str
     name: str
     description: Optional[str] = None
+    creator_id: Optional[str] = None
     created_at: str
 
 
@@ -235,6 +236,7 @@ class CatalogItemOut(BaseModel):
     currency: str
     image_urls: List[str]
     attributes: Dict[str, Any]
+    creator_id: Optional[str] = None
     created_at: str
     updated_at: str
 
