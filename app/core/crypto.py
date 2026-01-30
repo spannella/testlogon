@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import time
 from typing import Any, Dict, Optional
 
 from .aws import kms
@@ -34,7 +35,6 @@ def b64url_decode(s: str) -> bytes:
 def mint_ws_token(user_sub: str, ttl_seconds: int = 60) -> str:
     if not S.ws_token_secret:
         raise RuntimeError("WS_TOKEN_SECRET not set")
-    import time
     now = int(time.time())
     payload = {"user_sub": user_sub, "exp": now + ttl_seconds, "iat": now}
     raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
@@ -42,6 +42,8 @@ def mint_ws_token(user_sub: str, ttl_seconds: int = 60) -> str:
     return f"{b64url(raw)}.{b64url(sig)}"
 
 def verify_ws_token(token: str) -> Optional[Dict[str, Any]]:
+    if not S.ws_token_secret:
+        return None
     try:
         raw_b64, sig_b64 = token.split(".", 1)
         raw = b64url_decode(raw_b64)
@@ -50,7 +52,9 @@ def verify_ws_token(token: str) -> Optional[Dict[str, Any]]:
         if not hmac.compare_digest(sig, expected):
             return None
         obj = json.loads(raw.decode("utf-8"))
-        if int(obj.get("exp", 0)) < int(__import__("time").time()):
+        if not isinstance(obj, dict):
+            return None
+        if int(obj.get("exp", 0)) < int(time.time()):
             return None
         return obj
     except Exception:
