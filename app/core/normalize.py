@@ -9,7 +9,10 @@ from fastapi import HTTPException
 def client_ip_from_request(req) -> str:
     xff = req.headers.get("x-forwarded-for")
     if xff:
-        return xff.split(",")[0].strip()
+        for part in xff.split(","):
+            candidate = part.strip()
+            if candidate:
+                return candidate
     return req.client.host if req.client else "0.0.0.0"
 
 def normalize_email(s: str) -> str:
@@ -54,6 +57,6 @@ def ip_in_any_cidr(ip_str: str, cidrs: List[str]) -> bool:
             net = ipaddress.ip_network(c, strict=False)
             if ip in net:
                 return True
-        except Exception:
+        except ValueError:
             continue
     return False
