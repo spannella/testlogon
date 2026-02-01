@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import secrets
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.time import now_ts
 
@@ -97,6 +98,56 @@ def apply_balance_delta(table: Any, pk: str, delta: Dict[str, int], *, currency:
     ddb_update(table, pk, "BALANCE", expr, values, names=names)
 
 
+def ensure_balance_row_for_key(table: Any, key_name: str, key_value: str, currency: str) -> None:
+    if not table.get_item(Key={key_name: key_value, "sk": "BALANCE"}).get("Item"):
+        table.put_item(
+            Item={
+                key_name: key_value,
+                "sk": "BALANCE",
+                "currency": currency,
+                **{k: 0 for k in BAL_FIELDS},
+                "updated_at": now_ts(),
+            },
+        )
+
+
+def apply_balance_delta_for_key(
+    table: Any,
+    key_name: str,
+    key_value: str,
+    delta: Dict[str, int],
+    *,
+    currency: str = "usd",
+) -> None:
+    ensure_balance_row_for_key(table, key_name, key_value, currency)
+
+    sets = []
+    values: Dict[str, Any] = {":z": 0, ":t": now_ts()}
+    names: Dict[str, str] = {}
+
+    i = 0
+    for key, value in delta.items():
+        if value == 0:
+            continue
+        i += 1
+        nk = f"#k{i}"
+        dv = f":d{i}"
+        names[nk] = key
+        values[dv] = int(value)
+        sets.append(f"{nk} = if_not_exists({nk}, :z) + {dv}")
+
+    names["#u"] = "updated_at"
+    sets.append("#u = :t")
+
+    expr = "SET " + ", ".join(sets)
+    table.update_item(
+        Key={key_name: key_value, "sk": "BALANCE"},
+        UpdateExpression=expr,
+        ExpressionAttributeValues=values,
+        ExpressionAttributeNames=names,
+    )
+
+
 def compute_due(balance_item: Dict[str, Any]) -> Dict[str, int]:
     owed_settled = int(balance_item.get("owed_settled_cents", 0))
     owed_pending = int(balance_item.get("owed_pending_cents", 0))
@@ -110,3 +161,57 @@ def compute_due(balance_item: Dict[str, Any]) -> Dict[str, int]:
         "due_settled_cents": due_settled,
         "due_if_all_settles_cents": due_if_all_settles,
     }
+
+
+def ulidish() -> str:
+    return f"{int(now_ts() * 1000)}_{secrets.token_hex(8)}"
+
+
+def ledger_sk(ts: int, entry_id: str) -> str:
+    return f"LEDGER#{ts}#{entry_id}"
+
+
+def new_ledger_entry(
+    *,
+    key_name: str,
+    key_value: str,
+    entry_type: str,
+    amount_cents: int,
+    state: str,
+    reason: str,
+    meta: Optional[Dict[str, Any]] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, Dict[str, Any]]:
+    ts = now_ts()
+    entry_id = ulidish()
+    sk = ledger_sk(ts, entry_id)
+    item = {
+        key_name: key_value,
+        "sk": sk,
+        "entry_id": entry_id,
+        "ts": ts,
+        "type": entry_type,
+        "amount_cents": int(amount_cents),
+        "state": state,
+        "reason": reason,
+    }
+    if extra:
+        item.update(extra)
+    if meta:
+        item["meta"] = meta
+    return sk, item
+
+
+def settle_or_reverse_ledger(
+    table: Any,
+    key_name: str,
+    key_value: str,
+    ledger_sk_value: str,
+    new_state: str,
+) -> None:
+    table.update_item(
+        Key={key_name: key_value, "sk": ledger_sk_value},
+        UpdateExpression="SET #s = :s",
+        ExpressionAttributeNames={"#s": "state"},
+        ExpressionAttributeValues={":s": new_state},
+    )
