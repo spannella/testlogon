@@ -7,6 +7,8 @@ from typing import List
 from fastapi import HTTPException
 
 def client_ip_from_request(req) -> str:
+    if req is None:
+        return "0.0.0.0"
     xff = req.headers.get("x-forwarded-for")
     if xff:
         for part in xff.split(","):

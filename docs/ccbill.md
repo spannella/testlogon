@@ -36,6 +36,9 @@ charge once, subscribe, and reconcile via webhooks.
 | `DEFAULT_CURRENCY_CODE` | ISO numeric currency code (e.g., 840 for USD). |
 | `DEFAULT_CURRENCY` | Currency string (e.g., `usd`). |
 | `CCBILL_WEBHOOK_IP_ENFORCE` | Set to `true` to enforce CCBill webhook IP ranges. |
+| `CCBILL_WEBHOOK_IP_RANGES` | Optional comma-delimited list of CIDR blocks, IPs, or IP ranges (`start-end`) to allow for webhooks. Defaults to the bundled range list. |
+| `CCBILL_WEBHOOK_SIGNATURE_SECRET` | Optional shared secret used to verify webhook payload signatures (HMAC SHA-256). |
+| `CCBILL_WEBHOOK_SIGNATURE_HEADER` | Header name containing the webhook signature (default: `x-ccbill-signature`). |
 
 ## Optional environment variables
 
@@ -95,6 +98,7 @@ All endpoints below require a valid UI session (`X-SESSION-ID`) + auth token.
 - **Widget loads but tokenization fails**: confirm `CCBILL_FRONTEND_CLIENT_ID` and `CCBILL_FRONTEND_CLIENT_SECRET` and ensure the widget config in `/api/billing/config` matches your CCBill account.
 - **Charges failing**: validate `CCBILL_BACKEND_CLIENT_ID` and `CCBILL_BACKEND_CLIENT_SECRET` and confirm account/sub-account numbers.
 - **Webhook rejected**: set `CCBILL_WEBHOOK_IP_ENFORCE=false` temporarily to validate payloads, then enable IP enforcement after confirming the CCBill IP range list.
+- **Webhook signature failures**: confirm `CCBILL_WEBHOOK_SIGNATURE_SECRET` matches the secret configured in CCBill and that the signature header name matches `CCBILL_WEBHOOK_SIGNATURE_HEADER`.
 
 ## DynamoDB Table Layout
 

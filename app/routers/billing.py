@@ -27,6 +27,7 @@ from app.models import (
     SetDefaultReq,
     SetPriorityReq,
     StripeChargeReq,
+    StripeRefundReq,
     StripePaymentMethodOut,
     VerifyMicrodepositsReq,
 )
@@ -47,6 +48,11 @@ from app.services.billing_shared import (
 )
 from app.services.profile import get_profile
 from app.services.purchase_history import mark_completed, mark_reverted, record_billing_transaction
+from app.services.billing_dunning import (
+    bump_dunning_after_payment_method_update,
+    schedule_autopay_disabled_notice,
+    schedule_dunning,
+)
 from app.services.ttl import with_ttl
 
 router = APIRouter(tags=["billing"])
@@ -264,6 +270,8 @@ def set_autopay(body: SetAutopayReq, req: Request = None, ctx=Depends(require_ui
         ddb_put(T.billing, {"pk": pk, "sk": "BILLING", "autopay_enabled": False, "currency": "usd", "default_payment_method_id": None})
     ddb_update(T.billing, pk, "BILLING", "SET autopay_enabled = :e", {":e": bool(body.enabled)})
     audit_event("billing_autopay_set", user_id, req, outcome="success", enabled=bool(body.enabled))
+    if not body.enabled:
+        schedule_autopay_disabled_notice(user_id, "stripe")
     return {"ok": True}
 
 
@@ -327,6 +335,7 @@ def verify_microdeposits(body: VerifyMicrodepositsReq, ctx=Depends(require_ui_se
 @dual_route("GET", "/billing/payment-methods", response_model=List[StripePaymentMethodOut])
 def list_payment_methods(ctx=Depends(require_ui_session)) -> List[StripePaymentMethodOut]:
     user_id = ctx["user_sub"]
+    default_pm = current_default_pm(user_id)
     pms = list_payment_methods_ddb(user_id)
 
     out: List[StripePaymentMethodOut] = []
@@ -340,6 +349,9 @@ def list_payment_methods(ctx=Depends(require_ui_session)) -> List[StripePaymentM
             exp_month=it.get("exp_month"),
             exp_year=it.get("exp_year"),
             priority=int(it.get("priority", 0)),
+            provider=it.get("provider") or "stripe",
+            provider_method_id=it.get("provider_method_id") or it.get("payment_method_id"),
+            is_default=it.get("payment_method_id") == default_pm,
         ))
     out.sort(key=lambda x: x.priority)
     return out
@@ -368,6 +380,7 @@ def set_default(body: SetDefaultReq, req: Request = None, ctx=Depends(require_ui
     set_default_pm(user_id, body.payment_method_id)
     stripe.Customer.modify(customer_id, invoice_settings={"default_payment_method": body.payment_method_id})
     audit_event("billing_payment_method_default", user_id, req, outcome="success", payment_method_id=body.payment_method_id)
+    bump_dunning_after_payment_method_update(user_id, "stripe")
     return {"ok": True}
 
 
@@ -603,6 +616,66 @@ def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_
     return {"status": pi.get("status"), "payment_intent_id": pi["id"]}
 
 
+@dual_route("POST", "/billing/refund")
+def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, Any]:
+    ensure_stripe_configured()
+    user_id = ctx["user_sub"]
+    pk = user_pk(user_id)
+
+    pay = ddb_get(T.billing, pk, pay_sk(body.payment_intent_id))
+    if not pay:
+        raise HTTPException(404, "Payment record not found")
+
+    amount = int(body.amount_cents or pay.get("amount_cents", 0))
+    if amount <= 0:
+        raise HTTPException(400, "amount_cents must be greater than zero")
+
+    refund = stripe.Refund.create(
+        payment_intent=body.payment_intent_id,
+        amount=amount,
+        reason=body.reason,
+    )
+
+    led_sk_value, led_item = new_ledger_entry(
+        key_name="pk",
+        key_value=pk,
+        entry_type="adjustment",
+        amount_cents=amount,
+        state="settled",
+        reason="refund",
+        meta={"reason": body.reason},
+        extra={"stripe_payment_intent_id": body.payment_intent_id, "stripe_refund_id": refund.get("id")},
+    )
+    ddb_put(T.billing, led_item)
+
+    if pay.get("status") in ("processing", "requires_action"):
+        apply_balance_delta(T.billing, pk, {"payments_pending_cents": -amount}, currency=pay.get("currency", "usd"))
+    else:
+        apply_balance_delta(T.billing, pk, {"payments_settled_cents": -amount}, currency=pay.get("currency", "usd"))
+
+    if pay.get("ledger_sk"):
+        settle_or_reverse_ledger(T.billing, "pk", pk, pay["ledger_sk"], "reversed")
+
+    update_payment_status(user_id, body.payment_intent_id, "refunded", charge_id=refund.get("charge"))
+
+    purchase_txn_id = pay.get("purchase_txn_id")
+    if purchase_txn_id:
+        mark_reverted(user_id, purchase_txn_id, body.reason or "refund")
+
+    audit_event(
+        "billing_refund",
+        user_id,
+        req,
+        outcome="success",
+        provider="stripe",
+        payment_intent_id=body.payment_intent_id,
+        refund_id=refund.get("id"),
+        amount_cents=amount,
+        reason=body.reason,
+    )
+    return {"ok": True, "refund_id": refund.get("id"), "payment_intent_id": body.payment_intent_id}
+
+
 @dual_route("POST", "/billing/checkout_session")
 def create_checkout_session(body: BillingCheckoutReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, str]:
     ensure_stripe_configured()
@@ -675,8 +748,12 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
 
         try:
             stripe.PaymentMethod.attach(pm_id, customer=customer_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Stripe payment method attach failed",
+                extra={"user_id": user_id, "payment_method_id": pm_id, "customer_id": customer_id},
+                exc_info=exc,
+            )
 
         pm = stripe.PaymentMethod.retrieve(pm_id)
         pm_type = pm.get("type", "unknown")
@@ -706,6 +783,8 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
             "pk": pk,
             "sk": pm_sk(pm_id),
             "payment_method_id": pm_id,
+            "provider": "stripe",
+            "provider_method_id": pm_id,
             "method_type": pm_type,
             "label": label,
             "brand": brand,
@@ -715,10 +794,12 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
             "priority": next_priority,
             "created_at": now_ts(),
         })
+        bump_dunning_after_payment_method_update(user_id, "stripe")
 
         if not current_default_pm(user_id):
             set_default_pm(user_id, pm_id)
             stripe.Customer.modify(customer_id, invoice_settings={"default_payment_method": pm_id})
+            bump_dunning_after_payment_method_update(user_id, "stripe")
 
     elif event_type.startswith("payment_intent."):
         pi = event["data"]["object"]
@@ -806,6 +887,13 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
                 purchase_txn_id=purchase_txn_id,
                 reason=(pi.get("last_payment_error") or {}).get("message"),
             )
+            schedule_dunning(
+                user_id=user_id,
+                provider="stripe",
+                amount_cents=amount,
+                reason=status,
+                payment_ref=pi_id,
+            )
 
         elif status == "payment_failed":
             update_payment_status(user_id, pi_id, "payment_failed", charge_id=charge_id, last_error=pi.get("last_payment_error"))
@@ -833,6 +921,13 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
                 amount_cents=amount,
                 purchase_txn_id=purchase_txn_id,
                 reason=(pi.get("last_payment_error") or {}).get("message"),
+            )
+            schedule_dunning(
+                user_id=user_id,
+                provider="stripe",
+                amount_cents=amount,
+                reason=status,
+                payment_ref=pi_id,
             )
 
         else:
@@ -865,6 +960,7 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
         ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
 
         if event_type == "charge.dispute.funds_withdrawn":
+            pay = ddb_get(T.billing, pk, pay_sk(pi_id)) if pi_id else None
             led_sk_value, led_item = new_ledger_entry(
                 key_name="pk",
                 key_value=pk,
@@ -877,6 +973,10 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
             )
             ddb_put(T.billing, led_item)
             apply_balance_delta(T.billing, pk, {"owed_settled_cents": amount}, currency=currency)
+            if pay and pay.get("ledger_sk"):
+                settle_or_reverse_ledger(T.billing, "pk", pk, pay["ledger_sk"], "reversed")
+            if pay and pay.get("purchase_txn_id"):
+                mark_reverted(user_id, pay["purchase_txn_id"], "chargeback")
             audit_event(
                 "billing_dispute_funds_withdrawn",
                 user_id,
