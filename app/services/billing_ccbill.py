@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import ipaddress
 import json
-import secrets
 import time
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
@@ -15,13 +14,13 @@ from app.core.normalize import client_ip_from_request
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
-
-BAL_FIELDS = [
-    "owed_pending_cents",
-    "owed_settled_cents",
-    "payments_pending_cents",
-    "payments_settled_cents",
-]
+from app.services.billing_shared import (
+    apply_balance_delta_for_key,
+    compute_due as compute_due_shared,
+    ensure_balance_row_for_key,
+    new_ledger_entry as new_ledger_entry_shared,
+    settle_or_reverse_ledger as settle_or_reverse_ledger_shared,
+)
 
 CCBILL_WEBHOOK_IP_RANGES = [
     ("64.38.212.0", "64.38.212.255"),
@@ -31,10 +30,67 @@ CCBILL_WEBHOOK_IP_RANGES = [
 ]
 
 _OAUTH_CACHE: Dict[str, Tuple[str, int]] = {}
+_REDACTED_VALUE = "[REDACTED]"
+_ALLOWED_RAW_KEYS = {
+    "approved",
+    "transactionId",
+    "paymentUniqueId",
+    "transaction_id",
+    "subscriptionId",
+    "subscription_id",
+    "eventType",
+    "responseCode",
+    "errorCode",
+    "message",
+    "reason",
+    "status",
+    "type",
+    "amount",
+    "currencyCode",
+    "payload",
+    "q",
+}
+_SENSITIVE_KEY_FRAGMENTS = (
+    "card",
+    "cvv",
+    "cvc",
+    "security",
+    "password",
+    "email",
+    "address",
+    "ip",
+    "phone",
+    "name",
+    "ssn",
+    "bank",
+    "routing",
+    "acct",
+)
 
 
-def _ulidish() -> str:
-    return f"{int(time.time() * 1000)}_{secrets.token_hex(8)}"
+def _is_sensitive_key(key: str) -> bool:
+    key_lower = key.lower()
+    return any(fragment in key_lower for fragment in _SENSITIVE_KEY_FRAGMENTS)
+
+
+def _sanitize_ccbill_raw(raw: Any) -> Any:
+    if isinstance(raw, dict):
+        sanitized: Dict[str, Any] = {}
+        for key, value in raw.items():
+            if key not in _ALLOWED_RAW_KEYS:
+                continue
+            if _is_sensitive_key(key):
+                sanitized[key] = _REDACTED_VALUE
+            elif key in {"payload", "q"}:
+                sanitized[key] = _sanitize_ccbill_raw(value)
+            else:
+                sanitized[key] = _sanitize_ccbill_raw(value)
+        return sanitized
+    if isinstance(raw, list):
+        return [_sanitize_ccbill_raw(item) for item in raw]
+    if isinstance(raw, (str, int, float, bool)) or raw is None:
+        return raw
+    return str(raw)
 
 
 def _billing_sk(kind: str, identifier: str) -> str:
@@ -42,61 +98,15 @@ def _billing_sk(kind: str, identifier: str) -> str:
 
 
 def ensure_balance_row(user_sub: str) -> None:
-    it = T.billing.get_item(Key={"user_sub": user_sub, "sk": "BALANCE"}).get("Item")
-    if not it:
-        T.billing.put_item(Item={
-            "user_sub": user_sub,
-            "sk": "BALANCE",
-            "currency": S.default_currency,
-            **{k: 0 for k in BAL_FIELDS},
-            "updated_at": now_ts(),
-        })
+    ensure_balance_row_for_key(T.billing, "user_sub", user_sub, S.default_currency)
 
 
 def apply_balance_delta(user_sub: str, delta: Dict[str, int]) -> None:
-    ensure_balance_row(user_sub)
-    sets = []
-    values: Dict[str, Any] = {":z": 0, ":t": now_ts()}
-    names: Dict[str, str] = {}
-
-    i = 0
-    for k, v in delta.items():
-        if v == 0:
-            continue
-        i += 1
-        nk = f"#k{i}"
-        dv = f":d{i}"
-        names[nk] = k
-        values[dv] = int(v)
-        sets.append(f"{nk} = if_not_exists({nk}, :z) + {dv}")
-
-    names["#u"] = "updated_at"
-    sets.append("#u = :t")
-    expr = "SET " + ", ".join(sets)
-    T.billing.update_item(
-        Key={"user_sub": user_sub, "sk": "BALANCE"},
-        UpdateExpression=expr,
-        ExpressionAttributeNames=names,
-        ExpressionAttributeValues=values,
-    )
+    apply_balance_delta_for_key(T.billing, "user_sub", user_sub, delta, currency=S.default_currency)
 
 
 def compute_due(balance_item: Dict[str, Any]) -> Dict[str, int]:
-    owed_settled = int(balance_item.get("owed_settled_cents", 0))
-    owed_pending = int(balance_item.get("owed_pending_cents", 0))
-    pay_settled = int(balance_item.get("payments_settled_cents", 0))
-    pay_pending = int(balance_item.get("payments_pending_cents", 0))
-
-    due_settled = owed_settled - pay_settled
-    due_if_all_settles = (owed_settled + owed_pending) - (pay_settled + pay_pending)
-    return {
-        "due_settled_cents": due_settled,
-        "due_if_all_settles_cents": due_if_all_settles,
-    }
-
-
-def ledger_sk(ts: int, entry_id: str) -> str:
-    return f"LEDGER#{ts}#{entry_id}"
+    return compute_due_shared(balance_item)
 
 
 def new_ledger_entry(
@@ -110,37 +120,27 @@ def new_ledger_entry(
     ccbill_subscription_id: Optional[str] = None,
     meta: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Dict[str, Any]]:
-    ts = now_ts()
-    eid = _ulidish()
-    sk = ledger_sk(ts, eid)
-    item = {
-        "user_sub": user_sub,
-        "sk": sk,
-        "entry_id": eid,
-        "ts": ts,
-        "type": entry_type,
-        "amount_cents": int(amount_cents),
-        "state": state,
-        "reason": reason,
-    }
+    extra: Dict[str, Any] = {}
     if ccbill_payment_token_id:
-        item["ccbill_payment_token_id"] = ccbill_payment_token_id
+        extra["ccbill_payment_token_id"] = ccbill_payment_token_id
     if ccbill_transaction_id:
-        item["ccbill_transaction_id"] = ccbill_transaction_id
+        extra["ccbill_transaction_id"] = ccbill_transaction_id
     if ccbill_subscription_id:
-        item["ccbill_subscription_id"] = ccbill_subscription_id
-    if meta:
-        item["meta"] = meta
-    return sk, item
+        extra["ccbill_subscription_id"] = ccbill_subscription_id
+    return new_ledger_entry_shared(
+        key_name="user_sub",
+        key_value=user_sub,
+        entry_type=entry_type,
+        amount_cents=amount_cents,
+        state=state,
+        reason=reason,
+        meta=meta,
+        extra=extra or None,
+    )
 
 
 def settle_or_reverse_ledger(user_sub: str, ledger_sk_value: str, new_state: str) -> None:
-    T.billing.update_item(
-        Key={"user_sub": user_sub, "sk": ledger_sk_value},
-        UpdateExpression="SET #s = :s",
-        ExpressionAttributeNames={"#s": "state"},
-        ExpressionAttributeValues={":s": new_state},
-    )
+    settle_or_reverse_ledger_shared(T.billing, "user_sub", user_sub, ledger_sk_value, new_state)
 
 
 def put_payment_record(
@@ -169,7 +169,7 @@ def put_payment_record(
         "updated_at": now_ts(),
     }
     if raw:
-        item["raw"] = raw
+        item["raw"] = _sanitize_ccbill_raw(raw)
     T.billing.put_item(Item=item)
 
 
@@ -179,7 +179,7 @@ def update_payment_status(user_sub: str, transaction_id: str, status: str, raw: 
     sets = ["#st = :st", "#u = :u"]
     if raw is not None:
         names["#r"] = "raw"
-        values[":r"] = raw
+        values[":r"] = _sanitize_ccbill_raw(raw)
         sets.append("#r = :r")
     T.billing.update_item(
         Key={"user_sub": user_sub, "sk": _billing_sk("PAY", transaction_id)},
@@ -217,7 +217,7 @@ def upsert_subscription(
     if last_transaction_id:
         item["last_transaction_id"] = last_transaction_id
     if raw:
-        item["raw"] = raw
+        item["raw"] = _sanitize_ccbill_raw(raw)
     T.billing.put_item(Item=item)
 
 
@@ -555,4 +555,3 @@ def _get_default_token_or_400(user_sub: str) -> str:
     if not token:
         raise HTTPException(400, "No default payment method set")
     return token
-

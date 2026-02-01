@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import sys
-import secrets
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional
 from urllib.parse import urljoin
 
 if "stripe" in sys.modules:
@@ -41,6 +41,8 @@ from app.services.billing_shared import (
     ddb_query_pk,
     ddb_update,
     ensure_balance_row,
+    new_ledger_entry,
+    settle_or_reverse_ledger,
     user_pk,
 )
 from app.services.profile import get_profile
@@ -48,6 +50,7 @@ from app.services.purchase_history import mark_completed, mark_reverted, record_
 from app.services.ttl import with_ttl
 
 router = APIRouter(tags=["billing"])
+logger = logging.getLogger(__name__)
 
 
 def dual_route(methods: str | Iterable[str], path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -78,10 +81,6 @@ def build_return_url(req: Request, fallback_query: str) -> str:
     return urljoin(str(req.base_url), fallback_query)
 
 
-def ulidish() -> str:
-    return f"{int(now_ts() * 1000)}_{secrets.token_hex(8)}"
-
-
 def get_or_create_customer(user_id: str) -> str:
     pk = user_pk(user_id)
     try:
@@ -98,8 +97,12 @@ def get_or_create_customer(user_id: str) -> str:
         if customer_payload:
             try:
                 stripe.Customer.modify(prof["stripe_customer_id"], **customer_payload)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning(
+                    "Stripe customer update failed",
+                    extra={"user_id": user_id, "stripe_customer_id": prof.get("stripe_customer_id")},
+                    exc_info=exc,
+                )
         return prof["stripe_customer_id"]
 
     cust = stripe.Customer.create(metadata={"app_user_id": user_id}, **customer_payload)
@@ -113,47 +116,6 @@ def user_id_from_customer(customer_id: str) -> Optional[str]:
         return cust.get("metadata", {}).get("app_user_id")
     except Exception:
         return None
-
-
-def ledger_sk(ts: int, entry_id: str) -> str:
-    return f"LEDGER#{ts}#{entry_id}"
-
-
-def new_ledger_entry(
-    user_id: str,
-    entry_type: str,
-    amount_cents: int,
-    state: str,
-    reason: str,
-    stripe_payment_intent_id: Optional[str] = None,
-    stripe_charge_id: Optional[str] = None,
-    meta: Optional[Dict[str, Any]] = None,
-) -> Tuple[str, Dict[str, Any]]:
-    ts = now_ts()
-    entry_id = ulidish()
-    sk = ledger_sk(ts, entry_id)
-    item = {
-        "pk": user_pk(user_id),
-        "sk": sk,
-        "entry_id": entry_id,
-        "ts": ts,
-        "type": entry_type,
-        "amount_cents": int(amount_cents),
-        "state": state,
-        "reason": reason,
-    }
-    if stripe_payment_intent_id:
-        item["stripe_payment_intent_id"] = stripe_payment_intent_id
-    if stripe_charge_id:
-        item["stripe_charge_id"] = stripe_charge_id
-    if meta:
-        item["meta"] = meta
-    return sk, item
-
-
-def settle_or_reverse_ledger(user_id: str, ledger_sk_value: str, new_state: str) -> None:
-    pk = user_pk(user_id)
-    ddb_update(T.billing, pk, ledger_sk_value, "SET #s = :s", {":s": new_state}, names={"#s": "state"})
 
 
 def pay_sk(payment_intent_id: str) -> str:
@@ -501,19 +463,20 @@ def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui
         pass
 
     led_sk, led_item = new_ledger_entry(
-        user_id=user_id,
+        key_name="pk",
+        key_value=pk,
         entry_type="credit",
         amount_cents=amount,
         state="pending" if pi.get("status") in ("processing", "requires_action") else ("settled" if pi.get("status") == "succeeded" else "pending"),
         reason="payment",
-        stripe_payment_intent_id=pi["id"],
         meta={"idempotency_key": idem},
+        extra={"stripe_payment_intent_id": pi["id"]},
     )
     ddb_put(T.billing, led_item)
 
     if pi.get("status") == "succeeded":
         apply_balance_delta(T.billing, pk, {"payments_settled_cents": amount}, currency=billing.get("currency", "usd"))
-        settle_or_reverse_ledger(user_id, led_sk, "settled")
+        settle_or_reverse_ledger(T.billing, "pk", pk, led_sk, "settled")
     else:
         apply_balance_delta(T.billing, pk, {"payments_pending_cents": amount}, currency=billing.get("currency", "usd"))
 
@@ -597,19 +560,20 @@ def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_
         state = "pending"
 
     led_sk, led_item = new_ledger_entry(
-        user_id=user_id,
+        key_name="pk",
+        key_value=pk,
         entry_type="credit",
         amount_cents=int(body.amount_cents),
         state=state,
         reason="charge_once",
-        stripe_payment_intent_id=pi["id"],
         meta={"idempotency_key": idem, "payment_method_id": payment_method_id},
+        extra={"stripe_payment_intent_id": pi["id"]},
     )
     ddb_put(T.billing, led_item)
 
     if pi.get("status") == "succeeded":
         apply_balance_delta(T.billing, pk, {"payments_settled_cents": int(body.amount_cents)}, currency=billing.get("currency", "usd"))
-        settle_or_reverse_ledger(user_id, led_sk, "settled")
+        settle_or_reverse_ledger(T.billing, "pk", pk, led_sk, "settled")
     else:
         apply_balance_delta(T.billing, pk, {"payments_pending_cents": int(body.amount_cents)}, currency=billing.get("currency", "usd"))
 
@@ -802,7 +766,7 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
             if pay.get("status") in ("processing", "requires_action"):
                 apply_balance_delta(T.billing, pk, {"payments_pending_cents": -amount, "payments_settled_cents": amount}, currency=pay.get("currency", "usd"))
             if led_sk_value:
-                settle_or_reverse_ledger(user_id, led_sk_value, "settled")
+                settle_or_reverse_ledger(T.billing, "pk", pk, led_sk_value, "settled")
             audit_event(
                 "billing_payment_intent_update",
                 user_id,
@@ -829,7 +793,7 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
             elif pay.get("status") == "succeeded":
                 apply_balance_delta(T.billing, pk, {"payments_settled_cents": -amount}, currency=pay.get("currency", "usd"))
             if led_sk_value:
-                settle_or_reverse_ledger(user_id, led_sk_value, "reversed")
+                settle_or_reverse_ledger(T.billing, "pk", pk, led_sk_value, "reversed")
             audit_event(
                 "billing_payment_intent_update",
                 user_id,
@@ -857,7 +821,7 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
             elif pay.get("status") == "succeeded":
                 apply_balance_delta(T.billing, pk, {"payments_settled_cents": -amount}, currency=pay.get("currency", "usd"))
             if led_sk_value:
-                settle_or_reverse_ledger(user_id, led_sk_value, "reversed")
+                settle_or_reverse_ledger(T.billing, "pk", pk, led_sk_value, "reversed")
             audit_event(
                 "billing_payment_intent_update",
                 user_id,
@@ -902,14 +866,14 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
 
         if event_type == "charge.dispute.funds_withdrawn":
             led_sk_value, led_item = new_ledger_entry(
-                user_id=user_id,
+                key_name="pk",
+                key_value=pk,
                 entry_type="adjustment",
                 amount_cents=amount,
                 state="settled",
                 reason="dispute_funds_withdrawn",
-                stripe_charge_id=charge_id,
-                stripe_payment_intent_id=pi_id,
                 meta={"currency": currency, "dispute_id": dispute.get("id")},
+                extra={"stripe_charge_id": charge_id, "stripe_payment_intent_id": pi_id},
             )
             ddb_put(T.billing, led_item)
             apply_balance_delta(T.billing, pk, {"owed_settled_cents": amount}, currency=currency)
@@ -927,14 +891,14 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
 
         elif event_type == "charge.dispute.funds_reinstated":
             led_sk_value, led_item = new_ledger_entry(
-                user_id=user_id,
+                key_name="pk",
+                key_value=pk,
                 entry_type="adjustment",
                 amount_cents=amount,
                 state="settled",
                 reason="dispute_funds_reinstated",
-                stripe_charge_id=charge_id,
-                stripe_payment_intent_id=pi_id,
                 meta={"currency": currency, "dispute_id": dispute.get("id")},
+                extra={"stripe_charge_id": charge_id, "stripe_payment_intent_id": pi_id},
             )
             ddb_put(T.billing, led_item)
             apply_balance_delta(T.billing, pk, {"owed_settled_cents": -amount}, currency=currency)
@@ -960,7 +924,8 @@ def dev_add_charge(body: AddChargeReq, ctx=Depends(require_ui_session)) -> Dict[
     ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
 
     led_sk_value, led_item = new_ledger_entry(
-        user_id=user_id,
+        key_name="pk",
+        key_value=pk,
         entry_type="debit",
         amount_cents=int(body.amount_cents),
         state=body.state,
