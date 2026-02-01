@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile, Body, Request
+from fastapi import APIRouter, Depends, File, Query, UploadFile, Body, Request, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.services.filemanager import (
     create_empty_folder,
     download_file,
     download_zip,
+    is_previewable,
     list_children,
     list_shared_with,
     list_shared_with_me,
@@ -147,6 +148,37 @@ def download_fs_file(path: str = Query(...), req: Request = None, user: str = De
     )
 
 
+@router.get("/preview")
+def preview_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
+    result = download_file(user, path)
+    node = result["node"]
+    obj = result["object"]
+    if not is_previewable(node):
+        raise HTTPException(status_code=415, detail="preview not available for this file type")
+    audit_event(
+        "filemgr_file_previewed",
+        user,
+        req,
+        outcome="success",
+        path=node.get("path"),
+        size=node.get("size"),
+    )
+
+    def gen():
+        body = obj["Body"]
+        while True:
+            chunk = body.read(1024 * 1024)
+            if not chunk:
+                break
+            yield chunk
+
+    return StreamingResponse(
+        gen(),
+        media_type=node.get("content_type", "application/octet-stream"),
+        headers={"Content-Disposition": f'inline; filename="{node["name"]}"'},
+    )
+
+
 @router.delete("/file")
 def remove_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
     remove_file(user, path)
@@ -233,7 +265,7 @@ def rename_folder(
 
 @router.post("/download-zip")
 def download_multiple_as_zip(paths: List[str] = Body(...), req: Request = None, user: str = Depends(_current_user)):
-    buf = download_zip(user, paths)
+    zip_stream = download_zip(user, paths)
     audit_event(
         "filemgr_zip_downloaded",
         user,
@@ -242,11 +274,8 @@ def download_multiple_as_zip(paths: List[str] = Body(...), req: Request = None, 
         count=len(paths),
     )
 
-    def zip_stream():
-        yield from iter(lambda: buf.read(1024 * 1024), b"")
-
     return StreamingResponse(
-        zip_stream(),
+        zip_stream,
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="download.zip"'},
     )

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import re
 import uuid
 import zipfile
@@ -9,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 import boto3
+import zipstream
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from fastapi import HTTPException, UploadFile
@@ -111,11 +111,18 @@ def delete_node(owner: str, path: str) -> None:
 
 def list_children(owner: str, folder_path: str) -> List[Dict[str, Any]]:
     tbl = _table()
-    prefix = f"NODE#{folder_path}"
-    resp = tbl.query(
-        KeyConditionExpression=Key("PK").eq(pk_user(owner)) & Key("SK").begins_with(prefix),
-    )
-    return resp.get("Items", [])
+    try:
+        resp = tbl.query(
+            IndexName="GSI2",
+            KeyConditionExpression=Key("GSI2PK").eq(f"PARENT#{folder_path}"),
+        )
+        return resp.get("Items", [])
+    except ClientError:
+        prefix = f"NODE#{folder_path}"
+        resp = tbl.query(
+            KeyConditionExpression=Key("PK").eq(pk_user(owner)) & Key("SK").begins_with(prefix),
+        )
+        return resp.get("Items", [])
 
 
 def is_ancestor_path(folder_path: str, maybe_child_path: str) -> bool:
@@ -179,8 +186,43 @@ def _node_matches(tokens: List[str], item: Dict[str, Any]) -> bool:
     haystack = _node_haystack(item)
     return all(token in haystack for token in tokens)
 
+def _token_pk(user: str, token: str) -> str:
+    return f"TOKEN#{token}#USER#{user}"
 
-def search_text(user: str, query: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+
+def _token_sk(path: str) -> str:
+    return f"PATH#{path}"
+
+
+def _token_entry(user: str, item: Dict[str, Any], token: str) -> Dict[str, Any]:
+    return {
+        "PK": _token_pk(user, token),
+        "SK": _token_sk(item["path"]),
+        "path": item["path"],
+        "type": item.get("type"),
+        "name": item.get("name"),
+        "size": item.get("size"),
+        "updated_at": item.get("updated_at"),
+    }
+
+
+def _node_tokens(item: Dict[str, Any]) -> List[str]:
+    return _search_tokens(_node_haystack(item))
+
+
+def _put_token_entries(user: str, item: Dict[str, Any]) -> None:
+    tbl = _table()
+    for token in _node_tokens(item):
+        tbl.put_item(Item=_token_entry(user, item, token))
+
+
+def _delete_token_entries(user: str, item: Dict[str, Any]) -> None:
+    tbl = _table()
+    for token in _node_tokens(item):
+        tbl.delete_item(Key={"PK": _token_pk(user, token), "SK": _token_sk(item["path"])})
+
+
+def _search_text_scan(user: str, query: str, *, limit: int = 50) -> List[Dict[str, Any]]:
     tokens = _search_tokens(query)
     if not tokens:
         return []
@@ -214,6 +256,56 @@ def search_text(user: str, query: str, *, limit: int = 50) -> List[Dict[str, Any
     return out
 
 
+def _query_token_items(user: str, token: str, *, limit: int) -> List[Dict[str, Any]]:
+    tbl = _table()
+    out: List[Dict[str, Any]] = []
+    start_key: Optional[Dict[str, Any]] = None
+    while len(out) < limit:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("PK").eq(_token_pk(user, token)) & Key("SK").begins_with("PATH#"),
+            "Limit": max(50, min(200, limit)),
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = tbl.query(**kwargs)
+        out.extend(resp.get("Items", []))
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
+    return out[:limit]
+
+def search_text(user: str, query: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+    tokens = _search_tokens(query)
+    if not tokens:
+        return []
+    items = _query_token_items(user, tokens[0], limit=limit * 4)
+    if not items:
+        return _search_text_scan(user, query, limit=limit)
+    by_path = {it["path"]: it for it in items}
+    paths = set(by_path.keys())
+    for token in tokens[1:]:
+        token_items = _query_token_items(user, token, limit=limit * 4)
+        if not token_items:
+            return []
+        token_paths = {it["path"] for it in token_items}
+        paths &= token_paths
+        if not paths:
+            return []
+    results = [by_path[p] for p in paths if p in by_path]
+    results.sort(key=lambda x: (x.get("type") != "folder", (x.get("name") or "").lower()))
+    out = results[:limit]
+    return [
+        {
+            "path": it.get("path"),
+            "type": it.get("type"),
+            "name": it.get("name"),
+            "size": it.get("size"),
+            "updated_at": it.get("updated_at"),
+        }
+        for it in out
+    ]
+
+
 def create_empty_folder(user: str, path: str) -> str:
     folder = norm_path(path, is_folder=True)
     if folder == "/":
@@ -233,8 +325,11 @@ def create_empty_folder(user: str, path: str) -> str:
         "updated_at": now_iso(),
         "GSI1PK": pk_user(user),
         "GSI1SK": f"NAME#{name.lower()}#PATH#{folder}",
+        "GSI2PK": f"PARENT#{parent}",
+        "GSI2SK": f"TYPE#folder#NAME#{name.lower()}#PATH#{folder}",
     }
     put_node(item)
+    _put_token_entries(user, item)
     return folder
 
 
@@ -280,8 +375,11 @@ def upload_file(user: str, path: str, file: UploadFile) -> Dict[str, Any]:
         "etag": etag,
         "GSI1PK": pk_user(user),
         "GSI1SK": f"NAME#{name.lower()}#PATH#{p}",
+        "GSI2PK": f"PARENT#{parent}",
+        "GSI2SK": f"TYPE#file#NAME#{name.lower()}#PATH#{p}",
     }
     put_node(item)
+    _put_token_entries(user, item)
     return {"path": p, "size": size}
 
 
@@ -330,8 +428,11 @@ def upload_profile_photo(
         "etag": etag,
         "GSI1PK": pk_user(user),
         "GSI1SK": f"NAME#{name.lower()}#PATH#{path}",
+        "GSI2PK": f"PARENT#{parent}",
+        "GSI2SK": f"TYPE#file#NAME#{name.lower()}#PATH#{path}",
     }
     put_node(item)
+    _put_token_entries(user, item)
     return {"path": path, "size": size}
 
 
@@ -376,8 +477,11 @@ def upload_catalog_image(
         "etag": etag,
         "GSI1PK": pk_user(owner),
         "GSI1SK": f"NAME#{name.lower()}#PATH#{path}",
+        "GSI2PK": f"PARENT#{parent}",
+        "GSI2SK": f"TYPE#file#NAME#{name.lower()}#PATH#{path}",
     }
     put_node(item)
+    _put_token_entries(owner, item)
     return {"path": path, "size": size}
 
 
@@ -405,6 +509,19 @@ def download_file(user: str, path: str) -> Dict[str, Any]:
     return {"node": node, "object": obj}
 
 
+def is_previewable(node: Dict[str, Any]) -> bool:
+    content_type = (node.get("content_type") or "").lower()
+    if content_type.startswith("image/"):
+        return True
+    if content_type in {"application/pdf"}:
+        return True
+    if content_type.startswith("text/"):
+        return True
+    if content_type in {"application/json", "application/xml"}:
+        return True
+    return False
+
+
 def remove_file(user: str, path: str) -> None:
     p = norm_path(path, is_folder=False)
     node = get_node(user, p)
@@ -415,6 +532,7 @@ def remove_file(user: str, path: str) -> None:
     except ClientError:
         pass
     delete_node(user, p)
+    _delete_token_entries(user, node)
     _delete_shares_for_path(owner=user, path=p)
 
 
@@ -436,9 +554,11 @@ def remove_folder(user: str, path: str) -> int:
             except ClientError:
                 pass
         delete_node(user, child["path"])
+        _delete_token_entries(user, child)
         _delete_shares_for_path(owner=user, path=child["path"])
 
     delete_node(user, folder)
+    _delete_token_entries(user, node)
     _delete_shares_for_path(owner=user, path=folder)
     return len(items)
 
@@ -460,10 +580,59 @@ def move_node(user: str, src: str, dst: str) -> Dict[str, Any]:
     if "Item" in resp:
         raise HTTPException(409, "destination exists")
 
+    def transact_move_item(item: Dict[str, Any], new_path: str, new_parent: str, new_name: str) -> None:
+        new_item = dict(item)
+        new_item["path"] = new_path
+        new_item["parent"] = new_parent
+        new_item["name"] = new_name
+        new_item["name_lc"] = new_name.lower()
+        new_item["updated_at"] = now_iso()
+        new_item["SK"] = sk_node(new_path)
+        new_item["GSI1SK"] = f"NAME#{new_item['name_lc']}#PATH#{new_path}"
+        new_item["GSI2PK"] = f"PARENT#{new_parent}"
+        new_item["GSI2SK"] = f"TYPE#{new_item['type']}#NAME#{new_item['name_lc']}#PATH#{new_path}"
+        ddb.meta.client.transact_write_items(
+            TransactItems=[
+                {
+                    "ConditionCheck": {
+                        "TableName": tbl.name,
+                        "Key": node_key(user, new_path),
+                        "ConditionExpression": "attribute_not_exists(PK)",
+                    }
+                },
+                {
+                    "Delete": {
+                        "TableName": tbl.name,
+                        "Key": node_key(user, item["path"]),
+                    }
+                },
+                {
+                    "Put": {
+                        "TableName": tbl.name,
+                        "Item": new_item,
+                    }
+                },
+            ]
+        )
+        _delete_token_entries(user, item)
+        _put_token_entries(user, new_item)
+
     if is_folder:
         if is_ancestor_path(src_p, dst_p):
             raise HTTPException(400, "cannot move folder into itself")
         descendants = list_children(user, src_p)
+        move_id = str(uuid.uuid4())
+        checkpoint = {
+            "PK": pk_user(user),
+            "SK": f"MOVE#{move_id}",
+            "src": src_p,
+            "dst": dst_p,
+            "status": "in_progress",
+            "total": len(descendants),
+            "moved": 0,
+            "updated_at": now_iso(),
+        }
+        tbl.put_item(Item=checkpoint)
         for it in descendants:
             old_path = it["path"]
             if not old_path.startswith(src_p):
@@ -472,39 +641,33 @@ def move_node(user: str, src: str, dst: str) -> Dict[str, Any]:
             new_parent, new_name = split_parent_name(
                 new_path if it["type"] == "file" else norm_path(new_path, is_folder=True)
             )
-
-            delete_node(user, old_path)
-
-            it["path"] = new_path
-            it["parent"] = new_parent
-            it["name"] = new_name
-            it["name_lc"] = new_name.lower()
-            it["updated_at"] = now_iso()
-            it["SK"] = sk_node(new_path)
-            it["GSI1SK"] = f"NAME#{it['name_lc']}#PATH#{new_path}"
-            put_node(it)
-
-            _move_shares(owner=user, old_path=old_path, new_path=new_path)
+            try:
+                transact_move_item(it, new_path, new_parent, new_name)
+                _move_shares(owner=user, old_path=old_path, new_path=new_path)
+                tbl.update_item(
+                    Key={"PK": pk_user(user), "SK": f"MOVE#{move_id}"},
+                    UpdateExpression="SET moved=:m, last_path=:p, updated_at=:t",
+                    ExpressionAttributeValues={
+                        ":m": checkpoint["moved"] + 1,
+                        ":p": old_path,
+                        ":t": now_iso(),
+                    },
+                )
+                checkpoint["moved"] += 1
+            except ClientError as exc:
+                raise HTTPException(500, f"move interrupted; checkpoint {move_id}") from exc
+        tbl.delete_item(Key={"PK": pk_user(user), "SK": f"MOVE#{move_id}"})
         return {"type": "folder", "src": src_p, "dst": dst_p, "count": len(descendants)}
 
     old_path = src_p
     new_path = dst_p
-    delete_node(user, old_path)
-
-    node["path"] = new_path
-    node["parent"] = dst_parent
-    node["name"] = dst_name
-    node["name_lc"] = dst_name.lower()
-    node["updated_at"] = now_iso()
-    node["SK"] = sk_node(new_path)
-    node["GSI1SK"] = f"NAME#{node['name_lc']}#PATH#{new_path}"
-    put_node(node)
+    transact_move_item(node, new_path, dst_parent, dst_name)
 
     _move_shares(owner=user, old_path=old_path, new_path=new_path)
     return {"type": "file", "src": old_path, "dst": new_path}
 
 
-def download_zip(user: str, paths: List[str]) -> io.BytesIO:
+def download_zip(user: str, paths: List[str]) -> zipstream.ZipFile:
     nodes = []
     for path in paths:
         p = norm_path(path, is_folder=False)
@@ -513,14 +676,12 @@ def download_zip(user: str, paths: List[str]) -> io.BytesIO:
             raise HTTPException(400, f"not a file: {path}")
         nodes.append(node)
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for node in nodes:
-            obj = _s3.get_object(Bucket=node["s3_bucket"], Key=node["s3_key"])
-            data = obj["Body"].read()
-            zf.writestr(node["name"], data)
-    buf.seek(0)
-    return buf
+    zf = zipstream.ZipFile(mode="w", compression=zipstream.ZIP_DEFLATED)
+    for node in nodes:
+        obj = _s3.get_object(Bucket=node["s3_bucket"], Key=node["s3_key"])
+        body = obj["Body"]
+        zf.write_iter(node["name"], iter(lambda: body.read(1024 * 1024), b""))
+    return zf
 
 
 def upload_zip(user: str, dest_folder: str, zip_file: UploadFile) -> List[str]:
@@ -528,9 +689,9 @@ def upload_zip(user: str, dest_folder: str, zip_file: UploadFile) -> List[str]:
     folder = norm_path(dest_folder, is_folder=True)
     ensure_folder_exists(user, folder)
 
-    data = zip_file.file.read()
+    zip_file.file.seek(0)
     try:
-        zf = zipfile.ZipFile(io.BytesIO(data))
+        zf = zipfile.ZipFile(zip_file.file)
     except zipfile.BadZipFile as exc:
         raise HTTPException(400, "invalid zip") from exc
 
@@ -546,7 +707,7 @@ def upload_zip(user: str, dest_folder: str, zip_file: UploadFile) -> List[str]:
                 tbl = _table()
                 resp = tbl.get_item(Key=node_key(user, fpath), ConsistentRead=True)
                 if "Item" not in resp:
-                    put_node({
+                    item = {
                         "PK": pk_user(user),
                         "SK": sk_node(fpath),
                         "type": "folder",
@@ -558,12 +719,21 @@ def upload_zip(user: str, dest_folder: str, zip_file: UploadFile) -> List[str]:
                         "updated_at": now_iso(),
                         "GSI1PK": pk_user(user),
                         "GSI1SK": f"NAME#{split_parent_name(fpath)[1].lower()}#PATH#{fpath}",
+                        "GSI2PK": f"PARENT#{split_parent_name(fpath)[0]}",
+                        "GSI2SK": f"TYPE#folder#NAME#{split_parent_name(fpath)[1].lower()}#PATH#{fpath}",
+                    }
+                    put_node(item)
+                    _put_token_entries(user, {
+                        "path": fpath,
+                        "type": "folder",
+                        "name": split_parent_name(fpath)[1],
+                        "size": None,
+                        "updated_at": now_iso(),
                     })
             except HTTPException:
                 pass
             continue
 
-        file_bytes = zf.read(info)
         out_path = norm_path(folder + name, is_folder=False)
         if out_path in created_set:
             raise HTTPException(409, f"already exists: {out_path}")
@@ -573,7 +743,13 @@ def upload_zip(user: str, dest_folder: str, zip_file: UploadFile) -> List[str]:
 
         obj_id = str(uuid.uuid4())
         s3_key = f"{user}/objects/{obj_id}"
-        _s3.put_object(Bucket=bucket, Key=s3_key, Body=file_bytes, ContentType="application/octet-stream")
+        with zf.open(info) as file_obj:
+            _s3.upload_fileobj(
+                Fileobj=file_obj,
+                Bucket=bucket,
+                Key=s3_key,
+                ExtraArgs={"ContentType": "application/octet-stream"},
+            )
 
         item = {
             "PK": pk_user(user),
@@ -587,14 +763,17 @@ def upload_zip(user: str, dest_folder: str, zip_file: UploadFile) -> List[str]:
             "updated_at": now_iso(),
             "upload_at": now_iso(),
             "upload_by": user,
-            "size": len(file_bytes),
+            "size": info.file_size,
             "content_type": "application/octet-stream",
             "s3_bucket": bucket,
             "s3_key": s3_key,
             "GSI1PK": pk_user(user),
             "GSI1SK": f"NAME#{split_parent_name(out_path)[1].lower()}#PATH#{out_path}",
+            "GSI2PK": f"PARENT#{out_parent}",
+            "GSI2SK": f"TYPE#file#NAME#{split_parent_name(out_path)[1].lower()}#PATH#{out_path}",
         }
         put_node(item)
+        _put_token_entries(user, item)
         created.append(out_path)
         created_set.add(out_path)
 
@@ -612,7 +791,7 @@ def _auto_create_parents(user: str, folder_path: str) -> None:
         resp = tbl.get_item(Key=node_key(user, cur), ConsistentRead=True)
         if "Item" not in resp:
             parent, name = split_parent_name(cur)
-            put_node({
+            item = {
                 "PK": pk_user(user),
                 "SK": sk_node(cur),
                 "type": "folder",
@@ -624,7 +803,11 @@ def _auto_create_parents(user: str, folder_path: str) -> None:
                 "updated_at": now_iso(),
                 "GSI1PK": pk_user(user),
                 "GSI1SK": f"NAME#{name.lower()}#PATH#{cur}",
-            })
+                "GSI2PK": f"PARENT#{parent}",
+                "GSI2SK": f"TYPE#folder#NAME#{name.lower()}#PATH#{cur}",
+            }
+            put_node(item)
+            _put_token_entries(user, item)
 
 
 def share_node(user: str, path: str, to_user: str) -> None:

@@ -93,8 +93,8 @@ class TestFileManagerRoutes(unittest.TestCase):
             self.assertTrue(resp["ok"])
             move_node.assert_called_once_with("user", "/a/", "/b/")
 
-        buf = io.BytesIO(b"zipdata")
-        with patch.object(filemanager, "download_zip", return_value=buf):
+        zip_stream = iter([b"zipdata"])
+        with patch.object(filemanager, "download_zip", return_value=zip_stream):
             resp = filemanager.download_multiple_as_zip(paths=["/a"], user="user")
             self.assertIsInstance(resp, StreamingResponse)
             self.assertEqual(resp.media_type, "application/zip")
