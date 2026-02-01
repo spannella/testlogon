@@ -28,7 +28,7 @@ from app.services.mfa import (
     store_recovery_codes,
 )
 from app.services.rate_limit import rate_limit_or_429
-from app.services.sessions import create_action_challenge, load_challenge_or_401, require_ui_session, revoke_challenge
+from app.services.sessions import create_action_challenge, load_challenge_or_401, require_ui_session, revoke_challenge, require_fresh_mfa
 from app.core.tables import T
 from app.core.time import now_ts
 
@@ -57,18 +57,21 @@ async def totp_devices(ctx=Depends(require_ui_session)):
 
 @router.post("/totp/devices/begin")
 async def totp_devices_begin(req: Request, body: TotpDeviceBeginReq, ctx=Depends(require_ui_session)):
+    require_fresh_mfa(ctx)
     out = totp_begin_enroll(ctx["user_sub"], body.label)
     audit_event("totp_device_begin", ctx["user_sub"], req, outcome="success", device_id=out["device_id"])
     return out
 
 @router.post("/totp/devices/confirm")
 async def totp_devices_confirm(req: Request, body: TotpDeviceConfirmReq, ctx=Depends(require_ui_session)):
+    require_fresh_mfa(ctx)
     totp_confirm_enroll(ctx["user_sub"], body.device_id, body.totp_code)
     audit_event("totp_device_confirm", ctx["user_sub"], req, outcome="success", device_id=body.device_id)
     return {"ok": True}
 
 @router.post("/totp/devices/{device_id}/remove")
 async def totp_devices_remove(req: Request, device_id: str, body: TotpDeviceRemoveReq, ctx=Depends(require_ui_session)):
+    require_fresh_mfa(ctx)
     if not totp_verify_any_enabled(ctx["user_sub"], body.totp_code):
         raise HTTPException(401, "Bad TOTP")
     try:
@@ -97,6 +100,7 @@ async def sms_devices(ctx=Depends(require_ui_session)):
 @router.post("/sms/devices/begin")
 async def sms_devices_begin(req: Request, body: SmsDeviceBeginReq, ctx=Depends(require_ui_session)):
     user_sub = ctx["user_sub"]
+    require_fresh_mfa(ctx)
     rate_limit_or_429(user_sub, "enroll_sms")
     phone = normalize_phone(body.phone_e164)
     r = T.sms.query(KeyConditionExpression=Key("user_sub").eq(user_sub))
@@ -132,6 +136,7 @@ async def sms_devices_begin(req: Request, body: SmsDeviceBeginReq, ctx=Depends(r
 @router.post("/sms/devices/confirm")
 async def sms_devices_confirm(req: Request, body: SmsDeviceConfirmReq, ctx=Depends(require_ui_session)):
     user_sub = ctx["user_sub"]
+    require_fresh_mfa(ctx)
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     if chal.get("purpose") != "sms_enroll":
         raise HTTPException(400, "Wrong challenge purpose")
@@ -157,6 +162,7 @@ async def sms_devices_confirm(req: Request, body: SmsDeviceConfirmReq, ctx=Depen
 @router.post("/sms/devices/{sms_device_id}/remove/begin")
 async def sms_devices_remove_begin(req: Request, sms_device_id: str, ctx=Depends(require_ui_session)):
     user_sub = ctx["user_sub"]
+    require_fresh_mfa(ctx)
     rate_limit_or_429(user_sub, "remove_sms")
     it = T.sms.get_item(Key={"user_sub": user_sub, "sms_device_id": sms_device_id}).get("Item")
     if not it:
@@ -180,6 +186,7 @@ async def sms_devices_remove_begin(req: Request, sms_device_id: str, ctx=Depends
 @router.post("/sms/devices/remove/confirm")
 async def sms_devices_remove_confirm(req: Request, body: SmsDeviceRemoveConfirmReq, ctx=Depends(require_ui_session)):
     user_sub = ctx["user_sub"]
+    require_fresh_mfa(ctx)
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     if chal.get("purpose") != "sms_remove":
         raise HTTPException(400, "Wrong challenge purpose")
@@ -211,6 +218,7 @@ async def email_devices(ctx=Depends(require_ui_session)):
 @router.post("/email/devices/begin")
 async def email_devices_begin(req: Request, body: EmailDeviceBeginReq, ctx=Depends(require_ui_session)):
     user_sub = ctx["user_sub"]
+    require_fresh_mfa(ctx)
     rate_limit_or_429(user_sub, "enroll_email")
     email = normalize_email(body.email)
     r = T.email.query(KeyConditionExpression=Key("user_sub").eq(user_sub))
@@ -249,6 +257,7 @@ async def email_devices_begin(req: Request, body: EmailDeviceBeginReq, ctx=Depen
 @router.post("/email/devices/confirm")
 async def email_devices_confirm(req: Request, body: EmailDeviceConfirmReq, ctx=Depends(require_ui_session)):
     user_sub = ctx["user_sub"]
+    require_fresh_mfa(ctx)
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     if chal.get("purpose") != "email_enroll":
         raise HTTPException(400, "Wrong challenge purpose")
@@ -274,6 +283,7 @@ async def email_devices_confirm(req: Request, body: EmailDeviceConfirmReq, ctx=D
 @router.post("/email/devices/{email_device_id}/remove/begin")
 async def email_devices_remove_begin(req: Request, email_device_id: str, ctx=Depends(require_ui_session)):
     user_sub = ctx["user_sub"]
+    require_fresh_mfa(ctx)
     rate_limit_or_429(user_sub, "remove_email")
     it = T.email.get_item(Key={"user_sub": user_sub, "email_device_id": email_device_id}).get("Item")
     if not it:
@@ -299,6 +309,7 @@ async def email_devices_remove_begin(req: Request, email_device_id: str, ctx=Dep
 @router.post("/email/devices/remove/confirm")
 async def email_devices_remove_confirm(req: Request, body: EmailDeviceRemoveConfirmReq, ctx=Depends(require_ui_session)):
     user_sub = ctx["user_sub"]
+    require_fresh_mfa(ctx)
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     if chal.get("purpose") != "email_remove":
         raise HTTPException(400, "Wrong challenge purpose")

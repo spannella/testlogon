@@ -111,12 +111,29 @@ function maybePrependAlertToHistory(a) {
 const API_BASE_DEFAULT = (window.API_BASE || window.location.origin);
 let API_BASE = lsGet("api_base") || API_BASE_DEFAULT;
 
-/* ===================== localStorage helpers ===================== */
+/* ===================== storage helpers ===================== */
 function lsGet(k){ try{return localStorage.getItem(k);}catch(e){return null;} }
 function lsSet(k,v){ try{localStorage.setItem(k,v);}catch(e){} }
 function lsDel(k){ try{localStorage.removeItem(k);}catch(e){} }
+function ssGet(k){ try{return sessionStorage.getItem(k);}catch(e){return null;} }
+function ssSet(k,v){ try{sessionStorage.setItem(k,v);}catch(e){} }
+function ssDel(k){ try{sessionStorage.removeItem(k);}catch(e){} }
 
-function accessToken(){ return lsGet("access_token"); }
+function migrateToken(k) {
+  const existing = ssGet(k);
+  if (existing) return existing;
+  const legacy = lsGet(k);
+  if (legacy) {
+    ssSet(k, legacy);
+    lsDel(k);
+    return legacy;
+  }
+  return null;
+}
+
+function accessToken(){ return migrateToken("access_token"); }
+function idToken(){ return migrateToken("id_token"); }
+function refreshToken(){ return migrateToken("refresh_token"); }
 function sessionId(){ return lsGet("session_id"); }
 
 /* ===================== modal helpers ===================== */
@@ -154,12 +171,12 @@ function openTokenModal() {
   modalShow({
     title: "Connection + Tokens",
     bodyHtml: `
-      <div class="muted">Paste your Cognito <b>access token</b> (JWT). Stored in localStorage.</div>
+      <div class="muted">Paste your Cognito <b>access token</b> (JWT). Stored in sessionStorage.</div>
       <input id="cfgApiBase" class="mono" placeholder="API base URL" value="${curBase}"/>
-      <input id="cfgAccessTok" class="mono" placeholder="access_token (Bearer)" value="${lsGet("access_token")||""}"/>
-      <div class="muted" style="margin-top:8px;">Optional: id_token / refresh_token (not used by this page)</div>
-      <input id="cfgIdTok" class="mono" placeholder="id_token" value="${lsGet("id_token")||""}"/>
-      <input id="cfgRefreshTok" class="mono" placeholder="refresh_token" value="${lsGet("refresh_token")||""}"/>
+      <input id="cfgAccessTok" class="mono" placeholder="access_token (Bearer)" value="${accessToken()||""}"/>
+      <div class="muted" style="margin-top:8px;">Optional: id_token / refresh_token (used for refresh)</div>
+      <input id="cfgIdTok" class="mono" placeholder="id_token" value="${idToken()||""}"/>
+      <input id="cfgRefreshTok" class="mono" placeholder="refresh_token" value="${refreshToken()||""}"/>
       <div id="cfgErr" class="err" style="margin-top:8px;"></div>
     `,
     actions: [
@@ -171,9 +188,9 @@ function openTokenModal() {
           if (!at) { document.getElementById("cfgErr").textContent = "access_token is required."; return; }
           lsSet("api_base", base);
           API_BASE = base;
-          lsSet("access_token", at);
-          lsSet("id_token", document.getElementById("cfgIdTok").value.trim());
-          lsSet("refresh_token", document.getElementById("cfgRefreshTok").value.trim());
+          ssSet("access_token", at);
+          ssSet("id_token", document.getElementById("cfgIdTok").value.trim());
+          ssSet("refresh_token", document.getElementById("cfgRefreshTok").value.trim());
           lsDel("session_id"); // force re-stepup
           modalClose();
           if (!accessToken()) {
@@ -187,8 +204,25 @@ function openTokenModal() {
 }
 
 /* ===================== generic API helper ===================== */
-async function api(path, {method="GET", body=null, includeSession=true}={}) {
-  const tok = accessToken();
+async function refreshAccessToken() {
+  const rt = refreshToken();
+  if (!rt) throw new Error("Missing refresh_token; please re-authenticate.");
+  const res = await fetch(API_BASE + "/ui/token/refresh", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: rt }),
+  });
+  const txt = await res.text();
+  if (!res.ok) throw new Error(res.status + ": " + txt);
+  const data = txt ? JSON.parse(txt) : {};
+  if (!data.access_token) throw new Error("Refresh failed: missing access_token.");
+  ssSet("access_token", data.access_token);
+  if (data.id_token) ssSet("id_token", data.id_token);
+  return data.access_token;
+}
+
+async function authFetch(path, {method="GET", body=null, includeSession=true}={}) {
+  let tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
   const headers = { "Authorization": "Bearer " + tok };
   if (includeSession) {
@@ -197,12 +231,22 @@ async function api(path, {method="GET", body=null, includeSession=true}={}) {
     headers["X-SESSION-ID"] = sid;
   }
   if (body !== null) headers["Content-Type"] = "application/json";
-
-  const res = await fetch(API_BASE + path, {
+  const doFetch = () => fetch(API_BASE + path, {
     method,
     headers,
     body: (body !== null ? JSON.stringify(body) : undefined),
   });
+  let res = await doFetch();
+  if (res.status === 401 && refreshToken()) {
+    tok = await refreshAccessToken();
+    headers["Authorization"] = "Bearer " + tok;
+    res = await doFetch();
+  }
+  return res;
+}
+
+async function api(path, {method="GET", body=null, includeSession=true}={}) {
+  const res = await authFetch(path, {method, body, includeSession});
   const txt = await res.text();
   if (!res.ok) throw new Error(res.status + ": " + txt);
   return txt ? JSON.parse(txt) : {};
@@ -1073,6 +1117,31 @@ function renderPasswordRecovery() {
   }
 }
 
+function rememberRecoveryReturn() {
+  const state = {
+    hash: window.location.hash || "",
+    scrollY: window.scrollY || 0,
+  };
+  ssSet("pw_recovery_return", JSON.stringify(state));
+}
+
+function resumeAfterPasswordReset() {
+  const pending = ssGet("pw_recovery_resume_pending");
+  if (!pending || !accessToken()) return;
+  const raw = ssGet("pw_recovery_return");
+  ssDel("pw_recovery_resume_pending");
+  if (!raw) return;
+  try {
+    const state = JSON.parse(raw);
+    if (state.hash !== undefined) {
+      window.location.hash = state.hash;
+    }
+    if (Number.isFinite(state.scrollY)) {
+      window.scrollTo(0, state.scrollY);
+    }
+  } catch (e) {}
+}
+
 async function startPasswordRecovery() {
   const username = (document.getElementById("pwRecoveryUsername").value || "").trim();
   if (!username) {
@@ -1080,6 +1149,7 @@ async function startPasswordRecovery() {
     renderPasswordRecovery();
     return;
   }
+  rememberRecoveryReturn();
   resetPasswordRecoveryState();
   passwordRecoveryState.username = username;
   try {
@@ -1117,7 +1187,12 @@ async function confirmPasswordRecovery() {
         challenge_id: passwordRecoveryState.challengeId,
       },
     });
-    passwordRecoveryState.lastErr = "Password updated. You can now log in.";
+    ssSet("pw_recovery_resume_pending", "1");
+    ssDel("access_token");
+    ssDel("id_token");
+    ssDel("refresh_token");
+    lsDel("session_id");
+    passwordRecoveryState.lastErr = "Password updated. Please log in again to continue where you left off.";
   } catch (e) {
     passwordRecoveryState.lastErr = String(e);
   }
@@ -1156,12 +1231,7 @@ async function ensureUiSession() {
   const needEmail = required.includes("email");
 
   async function postBearer(path, payload) {
-    const tok = accessToken();
-    const res = await fetch(API_BASE + path, {
-      method: "POST",
-      headers: { "Authorization": "Bearer " + tok, "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
+    const res = await authFetch(path, { method: "POST", body: payload, includeSession: false });
     const txt = await res.text();
     if (!res.ok) throw new Error(res.status + ": " + txt);
     return txt ? JSON.parse(txt) : {};
@@ -1453,9 +1523,9 @@ function handleAccountClosureSuccess() {
 }
 
 function clearAuthTokens() {
-  lsDel("access_token");
-  lsDel("id_token");
-  lsDel("refresh_token");
+  ssDel("access_token");
+  ssDel("id_token");
+  ssDel("refresh_token");
   lsDel("session_id");
 }
 
@@ -2038,6 +2108,44 @@ async function refreshSessions() {
   });
 }
 
+/* ===================== Devices ===================== */
+async function refreshDevices() {
+  await ensureUiSession();
+  const res = await apiGet("/ui/devices");
+  const el = document.getElementById("deviceList");
+  if (!el) return;
+  el.innerHTML = "";
+  (res.devices || []).forEach(d => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    const trustBadge = d.trusted ? "<span class='pill'>trusted</span>" : "<span class='pill'>new</span>";
+    row.innerHTML = `
+      <div class="grow">
+        <div class="mono">${escapeHtml(d.device_id)} ${trustBadge}</div>
+        <div class="muted">last ${fmtTs(d.last_seen_at)} • ${escapeHtml(d.last_ip || "")}</div>
+        <div class="muted">${escapeHtml((d.user_agent || "").slice(0, 120))}</div>
+      </div>
+      <div>
+        <button class="primary" ${d.trusted ? "disabled" : ""} data-action="trust">Trust</button>
+        <button class="danger" ${d.trusted ? "" : "disabled"} data-action="revoke">Revoke</button>
+      </div>
+    `;
+    row.querySelectorAll("button").forEach(btn => {
+      btn.onclick = async () => {
+        const action = btn.getAttribute("data-action");
+        if (!action) return;
+        if (action === "trust") {
+          await apiPost(`/ui/devices/${encodeURIComponent(d.device_id)}/trust`, {});
+        } else {
+          await apiPost(`/ui/devices/${encodeURIComponent(d.device_id)}/revoke`, {});
+        }
+        await refreshDevices();
+      };
+    });
+    el.appendChild(row);
+  });
+}
+
 /* ===================== Account Status ===================== */
 async function loadAccountStatus() {
   await ensureUiSession();
@@ -2386,6 +2494,7 @@ async function refreshAll() {
       refreshSmsDevices(),
       refreshEmailDevices(),
       refreshSessions(),
+      refreshDevices(),
       refreshKeys(),
       refreshAccountStatus(),
       refreshAlertEmailSettings(),
@@ -2399,6 +2508,7 @@ async function refreshAll() {
       refreshCalendarEvents(),
     ]);
     await pollToastsOnce();
+    resumeAfterPasswordReset();
   } catch (e) {
     document.getElementById("globalErr").textContent = String(e);
   }
@@ -4456,6 +4566,7 @@ document.getElementById("sessRevokeOthersBtn").onclick = async () => {
   await apiPost("/ui/sessions/revoke_others", {});
   await refreshSessions();
 };
+document.getElementById("deviceRefreshBtn").onclick = async () => { await refreshDevices(); };
 document.getElementById("totpAddBtn").onclick = async () => { await ensureUiSession(); openTotpAddModal(); };
 
 

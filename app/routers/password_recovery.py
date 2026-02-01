@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from app.core.crypto import sha256_str
 from app.core.settings import S
+from app.core.normalize import client_ip_from_request
 from app.core.tables import T
 from app.core.time import now_ts
 from app.models import (
@@ -29,13 +30,15 @@ from app.services.mfa import (
     twilio_check_sms,
     twilio_start_sms,
 )
-from app.services.rate_limit import can_send_verification, rate_limit_or_429
+from app.services.api_keys import revoke_all_api_keys
+from app.services.rate_limit import can_send_verification, rate_limit_or_429, rate_limit_mfa_verify
 from app.services.sessions import (
     compute_required_factors,
     create_stepup_challenge,
     load_challenge_or_401,
     mark_factor_passed,
     revoke_challenge,
+    revoke_all_sessions,
 )
 
 router = APIRouter(prefix="/ui", tags=["password-recovery"])
@@ -117,12 +120,21 @@ async def password_recovery_confirm(req: Request, body: PasswordRecoveryConfirmR
             raise HTTPException(401, "Complete all challenges before confirming")
         revoke_challenge(username, body.challenge_id)
     cognito_confirm_forgot_password(username, body.confirmation_code, body.new_password)
+    try:
+        revoke_all_sessions(username)
+    except Exception:
+        pass
+    try:
+        revoke_all_api_keys(username)
+    except Exception:
+        pass
     audit_event("password_recovery_confirm", username, req, outcome="success")
     return {"status": "ok"}
 
 
 @router.post("/password-recovery/challenge/totp/verify")
 async def password_recovery_totp_verify(req: Request, body: PasswordRecoveryTotpVerifyReq) -> Dict[str, Any]:
+    rate_limit_mfa_verify(body.username, client_ip_from_request(req), "totp")
     chal = _load_password_recovery_challenge(body.username, body.challenge_id)
     _ensure_factor_required(chal, "totp")
     dev = totp_verify_any_enabled(body.username, body.totp_code)
@@ -144,6 +156,11 @@ async def password_recovery_sms_begin(req: Request, body: PasswordRecoveryChalle
     if not can_send_verification(body.username, "sms"):
         raise HTTPException(429, "Rate limited")
     rate_limit_or_429(body.username, "sms_recovery")
+    T.sessions.update_item(
+        Key={"user_sub": body.username, "session_id": body.challenge_id},
+        UpdateExpression="SET sms_code_sent_at=:t, sms_code_attempts=:z",
+        ExpressionAttributeValues={":t": now_ts(), ":z": 0},
+    )
     send_to = nums[:S.sms_device_limit]
     for n in send_to:
         twilio_start_sms(n)
@@ -153,8 +170,21 @@ async def password_recovery_sms_begin(req: Request, body: PasswordRecoveryChalle
 
 @router.post("/password-recovery/challenge/sms/verify")
 async def password_recovery_sms_verify(req: Request, body: PasswordRecoverySmsVerifyReq) -> Dict[str, Any]:
+    rate_limit_mfa_verify(body.username, client_ip_from_request(req), "sms")
     chal = _load_password_recovery_challenge(body.username, body.challenge_id)
     _ensure_factor_required(chal, "sms")
+    attempts = int(chal.get("sms_code_attempts", 0))
+    sent_at = int(chal.get("sms_code_sent_at", 0))
+    if attempts >= S.sms_code_max_attempts and (now_ts() - sent_at) < S.sms_code_attempt_window_seconds:
+        audit_event(
+            "password_recovery_sms_verify",
+            body.username,
+            req,
+            outcome="failure",
+            challenge_id=body.challenge_id,
+            reason="too_many_attempts",
+        )
+        raise HTTPException(429, "Too many attempts; wait and retry")
     nums = list_enabled_sms_numbers(body.username)
     if not nums:
         raise HTTPException(400, "No SMS devices")
@@ -167,8 +197,21 @@ async def password_recovery_sms_verify(req: Request, body: PasswordRecoverySmsVe
         except Exception:
             continue
     if not ok:
+        T.sessions.update_item(
+            Key={"user_sub": body.username, "session_id": body.challenge_id},
+            UpdateExpression="SET sms_code_attempts = :n",
+            ExpressionAttributeValues={":n": attempts + 1},
+        )
         audit_event("password_recovery_sms_verify", body.username, req, outcome="failure", challenge_id=body.challenge_id)
         raise HTTPException(401, "Bad SMS code")
+    try:
+        T.sessions.update_item(
+            Key={"user_sub": body.username, "session_id": body.challenge_id},
+            UpdateExpression="REMOVE sms_code_sent_at SET sms_code_attempts = :z",
+            ExpressionAttributeValues={":z": 0},
+        )
+    except Exception:
+        pass
     mark_factor_passed(body.username, body.challenge_id, "sms")
     audit_event("password_recovery_sms_verify", body.username, req, outcome="success", challenge_id=body.challenge_id)
     return {"status": "ok"}
@@ -199,6 +242,7 @@ async def password_recovery_email_begin(req: Request, body: PasswordRecoveryChal
 
 @router.post("/password-recovery/challenge/email/verify")
 async def password_recovery_email_verify(req: Request, body: PasswordRecoveryEmailVerifyReq) -> Dict[str, Any]:
+    rate_limit_mfa_verify(body.username, client_ip_from_request(req), "email")
     chal = _load_password_recovery_challenge(body.username, body.challenge_id)
     _ensure_factor_required(chal, "email")
     expected = chal.get("email_code_hash", "")
@@ -231,6 +275,7 @@ async def password_recovery_email_verify(req: Request, body: PasswordRecoveryEma
 
 @router.post("/password-recovery/challenge/recovery")
 async def password_recovery_code(req: Request, body: PasswordRecoveryRecoveryCodeReq) -> Dict[str, Any]:
+    rate_limit_mfa_verify(body.username, client_ip_from_request(req), f"recovery_{body.factor}")
     chal = _load_password_recovery_challenge(body.username, body.challenge_id)
     factor = body.factor
     if factor not in ("totp", "sms", "email"):

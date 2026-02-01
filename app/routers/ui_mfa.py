@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.auth.deps import get_authenticated_user_sub
 from app.core.settings import S
+from app.core.normalize import client_ip_from_request
 from app.models import EmailBeginReq, EmailVerifyReq, SmsBeginReq, SmsVerifyReq, TotpVerifyReq, RecoveryReq
 from app.services.alerts import audit_event
 from app.services.mfa import (
@@ -16,7 +17,7 @@ from app.services.mfa import (
     twilio_start_sms,
     consume_recovery_code,
 )
-from app.services.rate_limit import rate_limit_or_429, can_send_verification
+from app.services.rate_limit import rate_limit_or_429, can_send_verification, rate_limit_mfa_verify
 from app.services.sessions import load_challenge_or_401, mark_factor_passed, maybe_finalize, revoke_challenge
 from app.core.tables import T
 from app.core.time import now_ts
@@ -36,6 +37,7 @@ def _challenge_progress(chal: dict, passed_factor: str) -> dict:
 
 @router.post("/totp/verify")
 async def ui_totp_verify(req: Request, body: TotpVerifyReq, user_sub: str = Depends(get_authenticated_user_sub)):
+    rate_limit_mfa_verify(user_sub, client_ip_from_request(req), "totp")
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     if "totp" not in (chal.get("required_factors") or []):
         raise HTTPException(400, "TOTP not required")
@@ -59,6 +61,11 @@ async def ui_sms_begin(req: Request, body: SmsBeginReq, user_sub: str = Depends(
     if not can_send_verification(user_sub, "sms"):
         raise HTTPException(429, "Rate limited")
     rate_limit_or_429(user_sub, "sms_login")
+    T.sessions.update_item(
+        Key={"user_sub": user_sub, "session_id": body.challenge_id},
+        UpdateExpression="SET sms_code_sent_at=:t, sms_code_attempts=:z",
+        ExpressionAttributeValues={":t": now_ts(), ":z": 0},
+    )
     # Send to all enabled numbers
     send_to = nums[:S.sms_device_limit]
     for n in send_to:
@@ -68,9 +75,15 @@ async def ui_sms_begin(req: Request, body: SmsBeginReq, user_sub: str = Depends(
 
 @router.post("/sms/verify")
 async def ui_sms_verify(req: Request, body: SmsVerifyReq, user_sub: str = Depends(get_authenticated_user_sub)):
+    rate_limit_mfa_verify(user_sub, client_ip_from_request(req), "sms")
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     if "sms" not in (chal.get("required_factors") or []):
         raise HTTPException(400, "SMS not required")
+    attempts = int(chal.get("sms_code_attempts", 0))
+    sent_at = int(chal.get("sms_code_sent_at", 0))
+    if attempts >= S.sms_code_max_attempts and (now_ts() - sent_at) < S.sms_code_attempt_window_seconds:
+        audit_event("mfa_sms_verify", user_sub, req, outcome="failure", challenge_id=body.challenge_id, reason="too_many_attempts")
+        raise HTTPException(429, "Too many attempts; wait and retry")
     nums = list_enabled_sms_numbers(user_sub)
     if not nums:
         raise HTTPException(400, "No SMS devices")
@@ -83,8 +96,21 @@ async def ui_sms_verify(req: Request, body: SmsVerifyReq, user_sub: str = Depend
         except Exception:
             continue
     if not ok:
+        T.sessions.update_item(
+            Key={"user_sub": user_sub, "session_id": body.challenge_id},
+            UpdateExpression="SET sms_code_attempts = :n",
+            ExpressionAttributeValues={":n": attempts + 1},
+        )
         audit_event("mfa_sms_verify", user_sub, req, outcome="failure", challenge_id=body.challenge_id)
         raise HTTPException(401, "Bad SMS code")
+    try:
+        T.sessions.update_item(
+            Key={"user_sub": user_sub, "session_id": body.challenge_id},
+            UpdateExpression="REMOVE sms_code_sent_at SET sms_code_attempts = :z",
+            ExpressionAttributeValues={":z": 0},
+        )
+    except Exception:
+        pass
     mark_factor_passed(user_sub, body.challenge_id, "sms")
     sid = maybe_finalize(req, user_sub, body.challenge_id)
     audit_event("mfa_sms_verify", user_sub, req, outcome="success", challenge_id=body.challenge_id)
@@ -113,6 +139,7 @@ async def ui_email_begin(req: Request, body: EmailBeginReq, user_sub: str = Depe
 
 @router.post("/email/verify")
 async def ui_email_verify(req: Request, body: EmailVerifyReq, user_sub: str = Depends(get_authenticated_user_sub)):
+    rate_limit_mfa_verify(user_sub, client_ip_from_request(req), "email")
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     if "email" not in (chal.get("required_factors") or []):
         raise HTTPException(400, "Email not required")
@@ -144,6 +171,7 @@ async def ui_email_verify(req: Request, body: EmailVerifyReq, user_sub: str = De
 
 @router.post("/recovery/{factor}")
 async def ui_recovery_factor(req: Request, factor: str, body: RecoveryReq, user_sub: str = Depends(get_authenticated_user_sub)):
+    rate_limit_mfa_verify(user_sub, client_ip_from_request(req), f"recovery_{factor}")
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     if factor not in ("totp","sms","email"):
         raise HTTPException(400, "Invalid factor")

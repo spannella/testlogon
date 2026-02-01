@@ -78,6 +78,37 @@ def revoke_api_key(user_sub: str, key_id: str) -> None:
     except Exception:
         raise HTTPException(404, "API key not found")
 
+def revoke_all_api_keys(user_sub: str) -> int:
+    revoked = 0
+    last_key = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "IndexName": S.api_keys_user_index,
+            "KeyConditionExpression": Key("user_sub").eq(user_sub),
+            "Limit": 200,
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        resp = T.api_keys.query(**kwargs)
+        items = resp.get("Items", [])
+        for it in items:
+            key_id = it.get("key_id") or it.get("api_key_id")
+            if not key_id:
+                continue
+            try:
+                T.api_keys.update_item(
+                    Key={"key_id": key_id},
+                    UpdateExpression="SET revoked = :t, revoked_at = :now",
+                    ExpressionAttributeValues={":t": True, ":now": now_ts()},
+                )
+                revoked += 1
+            except Exception:
+                pass
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+    return revoked
+
 def set_api_key_ip_rules(user_sub: str, key_id: str, allow_cidrs: List[str], deny_cidrs: List[str]) -> Dict[str, List[str]]:
     allow = [normalize_cidr(r) for r in (allow_cidrs or []) if (r or "").strip()]
     deny = [normalize_cidr(r) for r in (deny_cidrs or []) if (r or "").strip()]
