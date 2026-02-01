@@ -23,6 +23,7 @@ from app.auth.deps import extract_bearer_token, get_authenticated_user_sub
 from app.core.aws import ddb
 from app.core.settings import S
 from app.services.alerts import audit_event
+from app.services.filemanager import get_node, norm_path
 from app.services.sessions import require_ui_session
 from app.services.subscription_access import require_subscription_access
 
@@ -48,6 +49,7 @@ DDB_TYPING = os.getenv("DDB_TYPING", "Typing")
 
 DDB_MESSAGE_EDITS = os.getenv("DDB_MESSAGE_EDITS", "MessageEdits")
 DDB_MESSAGE_VIEWS = os.getenv("DDB_MESSAGE_VIEWS", "MessageViews")
+DDB_MESSAGE_RECEIPTS = os.getenv("DDB_MESSAGE_RECEIPTS", "MessageReceipts")
 
 S3_BUCKET_IMAGES = os.getenv("S3_BUCKET_IMAGES", "my-chat-images")
 
@@ -57,6 +59,7 @@ TYPING_TTL_SEC = int(os.getenv("TYPING_TTL_SEC", "10"))
 
 VIEWS_TTL_SEC = int(os.getenv("VIEWS_TTL_SEC", "2592000"))  # 30d
 EDITS_TTL_SEC = int(os.getenv("EDITS_TTL_SEC", "7776000"))  # 90d
+MESSAGE_REVOKE_WINDOW_SEC = int(os.getenv("MESSAGE_REVOKE_WINDOW_SEC", "300"))
 
 s3 = boto3.client("s3", region_name=AWS_REGION)
 
@@ -73,6 +76,7 @@ tbl_typing = ddb.Table(DDB_TYPING)
 
 tbl_edits = ddb.Table(DDB_MESSAGE_EDITS)
 tbl_views = ddb.Table(DDB_MESSAGE_VIEWS)
+tbl_receipts = ddb.Table(DDB_MESSAGE_RECEIPTS)
 
 router = APIRouter(prefix="/messaging", tags=["messaging"])
 
@@ -112,17 +116,29 @@ class StartConversationIn(BaseModel):
     participant_ids: List[str] = Field(min_length=1)
     type: Literal["dm", "group"] = "dm"
     title: Optional[str] = None
+    description: Optional[str] = Field(default=None, max_length=500)
+    icon: Optional[str] = Field(default=None, max_length=500)
+    topic: Optional[str] = Field(default=None, max_length=200)
+    retention_days: Optional[int] = Field(default=None, ge=1, le=3650)
 
 
 class StartGroupConversationIn(BaseModel):
     participant_ids: List[str] = Field(min_length=2)
     title: Optional[str] = None
+    description: Optional[str] = Field(default=None, max_length=500)
+    icon: Optional[str] = Field(default=None, max_length=500)
+    topic: Optional[str] = Field(default=None, max_length=200)
+    retention_days: Optional[int] = Field(default=None, ge=1, le=3650)
 
 
 class ConversationOut(BaseModel):
     conversation_id: str
     type: str
     title: Optional[str] = None
+    description: Optional[str] = None
+    icon: Optional[str] = None
+    topic: Optional[str] = None
+    retention_days: Optional[int] = None
     created_at: int
     created_by: str
     participant_count: int
@@ -131,11 +147,21 @@ class ConversationOut(BaseModel):
     status: str
     muted_until: int = 0
     last_read_at: int = 0
+    unread_count: int = 0
+
+
+class LinkPreviewIn(BaseModel):
+    url: str = Field(min_length=1, max_length=2000)
+    title: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=1000)
+    image_url: Optional[str] = Field(default=None, max_length=2000)
+    site_name: Optional[str] = Field(default=None, max_length=200)
 
 
 class SendTextMessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
     reply_to_message_id: Optional[str] = None
+    preview: Optional[LinkPreviewIn] = None
 
 
 class SendImagePresignIn(BaseModel):
@@ -208,6 +234,30 @@ class ReactIn(BaseModel):
     action: Literal["add", "remove"] = "add"
 
 
+class UpdateConversationIn(BaseModel):
+    title: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=500)
+    icon: Optional[str] = Field(default=None, max_length=500)
+    topic: Optional[str] = Field(default=None, max_length=200)
+    retention_days: Optional[int] = Field(default=None, ge=1, le=3650)
+
+
+class AddParticipantsIn(BaseModel):
+    participant_ids: List[str] = Field(min_length=1)
+
+
+class UpdateParticipantRoleIn(BaseModel):
+    role: Literal["admin", "member"]
+
+
+class CreateFileMessageIn(BaseModel):
+    path: str
+    kind: Literal["file", "audio", "video"] = "file"
+    duration_seconds: Optional[int] = Field(default=None, ge=1)
+    reply_to_message_id: Optional[str] = None
+    preview: Optional[LinkPreviewIn] = None
+
+
 class EditMessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
 
@@ -249,15 +299,22 @@ class MessageOut(BaseModel):
     message_id: str
     sender_id: str
     created_at: int
-    kind: Literal["text", "image"]
+    kind: Literal["text", "image", "file", "audio", "video"]
     text: Optional[str] = None
     image: Optional[Dict[str, Any]] = None
+    file: Optional[Dict[str, Any]] = None
+    preview: Optional[Dict[str, Any]] = None
 
     reply_to_message_id: Optional[str] = None
     forwarded_from: Optional[Dict[str, Any]] = None
     forward_note: Optional[str] = None
     edited_at: Optional[int] = None
     edited_by: Optional[str] = None
+    revoked_at: Optional[int] = None
+    revoked_by: Optional[str] = None
+    delivered_to_count: Optional[int] = None
+    read_by_count: Optional[int] = None
+    read_by_user_ids: Optional[List[str]] = None
     reactions_counts: Optional[Dict[str, int]] = None
     my_reactions: Optional[List[str]] = None
 
@@ -316,6 +373,10 @@ def _message_search_key(conversation_id: str, message_id: str) -> str:
 
 def _message_search_enabled() -> bool:
     return bool(DDB_MESSAGE_SEARCH) and _aws_credentials_available()
+
+
+def _message_receipts_enabled() -> bool:
+    return bool(DDB_MESSAGE_RECEIPTS)
 
 
 def _aws_credentials_available() -> bool:
@@ -467,6 +528,8 @@ def remove_message_search(
 
 def _filter_message_visible(message_item: dict, user_id: str) -> bool:
     deleted_for = set(message_item.get("deleted_for", []))
+    if message_item.get("revoked_at"):
+        return False
     return user_id not in deleted_for
 
 
@@ -480,11 +543,15 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         kind=message_item["kind"],
         text=message_item.get("text"),
         image=message_item.get("image"),
+        file=message_item.get("file"),
+        preview=message_item.get("preview"),
         reply_to_message_id=message_item.get("reply_to_message_id"),
         forwarded_from=message_item.get("forwarded_from"),
         forward_note=message_item.get("forward_note"),
         edited_at=int(message_item.get("edited_at", 0)) or None,
         edited_by=message_item.get("edited_by"),
+        revoked_at=int(message_item.get("revoked_at", 0)) or None,
+        revoked_by=message_item.get("revoked_by"),
         reactions_counts=counts if counts else None,
         my_reactions=mine if mine else None,
     )
@@ -603,6 +670,126 @@ def require_participant_active(user_id: str, conversation_id: str) -> dict:
     return item
 
 
+def require_participant_role(user_id: str, conversation_id: str, allowed: set[str]) -> dict:
+    item = require_participant_active(user_id, conversation_id)
+    role = item.get("role")
+    if role not in allowed:
+        raise HTTPException(status_code=403, detail="Insufficient role for this action")
+    return item
+
+
+def _get_conversation_or_404(conversation_id: str) -> dict:
+    convo = tbl_convos.get_item(Key={"conversation_id": conversation_id}).get("Item")
+    if not convo:
+        raise HTTPException(404, "Conversation not found")
+    return convo
+
+
+def _message_retention_ttl(conversation: dict, created_at: int) -> Optional[int]:
+    retention_days = conversation.get("retention_days")
+    if retention_days is None:
+        return None
+    try:
+        days = int(retention_days)
+    except (TypeError, ValueError):
+        return None
+    if days <= 0:
+        return None
+    return int(created_at) + days * 86400
+
+
+def _serialize_preview(preview: Optional[LinkPreviewIn]) -> Optional[dict]:
+    if not preview:
+        return None
+    return preview.dict(exclude_none=True)
+
+
+def _message_receipt_summary(message_item: dict, participants: Sequence[dict]) -> tuple[int, List[str]]:
+    if _message_receipts_enabled():
+        convo_id = message_item.get("conversation_id")
+        message_id = message_item.get("message_id")
+        if convo_id and message_id:
+            resp = tbl_receipts.query(
+                KeyConditionExpression=Key("conversation_id").eq(convo_id)
+                & Key("message_user").begins_with(f"{message_id}#"),
+                Limit=500,
+                ScanIndexForward=True,
+            )
+            items = resp.get("Items", [])
+            delivered = [it for it in items if int(it.get("delivered_at", 0) or 0) > 0]
+            read_by = [it["user_id"] for it in items if int(it.get("read_at", 0) or 0) > 0]
+            read_by.sort()
+            return len(delivered), read_by
+    active = [p for p in participants if p.get("status") == "active"]
+    sender_id = message_item.get("sender_id")
+    delivered = [p for p in active if p.get("user_id") != sender_id]
+    delivered_count = len(delivered)
+    created_at = int(message_item.get("created_at", 0) or 0)
+    read_by = [
+        p["user_id"]
+        for p in active
+        if int(p.get("last_read_at", 0) or 0) >= created_at
+    ]
+    read_by.sort()
+    return delivered_count, read_by
+
+
+def _apply_message_receipts(message_out: MessageOut, message_item: dict, participants: Sequence[dict]) -> MessageOut:
+    delivered_count, read_by = _message_receipt_summary(message_item, participants)
+    message_out.delivered_to_count = delivered_count
+    message_out.read_by_user_ids = read_by
+    message_out.read_by_count = len(read_by)
+    return message_out
+
+
+def _bump_unread_counts(conversation_id: str, sender_id: str, participants: Sequence[dict]) -> None:
+    for p in participants:
+        pid = p.get("user_id")
+        if not pid or pid == sender_id:
+            continue
+        if p.get("status") != "active":
+            continue
+        tbl_parts.update_item(
+            Key={"user_id": pid, "conversation_id": conversation_id},
+            UpdateExpression="ADD unread_count :one",
+            ExpressionAttributeValues={":one": 1},
+        )
+
+
+def _record_delivery_receipts(conversation_id: str, message_id: str, sender_id: str, participants: Sequence[dict]) -> None:
+    if not _message_receipts_enabled():
+        return
+    ts = now_ts()
+    with tbl_receipts.batch_writer() as bw:
+        for p in participants:
+            pid = p.get("user_id")
+            if not pid or pid == sender_id:
+                continue
+            if p.get("status") != "active":
+                continue
+            bw.put_item(
+                Item={
+                    "conversation_id": conversation_id,
+                    "message_user": f"{message_id}#{pid}",
+                    "message_id": message_id,
+                    "user_id": pid,
+                    "delivered_at": ts,
+                    "read_at": 0,
+                }
+            )
+
+
+def _ensure_can_revoke_message(user_id: str, conversation_id: str, message_item: dict) -> None:
+    if message_item.get("revoked_at"):
+        raise HTTPException(400, "Message already revoked")
+    created_at = int(message_item.get("created_at", 0) or 0)
+    if now_ts() - created_at > MESSAGE_REVOKE_WINDOW_SEC:
+        raise HTTPException(400, "Revocation window has expired")
+    if message_item.get("sender_id") == user_id:
+        return
+    require_participant_role(user_id, conversation_id, {"admin"})
+
+
 def _sse_pack(data: dict, event: str = "message") -> str:
     return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
 
@@ -694,7 +881,9 @@ def _get_message_or_404(conversation_id: str, message_id: str) -> dict:
 def _validate_reply_target(conversation_id: str, reply_to_message_id: Optional[str]) -> None:
     if not reply_to_message_id:
         return
-    _ = _get_message_or_404(conversation_id, reply_to_message_id)
+    msg = _get_message_or_404(conversation_id, reply_to_message_id)
+    if msg.get("revoked_at"):
+        raise HTTPException(400, "Cannot reply to a revoked message")
 
 
 def _message_key(conversation_id: str, message_id: str) -> str:
@@ -782,6 +971,10 @@ def start_conversation(
         "created_by": user_id,
         "type": inp.type,
         "title": inp.title,
+        "description": inp.description,
+        "icon": inp.icon,
+        "topic": inp.topic,
+        "retention_days": inp.retention_days,
         "participant_count": len(participant_ids),
         "last_message_at": 0,
         "last_message_preview": "",
@@ -798,6 +991,7 @@ def start_conversation(
                 "role": "admin" if pid == user_id else "member",
                 "muted_until": 0,
                 "last_read_at": 0,
+                "unread_count": 0,
                 "joined_at": created_at if status == "active" else 0,
                 "left_at": 0,
                 "GSI1PK": cid,
@@ -809,6 +1003,10 @@ def start_conversation(
         conversation_id=cid,
         type=inp.type,
         title=inp.title,
+        description=inp.description,
+        icon=inp.icon,
+        topic=inp.topic,
+        retention_days=inp.retention_days,
         created_at=created_at,
         created_by=user_id,
         participant_count=len(participant_ids),
@@ -817,6 +1015,7 @@ def start_conversation(
         status="active",
         muted_until=0,
         last_read_at=0,
+        unread_count=0,
     )
     audit_event(
         "messaging_conversation_started",
@@ -841,6 +1040,10 @@ def start_group_conversation(
             participant_ids=inp.participant_ids,
             type="group",
             title=inp.title,
+            description=inp.description,
+            icon=inp.icon,
+            topic=inp.topic,
+            retention_days=inp.retention_days,
         ),
         req,
         user_id=user_id,
@@ -891,6 +1094,10 @@ def list_conversations(user_id: str = Depends(get_messaging_user_id)):
                 conversation_id=cid,
                 type=convo.get("type", "dm"),
                 title=convo.get("title"),
+                description=convo.get("description"),
+                icon=convo.get("icon"),
+                topic=convo.get("topic"),
+                retention_days=convo.get("retention_days"),
                 created_at=int(convo.get("created_at", 0)),
                 created_by=convo.get("created_by", ""),
                 participant_count=int(convo.get("participant_count", 0)),
@@ -899,6 +1106,7 @@ def list_conversations(user_id: str = Depends(get_messaging_user_id)):
                 status=p.get("status", "pending"),
                 muted_until=int(p.get("muted_until", 0) or 0),
                 last_read_at=int(p.get("last_read_at", 0) or 0),
+                unread_count=int(p.get("unread_count", 0) or 0),
             )
         )
 
@@ -925,6 +1133,200 @@ def mute_conversation(conversation_id: str, inp: MuteIn, req: Request = None, us
         muted_until=int(inp.muted_until),
     )
     return {"ok": True, "muted_until": int(inp.muted_until)}
+
+
+@router.patch("/conversations/{conversation_id}", response_model=ConversationOut)
+def update_conversation(
+    conversation_id: str,
+    inp: UpdateConversationIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_role(user_id, conversation_id, {"admin"})
+
+    updates: Dict[str, Any] = {}
+    for key in ("title", "description", "icon", "topic", "retention_days"):
+        val = getattr(inp, key)
+        if val is not None:
+            updates[key] = val
+    if not updates:
+        raise HTTPException(400, "No updates provided")
+
+    expr_names = {f"#{k}": k for k in updates}
+    expr_vals = {f":{k}": v for k, v in updates.items()}
+    update_expr = "SET " + ", ".join([f"#{k} = :{k}" for k in updates])
+
+    tbl_convos.update_item(
+        Key={"conversation_id": conversation_id},
+        UpdateExpression=update_expr,
+        ExpressionAttributeNames=expr_names,
+        ExpressionAttributeValues=expr_vals,
+    )
+
+    convo = tbl_convos.get_item(Key={"conversation_id": conversation_id}).get("Item")
+    if not convo:
+        raise HTTPException(404, "Conversation not found")
+
+    part = get_participant_any(user_id, conversation_id)
+    out = ConversationOut(
+        conversation_id=conversation_id,
+        type=convo.get("type", "dm"),
+        title=convo.get("title"),
+        description=convo.get("description"),
+        icon=convo.get("icon"),
+        topic=convo.get("topic"),
+        retention_days=convo.get("retention_days"),
+        created_at=int(convo.get("created_at", 0)),
+        created_by=convo.get("created_by", ""),
+        participant_count=int(convo.get("participant_count", 0)),
+        last_message_at=int(convo.get("last_message_at", 0)) or None,
+        last_message_preview=convo.get("last_message_preview") or None,
+        status="active",
+        muted_until=int((part or {}).get("muted_until", 0) or 0),
+        last_read_at=int((part or {}).get("last_read_at", 0) or 0),
+        unread_count=int((part or {}).get("unread_count", 0) or 0),
+    )
+    audit_event(
+        "messaging_conversation_updated",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        updates=list(updates.keys()),
+    )
+    return out
+
+
+@router.post("/conversations/{conversation_id}/participants")
+def add_participants(
+    conversation_id: str,
+    inp: AddParticipantsIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_role(user_id, conversation_id, {"admin"})
+
+    added = 0
+    ts = now_ts()
+    for pid in dict.fromkeys(inp.participant_ids):
+        if pid == user_id:
+            continue
+        require_subscription_access(user_id, pid)
+        existing = get_participant_any(pid, conversation_id)
+        if existing:
+            if existing.get("status") in ("active", "pending"):
+                continue
+            tbl_parts.update_item(
+                Key={"user_id": pid, "conversation_id": conversation_id},
+                UpdateExpression="SET #s = :pending, role = :role, joined_at = :zero, left_at = :zero, unread_count = :zero",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={
+                    ":pending": "pending",
+                    ":role": existing.get("role") or "member",
+                    ":zero": 0,
+                },
+            )
+            added += 1
+            continue
+
+        tbl_parts.put_item(
+            Item={
+                "user_id": pid,
+                "conversation_id": conversation_id,
+                "status": "pending",
+                "role": "member",
+                "muted_until": 0,
+                "last_read_at": 0,
+                "unread_count": 0,
+                "joined_at": 0,
+                "left_at": 0,
+                "GSI1PK": conversation_id,
+                "GSI1SK": pid,
+            }
+        )
+        added += 1
+
+    if added:
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="ADD participant_count :inc",
+            ExpressionAttributeValues={":inc": added},
+        )
+    audit_event(
+        "messaging_conversation_participants_added",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        added_count=added,
+    )
+    return {"ok": True, "added_count": added}
+
+
+@router.delete("/conversations/{conversation_id}/participants/{participant_id}")
+def remove_participant(
+    conversation_id: str,
+    participant_id: str,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_role(user_id, conversation_id, {"admin"})
+    if participant_id == user_id:
+        raise HTTPException(400, "Use /leave to remove yourself from a conversation")
+    part = get_participant_any(participant_id, conversation_id)
+    if not part:
+        raise HTTPException(404, "Participant not found")
+    if part.get("status") != "left":
+        ts = now_ts()
+        tbl_parts.update_item(
+            Key={"user_id": participant_id, "conversation_id": conversation_id},
+            UpdateExpression="SET #s = :left, left_at = :ts",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":left": "left", ":ts": ts},
+        )
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="ADD participant_count :neg",
+            ExpressionAttributeValues={":neg": -1},
+        )
+    audit_event(
+        "messaging_conversation_participant_removed",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        participant_id=participant_id,
+    )
+    return {"ok": True}
+
+
+@router.patch("/conversations/{conversation_id}/participants/{participant_id}")
+def update_participant_role(
+    conversation_id: str,
+    participant_id: str,
+    inp: UpdateParticipantRoleIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_role(user_id, conversation_id, {"admin"})
+    part = get_participant_any(participant_id, conversation_id)
+    if not part:
+        raise HTTPException(404, "Participant not found")
+    tbl_parts.update_item(
+        Key={"user_id": participant_id, "conversation_id": conversation_id},
+        UpdateExpression="SET role = :role",
+        ExpressionAttributeValues={":role": inp.role},
+    )
+    audit_event(
+        "messaging_conversation_participant_role_updated",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        participant_id=participant_id,
+        role=inp.role,
+    )
+    return {"ok": True, "role": inp.role}
 
 
 @router.post("/conversations/{conversation_id}/leave")
@@ -1030,12 +1432,14 @@ def list_messages(
 
     resp = tbl_msgs.query(**kwargs)
     items = resp.get("Items", [])
+    parts = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id)).get("Items", [])
 
     out: List[MessageOut] = []
     for m in items:
         if not _filter_message_visible(m, user_id):
             continue
-        out.append(_message_out_from_item(m, user_id))
+        msg = _message_out_from_item(m, user_id)
+        out.append(_apply_message_receipts(msg, m, parts))
     return out
 
 
@@ -1098,7 +1502,12 @@ def search_messages_in_conversation(
             ]
 
     matches.sort(key=lambda x: int(x.get("created_at", 0)), reverse=True)
-    return [_message_out_from_item(item, user_id) for item in matches[:limit]]
+    parts = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id)).get("Items", [])
+    out = []
+    for item in matches[:limit]:
+        msg = _message_out_from_item(item, user_id)
+        out.append(_apply_message_receipts(msg, item, parts))
+    return out
 
 
 @router.get("/messages/search", response_model=List[MessageOut])
@@ -1175,7 +1584,20 @@ def search_messages_all_conversations(
             ]
 
     matches.sort(key=lambda x: int(x.get("created_at", 0)), reverse=True)
-    return [_message_out_from_item(item, user_id) for item in matches[:limit]]
+    convo_participants: Dict[str, List[dict]] = {}
+    for item in matches[:limit]:
+        cid = item.get("conversation_id")
+        if not cid or cid in convo_participants:
+            continue
+        convo_participants[cid] = tbl_parts.query(
+            IndexName="GSI1",
+            KeyConditionExpression=Key("GSI1PK").eq(cid),
+        ).get("Items", [])
+    out: List[MessageOut] = []
+    for item in matches[:limit]:
+        msg = _message_out_from_item(item, user_id)
+        out.append(_apply_message_receipts(msg, item, convo_participants.get(item.get("conversation_id"), [])))
+    return out
 
 
 @router.post("/conversations/{conversation_id}/messages", response_model=MessageOut)
@@ -1186,6 +1608,7 @@ def send_text_message(
     user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
     resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
     for participant in resp.get("Items", []):
         pid = participant.get("user_id")
@@ -1196,7 +1619,7 @@ def send_text_message(
     mid = "m_" + new_id()
     ts = now_ts()
 
-    item = {
+    item: Dict[str, Any] = {
         "conversation_id": conversation_id,
         "message_id": mid,
         "sender_id": user_id,
@@ -1206,17 +1629,25 @@ def send_text_message(
         "deleted_for": set(),
         "reactions": {},
     }
+    link_preview = _serialize_preview(inp.preview)
+    if link_preview:
+        item["preview"] = link_preview
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
     if inp.reply_to_message_id:
         item["reply_to_message_id"] = inp.reply_to_message_id
 
     tbl_msgs.put_item(Item=item)
+    _bump_unread_counts(conversation_id, user_id, resp.get("Items", []))
+    _record_delivery_receipts(conversation_id, mid, user_id, resp.get("Items", []))
     index_message_search(conversation_id, mid, user_id, ts, inp.text)
 
-    preview = inp.text[:140]
+    preview_text = inp.text[:140]
     tbl_convos.update_item(
         Key={"conversation_id": conversation_id},
         UpdateExpression="SET last_message_at = :ts, last_message_preview = :p",
-        ExpressionAttributeValues={":ts": ts, ":p": preview},
+        ExpressionAttributeValues={":ts": ts, ":p": preview_text},
     )
 
     message = MessageOut(
@@ -1226,8 +1657,10 @@ def send_text_message(
         created_at=ts,
         kind="text",
         text=inp.text,
+        preview=link_preview,
         reply_to_message_id=inp.reply_to_message_id,
     )
+    message = _apply_message_receipts(message, item, resp.get("Items", []))
     audit_event(
         "messaging_message_sent",
         user_id,
@@ -1261,6 +1694,7 @@ def create_image_message(
     user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
     resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
     for participant in resp.get("Items", []):
         pid = participant.get("user_id")
@@ -1271,7 +1705,7 @@ def create_image_message(
     mid = "m_" + new_id()
     ts = now_ts()
 
-    item = {
+    item: Dict[str, Any] = {
         "conversation_id": conversation_id,
         "message_id": mid,
         "sender_id": user_id,
@@ -1287,10 +1721,15 @@ def create_image_message(
         "deleted_for": set(),
         "reactions": {},
     }
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
     if inp.reply_to_message_id:
         item["reply_to_message_id"] = inp.reply_to_message_id
 
     tbl_msgs.put_item(Item=item)
+    _bump_unread_counts(conversation_id, user_id, resp.get("Items", []))
+    _record_delivery_receipts(conversation_id, mid, user_id, resp.get("Items", []))
 
     tbl_convos.update_item(
         Key={"conversation_id": conversation_id},
@@ -1307,6 +1746,7 @@ def create_image_message(
         image=item["image"],
         reply_to_message_id=inp.reply_to_message_id,
     )
+    message = _apply_message_receipts(message, item, resp.get("Items", []))
     audit_event(
         "messaging_message_sent",
         user_id,
@@ -1315,6 +1755,100 @@ def create_image_message(
         conversation_id=conversation_id,
         message_id=mid,
         kind="image",
+        reply_to_message_id=inp.reply_to_message_id,
+    )
+    return message
+
+
+@router.post("/conversations/{conversation_id}/messages/file", response_model=MessageOut)
+def create_file_message(
+    conversation_id: str,
+    inp: CreateFileMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+    resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+    for participant in resp.get("Items", []):
+        pid = participant.get("user_id")
+        if pid and pid != user_id:
+            require_subscription_access(user_id, pid)
+    _validate_reply_target(conversation_id, inp.reply_to_message_id)
+
+    path = norm_path(inp.path, is_folder=False)
+    node = get_node(user_id, path)
+    if node.get("type") != "file":
+        raise HTTPException(400, "Path must reference a file")
+
+    content_type = node.get("content_type") or "application/octet-stream"
+    if inp.kind == "audio" and not content_type.startswith("audio/"):
+        raise HTTPException(400, "Audio messages require an audio/* content type")
+    if inp.kind == "video" and not content_type.startswith("video/"):
+        raise HTTPException(400, "Video messages require a video/* content type")
+
+    mid = "m_" + new_id()
+    ts = now_ts()
+    preview = _serialize_preview(inp.preview)
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": inp.kind,
+        "file": {
+            "path": node.get("path"),
+            "name": node.get("name"),
+            "size": node.get("size"),
+            "content_type": content_type,
+            "duration_seconds": inp.duration_seconds,
+        },
+        "deleted_for": set(),
+        "reactions": {},
+    }
+    if preview:
+        item["preview"] = preview
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+    if inp.reply_to_message_id:
+        item["reply_to_message_id"] = inp.reply_to_message_id
+
+    tbl_msgs.put_item(Item=item)
+    _bump_unread_counts(conversation_id, user_id, resp.get("Items", []))
+    _record_delivery_receipts(conversation_id, mid, user_id, resp.get("Items", []))
+
+    preview_label = {
+        "file": "[file]",
+        "audio": "[voice note]",
+        "video": "[video]",
+    }.get(inp.kind, "[file]")
+    tbl_convos.update_item(
+        Key={"conversation_id": conversation_id},
+        UpdateExpression="SET last_message_at = :ts, last_message_preview = :p",
+        ExpressionAttributeValues={":ts": ts, ":p": preview_label},
+    )
+
+    message = MessageOut(
+        conversation_id=conversation_id,
+        message_id=mid,
+        sender_id=user_id,
+        created_at=ts,
+        kind=inp.kind,
+        file=item["file"],
+        preview=preview,
+        reply_to_message_id=inp.reply_to_message_id,
+    )
+    message = _apply_message_receipts(message, item, resp.get("Items", []))
+    audit_event(
+        "messaging_message_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=mid,
+        kind=inp.kind,
         reply_to_message_id=inp.reply_to_message_id,
     )
     return message
@@ -1330,8 +1864,8 @@ def mark_read(conversation_id: str, inp: MarkReadIn, req: Request = None, user_i
 
     tbl_parts.update_item(
         Key={"user_id": user_id, "conversation_id": conversation_id},
-        UpdateExpression="SET last_read_at = :v",
-        ExpressionAttributeValues={":v": newv},
+        UpdateExpression="SET last_read_at = :v, unread_count = :zero",
+        ExpressionAttributeValues={":v": newv, ":zero": 0},
     )
     audit_event(
         "messaging_conversation_read",
@@ -1352,6 +1886,9 @@ def delete_message_for_me(
     user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, conversation_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+    if msg.get("revoked_at"):
+        raise HTTPException(400, "Message already revoked")
     tbl_msgs.update_item(
         Key={"conversation_id": conversation_id, "message_id": message_id},
         UpdateExpression="ADD deleted_for :u",
@@ -1368,6 +1905,46 @@ def delete_message_for_me(
     return {"ok": True}
 
 
+@router.delete("/conversations/{conversation_id}/messages/{message_id}/revoke", response_model=MessageOut)
+def revoke_message_for_all(
+    conversation_id: str,
+    message_id: str,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+    _ensure_can_revoke_message(user_id, conversation_id, msg)
+
+    ts = now_ts()
+    tbl_msgs.update_item(
+        Key={"conversation_id": conversation_id, "message_id": message_id},
+        UpdateExpression="SET revoked_at = :ts, revoked_by = :uid",
+        ExpressionAttributeValues={":ts": ts, ":uid": user_id},
+    )
+    if msg.get("kind") == "text":
+        remove_message_search(conversation_id, message_id, msg.get("text", ""))
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="message:revoked",
+        payload={"message_id": message_id, "revoked_at": ts, "revoked_by": user_id},
+        respect_mute=False,
+    )
+    audit_event(
+        "messaging_message_revoked",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+        revoked_at=ts,
+    )
+    item = _get_message_or_404(conversation_id, message_id)
+    return _message_out_from_item(item, user_id)
+
+
 # -------------------------
 # React to message
 # -------------------------
@@ -1380,6 +1957,9 @@ def react_to_message(
     user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, conversation_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+    if msg.get("revoked_at"):
+        raise HTTPException(400, "Cannot react to a revoked message")
 
     expr_names = {"#e": inp.emoji}
     expr_vals = {":empty": set(), ":u": {user_id}}
@@ -1443,6 +2023,8 @@ def edit_message(
     msg = _get_message_or_404(conversation_id, message_id)
     if msg.get("kind") != "text":
         raise HTTPException(400, "Only text messages can be edited")
+    if msg.get("revoked_at"):
+        raise HTTPException(400, "Cannot edit a revoked message")
     if msg.get("sender_id") != user_id:
         raise HTTPException(403, "Only the sender can edit this message")
 
@@ -1529,7 +2111,9 @@ def get_edit_history(
 ):
     require_participant_active(user_id, conversation_id)
 
-    _ = _get_message_or_404(conversation_id, message_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+    if msg.get("revoked_at"):
+        raise HTTPException(400, "Cannot view a revoked message")
 
     resp = tbl_edits.query(
         KeyConditionExpression=Key("message_key").eq(_message_key(conversation_id, message_id)),
@@ -1563,10 +2147,13 @@ def forward_message(
 ):
     require_participant_active(user_id, target_conversation_id)
     require_participant_active(user_id, inp.source_conversation_id)
+    convo = _get_conversation_or_404(target_conversation_id)
 
     _validate_reply_target(target_conversation_id, inp.reply_to_message_id)
 
     src = _get_message_or_404(inp.source_conversation_id, inp.source_message_id)
+    if src.get("revoked_at"):
+        raise HTTPException(400, "Cannot forward a revoked message")
     if user_id in set(src.get("deleted_for", [])):
         raise HTTPException(403, "Cannot forward a message you deleted")
 
@@ -1581,7 +2168,7 @@ def forward_message(
     }
 
     kind = src.get("kind")
-    if kind not in ("text", "image"):
+    if kind not in ("text", "image", "file", "audio", "video"):
         raise HTTPException(400, "Unsupported source message kind")
 
     item: Dict[str, Any] = {
@@ -1594,6 +2181,9 @@ def forward_message(
         "reactions": {},
         "forwarded_from": forwarded_from,
     }
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
 
     if inp.note:
         item["forward_note"] = inp.note
@@ -1602,14 +2192,30 @@ def forward_message(
 
     if kind == "text":
         item["text"] = src.get("text", "")
+        if src.get("preview"):
+            item["preview"] = src.get("preview")
         preview = "[fwd] " + (item["text"] or "")[:140]
-    else:
+    elif kind == "image":
         item["image"] = src.get("image")
         preview = "[fwd image]"
+    else:
+        item["file"] = src.get("file")
+        if src.get("preview"):
+            item["preview"] = src.get("preview")
+        preview = f"[fwd {kind}]"
 
     tbl_msgs.put_item(Item=item)
     if kind == "text":
         index_message_search(target_conversation_id, mid, user_id, ts, item.get("text", ""))
+    _record_delivery_receipts(
+        target_conversation_id,
+        mid,
+        user_id,
+        tbl_parts.query(
+            IndexName="GSI1",
+            KeyConditionExpression=Key("GSI1PK").eq(target_conversation_id),
+        ).get("Items", []),
+    )
 
     tbl_convos.update_item(
         Key={"conversation_id": target_conversation_id},
@@ -1633,9 +2239,19 @@ def forward_message(
         kind=kind,
         text=item.get("text"),
         image=item.get("image"),
+        file=item.get("file"),
+        preview=item.get("preview"),
         reply_to_message_id=item.get("reply_to_message_id"),
         forwarded_from=item.get("forwarded_from"),
         forward_note=item.get("forward_note"),
+    )
+    message = _apply_message_receipts(
+        message,
+        item,
+        tbl_parts.query(
+            IndexName="GSI1",
+            KeyConditionExpression=Key("GSI1PK").eq(target_conversation_id),
+        ).get("Items", []),
     )
     audit_event(
         "messaging_message_forwarded",
@@ -1667,7 +2283,9 @@ def mark_message_viewed(
     Returns the stored timestamp (server-controlled).
     """
     require_participant_active(user_id, conversation_id)
-    _ = _get_message_or_404(conversation_id, message_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+    if msg.get("revoked_at"):
+        raise HTTPException(400, "Message was revoked")
 
     ts = int(inp.viewed_at) if inp.viewed_at else now_ts()
     if ts > now_ts() + 300:
@@ -1689,6 +2307,13 @@ def mark_message_viewed(
             ":one": 1,
         },
     )
+    if _message_receipts_enabled():
+        tbl_receipts.update_item(
+            Key={"conversation_id": conversation_id, "message_user": f"{message_id}#{user_id}"},
+            UpdateExpression="SET message_id = :mid, user_id = :uid, delivered_at = if_not_exists(delivered_at, :ts), "
+            "read_at = :ts",
+            ExpressionAttributeValues={":mid": message_id, ":uid": user_id, ":ts": ts},
+        )
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,
