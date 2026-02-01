@@ -567,6 +567,9 @@ class PaymentMethodOut(BaseModel):
     label: Optional[str] = None
     priority: int
     pm_type: Optional[str] = None
+    provider: Optional[str] = None
+    provider_method_id: Optional[str] = None
+    is_default: bool = False
 
 
 class SetAutopayIn(BaseModel):
@@ -747,6 +750,8 @@ def exchange_setup_token(body: ExchangeTokenIn, x_user_id: Optional[str] = Heade
             "pk": pk,
             "sk": pm_sk(payment_token_id),
             "payment_token_id": payment_token_id,
+            "provider": "paypal",
+            "provider_method_id": payment_token_id,
             "label": body.label,
             "pm_type": pm_type,
             "priority": next_priority,
@@ -764,6 +769,7 @@ def exchange_setup_token(body: ExchangeTokenIn, x_user_id: Optional[str] = Heade
 @router.get("/api/billing/payment-methods", response_model=List[PaymentMethodOut])
 def list_payment_methods(x_user_id: Optional[str] = Header(default=None)):
     user_id = require_user(x_user_id)
+    default_token = current_default_pm(user_id)
     pms = list_payment_methods_ddb(user_id)
     out: List[PaymentMethodOut] = [
         PaymentMethodOut(
@@ -771,6 +777,9 @@ def list_payment_methods(x_user_id: Optional[str] = Header(default=None)):
             label=it.get("label"),
             priority=int(it.get("priority", 0)),
             pm_type=it.get("pm_type"),
+            provider=it.get("provider") or "paypal",
+            provider_method_id=it.get("provider_method_id") or it.get("payment_token_id"),
+            is_default=it.get("payment_token_id") == default_token,
         )
         for it in pms
     ]
@@ -1045,9 +1054,6 @@ def list_subscriptions(x_user_id: Optional[str] = Header(default=None), limit: i
 @router.post("/api/paypal/webhook")
 async def paypal_webhook(req: Request):
     raw_body = await req.body()
-    dedupe_key = hashlib.sha256(raw_body).hexdigest()
-    if not mark_webhook_processed(dedupe_key):
-        return {"received": True, "deduped": True}
 
     if not S.paypal_webhook_id:
         raise HTTPException(500, "PAYPAL_WEBHOOK_ID not set; cannot verify webhook signatures")
@@ -1059,7 +1065,26 @@ async def paypal_webhook(req: Request):
     auth_algo = req.headers.get("paypal-auth-algo", "")
 
     if not (transmission_id and transmission_time and transmission_sig and cert_url and auth_algo):
+        _log_paypal_webhook_rejection(
+            reason="missing_headers",
+            req=req,
+            raw_body=raw_body,
+            transmission_id=transmission_id,
+            transmission_time=transmission_time,
+        )
         raise HTTPException(400, "Missing PayPal webhook verification headers")
+
+    dedupe_key = transmission_id or hashlib.sha256(raw_body).hexdigest()
+    if not mark_webhook_processed(dedupe_key):
+        _log_paypal_webhook_rejection(
+            reason="replay",
+            req=req,
+            raw_body=raw_body,
+            transmission_id=transmission_id,
+            transmission_time=transmission_time,
+            dedupe_key=dedupe_key,
+        )
+        return {"received": True, "deduped": True}
 
     verified = paypal_verify_webhook_signature(
         transmission_id=transmission_id,
@@ -1071,6 +1096,15 @@ async def paypal_webhook(req: Request):
         raw_body=raw_body,
     )
     if not verified:
+        _log_paypal_webhook_rejection(
+            reason="invalid_signature",
+            req=req,
+            raw_body=raw_body,
+            transmission_id=transmission_id,
+            transmission_time=transmission_time,
+            cert_url=cert_url,
+            auth_algo=auth_algo,
+        )
         raise HTTPException(403, "Invalid webhook signature")
 
     event = json.loads(raw_body.decode("utf-8") or "{}")
@@ -1209,3 +1243,43 @@ async def paypal_webhook(req: Request):
         )
 
     return {"received": True}
+
+
+def _log_paypal_webhook_rejection(
+    *,
+    reason: str,
+    req: Request,
+    raw_body: bytes,
+    transmission_id: str,
+    transmission_time: str,
+    cert_url: Optional[str] = None,
+    auth_algo: Optional[str] = None,
+    dedupe_key: Optional[str] = None,
+) -> None:
+    event_type = ""
+    try:
+        event = json.loads(raw_body.decode("utf-8") or "{}")
+        event_type = event.get("event_type", "")
+    except Exception:
+        event = {}
+    safe_headers = {}
+    for key in ("content-type", "user-agent", "paypal-transmission-id", "paypal-transmission-time"):
+        val = req.headers.get(key)
+        if val:
+            safe_headers[key] = val
+    ddb_put(
+        {
+            "pk": "PAYPAL_WEBHOOK_REJECTED",
+            "sk": f"{now_ts()}#{dedupe_key or hashlib.sha256(raw_body).hexdigest()}",
+            "reason": reason,
+            "eventType": event_type,
+            "transmission_id": transmission_id,
+            "transmission_time": transmission_time,
+            "cert_url": cert_url,
+            "auth_algo": auth_algo,
+            "headers": safe_headers,
+            "body_sha256": hashlib.sha256(raw_body).hexdigest(),
+            "created_at": now_ts(),
+            "event": event or None,
+        }
+    )

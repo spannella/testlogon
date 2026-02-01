@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import ipaddress
 import json
 import time
@@ -21,13 +23,15 @@ from app.services.billing_shared import (
     new_ledger_entry as new_ledger_entry_shared,
     settle_or_reverse_ledger as settle_or_reverse_ledger_shared,
 )
+from app.services.purchase_history import record_billing_transaction
 
-CCBILL_WEBHOOK_IP_RANGES = [
+_DEFAULT_CCBILL_WEBHOOK_IP_RANGES = [
     ("64.38.212.0", "64.38.212.255"),
     ("64.38.215.0", "64.38.215.255"),
     ("64.38.240.0", "64.38.240.255"),
     ("64.38.241.0", "64.38.241.255"),
 ]
+_CCBILL_IP_RANGE_CACHE: Optional[List[Tuple[ipaddress._BaseAddress, ipaddress._BaseAddress]]] = None
 
 _OAUTH_CACHE: Dict[str, Tuple[str, int]] = {}
 _REDACTED_VALUE = "[REDACTED]"
@@ -93,6 +97,64 @@ def _sanitize_ccbill_raw(raw: Any) -> Any:
     return str(raw)
 
 
+def sanitize_ccbill_payload(payload: Any) -> Any:
+    return _sanitize_ccbill_raw(payload)
+
+
+def _parse_ccbill_ip_ranges(raw: str) -> List[Tuple[ipaddress._BaseAddress, ipaddress._BaseAddress]]:
+    tokens = [tok.strip() for tok in raw.split(",") if tok.strip()]
+    ranges: List[Tuple[ipaddress._BaseAddress, ipaddress._BaseAddress]] = []
+    for token in tokens:
+        try:
+            if "/" in token:
+                net = ipaddress.ip_network(token, strict=False)
+                ranges.append((net.network_address, net.broadcast_address))
+                continue
+            if "-" in token:
+                start, end = token.split("-", 1)
+                ranges.append((ipaddress.ip_address(start.strip()), ipaddress.ip_address(end.strip())))
+                continue
+            ip = ipaddress.ip_address(token)
+            ranges.append((ip, ip))
+        except ValueError:
+            continue
+    return ranges
+
+
+def _ccbill_ip_ranges() -> List[Tuple[ipaddress._BaseAddress, ipaddress._BaseAddress]]:
+    global _CCBILL_IP_RANGE_CACHE
+    if _CCBILL_IP_RANGE_CACHE is not None:
+        return _CCBILL_IP_RANGE_CACHE
+    raw = S.ccbill_webhook_ip_ranges.strip()
+    if not raw:
+        _CCBILL_IP_RANGE_CACHE = [
+            (ipaddress.ip_address(a), ipaddress.ip_address(b)) for a, b in _DEFAULT_CCBILL_WEBHOOK_IP_RANGES
+        ]
+        return _CCBILL_IP_RANGE_CACHE
+    parsed = _parse_ccbill_ip_ranges(raw)
+    if not parsed:
+        _CCBILL_IP_RANGE_CACHE = [
+            (ipaddress.ip_address(a), ipaddress.ip_address(b)) for a, b in _DEFAULT_CCBILL_WEBHOOK_IP_RANGES
+        ]
+        return _CCBILL_IP_RANGE_CACHE
+    _CCBILL_IP_RANGE_CACHE = parsed
+    return _CCBILL_IP_RANGE_CACHE
+
+
+def verify_ccbill_webhook_signature(raw_body: bytes, signature_header: str) -> bool:
+    secret = S.ccbill_webhook_signature_secret
+    if not secret:
+        return True
+    if not signature_header:
+        return False
+    sig = signature_header.strip()
+    if "=" in sig:
+        _, sig = sig.split("=", 1)
+        sig = sig.strip()
+    digest = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(digest, sig)
+
+
 def _billing_sk(kind: str, identifier: str) -> str:
     return f"{kind}#{identifier}"
 
@@ -153,6 +215,7 @@ def put_payment_record(
     payment_token_id: Optional[str] = None,
     subscription_id: Optional[str] = None,
     raw: Optional[Dict[str, Any]] = None,
+    purchase_txn_id: Optional[str] = None,
 ) -> None:
     item = {
         "user_sub": user_sub,
@@ -168,6 +231,8 @@ def put_payment_record(
         "created_at": now_ts(),
         "updated_at": now_ts(),
     }
+    if purchase_txn_id:
+        item["purchase_txn_id"] = purchase_txn_id
     if raw:
         item["raw"] = _sanitize_ccbill_raw(raw)
     T.billing.put_item(Item=item)
@@ -363,8 +428,8 @@ def webhook_remote_ip_allowed(ip_str: str) -> bool:
         ip = ipaddress.ip_address(ip_str)
     except Exception:
         return False
-    for a, b in CCBILL_WEBHOOK_IP_RANGES:
-        if ipaddress.ip_address(a) <= ip <= ipaddress.ip_address(b):
+    for start, end in _ccbill_ip_ranges():
+        if start <= ip <= end:
             return True
     return False
 
@@ -412,10 +477,20 @@ def charge_once(
         apply_balance_delta(user_sub, {"payments_pending_cents": -amount, "payments_settled_cents": amount})
         settle_or_reverse_ledger(user_sub, led_sk_value, "settled")
         status = "succeeded"
+        purchase_txn_id = record_billing_transaction(
+            user_sub=user_sub,
+            amount_cents=amount,
+            currency=S.default_currency,
+            description=f"CCBill charge once ({reason})",
+            status="COMPLETED",
+            external_ref=str(transaction_id or ""),
+            metadata={"provider": "ccbill", "payment_token_id": token, "transaction_id": str(transaction_id or "")},
+        )
     else:
         apply_balance_delta(user_sub, {"payments_pending_cents": -amount})
         settle_or_reverse_ledger(user_sub, led_sk_value, "reversed")
         status = "failed"
+        purchase_txn_id = None
 
     if transaction_id:
         put_payment_record(
@@ -426,6 +501,7 @@ def charge_once(
             status=status,
             ledger_sk_value=led_sk_value,
             payment_token_id=token,
+            purchase_txn_id=purchase_txn_id,
             raw=resp,
         )
 
@@ -482,11 +558,27 @@ def subscribe_monthly(
         settle_or_reverse_ledger(user_sub, led_sk_value, "settled")
         pay_status = "succeeded"
         sub_status = "active"
+        purchase_txn_id = record_billing_transaction(
+            user_sub=user_sub,
+            amount_cents=monthly_cents,
+            currency=S.default_currency,
+            description="CCBill subscription signup",
+            status="COMPLETED",
+            external_ref=str(transaction_id or ""),
+            metadata={
+                "provider": "ccbill",
+                "payment_token_id": token,
+                "transaction_id": str(transaction_id or ""),
+                "subscription_id": str(subscription_id or ""),
+                "plan_id": plan_id,
+            },
+        )
     else:
         apply_balance_delta(user_sub, {"payments_pending_cents": -monthly_cents})
         settle_or_reverse_ledger(user_sub, led_sk_value, "reversed")
         pay_status = "failed"
         sub_status = "failed"
+        purchase_txn_id = None
 
     if transaction_id:
         put_payment_record(
@@ -498,6 +590,7 @@ def subscribe_monthly(
             ledger_sk_value=led_sk_value,
             payment_token_id=token,
             subscription_id=str(subscription_id) if subscription_id else None,
+            purchase_txn_id=purchase_txn_id,
             raw=resp,
         )
 

@@ -347,6 +347,9 @@ class PaymentMethodOut(BaseModel):
     payment_token_id: str
     label: Optional[str] = None
     priority: int
+    provider: Optional[str] = None
+    provider_method_id: Optional[str] = None
+    is_default: bool = False
 
 
 class SavePaymentTokenIn(BaseModel):
@@ -594,6 +597,12 @@ class AddChargeIn(BaseModel):
     reason: str = "usage"
 
 
+class RefundIn(BaseModel):
+    transaction_id: str
+    amount_cents: Optional[int] = Field(default=None, ge=1)
+    reason: Optional[str] = None
+
+
 class BillingCheckoutReq(BaseModel):
     amount_cents: int
     currency: Optional[str] = None
@@ -608,6 +617,9 @@ class StripePaymentMethodOut(BaseModel):
     exp_month: Optional[int] = None
     exp_year: Optional[int] = None
     priority: int
+    provider: Optional[str] = None
+    provider_method_id: Optional[str] = None
+    is_default: bool = False
 
 class SetPriorityReq(BaseModel):
     payment_method_id: str
@@ -628,6 +640,12 @@ class StripeChargeReq(BaseModel):
     payment_method_id: Optional[str] = None
     description: Optional[str] = None
     idempotency_key: Optional[str] = None
+
+
+class StripeRefundReq(BaseModel):
+    payment_intent_id: str
+    amount_cents: Optional[int] = Field(default=None, ge=1)
+    reason: Optional[str] = None
 
 class VerifyMicrodepositsReq(BaseModel):
     setup_intent_id: str
