@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import pytest
 from fastapi import HTTPException
@@ -23,6 +23,41 @@ def build_calendar_table(meta: dict | None = None, events: list[dict] | None = N
     table = Mock()
     table.get_item.return_value = {"Item": meta} if meta else {}
     table.query.return_value = {"Items": events or []}
+    return table
+
+
+def build_calendar_table_with_event(meta: dict, event: dict | None) -> Mock:
+    table = Mock()
+    table.get_item.side_effect = [
+        {"Item": meta},
+        {"Item": event} if event else {},
+    ]
+    table.query.return_value = {"Items": []}
+    return table
+
+
+def build_calendar_table_with_batch(meta: dict, events: list[dict]) -> Mock:
+    table = Mock()
+    table.get_item.return_value = {"Item": meta}
+    table.query.return_value = {"Items": events}
+    batch = Mock()
+    batch.__enter__ = Mock(return_value=batch)
+    batch.__exit__ = Mock(return_value=None)
+    table.batch_writer.return_value = batch
+    return table
+
+
+def build_calendar_table_map(metas: dict[str, dict], events_sequence: list[list[dict]]) -> Mock:
+    table = Mock()
+
+    def get_item_side_effect(**kwargs):
+        key = kwargs.get("Key", {})
+        calendar_id = key.get("calendar_id")
+        meta = metas.get(calendar_id)
+        return {"Item": meta} if meta else {}
+
+    table.get_item.side_effect = get_item_side_effect
+    table.query.side_effect = [{"Items": events} for events in events_sequence]
     return table
 
 
@@ -218,3 +253,147 @@ def test_openings_rejects_invalid_window():
                 end_utc="2024-01-01T09:00:00Z",
                 ctx=build_ctx(),
             ))
+
+
+def test_team_openings_merge_multiple_calendars():
+    metas = {
+        "cal1": {"calendar_id": "cal1", "sk": "meta", "owner_user_sub": "user", "timezone": "UTC"},
+        "cal2": {"calendar_id": "cal2", "sk": "meta", "owner_user_sub": "user", "timezone": "UTC"},
+    }
+    events_sequence = [
+        [
+            {
+                "event_id": "evt1",
+                "name": "Standup",
+                "timezone": "UTC",
+                "start_utc": "2024-04-01T10:00:00Z",
+                "end_utc": "2024-04-01T11:00:00Z",
+                "all_day": False,
+            },
+        ],
+        [
+            {
+                "event_id": "evt2",
+                "name": "Review",
+                "timezone": "UTC",
+                "start_utc": "2024-04-01T12:00:00Z",
+                "end_utc": "2024-04-01T13:30:00Z",
+                "all_day": False,
+            },
+        ],
+    ]
+    table = build_calendar_table_map(metas=metas, events_sequence=events_sequence)
+    with patch.object(calendar_router, "T", SimpleNamespace(calendar=table)):
+        openings = run_async(calendar_router.list_team_openings(
+            body=calendar_router.TeamAvailabilityIn(
+                calendar_ids=["cal1", "cal2"],
+                start_utc="2024-04-01T09:00:00Z",
+                end_utc="2024-04-01T15:00:00Z",
+            ),
+            ctx=build_ctx(),
+        ))
+
+    assert [(o.start_utc, o.end_utc) for o in openings] == [
+        ("2024-04-01T09:00:00Z", "2024-04-01T10:00:00Z"),
+        ("2024-04-01T11:00:00Z", "2024-04-01T12:00:00Z"),
+        ("2024-04-01T13:30:00Z", "2024-04-01T15:00:00Z"),
+    ]
+
+
+def test_update_calendar_changes_name_and_timezone():
+    meta = {
+        "calendar_id": "cal123",
+        "sk": "meta",
+        "owner_user_sub": "user",
+        "timezone": "UTC",
+        "name": "Old",
+        "created_at_utc": "2024-01-01T00:00:00Z",
+    }
+    table = build_calendar_table(meta=meta)
+    with patch.object(calendar_router, "T", SimpleNamespace(calendar=table)):
+        resp = run_async(calendar_router.update_calendar(
+            "cal123",
+            calendar_router.CalendarUpdateIn(name="New", timezone="UTC"),
+            ctx=build_ctx(),
+        ))
+
+    assert resp.name == "New"
+    assert resp.timezone == "UTC"
+    table.put_item.assert_called_once()
+
+
+def test_update_event_updates_times():
+    meta = {"calendar_id": "cal123", "sk": "meta", "owner_user_sub": "user", "timezone": "UTC"}
+    event = {
+        "calendar_id": "cal123",
+        "sk": "event#evt1",
+        "event_id": "evt1",
+        "name": "Standup",
+        "description": "Daily sync",
+        "timezone": "UTC",
+        "start_utc": "2024-01-01T10:00:00Z",
+        "end_utc": "2024-01-01T11:00:00Z",
+        "all_day": False,
+        "created_at_utc": "2024-01-01T08:00:00Z",
+    }
+    table = build_calendar_table_with_event(meta=meta, event=event)
+    with patch.object(calendar_router, "T", SimpleNamespace(calendar=table)):
+        resp = run_async(calendar_router.update_event(
+            "cal123",
+            "evt1",
+            calendar_router.EventUpdateIn(start_utc="2024-01-01T12:00:00Z", end_utc="2024-01-01T13:00:00Z"),
+            ctx=build_ctx(),
+        ))
+
+    assert resp.start_utc == "2024-01-01T12:00:00Z"
+    assert resp.end_utc == "2024-01-01T13:00:00Z"
+    table.put_item.assert_called_once()
+
+
+def test_delete_event_removes_item():
+    meta = {"calendar_id": "cal123", "sk": "meta", "owner_user_sub": "user", "timezone": "UTC"}
+    event = {
+        "calendar_id": "cal123",
+        "sk": "event#evt1",
+        "event_id": "evt1",
+        "name": "Standup",
+        "timezone": "UTC",
+        "start_utc": "2024-01-01T10:00:00Z",
+        "end_utc": "2024-01-01T11:00:00Z",
+        "all_day": False,
+    }
+    table = build_calendar_table_with_event(meta=meta, event=event)
+    with patch.object(calendar_router, "T", SimpleNamespace(calendar=table)):
+        resp = run_async(calendar_router.delete_event("cal123", "evt1", ctx=build_ctx()))
+
+    assert resp == {"ok": True}
+    table.delete_item.assert_called_once_with(Key={"calendar_id": "cal123", "sk": "event#evt1"})
+
+
+def test_delete_calendar_removes_meta_and_events():
+    meta = {"calendar_id": "cal123", "sk": "meta", "owner_user_sub": "user", "timezone": "UTC"}
+    events = [
+        {
+            "calendar_id": "cal123",
+            "sk": "event#evt1",
+            "event_id": "evt1",
+            "name": "Standup",
+            "timezone": "UTC",
+            "start_utc": "2024-01-01T10:00:00Z",
+            "end_utc": "2024-01-01T11:00:00Z",
+            "all_day": False,
+        },
+    ]
+    table = build_calendar_table_with_batch(meta=meta, events=events)
+    with patch.object(calendar_router, "T", SimpleNamespace(calendar=table)):
+        resp = run_async(calendar_router.delete_calendar("cal123", ctx=build_ctx()))
+
+    assert resp == {"ok": True}
+    table.batch_writer.assert_called_once()
+    table.batch_writer.return_value.delete_item.assert_has_calls(
+        [
+            call(Key={"calendar_id": "cal123", "sk": "meta"}),
+            call(Key={"calendar_id": "cal123", "sk": "event#evt1"}),
+        ],
+        any_order=True,
+    )

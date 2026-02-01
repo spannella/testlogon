@@ -8,7 +8,16 @@ from boto3.dynamodb.conditions import Key
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.tables import T
-from app.models import CalendarCreateIn, CalendarOut, EventCreateIn, EventOut, OpeningsOut
+from app.models import (
+    CalendarCreateIn,
+    CalendarOut,
+    CalendarUpdateIn,
+    EventCreateIn,
+    EventOut,
+    EventUpdateIn,
+    OpeningsOut,
+    TeamAvailabilityIn,
+)
 from app.services.sessions import require_ui_session
 
 try:
@@ -81,6 +90,14 @@ def invert_intervals(busy: list[tuple[datetime, datetime]], start: datetime, end
     return free
 
 
+def parse_availability_window(start_utc: str, end_utc: str) -> tuple[datetime, datetime]:
+    window_start = parse_iso_dt(start_utc)
+    window_end = parse_iso_dt(end_utc)
+    if window_end <= window_start:
+        raise HTTPException(status_code=400, detail="end_utc must be after start_utc")
+    return window_start, window_end
+
+
 def _calendar_keys(calendar_id: str) -> Dict[str, str]:
     return {"calendar_id": calendar_id, "sk": "meta"}
 
@@ -89,13 +106,24 @@ def _event_key(event_id: str) -> str:
     return f"event#{event_id}"
 
 
-def _normalize_event_times(calendar_tz: str, payload: EventCreateIn) -> Dict[str, Any]:
+def _load_event(calendar_id: str, event_id: str) -> Dict[str, Any]:
+    item = T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": _event_key(event_id)}).get("Item")
+    if not item:
+        raise HTTPException(status_code=404, detail="Event not found")
+    return item
+
+
+def _validate_timezone(tz_name: str) -> None:
     _require_zoneinfo()
-    tz_name = payload.timezone or calendar_tz
     try:
         ZoneInfo(tz_name)
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid timezone") from exc
+
+
+def _normalize_event_times(calendar_tz: str, payload: EventCreateIn) -> Dict[str, Any]:
+    tz_name = payload.timezone or calendar_tz
+    _validate_timezone(tz_name)
 
     if payload.all_day:
         if not payload.all_day_date:
@@ -225,6 +253,81 @@ async def list_events(calendar_id: str, ctx: Dict[str, str] = Depends(require_ui
     return [_event_out(item, calendar_id) for item in _list_events(calendar_id)]
 
 
+@router.patch("/calendars/{calendar_id}", response_model=CalendarOut)
+async def update_calendar(
+    calendar_id: str,
+    body: CalendarUpdateIn,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    meta = _load_calendar(calendar_id, ctx["user_sub"])
+    name = body.name if body.name is not None else meta.get("name", "")
+    timezone_name = body.timezone if body.timezone is not None else meta.get("timezone", "UTC")
+    if body.timezone is not None:
+        _validate_timezone(timezone_name)
+    updated = {**meta, "name": name, "timezone": timezone_name}
+    T.calendar.put_item(Item=updated)
+    return CalendarOut(
+        calendar_id=calendar_id,
+        name=updated["name"],
+        timezone=updated["timezone"],
+        owner_user_id=updated["owner_user_sub"],
+        created_at_utc=updated.get("created_at_utc", ""),
+    )
+
+
+@router.patch("/calendars/{calendar_id}/events/{event_id}", response_model=EventOut)
+async def update_event(
+    calendar_id: str,
+    event_id: str,
+    body: EventUpdateIn,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    meta = _load_calendar(calendar_id, ctx["user_sub"])
+    item = _load_event(calendar_id, event_id)
+    payload = EventCreateIn(
+        name=body.name if body.name is not None else item["name"],
+        description=body.description if body.description is not None else item.get("description", ""),
+        timezone=body.timezone if body.timezone is not None else item.get("timezone"),
+        start_utc=body.start_utc if body.start_utc is not None else item.get("start_utc"),
+        end_utc=body.end_utc if body.end_utc is not None else item.get("end_utc"),
+        all_day=body.all_day if body.all_day is not None else item.get("all_day", False),
+        all_day_date=body.all_day_date if body.all_day_date is not None else item.get("all_day_date"),
+    )
+    normalized = _normalize_event_times(meta["timezone"], payload)
+    updated = {
+        **item,
+        "name": payload.name,
+        "description": payload.description,
+        **normalized,
+    }
+    T.calendar.put_item(Item=updated)
+    return _event_out(updated, calendar_id)
+
+
+@router.delete("/calendars/{calendar_id}/events/{event_id}")
+async def delete_event(
+    calendar_id: str,
+    event_id: str,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    _load_calendar(calendar_id, ctx["user_sub"])
+    _load_event(calendar_id, event_id)
+    T.calendar.delete_item(Key={"calendar_id": calendar_id, "sk": _event_key(event_id)})
+    return {"ok": True}
+
+
+@router.delete("/calendars/{calendar_id}")
+async def delete_calendar(calendar_id: str, ctx: Dict[str, str] = Depends(require_ui_session)):
+    _load_calendar(calendar_id, ctx["user_sub"])
+    events = _list_events(calendar_id)
+    with T.calendar.batch_writer() as batch:
+        batch.delete_item(Key={"calendar_id": calendar_id, "sk": "meta"})
+        for event in events:
+            event_sk = event.get("sk") or _event_key(event["event_id"])
+            batch.delete_item(Key={"calendar_id": calendar_id, "sk": event_sk})
+    return {"ok": True}
+
+
 @router.get("/calendars/{calendar_id}/openings", response_model=list[OpeningsOut])
 async def list_openings(
     calendar_id: str,
@@ -233,10 +336,20 @@ async def list_openings(
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
     _load_calendar(calendar_id, ctx["user_sub"])
-    window_start = parse_iso_dt(start_utc)
-    window_end = parse_iso_dt(end_utc)
-    if window_end <= window_start:
-        raise HTTPException(status_code=400, detail="end_utc must be after start_utc")
+    window_start, window_end = parse_availability_window(start_utc, end_utc)
     busy = [_event_to_busy_interval(event) for event in _list_events(calendar_id)]
+    free = invert_intervals(busy, window_start, window_end)
+    return [OpeningsOut(start_utc=iso_utc(s), end_utc=iso_utc(e)) for s, e in free]
+
+
+@router.post("/calendars/availability", response_model=list[OpeningsOut])
+async def list_team_openings(body: TeamAvailabilityIn, ctx: Dict[str, str] = Depends(require_ui_session)):
+    window_start, window_end = parse_availability_window(body.start_utc, body.end_utc)
+    if not body.calendar_ids:
+        raise HTTPException(status_code=400, detail="calendar_ids is required")
+    busy: list[tuple[datetime, datetime]] = []
+    for calendar_id in body.calendar_ids:
+        _load_calendar(calendar_id, ctx["user_sub"])
+        busy.extend(_event_to_busy_interval(event) for event in _list_events(calendar_id))
     free = invert_intervals(busy, window_start, window_end)
     return [OpeningsOut(start_utc=iso_utc(s), end_utc=iso_utc(e)) for s, e in free]
