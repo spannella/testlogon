@@ -418,6 +418,11 @@ class CalendarOut(BaseModel):
     created_at_utc: str
 
 
+class CalendarUpdateIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    timezone: str | None = Field(default=None, max_length=64)
+
+
 class EventCreateIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=5000)
@@ -441,7 +446,23 @@ class EventOut(BaseModel):
     created_at_utc: str
 
 
+class EventUpdateIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=5000)
+    timezone: str | None = Field(default=None, max_length=64)
+    start_utc: str | None = None
+    end_utc: str | None = None
+    all_day: bool | None = None
+    all_day_date: str | None = None
+
+
 class OpeningsOut(BaseModel):
+    start_utc: str
+    end_utc: str
+
+
+class TeamAvailabilityIn(BaseModel):
+    calendar_ids: List[str] = Field(min_length=1)
     start_utc: str
     end_utc: str
 
