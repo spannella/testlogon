@@ -11,7 +11,8 @@ from app.core.normalize import client_ip_from_request
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
-from app.metrics import record_session_created
+from app.metrics import record_session_created, record_session_revoked
+from app.services.device_trust import record_device_login
 from app.services.ttl import with_ttl
 
 def is_real_ui_session_id(session_id: str) -> bool:
@@ -51,12 +52,12 @@ async def require_ui_session(
     request.state.user_sub = user_sub
     return {"user_sub": user_sub, "session_id": x_session_id}
 
-def create_real_session(req: Request, user_sub: str) -> str:
+def create_real_session(req: Request, user_sub: str, *, mfa_verified_at: Optional[int] = None) -> str:
     session_id = str(uuid.uuid4())
     ts = now_ts()
     ttl = ts + S.ui_session_ttl_seconds
     is_new_user = _is_new_user(user_sub)
-    T.sessions.put_item(Item=with_ttl({
+    item: Dict[str, Any] = {
         "user_sub": user_sub,
         "session_id": session_id,
         "created_at": ts,
@@ -65,7 +66,14 @@ def create_real_session(req: Request, user_sub: str) -> str:
         "user_agent": (req.headers.get("user-agent", "")[:512]),
         "revoked": False,
         "pending_auth": False,
-    }, ttl_epoch=ttl))
+    }
+    if mfa_verified_at:
+        item["mfa_verified_at"] = mfa_verified_at
+    T.sessions.put_item(Item=with_ttl(item, ttl_epoch=ttl))
+    try:
+        record_device_login(req, user_sub)
+    except Exception:
+        pass
     record_session_created(user_sub, is_new_user)
     return session_id
 
@@ -192,6 +200,46 @@ def maybe_finalize(req: Request, user_sub: str, challenge_id: str) -> Optional[s
         return None
     if chal.get("purpose"):
         return None
-    sid = create_real_session(req, user_sub)
+    sid = create_real_session(req, user_sub, mfa_verified_at=now_ts())
     revoke_challenge(user_sub, challenge_id)
     return sid
+
+def revoke_all_sessions(user_sub: str) -> None:
+    last_key = None
+    ts = now_ts()
+    while True:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("user_sub").eq(user_sub),
+            "Limit": 200,
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        resp = T.sessions.query(**kwargs)
+        items = resp.get("Items", [])
+        for it in items:
+            sid = it.get("session_id", "")
+            if not sid:
+                continue
+            try:
+                T.sessions.update_item(
+                    Key={"user_sub": user_sub, "session_id": sid},
+                    UpdateExpression="SET revoked=:t, revoked_at=:now",
+                    ExpressionAttributeValues={":t": True, ":now": ts},
+                )
+            except Exception:
+                pass
+            if is_real_ui_session_id(sid):
+                record_session_revoked(user_sub)
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+
+def require_fresh_mfa(ctx: Dict[str, str], *, max_age_seconds: Optional[int] = None) -> None:
+    required = compute_required_factors(ctx["user_sub"])
+    if not required:
+        return
+    max_age = max_age_seconds or S.ui_stepup_max_age_seconds
+    it = T.sessions.get_item(Key={"user_sub": ctx["user_sub"], "session_id": ctx["session_id"]}).get("Item") or {}
+    verified_at = int(it.get("mfa_verified_at", 0) or 0)
+    if not verified_at or (now_ts() - verified_at) > max_age:
+        raise HTTPException(401, "Fresh MFA required")

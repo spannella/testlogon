@@ -108,6 +108,9 @@ async def get_authenticated_user_sub(request: Request) -> str:
             raise HTTPException(401, "Token missing subject")
         return str(user_sub)
 
+    if not S.dev_mode:
+        raise HTTPException(401, "Authentication not configured")
+
     fallback_user = request.headers.get("x-user-sub")
     if fallback_user:
         return fallback_user

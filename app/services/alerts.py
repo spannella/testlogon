@@ -22,6 +22,7 @@ ALERT_EVENT_TYPES: List[str] = [
     "login_success","login_failure","mfa_success","mfa_failure","challenge_created","challenge_revoked",
     "challenge_failed","api_key_created","api_key_revoked","api_key_ip_rules_updated","session_revoked",
     "totp_device_added","totp_device_removed","rate_limited","access_denied","security_event",
+    "device_new","device_location_mismatch","device_trust","device_revoke",
 ]
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.
@@ -266,6 +267,10 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
             "ui_session_revoke_others": "Other sessions revoked",
             "totp_device_confirm": "TOTP device added",
             "totp_device_remove": "TOTP device removed",
+            "device_new": "New device detected",
+            "device_location_mismatch": "Device location mismatch",
+            "device_trust": "Device trusted",
+            "device_revoke": "Device trust revoked",
         }
         title = pretty.get(event, event.replace("_", " "))
         wr = write_alert(user_sub, event=event, outcome=outcome, title=title, details={**payload, "alert_type": alert_type})

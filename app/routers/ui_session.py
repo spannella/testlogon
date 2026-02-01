@@ -9,6 +9,7 @@ from app.auth.deps import get_authenticated_user_sub
 from app.models import UiSessionFinalizeReq, UiSessionStartReq, UiSessionStartResp
 from app.core.normalize import client_ip_from_request
 from app.services.alerts import audit_event
+from app.services.rate_limit import rate_limit_login_attempt
 from app.services.sessions import (
     compute_required_factors,
     create_real_session,
@@ -26,6 +27,7 @@ router = APIRouter(prefix="/ui", tags=["ui-session"])
 
 @router.post("/session/start", response_model=UiSessionStartResp)
 async def ui_session_start(req: Request, body: UiSessionStartReq, user_sub: str = Depends(get_authenticated_user_sub)):
+    rate_limit_login_attempt(user_sub, client_ip_from_request(req))
     required = compute_required_factors(user_sub)
     if not required:
         sid = create_real_session(req, user_sub)

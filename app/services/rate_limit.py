@@ -63,6 +63,22 @@ def _bucket_limit(user_sub: str, sid: str, max_n: int, win: int) -> bool:
         pass
     return True
 
+def _ip_user(ip: str) -> str:
+    return f"ip#{ip}" if ip else "ip#unknown"
+
+def rate_limit_login_attempt(user_sub: str, ip: str) -> None:
+    if not _bucket_limit(user_sub, "rl#login", S.login_attempt_max_per_window, S.login_attempt_window_seconds):
+        raise HTTPException(429, "Too many login attempts; try again later")
+    if not _bucket_limit(_ip_user(ip), "rl#login", S.login_attempt_max_per_window, S.login_attempt_window_seconds):
+        raise HTTPException(429, "Too many login attempts; try again later")
+
+def rate_limit_mfa_verify(user_sub: str, ip: str, factor: str) -> None:
+    sid = f"rl#mfa_verify#{factor}"
+    if not _bucket_limit(user_sub, sid, S.mfa_verify_max_per_window, S.mfa_verify_window_seconds):
+        raise HTTPException(429, "Too many verification attempts; try again later")
+    if not _bucket_limit(_ip_user(ip), sid, S.mfa_verify_max_per_window, S.mfa_verify_window_seconds):
+        raise HTTPException(429, "Too many verification attempts; try again later")
+
 def can_send_verification(user_sub: str, channel: str) -> bool:
     if channel == "email":
         return _bucket_limit(user_sub, "rl#verify_email", S.verify_email_max_per_window, S.verify_email_window_seconds)

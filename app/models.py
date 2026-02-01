@@ -118,6 +118,25 @@ class AlertEmailConfirmReq(BaseModel):
     challenge_id: str
     code: str
 
+class TokenRefreshReq(BaseModel):
+    refresh_token: str
+
+class TokenRefreshResp(BaseModel):
+    access_token: str
+    id_token: Optional[str] = None
+    expires_in: Optional[int] = None
+
+class DeviceTrustOut(BaseModel):
+    device_id: str
+    user_agent: str
+    first_seen_at: int
+    last_seen_at: int
+    last_ip: str
+    trusted: bool
+
+class DeviceTrustListOut(BaseModel):
+    devices: List[DeviceTrustOut] = Field(default_factory=list)
+
 
 class PurchaseMoneyIn(BaseModel):
     amount: float = Field(..., gt=0)

@@ -38,3 +38,21 @@ def cognito_confirm_forgot_password(username: str, code: str, new_password: str)
         ConfirmationCode=code,
         Password=new_password,
     )
+
+
+def cognito_refresh_tokens(refresh_token: str) -> Dict[str, Any]:
+    client = cognito_client()
+    try:
+        resp = client.initiate_auth(
+            ClientId=_cognito_client_id(),
+            AuthFlow="REFRESH_TOKEN_AUTH",
+            AuthParameters={"REFRESH_TOKEN": refresh_token},
+        )
+    except client.exceptions.NotAuthorizedException as exc:  # type: ignore[attr-defined]
+        raise HTTPException(401, "Invalid refresh token") from exc
+    except client.exceptions.InvalidParameterException as exc:  # type: ignore[attr-defined]
+        raise HTTPException(400, "Invalid refresh token") from exc
+    result = resp.get("AuthenticationResult") or {}
+    if not result:
+        raise HTTPException(401, "Refresh token rejected")
+    return result
