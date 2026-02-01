@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile, Body, Request, HTTPException
 from fastapi.responses import StreamingResponse
@@ -19,6 +19,7 @@ from app.services.filemanager import (
     remove_folder,
     search_prefix,
     share_node,
+    unshare_node,
     split_parent_name,
     upload_file,
     upload_zip,
@@ -304,10 +305,12 @@ def upload_zip_and_extract(
 def share_fs_node(
     path: str = Body(..., embed=True),
     to_user: str = Body(..., embed=True),
+    permission: str = Body("read", embed=True),
+    expires_at: Optional[str] = Body(None, embed=True),
     req: Request = None,
     user: str = Depends(_current_user),
 ):
-    share_node(user, path, to_user)
+    share_node(user, path, to_user, permission=permission, expires_at=expires_at)
     audit_event(
         "filemgr_node_shared",
         user,
@@ -315,6 +318,27 @@ def share_fs_node(
         outcome="success",
         path=path,
         shared_with=to_user,
+        permission=permission,
+        expires_at=expires_at,
+    )
+    return {"ok": True}
+
+
+@router.post("/unshare")
+def unshare_fs_node(
+    path: str = Body(..., embed=True),
+    to_user: str = Body(..., embed=True),
+    req: Request = None,
+    user: str = Depends(_current_user),
+):
+    unshare_node(user, path, to_user)
+    audit_event(
+        "filemgr_node_unshared",
+        user,
+        req,
+        outcome="success",
+        path=path,
+        unshared_with=to_user,
     )
     return {"ok": True}
 

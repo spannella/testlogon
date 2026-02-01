@@ -478,8 +478,8 @@
     <h3>File Manager</h3>
     <div class="muted">Browse folders, upload files, and manage downloads.</div>
     <div class="row-inline" style="margin-top:10px;">
-      <input id="filemgrPath" class="mono" placeholder="/path/" style="flex:1;" />
-      <button id="filemgrGoBtn">Go</button>
+      <div id="filemgrBreadcrumb" class="mono" style="flex:1; display:flex; flex-wrap:wrap; gap:6px;"></div>
+      <input id="filemgrPath" class="mono hidden" />
       <button id="filemgrUpBtn">Up</button>
       <button id="filemgrRefreshBtn">Refresh</button>
     </div>
@@ -488,6 +488,11 @@
       <button id="filemgrCreateFolderBtn">Create folder</button>
       <input id="filemgrUploadInput" type="file" />
       <button id="filemgrUploadBtn">Upload</button>
+      <input id="filemgrUploadZipInput" type="file" accept=".zip,application/zip" />
+      <button id="filemgrUploadZipBtn">Upload zip</button>
+      <button id="filemgrDownloadZipBtn">Download selected</button>
+      <button id="filemgrBulkMoveBtn">Move selected</button>
+      <button id="filemgrBulkDeleteBtn" class="danger">Delete selected</button>
     </div>
     <div class="row-inline" style="margin-top:10px;">
       <input id="filemgrSearch" placeholder="Search prefix" />
@@ -501,6 +506,7 @@
     <table id="filemgrTable">
       <thead>
         <tr>
+          <th><input id="filemgrSelectAll" type="checkbox" /></th>
           <th>Name</th>
           <th>Type</th>
           <th>Size</th>
@@ -510,6 +516,14 @@
       </thead>
       <tbody></tbody>
     </table>
+    <div class="section" style="margin-top:16px;">
+      <div class="row-inline">
+        <h4 style="margin:0;">File activity</h4>
+        <button id="filemgrAuditRefreshBtn">Refresh</button>
+        <span id="filemgrAuditStatus" class="muted"></span>
+      </div>
+      <div id="filemgrAuditList" class="list" style="margin-top:8px;"></div>
+    </div>
     <h3>Scheduling</h3>
     <div class="muted">Create calendars, add events, and view availability windows.</div>
     <div class="row-inline" style="margin-top:10px;">
