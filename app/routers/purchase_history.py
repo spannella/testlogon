@@ -11,6 +11,7 @@ from app.models import (
     PurchaseTransactionInfo,
     PurchaseTransactionStatusReq,
     PurchaseTransactionSummary,
+    ReceiptLinkOut,
 )
 from app.services.purchase_history import (
     create_transaction,
@@ -24,6 +25,7 @@ from app.services.purchase_history import (
     respond_cancel,
     update_shipping,
 )
+from app.services.receipts import get_or_create_receipt
 from app.services.sessions import require_ui_session
 
 router = APIRouter(prefix="/ui/purchase-history", tags=["purchase-history"])
@@ -111,3 +113,8 @@ async def ui_list_events(
     limit: int = Query(50, ge=1, le=200),
 ):
     return {"txn_id": txn_id, "events": list_events(ctx["user_sub"], txn_id, limit)}
+
+
+@router.get("/transactions/{txn_id}/receipt", response_model=ReceiptLinkOut)
+async def ui_get_receipt(txn_id: str, ctx=Depends(require_ui_session)):
+    return get_or_create_receipt(ctx["user_sub"], txn_id)

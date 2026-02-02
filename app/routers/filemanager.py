@@ -27,6 +27,7 @@ from app.services.filemanager import (
     search_text,
 )
 from app.services.alerts import audit_event
+from app.services.purchase_history import record_receipt_download
 from app.services.sessions import require_ui_session
 
 router = APIRouter(prefix="/v1/fs", tags=["filemanager"])
@@ -133,6 +134,12 @@ def download_fs_file(path: str = Query(...), req: Request = None, user: str = De
         path=node.get("path"),
         size=node.get("size"),
     )
+    receipt_path = norm_path(path, is_folder=False)
+    if receipt_path.startswith("/billing/receipts/") and receipt_path.lower().endswith(".pdf"):
+        _, name = split_parent_name(receipt_path)
+        txn_id = name[:-4]
+        if txn_id:
+            record_receipt_download(user, txn_id, receipt_path)
 
     def gen():
         body = obj["Body"]

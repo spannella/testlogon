@@ -25,6 +25,7 @@ from app.services.billing_shared import (
     ensure_balance_row as ensure_balance_row_shared,
     user_pk,
 )
+from app.services.purchase_history import mark_completed, mark_reverted, record_billing_transaction
 
 router = APIRouter(tags=["billing"])
 
@@ -179,6 +180,7 @@ def put_payment_record(
     ledger_sk_value: Optional[str],
     payment_token_id: Optional[str] = None,
     subscription_id: Optional[str] = None,
+    purchase_txn_id: Optional[str] = None,
     raw: Optional[Dict[str, Any]] = None,
 ) -> None:
     pk = user_pk(user_id)
@@ -196,6 +198,8 @@ def put_payment_record(
         "created_at": now_ts(),
         "updated_at": now_ts(),
     }
+    if purchase_txn_id:
+        item["purchase_txn_id"] = purchase_txn_id
     if raw:
         item["raw"] = raw
     ddb_put(item)
@@ -874,8 +878,24 @@ async def charge_once(body: OneTimeChargeIn, request: Request, x_user_id: Option
 
     order_id = order.get("id")
     approve = _find_link(order, "approve") or _find_link(order, "payer-action") or _find_link(order, "payer_action")
+    purchase_txn_id = None
 
     if order_id:
+        description = body.reason or "PayPal charge"
+        purchase_txn_id = record_billing_transaction(
+            user_sub=user_id,
+            amount_cents=amount,
+            currency=DEFAULT_CURRENCY,
+            description=description,
+            status="PENDING",
+            external_ref=str(order_id),
+            metadata={
+                "paypal_order_id": order_id,
+                "payment_token_id": token,
+                "ledger_sk": led_sk_value,
+                "reason": body.reason,
+            },
+        )
         put_payment_record(
             user_id=user_id,
             external_id=str(order_id),
@@ -884,6 +904,7 @@ async def charge_once(body: OneTimeChargeIn, request: Request, x_user_id: Option
             status="pending",
             ledger_sk_value=led_sk_value,
             payment_token_id=token,
+            purchase_txn_id=purchase_txn_id,
             raw={"order": order},
         )
 
@@ -910,14 +931,53 @@ async def capture_order(body: CaptureOrderIn, x_user_id: Optional[str] = Header(
     status = (cap.get("status") or "").upper()
     ok = status in ("COMPLETED",)
 
+    purchase_txn_id = pay.get("purchase_txn_id")
     if ok:
         apply_balance_delta(pk, {"payments_pending_cents": -amount, "payments_settled_cents": amount})
         settle_or_reverse_ledger(user_id, led_sk_value, "settled")
         update_payment_status(user_id, order_id, "succeeded", raw={"capture": cap})
+        if purchase_txn_id:
+            mark_completed(user_id, purchase_txn_id, order_id, "PayPal capture succeeded")
+        else:
+            purchase_txn_id = record_billing_transaction(
+                user_sub=user_id,
+                amount_cents=amount,
+                currency=DEFAULT_CURRENCY,
+                description="PayPal charge",
+                status="COMPLETED",
+                external_ref=str(order_id),
+                metadata={
+                    "paypal_order_id": order_id,
+                    "paypal_capture_status": status,
+                    "paypal_capture": cap,
+                },
+            )
+            ddb_update(
+                pk,
+                pay_sk(order_id),
+                "SET purchase_txn_id = :p, updated_at = :u",
+                {":p": purchase_txn_id, ":u": now_ts()},
+            )
     else:
         apply_balance_delta(pk, {"payments_pending_cents": -amount})
         settle_or_reverse_ledger(user_id, led_sk_value, "reversed")
         update_payment_status(user_id, order_id, "failed", raw={"capture": cap})
+        if purchase_txn_id:
+            mark_reverted(user_id, purchase_txn_id, status.lower() or "paypal_capture_failed")
+        else:
+            record_billing_transaction(
+                user_sub=user_id,
+                amount_cents=amount,
+                currency=DEFAULT_CURRENCY,
+                description="PayPal charge",
+                status="REVERTED",
+                external_ref=str(order_id),
+                metadata={
+                    "paypal_order_id": order_id,
+                    "paypal_capture_status": status,
+                    "paypal_capture": cap,
+                },
+            )
 
     return {"ok": ok, "order_id": order_id, "capture": cap}
 
