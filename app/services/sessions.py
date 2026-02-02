@@ -38,10 +38,29 @@ async def require_ui_session(
         raise HTTPException(401, "Session not finalized")
 
     ts = now_ts()
+    ttl_attr = S.ddb_ttl_attr
+    ttl_epoch = int(it.get(ttl_attr, 0) or 0)
+    if ttl_epoch and ttl_epoch <= ts:
+        try:
+            T.sessions.update_item(
+                Key={"user_sub": user_sub, "session_id": x_session_id},
+                UpdateExpression="SET revoked=:t, revoked_at=:now",
+                ExpressionAttributeValues={":t": True, ":now": ts},
+            )
+        except Exception:
+            pass
+        raise HTTPException(401, "Session expired")
     last = int(it.get("last_seen_at", 0) or 0)
     if last and (ts - last) > S.ui_inactivity_seconds:
         T.sessions.update_item(Key={"user_sub": user_sub, "session_id": x_session_id}, UpdateExpression="SET revoked=:t", ExpressionAttributeValues={":t": True})
         raise HTTPException(401, "Session expired (inactive)")
+
+    device_info = record_device_login(request, user_sub)
+    if not device_info.get("trusted", False) and (device_info.get("new_device") or device_info.get("location_mismatch")):
+        if compute_required_factors(user_sub):
+            require_fresh_mfa({"user_sub": user_sub, "session_id": x_session_id})
+        else:
+            raise HTTPException(401, "Re-auth required")
 
     # Touch last_seen (best effort)
     try:

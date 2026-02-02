@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import uuid
-from typing import Any, Dict, List, Literal, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
@@ -41,6 +42,14 @@ def interval_seconds(interval: str) -> int:
     if interval == "year":
         return 365 * 24 * 3600
     return 30 * 24 * 3600
+
+
+def _iso_utc_from_ts(ts: int) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _subscription_event_id(subscription_id: str, kind: str) -> str:
+    return f"sub_{subscription_id}_{kind}"
 
 
 def ddb_put_item(item: Dict[str, Any]) -> None:
@@ -125,6 +134,8 @@ def normalize_subscription(sub: Dict[str, Any]) -> Dict[str, Any]:
         return sub
     normalized = sub.copy()
     normalized["auto_renew"] = not bool(sub.get("cancel_at_period_end", False))
+    if "renewal_policy" not in normalized:
+        normalized["renewal_policy"] = "auto" if normalized["auto_renew"] else "manual"
     return normalized
 
 
@@ -170,6 +181,13 @@ def record_billing_subscription(sub: Dict[str, Any]) -> None:
         "updated_at": sub["updated_at"],
         "provider": sub["provider"],
         "provider_subscription_id": sub["provider_subscription_id"],
+        "interval": sub.get("interval"),
+        "auto_renew": sub.get("auto_renew"),
+        "cancel_at_period_end": sub.get("cancel_at_period_end"),
+        "trial_start": sub.get("trial_start"),
+        "trial_end": sub.get("trial_end"),
+        "proration_policy": sub.get("proration_policy"),
+        "renewal_policy": sub.get("renewal_policy"),
     }
     billing_put(T.billing, item)
 
@@ -284,6 +302,7 @@ class SubscribeIn(BaseModel):
     subscriber_id: Optional[str] = None
     interval: Optional[Literal["month", "year"]] = None
     discount_code: Optional[str] = None
+    trial_days: Optional[conint(ge=1, le=365)] = None
 
 
 class SubscriptionOut(BaseModel):
@@ -301,6 +320,10 @@ class SubscriptionOut(BaseModel):
     price_cents: int
     currency: str
     auto_renew: bool
+    trial_start: Optional[int] = None
+    trial_end: Optional[int] = None
+    proration_policy: Optional[str] = None
+    renewal_policy: Optional[str] = None
     created_at: int
     updated_at: int
     creator_profile: Optional[Dict[str, Optional[str]]] = None
@@ -320,6 +343,15 @@ class SubscriptionResumeIn(BaseModel):
 class SubscriptionRenewalIn(BaseModel):
     auto_renew: bool = True
     effective: Literal["immediate", "period_end"] = "period_end"
+    renewal_policy: Optional[Literal["auto", "manual", "cancel_at_period_end"]] = None
+    reason: Optional[str] = None
+
+
+class SubscriptionChangePlanIn(BaseModel):
+    plan_id: str
+    interval: Optional[Literal["month", "year"]] = None
+    effective: Literal["immediate", "period_end"] = "immediate"
+    proration_policy: Literal["none", "charge", "credit", "full"] = "full"
     reason: Optional[str] = None
 
 
@@ -333,6 +365,10 @@ class InvoiceOut(BaseModel):
     period_start: int
     period_end: int
     created_at: int
+    is_proration: Optional[bool] = None
+    proration_amount_cents: Optional[int] = None
+    proration_period_start: Optional[int] = None
+    proration_period_end: Optional[int] = None
 
 
 class EarningsOut(BaseModel):
@@ -478,12 +514,14 @@ def subscription_summary(sub: Dict[str, Any]) -> Dict[str, Any]:
     cancel_at_period_end = bool(sub.get("cancel_at_period_end", False))
     next_amount = 0
     next_renewal_at = None
-    if status in {"active", "past_due"} and not cancel_at_period_end:
+    if status in {"active", "past_due", "trialing"} and not cancel_at_period_end:
         next_amount = int(sub.get("price_cents", 0))
         discount = sub.get("discount") or {}
         if discount and sub.get("discount_remaining_months", 0):
             next_amount = _apply_discount(next_amount, discount)
         next_renewal_at = int(sub.get("current_period_end") or 0) or None
+        if status == "trialing":
+            next_amount = 0
 
     return {
         "subscription_id": sub["subscription_id"],
@@ -516,6 +554,121 @@ def build_ledger_item(creator_id: str, entry: Dict[str, Any]) -> Dict[str, Any]:
 def save_ledger_entry(creator_id: str, entry: Dict[str, Any]) -> None:
     ddb_put_item(build_ledger_item(creator_id, entry))
 
+
+def _calendar_meta(calendar_id: str) -> Optional[Dict[str, Any]]:
+    return T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": "meta"}).get("Item")
+
+
+def _calendar_event_item(
+    *,
+    calendar_id: str,
+    event_id: str,
+    name: str,
+    description: str,
+    start_ts: int,
+    end_ts: int,
+    timezone_name: str,
+) -> Dict[str, Any]:
+    return {
+        "calendar_id": calendar_id,
+        "sk": f"event#{event_id}",
+        "event_id": event_id,
+        "name": name,
+        "description": description,
+        "timezone": timezone_name,
+        "start_utc": _iso_utc_from_ts(start_ts),
+        "end_utc": _iso_utc_from_ts(end_ts),
+        "all_day": False,
+        "all_day_date": None,
+        "created_at_utc": _iso_utc_from_ts(now_ts()),
+    }
+
+
+def _upsert_subscription_calendar_event(
+    calendar_id: str,
+    event_id: str,
+    *,
+    name: str,
+    description: str,
+    when_ts: Optional[int],
+    timezone_name: str,
+) -> None:
+    if not when_ts:
+        T.calendar.delete_item(Key={"calendar_id": calendar_id, "sk": f"event#{event_id}"})
+        return
+    start_ts = when_ts
+    end_ts = when_ts + 3600
+    item = _calendar_event_item(
+        calendar_id=calendar_id,
+        event_id=event_id,
+        name=name,
+        description=description,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        timezone_name=timezone_name,
+    )
+    T.calendar.put_item(Item=item)
+
+
+def refresh_subscription_calendar_events(sub: Dict[str, Any], plan: Optional[Dict[str, Any]] = None) -> None:
+    plan = plan or ddb_get_item(pk_plan(sub["plan_id"]), "META")
+    if not plan:
+        return
+    calendar_id = (plan.get("metadata") or {}).get("calendar_id")
+    if not calendar_id:
+        return
+    calendar_meta = _calendar_meta(calendar_id)
+    if not calendar_meta:
+        return
+    timezone_name = calendar_meta.get("timezone", "UTC")
+    sub_id = sub["subscription_id"]
+    trial_end = sub.get("trial_end")
+    renewal_at = sub.get("current_period_end") if not sub.get("cancel_at_period_end") else None
+    cancel_at = sub.get("current_period_end") if sub.get("cancel_at_period_end") else None
+
+    _upsert_subscription_calendar_event(
+        calendar_id,
+        _subscription_event_id(sub_id, "trial_end"),
+        name="Subscription trial ends",
+        description=f"Trial ends for subscription {sub_id}",
+        when_ts=trial_end,
+        timezone_name=timezone_name,
+    )
+    _upsert_subscription_calendar_event(
+        calendar_id,
+        _subscription_event_id(sub_id, "renewal"),
+        name="Subscription renewal",
+        description=f"Renewal for subscription {sub_id}",
+        when_ts=renewal_at,
+        timezone_name=timezone_name,
+    )
+    _upsert_subscription_calendar_event(
+        calendar_id,
+        _subscription_event_id(sub_id, "cancellation"),
+        name="Subscription cancellation",
+        description=f"Subscription {sub_id} ends",
+        when_ts=cancel_at,
+        timezone_name=timezone_name,
+    )
+
+
+def _proration_fraction(now: int, period_start: int, period_end: int) -> float:
+    remaining = max(0, period_end - now)
+    total = max(1, period_end - period_start)
+    return min(1.0, max(0.0, remaining / total))
+
+
+def calculate_proration(
+    *,
+    current_price: int,
+    new_price: int,
+    now: int,
+    period_start: int,
+    period_end: int,
+) -> int:
+    fraction = _proration_fraction(now, period_start, period_end)
+    difference = new_price - current_price
+    return int(round(difference * fraction))
 
 # -----------------------------
 # API endpoints
@@ -665,6 +818,14 @@ async def subscribe(
             "duration_months": discount.get("duration_months"),
         }
     price_cents = _apply_discount(base_price, discount) if applied_discount else base_price
+    trial_end = None
+    trial_start = None
+    status = "active"
+    if body.trial_days:
+        trial_start = ts
+        trial_end = ts + int(body.trial_days) * 86400
+        period_end = trial_end
+        status = "trialing"
     sub = {
         "subscription_id": subscription_id,
         "plan_id": plan_id,
@@ -673,13 +834,17 @@ async def subscribe(
         "interval": interval,
         "provider": "stub",
         "provider_subscription_id": provider_subscription_id,
-        "status": "active",
+        "status": status,
         "start_at": ts,
         "current_period_end": period_end,
         "cancel_at_period_end": False,
         "price_cents": price_cents,
         "currency": plan["currency"],
         "auto_renew": True,
+        "trial_start": trial_start,
+        "trial_end": trial_end,
+        "proration_policy": "full",
+        "renewal_policy": "auto",
         "created_at": ts,
         "updated_at": ts,
     }
@@ -696,56 +861,57 @@ async def subscribe(
     save_subscription(sub)
     record_billing_subscription(sub)
 
-    invoice_id = new_id("inv")
-    invoice = {
-        "invoice_id": invoice_id,
-        "subscription_id": subscription_id,
-        "subscriber_id": subscriber_id,
-        "provider_invoice_id": new_id("stub_inv"),
-        "amount_cents": int(sub["price_cents"]),
-        "currency": plan["currency"],
-        "status": "paid",
-        "period_start": ts,
-        "period_end": period_end,
-        "created_at": ts,
-    }
-    if applied_discount:
-        invoice["discount"] = applied_discount
-    save_invoice(invoice)
-    record_billing_payment(invoice, subscription_id)
-    record_billing_transaction(
-        user_sub=subscriber_id,
-        amount_cents=int(invoice["amount_cents"]),
-        currency=invoice["currency"],
-        description=f"Subscription {plan_id}",
-        status="COMPLETED",
-        external_ref=invoice_id,
-        metadata={"subscription_id": subscription_id, "creator_id": plan["creator_id"]},
-    )
+    if status != "trialing":
+        invoice_id = new_id("inv")
+        invoice = {
+            "invoice_id": invoice_id,
+            "subscription_id": subscription_id,
+            "subscriber_id": subscriber_id,
+            "provider_invoice_id": new_id("stub_inv"),
+            "amount_cents": int(sub["price_cents"]),
+            "currency": plan["currency"],
+            "status": "paid",
+            "period_start": ts,
+            "period_end": period_end,
+            "created_at": ts,
+        }
+        if applied_discount:
+            invoice["discount"] = applied_discount
+        save_invoice(invoice)
+        record_billing_payment(invoice, subscription_id)
+        record_billing_transaction(
+            user_sub=subscriber_id,
+            amount_cents=int(invoice["amount_cents"]),
+            currency=invoice["currency"],
+            description=f"Subscription {plan_id}",
+            status="COMPLETED",
+            external_ref=invoice_id,
+            metadata={"subscription_id": subscription_id, "creator_id": plan["creator_id"]},
+        )
 
-    fee_cents = int(invoice["amount_cents"] * FEE_BPS / 10000)
-    charge_entry = {
-        "entry_id": new_id("led"),
-        "subscription_id": subscription_id,
-        "subscriber_id": subscriber_id,
-        "entry_type": "charge",
-        "amount_cents": invoice["amount_cents"],
-        "currency": invoice["currency"],
-        "created_at": ts,
-        "metadata": {"invoice_id": invoice_id},
-    }
-    fee_entry = {
-        "entry_id": new_id("led"),
-        "subscription_id": subscription_id,
-        "subscriber_id": subscriber_id,
-        "entry_type": "fee",
-        "amount_cents": fee_cents,
-        "currency": invoice["currency"],
-        "created_at": ts,
-        "metadata": {"invoice_id": invoice_id},
-    }
-    save_ledger_entry(plan["creator_id"], charge_entry)
-    save_ledger_entry(plan["creator_id"], fee_entry)
+        fee_cents = int(invoice["amount_cents"] * FEE_BPS / 10000)
+        charge_entry = {
+            "entry_id": new_id("led"),
+            "subscription_id": subscription_id,
+            "subscriber_id": subscriber_id,
+            "entry_type": "charge",
+            "amount_cents": invoice["amount_cents"],
+            "currency": invoice["currency"],
+            "created_at": ts,
+            "metadata": {"invoice_id": invoice_id},
+        }
+        fee_entry = {
+            "entry_id": new_id("led"),
+            "subscription_id": subscription_id,
+            "subscriber_id": subscriber_id,
+            "entry_type": "fee",
+            "amount_cents": fee_cents,
+            "currency": invoice["currency"],
+            "created_at": ts,
+            "metadata": {"invoice_id": invoice_id},
+        }
+        save_ledger_entry(plan["creator_id"], charge_entry)
+        save_ledger_entry(plan["creator_id"], fee_entry)
 
     put_notification(
         recipient_user_id=plan["creator_id"],
@@ -777,6 +943,7 @@ async def subscribe(
         subscriber_id=subscriber_id,
     )
 
+    refresh_subscription_calendar_events(sub, plan)
     return attach_subscription_profiles(sub)
 
 
@@ -916,6 +1083,7 @@ async def cancel_subscription(
         raise HTTPException(status_code=403, detail="Not authorized to cancel this subscription")
     sub["cancel_at_period_end"] = body.cancel_at_period_end
     sub["auto_renew"] = False
+    sub["renewal_policy"] = "cancel_at_period_end" if body.cancel_at_period_end else "manual"
     if body.cancel_at_period_end:
         sub["status"] = "canceling"
     else:
@@ -952,6 +1120,7 @@ async def cancel_subscription(
         subscriber_id=sub["subscriber_id"],
         cancel_at_period_end=sub["cancel_at_period_end"],
     )
+    refresh_subscription_calendar_events(sub)
     return attach_subscription_profiles(sub)
 
 
@@ -972,6 +1141,7 @@ async def resume_subscription(
     sub["cancel_at_period_end"] = False
     sub["auto_renew"] = True
     sub["status"] = "active"
+    sub["renewal_policy"] = "auto"
     sub["updated_at"] = now_ts()
     save_subscription(sub)
     record_billing_subscription(sub)
@@ -1001,6 +1171,7 @@ async def resume_subscription(
         subscription_id=subscription_id,
         subscriber_id=sub["subscriber_id"],
     )
+    refresh_subscription_calendar_events(sub)
     return attach_subscription_profiles(sub)
 
 
@@ -1019,6 +1190,8 @@ async def update_subscription_renewal(
     if user_id not in (sub["subscriber_id"], sub["creator_id"]):
         raise HTTPException(status_code=403, detail="Not authorized to update renewal settings")
     sub["auto_renew"] = body.auto_renew
+    if body.renewal_policy:
+        sub["renewal_policy"] = body.renewal_policy
     if not body.auto_renew:
         if body.effective == "immediate":
             sub["status"] = "canceled"
@@ -1042,6 +1215,219 @@ async def update_subscription_renewal(
         auto_renew=body.auto_renew,
         effective=body.effective,
     )
+    refresh_subscription_calendar_events(sub)
+    return attach_subscription_profiles(sub)
+
+
+@router.post("/api/subscriptions/{subscription_id}/trial/convert", response_model=SubscriptionOut)
+async def convert_trial(
+    subscription_id: str,
+    request: Request,
+    x_user_id: Optional[str] = Header(default=None),
+):
+    sub = ddb_get_item(pk_subscription(subscription_id), "META")
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    sub = normalize_subscription(sub)
+    user_id = require_user(x_user_id)
+    if user_id not in (sub["subscriber_id"], sub["creator_id"]):
+        raise HTTPException(status_code=403, detail="Not authorized to convert trial")
+    if (sub.get("status") or "").lower() != "trialing":
+        raise HTTPException(status_code=400, detail="Subscription is not in trial")
+    plan = ddb_get_item(pk_plan(sub["plan_id"]), "META")
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    ts = now_ts()
+    sub["status"] = "active"
+    sub["trial_converted_at"] = ts
+    sub["current_period_end"] = ts + interval_seconds(sub["interval"])
+    sub["updated_at"] = ts
+    save_subscription(sub)
+    record_billing_subscription(sub)
+
+    invoice_id = new_id("inv")
+    invoice = {
+        "invoice_id": invoice_id,
+        "subscription_id": subscription_id,
+        "subscriber_id": sub["subscriber_id"],
+        "provider_invoice_id": new_id("stub_inv"),
+        "amount_cents": int(sub["price_cents"]),
+        "currency": sub["currency"],
+        "status": "paid",
+        "period_start": ts,
+        "period_end": sub["current_period_end"],
+        "created_at": ts,
+    }
+    save_invoice(invoice)
+    record_billing_payment(invoice, subscription_id)
+    record_billing_transaction(
+        user_sub=sub["subscriber_id"],
+        amount_cents=int(invoice["amount_cents"]),
+        currency=invoice["currency"],
+        description=f"Subscription {sub['plan_id']}",
+        status="COMPLETED",
+        external_ref=invoice_id,
+        metadata={"subscription_id": subscription_id, "creator_id": sub["creator_id"]},
+    )
+
+    fee_cents = int(invoice["amount_cents"] * FEE_BPS / 10000)
+    charge_entry = {
+        "entry_id": new_id("led"),
+        "subscription_id": subscription_id,
+        "subscriber_id": sub["subscriber_id"],
+        "entry_type": "charge",
+        "amount_cents": invoice["amount_cents"],
+        "currency": invoice["currency"],
+        "created_at": ts,
+        "metadata": {"invoice_id": invoice_id},
+    }
+    fee_entry = {
+        "entry_id": new_id("led"),
+        "subscription_id": subscription_id,
+        "subscriber_id": sub["subscriber_id"],
+        "entry_type": "fee",
+        "amount_cents": fee_cents,
+        "currency": invoice["currency"],
+        "created_at": ts,
+        "metadata": {"invoice_id": invoice_id},
+    }
+    save_ledger_entry(sub["creator_id"], charge_entry)
+    save_ledger_entry(sub["creator_id"], fee_entry)
+
+    audit_event(
+        "subscription_trial_converted",
+        sub["subscriber_id"],
+        request,
+        outcome="success",
+        subscription_id=subscription_id,
+        plan_id=sub["plan_id"],
+        creator_id=sub["creator_id"],
+    )
+    refresh_subscription_calendar_events(sub, plan)
+    return attach_subscription_profiles(sub)
+
+
+@router.post("/api/subscriptions/{subscription_id}/change-plan", response_model=SubscriptionOut)
+async def change_subscription_plan(
+    subscription_id: str,
+    body: SubscriptionChangePlanIn,
+    request: Request,
+    x_user_id: Optional[str] = Header(default=None),
+):
+    sub = ddb_get_item(pk_subscription(subscription_id), "META")
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    sub = normalize_subscription(sub)
+    user_id = require_user(x_user_id)
+    if user_id not in (sub["subscriber_id"], sub["creator_id"]):
+        raise HTTPException(status_code=403, detail="Not authorized to change plan")
+    plan = ddb_get_item(pk_plan(body.plan_id), "META")
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    if plan.get("status") != "active":
+        raise HTTPException(status_code=400, detail="Plan is not active")
+
+    interval = _plan_interval(plan, body.interval)
+    new_price = _select_plan_price(plan, interval)
+    ts = now_ts()
+
+    if body.effective == "period_end":
+        sub["pending_plan_id"] = body.plan_id
+        sub["pending_interval"] = interval
+        sub["pending_price_cents"] = new_price
+        sub["pending_apply_at"] = sub.get("current_period_end")
+        sub["updated_at"] = ts
+        save_subscription(sub)
+        record_billing_subscription(sub)
+        audit_event(
+            "subscription_plan_change_scheduled",
+            sub["subscriber_id"],
+            request,
+            outcome="success",
+            subscription_id=subscription_id,
+            plan_id=body.plan_id,
+            effective=body.effective,
+        )
+        refresh_subscription_calendar_events(sub, plan)
+        return attach_subscription_profiles(sub)
+
+    proration_amount = 0
+    if body.proration_policy != "none":
+        proration_amount = calculate_proration(
+            current_price=int(sub["price_cents"]),
+            new_price=int(new_price),
+            now=ts,
+            period_start=int(sub.get("start_at") or ts),
+            period_end=int(sub.get("current_period_end") or ts),
+        )
+        if proration_amount > 0 and body.proration_policy == "credit":
+            proration_amount = 0
+        if proration_amount < 0 and body.proration_policy == "charge":
+            proration_amount = 0
+
+    sub["plan_id"] = body.plan_id
+    sub["interval"] = interval
+    sub["price_cents"] = int(new_price)
+    sub["proration_policy"] = body.proration_policy
+    sub["updated_at"] = ts
+    save_subscription(sub)
+    record_billing_subscription(sub)
+
+    if proration_amount != 0:
+        invoice_id = new_id("inv")
+        proration_status = "paid" if proration_amount > 0 else "credited"
+        invoice = {
+            "invoice_id": invoice_id,
+            "subscription_id": subscription_id,
+            "subscriber_id": sub["subscriber_id"],
+            "provider_invoice_id": new_id("stub_inv"),
+            "amount_cents": abs(int(proration_amount)),
+            "currency": sub["currency"],
+            "status": proration_status,
+            "period_start": ts,
+            "period_end": sub.get("current_period_end"),
+            "created_at": ts,
+            "is_proration": True,
+            "proration_amount_cents": int(proration_amount),
+            "proration_period_start": sub.get("start_at"),
+            "proration_period_end": sub.get("current_period_end"),
+        }
+        save_invoice(invoice)
+        record_billing_payment(invoice, subscription_id)
+        record_billing_transaction(
+            user_sub=sub["subscriber_id"],
+            amount_cents=int(proration_amount),
+            currency=sub["currency"],
+            description=f"Subscription proration {subscription_id}",
+            status="COMPLETED",
+            external_ref=invoice_id,
+            metadata={"subscription_id": subscription_id, "creator_id": sub["creator_id"]},
+        )
+
+        entry_type = "proration_charge" if proration_amount > 0 else "proration_credit"
+        entry = {
+            "entry_id": new_id("led"),
+            "subscription_id": subscription_id,
+            "subscriber_id": sub["subscriber_id"],
+            "entry_type": entry_type,
+            "amount_cents": abs(int(proration_amount)),
+            "currency": sub["currency"],
+            "created_at": ts,
+            "metadata": {"invoice_id": invoice_id, "proration_amount_cents": proration_amount},
+        }
+        save_ledger_entry(sub["creator_id"], entry)
+
+    audit_event(
+        "subscription_plan_changed",
+        sub["subscriber_id"],
+        request,
+        outcome="success",
+        subscription_id=subscription_id,
+        plan_id=body.plan_id,
+        proration_amount_cents=proration_amount,
+    )
+    refresh_subscription_calendar_events(sub, plan)
     return attach_subscription_profiles(sub)
 
 
@@ -1063,6 +1449,7 @@ async def remove_subscriber(
     sub["status"] = "canceled"
     sub["auto_renew"] = False
     sub["cancel_at_period_end"] = False
+    sub["renewal_policy"] = "manual"
     sub["current_period_end"] = now_ts()
     sub["updated_at"] = now_ts()
     save_subscription(sub)
@@ -1105,6 +1492,7 @@ async def remove_subscriber(
         notif_type="subscription_removed",
         payload={"subscription_id": subscription_id, "creator_id": creator_id},
     )
+    refresh_subscription_calendar_events(sub)
     return attach_subscription_profiles(sub)
 
 
@@ -1126,6 +1514,7 @@ async def stop_subscriber_renewal(
     sub["auto_renew"] = False
     sub["cancel_at_period_end"] = True
     sub["status"] = "canceling"
+    sub["renewal_policy"] = "cancel_at_period_end"
     sub["updated_at"] = now_ts()
     save_subscription(sub)
     record_billing_subscription(sub)
@@ -1137,6 +1526,7 @@ async def stop_subscriber_renewal(
         subscription_id=subscription_id,
         subscriber_id=sub["subscriber_id"],
     )
+    refresh_subscription_calendar_events(sub)
     return attach_subscription_profiles(sub)
 
 

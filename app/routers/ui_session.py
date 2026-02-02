@@ -10,6 +10,7 @@ from app.models import UiSessionFinalizeReq, UiSessionStartReq, UiSessionStartRe
 from app.core.normalize import client_ip_from_request
 from app.services.alerts import audit_event
 from app.services.rate_limit import rate_limit_login_attempt
+from app.services.device_trust import trust_current_device
 from app.services.sessions import (
     compute_required_factors,
     create_real_session,
@@ -42,6 +43,9 @@ async def ui_session_finalize(req: Request, body: UiSessionFinalizeReq, user_sub
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     sid = maybe_finalize(req, user_sub, body.challenge_id)
     if sid:
+        if body.remember_device:
+            device_id = trust_current_device(req, user_sub)
+            audit_event("device_trust", user_sub, req, outcome="success", device_id=device_id)
         audit_event("ui_session_finalize", user_sub, req, outcome="success", challenge_id=body.challenge_id, session_id=sid)
         return {"status": "ok", "session_id": sid}
     audit_event("ui_session_finalize", user_sub, req, outcome="pending", challenge_id=body.challenge_id, passed=chal.get("passed", {}))

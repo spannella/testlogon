@@ -13,6 +13,7 @@ class Settings:
     cognito_region: str = os.environ.get("COGNITO_REGION", "")
     cognito_app_client_id: str = os.environ.get("COGNITO_APP_CLIENT_ID", "")
     cognito_expected_token_use: str = os.environ.get("COGNITO_EXPECTED_TOKEN_USE", "access")
+    cognito_jwks_ttl_seconds: int = int(os.environ.get("COGNITO_JWKS_TTL_SECONDS", "3600"))
 
     # DynamoDB tables
     ddb_sessions_table: str = os.environ.get("DDB_SESSIONS_TABLE", "")
@@ -53,6 +54,10 @@ class Settings:
     login_attempt_window_seconds: int = int(os.environ.get("LOGIN_ATTEMPT_WINDOW_SECONDS", "900"))
     mfa_verify_max_per_window: int = int(os.environ.get("MFA_VERIFY_MAX_PER_WINDOW", "10"))
     mfa_verify_window_seconds: int = int(os.environ.get("MFA_VERIFY_WINDOW_SECONDS", "600"))
+    lockout_max_attempts: int = int(os.environ.get("LOCKOUT_MAX_ATTEMPTS", "5"))
+    lockout_window_seconds: int = int(os.environ.get("LOCKOUT_WINDOW_SECONDS", "900"))
+    lockout_base_seconds: int = int(os.environ.get("LOCKOUT_BASE_SECONDS", "300"))
+    lockout_max_seconds: int = int(os.environ.get("LOCKOUT_MAX_SECONDS", "3600"))
 
     # Device limits
     sms_device_limit: int = int(os.environ.get("SMS_DEVICE_LIMIT", "3"))
@@ -84,6 +89,14 @@ class Settings:
 
     # Websocket/SSE token (HMAC)
     ws_token_secret: str = os.environ.get("WS_TOKEN_SECRET", "")
+
+    # Credential stuffing protection
+    hibp_enabled: bool = os.environ.get("HIBP_ENABLED", "0") not in ("0", "false", "False")
+    hibp_api_key: str = os.environ.get("HIBP_API_KEY", "")
+
+    # Passwordless (magic links)
+    magic_link_enabled: bool = os.environ.get("MAGIC_LINK_ENABLED", "0") not in ("0", "false", "False")
+    magic_link_ttl_seconds: int = int(os.environ.get("MAGIC_LINK_TTL_SECONDS", "900"))
 
     # Push / FCM
     push_devices_table_name: str = os.environ.get("PUSH_DEVICES_TABLE_NAME", "push_devices")

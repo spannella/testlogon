@@ -49,6 +49,10 @@ This service is a FastAPI application with DynamoDB-backed storage and optional 
 - When debugging billing flows, make sure billing tables and env vars are set before opening the UI.
 - If Cognito is not configured, you can pass `X-User-Sub` headers for local testing.
 - OpenSearch-backed message search is optional; configure `OPENSEARCH_ENDPOINT`, `OPENSEARCH_INDEX`, and `OPENSEARCH_REGION` to enable it.
+- Account lockout controls are configured via `LOCKOUT_MAX_ATTEMPTS`, `LOCKOUT_WINDOW_SECONDS`, `LOCKOUT_BASE_SECONDS`, and `LOCKOUT_MAX_SECONDS`.
+- Passwordless magic links require `MAGIC_LINK_ENABLED=1` and `SES_FROM_EMAIL`; set `MAGIC_LINK_TTL_SECONDS` to adjust link expiration.
+- Breach checks are optional; enable with `HIBP_ENABLED=1` and optionally `HIBP_API_KEY` for HaveIBeenPwned API access.
+- Cognito JWKS cache refresh uses `COGNITO_JWKS_TTL_SECONDS` to control how often keys are refreshed.
 
 ### Search functionality overview
 - **Messaging**: full-text search within a conversation and across all conversations, with optional OpenSearch indexing plus sender/after filters.
@@ -131,6 +135,13 @@ The billing table stores balance snapshots, ledger entries, payment method token
 - `GET /api/billing/payments`
 - `GET /api/billing/subscriptions`
 - `POST /api/paypal/webhook`
+
+## Passwordless login
+
+When enabled, the passwordless flow uses:
+
+- `POST /ui/passwordless/start`
+- `POST /ui/passwordless/verify`
 
 ### Running billing tests
 

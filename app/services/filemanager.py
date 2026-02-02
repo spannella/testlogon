@@ -96,6 +96,8 @@ def get_node(owner: str, path: str) -> Dict[str, Any]:
     resp = tbl.get_item(Key=node_key(owner, path), ConsistentRead=True)
     if "Item" not in resp:
         raise HTTPException(404, "not found")
+    if resp["Item"].get("deleted_at"):
+        raise HTTPException(404, "not found")
     return resp["Item"]
 
 
@@ -109,20 +111,24 @@ def delete_node(owner: str, path: str) -> None:
     tbl.delete_item(Key=node_key(owner, path))
 
 
-def list_children(owner: str, folder_path: str) -> List[Dict[str, Any]]:
+def list_children(owner: str, folder_path: str, *, include_deleted: bool = False) -> List[Dict[str, Any]]:
     tbl = _table()
+    def _filter(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if include_deleted:
+            return items
+        return [it for it in items if not it.get("deleted_at")]
     try:
         resp = tbl.query(
             IndexName="GSI2",
             KeyConditionExpression=Key("GSI2PK").eq(f"PARENT#{folder_path}"),
         )
-        return resp.get("Items", [])
+        return _filter(resp.get("Items", []))
     except ClientError:
         prefix = f"NODE#{folder_path}"
         resp = tbl.query(
             KeyConditionExpression=Key("PK").eq(pk_user(owner)) & Key("SK").begins_with(prefix),
         )
-        return resp.get("Items", [])
+        return _filter(resp.get("Items", []))
 
 
 def is_ancestor_path(folder_path: str, maybe_child_path: str) -> bool:
@@ -159,7 +165,7 @@ def search_prefix(user: str, prefix: str, *, limit: int = 50) -> List[Dict[str, 
         & Key("GSI1SK").begins_with(f"NAME#{prefix_lc}"),
         Limit=limit,
     )
-    items = resp.get("Items", [])
+    items = [it for it in resp.get("Items", []) if not it.get("deleted_at")]
     return [
         {"path": it["path"], "type": it["type"], "name": it["name"], "size": it.get("size")}
         for it in items
@@ -222,6 +228,18 @@ def _delete_token_entries(user: str, item: Dict[str, Any]) -> None:
         tbl.delete_item(Key={"PK": _token_pk(user, token), "SK": _token_sk(item["path"])})
 
 
+def _soft_delete_node(user: str, item: Dict[str, Any], deleted_by: str) -> None:
+    if item.get("deleted_at"):
+        return
+    tbl = _table()
+    deleted_at = now_iso()
+    tbl.update_item(
+        Key=node_key(user, item["path"]),
+        UpdateExpression="SET deleted_at=:t, deleted_by=:u, updated_at=:t",
+        ExpressionAttributeValues={":t": deleted_at, ":u": deleted_by},
+    )
+
+
 def _search_text_scan(user: str, query: str, *, limit: int = 50) -> List[Dict[str, Any]]:
     tokens = _search_tokens(query)
     if not tokens:
@@ -238,6 +256,8 @@ def _search_text_scan(user: str, query: str, *, limit: int = 50) -> List[Dict[st
             kwargs["ExclusiveStartKey"] = start_key
         resp = tbl.query(**kwargs)
         for item in resp.get("Items", []):
+            if item.get("deleted_at"):
+                continue
             if _node_matches(tokens, item):
                 out.append(
                     {
@@ -436,6 +456,51 @@ def upload_profile_photo(
     return {"path": path, "size": size}
 
 
+def upload_billing_receipt(
+    user: str,
+    *,
+    txn_id: str,
+    content: bytes,
+) -> Dict[str, Any]:
+    bucket = _bucket()
+    obj_id = str(uuid.uuid4())
+    folder = norm_path("/billing/receipts/", is_folder=True)
+    _auto_create_parents(user, folder)
+    path = norm_path(f"{folder}{txn_id}.pdf", is_folder=False)
+    require_not_exists(user, path)
+
+    resp = _s3.put_object(Bucket=bucket, Key=f"{user}/objects/{obj_id}", Body=content, ContentType="application/pdf")
+    etag = resp.get("ETag")
+    size = len(content)
+
+    parent, name = split_parent_name(path)
+    item = {
+        "PK": pk_user(user),
+        "SK": sk_node(path),
+        "type": "file",
+        "path": path,
+        "name": name,
+        "name_lc": name.lower(),
+        "parent": parent,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "upload_at": now_iso(),
+        "upload_by": user,
+        "size": size,
+        "content_type": "application/pdf",
+        "s3_bucket": bucket,
+        "s3_key": f"{user}/objects/{obj_id}",
+        "etag": etag,
+        "GSI1PK": pk_user(user),
+        "GSI1SK": f"NAME#{name.lower()}#PATH#{path}",
+        "GSI2PK": f"PARENT#{parent}",
+        "GSI2SK": f"TYPE#file#NAME#{name.lower()}#PATH#{path}",
+    }
+    put_node(item)
+    _put_token_entries(user, item)
+    return {"path": path, "size": size}
+
+
 def upload_catalog_image(
     item_id: str,
     *,
@@ -527,11 +592,7 @@ def remove_file(user: str, path: str) -> None:
     node = get_node(user, p)
     if node["type"] != "file":
         raise HTTPException(400, "not a file")
-    try:
-        _s3.delete_object(Bucket=node["s3_bucket"], Key=node["s3_key"])
-    except ClientError:
-        pass
-    delete_node(user, p)
+    _soft_delete_node(user, node, deleted_by=user)
     _delete_token_entries(user, node)
     _delete_shares_for_path(owner=user, path=p)
 
@@ -544,20 +605,15 @@ def remove_folder(user: str, path: str) -> int:
     if node["type"] != "folder":
         raise HTTPException(400, "not a folder")
 
-    items = list_children(user, folder)
+    items = list_children(user, folder, include_deleted=True)
     for child in items:
         if child["path"] == folder:
             continue
-        if child["type"] == "file":
-            try:
-                _s3.delete_object(Bucket=child["s3_bucket"], Key=child["s3_key"])
-            except ClientError:
-                pass
-        delete_node(user, child["path"])
+        _soft_delete_node(user, child, deleted_by=user)
         _delete_token_entries(user, child)
         _delete_shares_for_path(owner=user, path=child["path"])
 
-    delete_node(user, folder)
+    _soft_delete_node(user, node, deleted_by=user)
     _delete_token_entries(user, node)
     _delete_shares_for_path(owner=user, path=folder)
     return len(items)
@@ -810,39 +866,71 @@ def _auto_create_parents(user: str, folder_path: str) -> None:
             _put_token_entries(user, item)
 
 
-def share_node(user: str, path: str, to_user: str) -> None:
+def share_node(
+    user: str,
+    path: str,
+    to_user: str,
+    permission: str = "read",
+    expires_at: Optional[str] = None,
+) -> None:
+    if permission not in {"read", "write"}:
+        raise HTTPException(status_code=400, detail="permission must be read or write")
     tbl = _table()
     p = norm_path(path, is_folder=None)
     node = get_node(user, p if p.endswith("/") else p)
 
     share_sk = f"SHARE#{node['path']}#TO#{to_user}"
-    tbl.put_item(Item={
+    owner_item = {
         "PK": pk_user(user),
         "SK": share_sk,
         "path": node["path"],
         "to_user": to_user,
         "shared_at": now_iso(),
-    })
+        "permission": permission,
+    }
+    if expires_at:
+        owner_item["expires_at"] = expires_at
+    tbl.put_item(Item=owner_item)
 
-    tbl.put_item(Item={
+    recipient_item = {
         "PK": pk_user(to_user),
         "SK": f"SHARED#FROM#{user}#PATH#{node['path']}",
         "owner": user,
         "path": node["path"],
         "shared_at": now_iso(),
-    })
+        "permission": permission,
+    }
+    if expires_at:
+        recipient_item["expires_at"] = expires_at
+    tbl.put_item(Item=recipient_item)
 
 
-def list_shared_with(user: str, path: str) -> List[str]:
+def unshare_node(user: str, path: str, to_user: str) -> None:
+    tbl = _table()
+    p = norm_path(path, is_folder=None)
+    node = get_node(user, p if p.endswith("/") else p)
+    share_sk = f"SHARE#{node['path']}#TO#{to_user}"
+    tbl.delete_item(Key={"PK": pk_user(user), "SK": share_sk})
+    tbl.delete_item(Key={"PK": pk_user(to_user), "SK": f"SHARED#FROM#{user}#PATH#{node['path']}"})
+
+
+def list_shared_with(user: str, path: str) -> List[Dict[str, Any]]:
     tbl = _table()
     p = norm_path(path, is_folder=None)
     prefix = f"SHARE#{p}#TO#"
     resp = tbl.query(
         KeyConditionExpression=Key("PK").eq(pk_user(user)) & Key("SK").begins_with(prefix)
     )
-    tos = [it["to_user"] for it in resp.get("Items", [])]
-    tos.sort(key=lambda x: x.lower())
-    return tos
+    items = []
+    for it in resp.get("Items", []):
+        items.append({
+            "to_user": it["to_user"],
+            "permission": it.get("permission", "read"),
+            "expires_at": it.get("expires_at"),
+            "shared_at": it.get("shared_at"),
+        })
+    items.sort(key=lambda x: x["to_user"].lower())
+    return items
 
 
 def list_shared_with_me(user: str) -> List[Dict[str, Any]]:
@@ -852,7 +940,13 @@ def list_shared_with_me(user: str) -> List[Dict[str, Any]]:
     )
     items = []
     for it in resp.get("Items", []):
-        items.append({"owner": it["owner"], "path": it["path"], "shared_at": it.get("shared_at")})
+        items.append({
+            "owner": it["owner"],
+            "path": it["path"],
+            "shared_at": it.get("shared_at"),
+            "permission": it.get("permission", "read"),
+            "expires_at": it.get("expires_at"),
+        })
     items.sort(key=lambda x: (x["owner"].lower(), x["path"]))
     return items
 
@@ -883,6 +977,8 @@ def _move_shares(owner: str, old_path: str, new_path: str) -> None:
             "path": new_path,
             "to_user": to_user,
             "shared_at": it.get("shared_at", now_iso()),
+            "permission": it.get("permission", "read"),
+            "expires_at": it.get("expires_at"),
         })
         tbl.put_item(Item={
             "PK": pk_user(to_user),
@@ -890,4 +986,6 @@ def _move_shares(owner: str, old_path: str, new_path: str) -> None:
             "owner": owner,
             "path": new_path,
             "shared_at": it.get("shared_at", now_iso()),
+            "permission": it.get("permission", "read"),
+            "expires_at": it.get("expires_at"),
         })

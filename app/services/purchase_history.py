@@ -119,6 +119,8 @@ def _item_to_info(item: Dict[str, Any]) -> Dict[str, Any]:
             "reverted_at": item.get("reverted_at"),
             "version": int(item.get("version", 0)),
             "metadata": item.get("metadata"),
+            "receipt_path": item.get("receipt_path"),
+            "receipt_generated_at": item.get("receipt_generated_at"),
         },
     )
     return summary
@@ -133,6 +135,54 @@ def _fetch_txn(user_sub: str, txn_id: str) -> Optional[Dict[str, Any]]:
     )
     items = resp.get("Items", [])
     return items[0] if items else None
+
+
+def get_transaction_item(user_sub: str, txn_id: str) -> Dict[str, Any]:
+    item = _fetch_txn(user_sub, txn_id)
+    if not item:
+        raise HTTPException(404, "Transaction not found")
+    return item
+
+
+def set_receipt_info(user_sub: str, txn_id: str, receipt_path: str, generated_at: int) -> None:
+    item = _fetch_txn(user_sub, txn_id)
+    if not item:
+        raise HTTPException(404, "Transaction not found")
+    try:
+        T.purchase_transactions.update_item(
+            Key={"user_sub": item["user_sub"], "sk": item["sk"]},
+            UpdateExpression=(
+                "SET receipt_path = :p, receipt_generated_at = :g, "
+                "updated_at = :u, version = version + :one"
+            ),
+            ConditionExpression="version = :v",
+            ExpressionAttributeValues={
+                ":p": receipt_path,
+                ":g": int(generated_at),
+                ":u": now_ts(),
+                ":one": 1,
+                ":v": int(item.get("version", 0)),
+            },
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+            raise HTTPException(409, "Conflict: transaction was updated by someone else") from exc
+        raise HTTPException(500, f"DDB error: {exc.response.get('Error', {}).get('Message')}") from exc
+    _record_event(
+        txn_id,
+        user_sub,
+        "receipt_generated",
+        {"receipt_path": receipt_path, "receipt_generated_at": int(generated_at)},
+    )
+
+
+def record_receipt_download(user_sub: str, txn_id: str, receipt_path: str) -> None:
+    _record_event(
+        txn_id,
+        user_sub,
+        "receipt_downloaded",
+        {"receipt_path": receipt_path},
+    )
 
 
 def create_transaction(user_sub: str, body: Dict[str, Any]) -> Dict[str, Any]:

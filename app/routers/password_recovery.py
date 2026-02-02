@@ -19,6 +19,7 @@ from app.models import (
     PasswordRecoveryTotpVerifyReq,
 )
 from app.services.alerts import audit_event
+from app.services.breach_check import check_password_breach
 from app.services.cognito import cognito_confirm_forgot_password, cognito_forgot_password
 from app.services.mfa import (
     consume_recovery_code,
@@ -31,7 +32,15 @@ from app.services.mfa import (
     twilio_start_sms,
 )
 from app.services.api_keys import revoke_all_api_keys
-from app.services.rate_limit import can_send_verification, rate_limit_or_429, rate_limit_mfa_verify
+from app.services.rate_limit import (
+    can_send_verification,
+    rate_limit_or_429,
+    rate_limit_mfa_verify,
+    rate_limit_password_recovery,
+    enforce_lockout,
+    record_lockout_failure,
+    clear_lockout,
+)
 from app.services.sessions import (
     compute_required_factors,
     create_stepup_challenge,
@@ -76,7 +85,13 @@ def _challenge_required_factors(username: str) -> List[str]:
 async def password_recovery_start(req: Request, body: PasswordRecoveryStartReq) -> Dict[str, Any]:
     _require_cognito()
     username = _normalized_username(body.username)
-    resp = cognito_forgot_password(username)
+    enforce_lockout(username, client_ip_from_request(req), "password_recovery_start")
+    rate_limit_password_recovery(username, client_ip_from_request(req), "start")
+    try:
+        resp = cognito_forgot_password(username)
+    except Exception:
+        record_lockout_failure(username, client_ip_from_request(req), "password_recovery_start")
+        raise
     delivery = resp.get("CodeDeliveryDetails") or {}
     required = _challenge_required_factors(username)
     challenge_id = None
@@ -108,18 +123,30 @@ async def password_recovery_start(req: Request, body: PasswordRecoveryStartReq) 
 async def password_recovery_confirm(req: Request, body: PasswordRecoveryConfirmReq) -> Dict[str, Any]:
     _require_cognito()
     username = _normalized_username(body.username)
-    required = _challenge_required_factors(username)
-    if required:
-        if not body.challenge_id:
-            raise HTTPException(400, "Challenge required")
-        chal = _load_password_recovery_challenge(username, body.challenge_id)
-        if set(chal.get("required_factors") or []) != set(required):
-            raise HTTPException(400, "Challenge factors out of date; restart recovery")
-        passed = chal.get("passed", {}) or {}
-        if not all(passed.get(f, False) for f in required):
-            raise HTTPException(401, "Complete all challenges before confirming")
-        revoke_challenge(username, body.challenge_id)
-    cognito_confirm_forgot_password(username, body.confirmation_code, body.new_password)
+    enforce_lockout(username, client_ip_from_request(req), "password_recovery_confirm")
+    rate_limit_password_recovery(username, client_ip_from_request(req), "confirm")
+    try:
+        required = _challenge_required_factors(username)
+        if required:
+            if not body.challenge_id:
+                raise HTTPException(400, "Challenge required")
+            chal = _load_password_recovery_challenge(username, body.challenge_id)
+            if set(chal.get("required_factors") or []) != set(required):
+                raise HTTPException(400, "Challenge factors out of date; restart recovery")
+            passed = chal.get("passed", {}) or {}
+            if not all(passed.get(f, False) for f in required):
+                raise HTTPException(401, "Complete all challenges before confirming")
+            revoke_challenge(username, body.challenge_id)
+        breach_count = check_password_breach(body.new_password)
+        if breach_count:
+            raise HTTPException(400, "Password found in breach corpus")
+        cognito_confirm_forgot_password(username, body.confirmation_code, body.new_password)
+    except HTTPException:
+        record_lockout_failure(username, client_ip_from_request(req), "password_recovery_confirm")
+        raise
+    except Exception:
+        record_lockout_failure(username, client_ip_from_request(req), "password_recovery_confirm")
+        raise
     try:
         revoke_all_sessions(username)
     except Exception:
@@ -128,21 +155,25 @@ async def password_recovery_confirm(req: Request, body: PasswordRecoveryConfirmR
         revoke_all_api_keys(username)
     except Exception:
         pass
+    clear_lockout(username, client_ip_from_request(req), "password_recovery_confirm")
     audit_event("password_recovery_confirm", username, req, outcome="success")
     return {"status": "ok"}
 
 
 @router.post("/password-recovery/challenge/totp/verify")
 async def password_recovery_totp_verify(req: Request, body: PasswordRecoveryTotpVerifyReq) -> Dict[str, Any]:
+    enforce_lockout(body.username, client_ip_from_request(req), "password_recovery_totp")
     rate_limit_mfa_verify(body.username, client_ip_from_request(req), "totp")
     chal = _load_password_recovery_challenge(body.username, body.challenge_id)
     _ensure_factor_required(chal, "totp")
     dev = totp_verify_any_enabled(body.username, body.totp_code)
     if not dev:
         audit_event("password_recovery_totp_verify", body.username, req, outcome="failure", challenge_id=body.challenge_id)
+        record_lockout_failure(body.username, client_ip_from_request(req), "password_recovery_totp")
         raise HTTPException(401, "Bad TOTP")
     mark_factor_passed(body.username, body.challenge_id, "totp")
     audit_event("password_recovery_totp_verify", body.username, req, outcome="success", challenge_id=body.challenge_id)
+    clear_lockout(body.username, client_ip_from_request(req), "password_recovery_totp")
     return {"status": "ok"}
 
 
@@ -170,6 +201,7 @@ async def password_recovery_sms_begin(req: Request, body: PasswordRecoveryChalle
 
 @router.post("/password-recovery/challenge/sms/verify")
 async def password_recovery_sms_verify(req: Request, body: PasswordRecoverySmsVerifyReq) -> Dict[str, Any]:
+    enforce_lockout(body.username, client_ip_from_request(req), "password_recovery_sms")
     rate_limit_mfa_verify(body.username, client_ip_from_request(req), "sms")
     chal = _load_password_recovery_challenge(body.username, body.challenge_id)
     _ensure_factor_required(chal, "sms")
@@ -184,6 +216,7 @@ async def password_recovery_sms_verify(req: Request, body: PasswordRecoverySmsVe
             challenge_id=body.challenge_id,
             reason="too_many_attempts",
         )
+        record_lockout_failure(body.username, client_ip_from_request(req), "password_recovery_sms")
         raise HTTPException(429, "Too many attempts; wait and retry")
     nums = list_enabled_sms_numbers(body.username)
     if not nums:
@@ -203,6 +236,7 @@ async def password_recovery_sms_verify(req: Request, body: PasswordRecoverySmsVe
             ExpressionAttributeValues={":n": attempts + 1},
         )
         audit_event("password_recovery_sms_verify", body.username, req, outcome="failure", challenge_id=body.challenge_id)
+        record_lockout_failure(body.username, client_ip_from_request(req), "password_recovery_sms")
         raise HTTPException(401, "Bad SMS code")
     try:
         T.sessions.update_item(
@@ -214,6 +248,7 @@ async def password_recovery_sms_verify(req: Request, body: PasswordRecoverySmsVe
         pass
     mark_factor_passed(body.username, body.challenge_id, "sms")
     audit_event("password_recovery_sms_verify", body.username, req, outcome="success", challenge_id=body.challenge_id)
+    clear_lockout(body.username, client_ip_from_request(req), "password_recovery_sms")
     return {"status": "ok"}
 
 
@@ -242,6 +277,7 @@ async def password_recovery_email_begin(req: Request, body: PasswordRecoveryChal
 
 @router.post("/password-recovery/challenge/email/verify")
 async def password_recovery_email_verify(req: Request, body: PasswordRecoveryEmailVerifyReq) -> Dict[str, Any]:
+    enforce_lockout(body.username, client_ip_from_request(req), "password_recovery_email")
     rate_limit_mfa_verify(body.username, client_ip_from_request(req), "email")
     chal = _load_password_recovery_challenge(body.username, body.challenge_id)
     _ensure_factor_required(chal, "email")
@@ -259,6 +295,7 @@ async def password_recovery_email_verify(req: Request, body: PasswordRecoveryEma
             challenge_id=body.challenge_id,
             reason="too_many_attempts",
         )
+        record_lockout_failure(body.username, client_ip_from_request(req), "password_recovery_email")
         raise HTTPException(429, "Too many attempts; wait and retry")
     if sha256_str(body.code.strip()) != expected:
         T.sessions.update_item(
@@ -267,21 +304,29 @@ async def password_recovery_email_verify(req: Request, body: PasswordRecoveryEma
             ExpressionAttributeValues={":n": attempts + 1},
         )
         audit_event("password_recovery_email_verify", body.username, req, outcome="failure", challenge_id=body.challenge_id)
+        record_lockout_failure(body.username, client_ip_from_request(req), "password_recovery_email")
         raise HTTPException(401, "Bad email code")
     mark_factor_passed(body.username, body.challenge_id, "email")
     audit_event("password_recovery_email_verify", body.username, req, outcome="success", challenge_id=body.challenge_id)
+    clear_lockout(body.username, client_ip_from_request(req), "password_recovery_email")
     return {"status": "ok"}
 
 
 @router.post("/password-recovery/challenge/recovery")
 async def password_recovery_code(req: Request, body: PasswordRecoveryRecoveryCodeReq) -> Dict[str, Any]:
+    enforce_lockout(body.username, client_ip_from_request(req), f"password_recovery_code_{body.factor}")
     rate_limit_mfa_verify(body.username, client_ip_from_request(req), f"recovery_{body.factor}")
     chal = _load_password_recovery_challenge(body.username, body.challenge_id)
     factor = body.factor
     if factor not in ("totp", "sms", "email"):
         raise HTTPException(400, "Invalid factor")
     _ensure_factor_required(chal, factor)
-    consume_recovery_code(body.username, factor, body.recovery_code)
+    try:
+        consume_recovery_code(body.username, factor, body.recovery_code)
+    except HTTPException:
+        record_lockout_failure(body.username, client_ip_from_request(req), f"password_recovery_code_{body.factor}")
+        raise
     mark_factor_passed(body.username, body.challenge_id, factor)
     audit_event("password_recovery_code", body.username, req, outcome="success", challenge_id=body.challenge_id, factor=factor)
+    clear_lockout(body.username, client_ip_from_request(req), f"password_recovery_code_{body.factor}")
     return {"status": "ok"}

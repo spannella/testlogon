@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile, Body, Request, HTTPException
 from fastapi.responses import StreamingResponse
@@ -19,6 +19,7 @@ from app.services.filemanager import (
     remove_folder,
     search_prefix,
     share_node,
+    unshare_node,
     split_parent_name,
     upload_file,
     upload_zip,
@@ -26,6 +27,7 @@ from app.services.filemanager import (
     search_text,
 )
 from app.services.alerts import audit_event
+from app.services.purchase_history import record_receipt_download
 from app.services.sessions import require_ui_session
 
 router = APIRouter(prefix="/v1/fs", tags=["filemanager"])
@@ -132,6 +134,12 @@ def download_fs_file(path: str = Query(...), req: Request = None, user: str = De
         path=node.get("path"),
         size=node.get("size"),
     )
+    receipt_path = norm_path(path, is_folder=False)
+    if receipt_path.startswith("/billing/receipts/") and receipt_path.lower().endswith(".pdf"):
+        _, name = split_parent_name(receipt_path)
+        txn_id = name[:-4]
+        if txn_id:
+            record_receipt_download(user, txn_id, receipt_path)
 
     def gen():
         body = obj["Body"]
@@ -307,10 +315,12 @@ def upload_zip_and_extract(
 def share_fs_node(
     path: str = Body(..., embed=True),
     to_user: str = Body(..., embed=True),
+    permission: str = Body("read", embed=True),
+    expires_at: Optional[str] = Body(None, embed=True),
     req: Request = None,
     user: str = Depends(_current_user),
 ):
-    share_node(user, path, to_user)
+    share_node(user, path, to_user, permission=permission, expires_at=expires_at)
     audit_event(
         "filemgr_node_shared",
         user,
@@ -318,6 +328,27 @@ def share_fs_node(
         outcome="success",
         path=path,
         shared_with=to_user,
+        permission=permission,
+        expires_at=expires_at,
+    )
+    return {"ok": True}
+
+
+@router.post("/unshare")
+def unshare_fs_node(
+    path: str = Body(..., embed=True),
+    to_user: str = Body(..., embed=True),
+    req: Request = None,
+    user: str = Depends(_current_user),
+):
+    unshare_node(user, path, to_user)
+    audit_event(
+        "filemgr_node_unshared",
+        user,
+        req,
+        outcome="success",
+        path=path,
+        unshared_with=to_user,
     )
     return {"ok": True}
 
