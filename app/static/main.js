@@ -134,7 +134,30 @@ function migrateToken(k) {
 function accessToken(){ return migrateToken("access_token"); }
 function idToken(){ return migrateToken("id_token"); }
 function refreshToken(){ return migrateToken("refresh_token"); }
-function sessionId(){ return lsGet("session_id"); }
+const CSRF_COOKIE_NAME = window.UI_CSRF_COOKIE_NAME || "ui_csrf";
+
+function getCookie(name) {
+  const cookies = document.cookie ? document.cookie.split(";") : [];
+  for (const raw of cookies) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const idx = trimmed.indexOf("=");
+    const key = idx >= 0 ? trimmed.slice(0, idx) : trimmed;
+    if (key === name) {
+      return idx >= 0 ? decodeURIComponent(trimmed.slice(idx + 1)) : "";
+    }
+  }
+  return null;
+}
+
+function csrfToken() {
+  return getCookie(CSRF_COOKIE_NAME);
+}
+
+function addCsrfHeader(headers) {
+  const token = csrfToken();
+  if (token) headers["X-CSRF-Token"] = token;
+}
 
 /* ===================== modal helpers ===================== */
 let _modalEl = null;
@@ -191,7 +214,6 @@ function openTokenModal() {
           ssSet("access_token", at);
           ssSet("id_token", document.getElementById("cfgIdTok").value.trim());
           ssSet("refresh_token", document.getElementById("cfgRefreshTok").value.trim());
-          lsDel("session_id"); // force re-stepup
           modalClose();
           if (!accessToken()) {
             openTokenModal();
@@ -225,16 +247,17 @@ async function authFetch(path, {method="GET", body=null, includeSession=true}={}
   let tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
   const headers = { "Authorization": "Bearer " + tok };
-  if (includeSession) {
-    const sid = sessionId();
-    if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
-    headers["X-SESSION-ID"] = sid;
+  const upperMethod = method.toUpperCase();
+  if (includeSession && !["GET", "HEAD", "OPTIONS"].includes(upperMethod)) {
+    const csrf = csrfToken();
+    if (csrf) headers["X-CSRF-Token"] = csrf;
   }
   if (body !== null) headers["Content-Type"] = "application/json";
   const doFetch = () => fetch(API_BASE + path, {
     method,
     headers,
     body: (body !== null ? JSON.stringify(body) : undefined),
+    credentials: "include",
   });
   let res = await doFetch();
   if (res.status === 401 && refreshToken()) {
@@ -267,6 +290,7 @@ async function apiPublic(path, { method = "GET", body = null } = {}) {
     method,
     headers,
     body: body !== null ? JSON.stringify(body) : undefined,
+    credentials: "include",
   });
   const txt = await res.text();
   if (!res.ok) throw new Error(res.status + ": " + txt);
@@ -1192,7 +1216,6 @@ async function confirmPasswordRecovery() {
     ssDel("access_token");
     ssDel("id_token");
     ssDel("refresh_token");
-    lsDel("session_id");
     passwordRecoveryState.lastErr = "Password updated. Please log in again to continue where you left off.";
   } catch (e) {
     passwordRecoveryState.lastErr = String(e);
@@ -1206,7 +1229,8 @@ async function sessionStart() {
   const res = await fetch(API_BASE + "/ui/session/start", {
     method: "POST",
     headers: { "Authorization": "Bearer " + tok, "Content-Type": "application/json" },
-    body: JSON.stringify({})
+    body: JSON.stringify({}),
+    credentials: "include",
   });
   const txt = await res.text();
   if (!res.ok) throw new Error(res.status + ": " + txt);
@@ -1217,11 +1241,16 @@ async function sessionStart() {
    FULL ensureUiSession() (TOTP + SMS + Email, auto-send SMS/email once)
    ============================================================ */
 async function ensureUiSession() {
-  if (sessionId()) return true;
+  try {
+    await apiGet("/ui/me");
+    return true;
+  } catch (e) {
+    const code = parseHttpError(String(e));
+    if (code && code !== 401 && code !== 403) throw e;
+  }
 
   const r = await sessionStart();
   if (!r.auth_required) {
-    lsSet("session_id", r.session_id);
     return true;
   }
 
@@ -1264,7 +1293,6 @@ async function ensureUiSession() {
 
     async function tryFinalizeOrClose(res) {
       if (res && res.session_id) {
-        lsSet("session_id", res.session_id);
         modalClose();
         resolve(true);
         return true;
@@ -1527,7 +1555,6 @@ function clearAuthTokens() {
   ssDel("access_token");
   ssDel("id_token");
   ssDel("refresh_token");
-  lsDel("session_id");
 }
 
 async function runAccountClosureChallenge(challengeId, required) {
@@ -3338,9 +3365,9 @@ function setMsgAttachmentStatus(msg) {
 function uiSessionHeaders() {
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
-  const sid = sessionId();
-  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
-  return { Authorization: `Bearer ${tok}`, "X-SESSION-ID": sid };
+  const headers = { Authorization: `Bearer ${tok}` };
+  addCsrfHeader(headers);
+  return headers;
 }
 
 async function msgRequest(path, { method = "GET", body = null } = {}) {
@@ -3351,16 +3378,15 @@ async function msgRequest(path, { method = "GET", body = null } = {}) {
   } else {
     const tok = accessToken();
     if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
-    const sid = sessionId();
-    if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
     headers.Authorization = `Bearer ${tok}`;
-    headers["X-SESSION-ID"] = sid;
+    if (method !== "GET") addCsrfHeader(headers);
   }
   if (body) headers["Content-Type"] = "application/json";
   const res = await fetch(`${msgApiBase()}${path}`, {
     method,
     headers,
     body: body ? JSON.stringify(body) : null,
+    credentials: "include",
   });
   if (!res.ok) {
     const text = await res.text();
@@ -3377,6 +3403,7 @@ async function fileManagerUpload(path, file) {
     method: "POST",
     headers,
     body: form,
+    credentials: "include",
   });
   if (!res.ok) {
     const text = await res.text();
@@ -3392,6 +3419,7 @@ async function fileManagerPresignUpload(path, file) {
     method: "POST",
     headers,
     body: JSON.stringify({ path, content_type: file.type || "application/octet-stream" }),
+    credentials: "include",
   });
   if (!res.ok) {
     const text = await res.text();
@@ -3410,6 +3438,7 @@ async function fileManagerPresignUpload(path, file) {
     method: "POST",
     headers,
     body: JSON.stringify({ path: data.path, key: data.key, content_type: data.content_type }),
+    credentials: "include",
   });
   if (!completeRes.ok) {
     const text = await completeRes.text();
@@ -3421,7 +3450,10 @@ async function fileManagerPresignUpload(path, file) {
 async function fetchFileBlob(path, { preview }) {
   const headers = uiSessionHeaders();
   const endpoint = preview ? "/v1/fs/preview" : "/v1/fs/download";
-  const res = await fetch(`${msgApiBase()}${endpoint}?path=${encodeURIComponent(path)}`, { headers });
+  const res = await fetch(`${msgApiBase()}${endpoint}?path=${encodeURIComponent(path)}`, {
+    headers,
+    credentials: "include",
+  });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(text || `Download failed: ${res.status}`);
@@ -4531,17 +4563,15 @@ async function refreshProfileAudit() {
 async function apiUpload(path, file) {
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
-  const sid = sessionId();
-  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
   const form = new FormData();
   form.append("file", file);
+  const headers = { "Authorization": "Bearer " + tok };
+  addCsrfHeader(headers);
   const res = await fetch(API_BASE + path, {
     method: "POST",
-    headers: {
-      "Authorization": "Bearer " + tok,
-      "X-SESSION-ID": sid,
-    },
+    headers,
     body: form,
+    credentials: "include",
   });
   if (!res.ok) throw new Error(await res.text());
   return await res.json();
@@ -4798,8 +4828,6 @@ function finishFileMgrTransfer(transfer, label, options = {}) {
 async function apiUploadFileManager(path, file, onProgress, onCancelReady) {
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
-  const sid = sessionId();
-  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
   const form = new FormData();
   form.append("file", file);
   const url = `${API_BASE}/v1/fs/upload?path=${encodeURIComponent(path)}`;
@@ -4807,7 +4835,9 @@ async function apiUploadFileManager(path, file, onProgress, onCancelReady) {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
     xhr.setRequestHeader("Authorization", "Bearer " + tok);
-    xhr.setRequestHeader("X-SESSION-ID", sid);
+    const csrf = csrfToken();
+    if (csrf) xhr.setRequestHeader("X-CSRF-Token", csrf);
+    xhr.withCredentials = true;
     xhr.responseType = "json";
     xhr.upload.onprogress = (event) => {
       if (onProgress) onProgress(event);
@@ -4840,8 +4870,6 @@ async function fileMgrDownload(path, filename, button) {
   }
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
-  const sid = sessionId();
-  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
   const url = `${API_BASE}/v1/fs/download?path=${encodeURIComponent(path)}`;
   let cancel = null;
   let canceled = false;
@@ -4858,7 +4886,7 @@ async function fileMgrDownload(path, filename, button) {
       const xhr = new XMLHttpRequest();
       xhr.open("GET", url);
       xhr.setRequestHeader("Authorization", "Bearer " + tok);
-      xhr.setRequestHeader("X-SESSION-ID", sid);
+      xhr.withCredentials = true;
       xhr.responseType = "blob";
       cancel = () => xhr.abort();
       xhr.onprogress = (event) => {
@@ -4903,15 +4931,12 @@ async function fileMgrDownload(path, filename, button) {
 async function fileMgrPreview(path) {
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
-  const sid = sessionId();
-  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
   const url = `${API_BASE}/v1/fs/preview?path=${encodeURIComponent(path)}`;
+  const headers = { "Authorization": "Bearer " + tok };
   const res = await fetch(url, {
     method: "GET",
-    headers: {
-      "Authorization": "Bearer " + tok,
-      "X-SESSION-ID": sid,
-    },
+    headers,
+    credentials: "include",
   });
   if (!res.ok) throw new Error(await res.text());
   const blob = await res.blob();
@@ -4923,16 +4948,16 @@ async function fileMgrPreview(path) {
 async function fileMgrDownloadZip(paths) {
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
-  const sid = sessionId();
-  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const headers = {
+    "Authorization": "Bearer " + tok,
+    "Content-Type": "application/json",
+  };
+  addCsrfHeader(headers);
   const res = await fetch(`${API_BASE}/v1/fs/download-zip`, {
     method: "POST",
-    headers: {
-      "Authorization": "Bearer " + tok,
-      "X-SESSION-ID": sid,
-      "Content-Type": "application/json",
-    },
+    headers,
     body: JSON.stringify(paths || []),
+    credentials: "include",
   });
   if (!res.ok) throw new Error(await res.text());
   const blob = await res.blob();
@@ -5262,18 +5287,16 @@ async function uploadZipFileMgr() {
   await ensureUiSession();
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
-  const sid = sessionId();
-  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
   const form = new FormData();
   form.append("zip_file", file);
   const dest = currentFileMgrPath();
+  const headers = { "Authorization": "Bearer " + tok };
+  addCsrfHeader(headers);
   const res = await fetch(`${API_BASE}/v1/fs/upload-zip?dest_folder=${encodeURIComponent(dest)}`, {
     method: "POST",
-    headers: {
-      "Authorization": "Bearer " + tok,
-      "X-SESSION-ID": sid,
-    },
+    headers,
     body: form,
+    credentials: "include",
   });
   if (!res.ok) throw new Error(await res.text());
   input.value = "";
@@ -5796,7 +5819,12 @@ document.getElementById("purchaseSearchBtn").onclick = searchPurchaseHistory;
 document.getElementById("purchaseSearchClearBtn").onclick = clearPurchaseSearch;
 
 document.getElementById("btnRefreshAll").onclick = refreshAll;
-document.getElementById("btnClearSession").onclick = () => { lsDel("session_id"); alert("UI session cleared."); };
+document.getElementById("btnClearSession").onclick = async () => {
+  try {
+    await apiPost("/ui/session/logout", {});
+  } catch (e) {}
+  alert("UI session cleared.");
+};
 document.getElementById("btnSetTokens").onclick = openTokenModal;
 
 document.getElementById("btnClearTokens").onclick = () => { clearAuthTokens(); alert("Tokens cleared."); };

@@ -98,6 +98,33 @@ class PasswordlessVerifyResp(BaseModel):
     challenge_id: Optional[str] = None
     required_factors: List[str] = Field(default_factory=list)
 
+class WebAuthnRegisterBeginReq(BaseModel):
+    label: Optional[str] = None
+
+class WebAuthnRegisterBeginResp(BaseModel):
+    options: Dict[str, Any]
+
+class WebAuthnRegisterFinishReq(BaseModel):
+    credential: Dict[str, Any]
+    label: Optional[str] = None
+
+class WebAuthnRegisterFinishResp(BaseModel):
+    credential_id: str
+
+class WebAuthnAuthBeginReq(BaseModel):
+    username: str
+
+class WebAuthnAuthBeginResp(BaseModel):
+    options: Dict[str, Any]
+
+class WebAuthnAuthFinishReq(BaseModel):
+    username: str
+    credential: Dict[str, Any]
+
+class WebAuthnAuthFinishResp(BaseModel):
+    status: str
+    session_id: Optional[str] = None
+
 class CreateApiKeyReq(BaseModel):
     label: Optional[str] = None
 

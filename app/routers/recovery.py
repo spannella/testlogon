@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.auth.deps import get_authenticated_user_sub
 from app.models import RecoveryReq
 from app.services.alerts import audit_event
 from app.services.mfa import consume_recovery_code
-from app.services.sessions import load_challenge_or_401, mark_factor_passed, maybe_finalize
+from app.services.sessions import load_challenge_or_401, mark_factor_passed, maybe_finalize, rotate_session_cookies
 
 router = APIRouter(prefix="/ui", tags=["recovery"])
 
 
-def _recover(req: Request, user_sub: str, factor: str, body: RecoveryReq):
+def _recover(req: Request, user_sub: str, factor: str, body: RecoveryReq, response: Response):
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     if factor not in ("totp", "sms", "email"):
         raise HTTPException(400, "Invalid factor")
@@ -20,25 +20,48 @@ def _recover(req: Request, user_sub: str, factor: str, body: RecoveryReq):
     consume_recovery_code(user_sub, factor, body.recovery_code)
     mark_factor_passed(user_sub, body.challenge_id, factor)
     sid = maybe_finalize(req, user_sub, body.challenge_id)
+    if sid:
+        rotate_session_cookies(req, response, user_sub, sid)
     audit_event("mfa_recovery", user_sub, req, outcome="success", challenge_id=body.challenge_id, factor=factor)
-    return {"ok": True, "session_id": sid}
+    return {"ok": True, "session_id": sid.session_id if sid else None}
 
 
 @router.post("/recovery/{factor}")
-async def recovery_factor(req: Request, factor: str, body: RecoveryReq, user_sub: str = Depends(get_authenticated_user_sub)):
-    return _recover(req, user_sub, factor, body)
+async def recovery_factor(
+    req: Request,
+    factor: str,
+    body: RecoveryReq,
+    response: Response,
+    user_sub: str = Depends(get_authenticated_user_sub),
+):
+    return _recover(req, user_sub, factor, body, response)
 
 
 @router.post("/recovery/totp")
-async def recovery_totp(req: Request, body: RecoveryReq, user_sub: str = Depends(get_authenticated_user_sub)):
-    return _recover(req, user_sub, "totp", body)
+async def recovery_totp(
+    req: Request,
+    body: RecoveryReq,
+    response: Response,
+    user_sub: str = Depends(get_authenticated_user_sub),
+):
+    return _recover(req, user_sub, "totp", body, response)
 
 
 @router.post("/recovery/sms")
-async def recovery_sms(req: Request, body: RecoveryReq, user_sub: str = Depends(get_authenticated_user_sub)):
-    return _recover(req, user_sub, "sms", body)
+async def recovery_sms(
+    req: Request,
+    body: RecoveryReq,
+    response: Response,
+    user_sub: str = Depends(get_authenticated_user_sub),
+):
+    return _recover(req, user_sub, "sms", body, response)
 
 
 @router.post("/recovery/email")
-async def recovery_email(req: Request, body: RecoveryReq, user_sub: str = Depends(get_authenticated_user_sub)):
-    return _recover(req, user_sub, "email", body)
+async def recovery_email(
+    req: Request,
+    body: RecoveryReq,
+    response: Response,
+    user_sub: str = Depends(get_authenticated_user_sub),
+):
+    return _recover(req, user_sub, "email", body, response)
