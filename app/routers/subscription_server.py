@@ -352,6 +352,8 @@ class SubscriptionChangePlanIn(BaseModel):
     interval: Optional[Literal["month", "year"]] = None
     effective: Literal["immediate", "period_end"] = "immediate"
     proration_policy: Literal["none", "charge", "credit", "full"] = "full"
+    proration_amount_cents: Optional[int] = None
+    provider_invoice_id: Optional[str] = None
     reason: Optional[str] = None
 
 
@@ -1353,7 +1355,9 @@ async def change_subscription_plan(
         return attach_subscription_profiles(sub)
 
     proration_amount = 0
-    if body.proration_policy != "none":
+    if body.proration_amount_cents is not None:
+        proration_amount = int(body.proration_amount_cents)
+    elif body.proration_policy != "none":
         proration_amount = calculate_proration(
             current_price=int(sub["price_cents"]),
             new_price=int(new_price),
@@ -1361,10 +1365,12 @@ async def change_subscription_plan(
             period_start=int(sub.get("start_at") or ts),
             period_end=int(sub.get("current_period_end") or ts),
         )
-        if proration_amount > 0 and body.proration_policy == "credit":
-            proration_amount = 0
-        if proration_amount < 0 and body.proration_policy == "charge":
-            proration_amount = 0
+    if body.proration_policy == "none":
+        proration_amount = 0
+    elif proration_amount > 0 and body.proration_policy == "credit":
+        proration_amount = 0
+    elif proration_amount < 0 and body.proration_policy == "charge":
+        proration_amount = 0
 
     sub["plan_id"] = body.plan_id
     sub["interval"] = interval
@@ -1375,13 +1381,13 @@ async def change_subscription_plan(
     record_billing_subscription(sub)
 
     if proration_amount != 0:
-        invoice_id = new_id("inv")
+        invoice_id = body.provider_invoice_id or new_id("inv")
         proration_status = "paid" if proration_amount > 0 else "credited"
         invoice = {
             "invoice_id": invoice_id,
             "subscription_id": subscription_id,
             "subscriber_id": sub["subscriber_id"],
-            "provider_invoice_id": new_id("stub_inv"),
+            "provider_invoice_id": body.provider_invoice_id or new_id("stub_inv"),
             "amount_cents": abs(int(proration_amount)),
             "currency": sub["currency"],
             "status": proration_status,
@@ -1693,7 +1699,7 @@ async def list_earnings(
 
 @router.post("/api/billing/webhooks/{provider}")
 async def billing_webhook(provider: str, body: WebhookIn):
-    if provider != "stub":
+    if provider not in ("stub", "paypal", "ccbill"):
         raise HTTPException(status_code=400, detail="Unsupported provider")
     event_id = new_id("wh")
     ddb_put_item({
@@ -1717,7 +1723,58 @@ async def billing_webhook(provider: str, body: WebhookIn):
 
     ts = now_ts()
     event_type = body.event_type.lower()
-    if event_type == "invoice.paid":
+    if event_type in ("invoice.proration", "subscription.proration"):
+        proration_amount = body.metadata.get("proration_amount_cents")
+        if proration_amount is None:
+            proration_amount = body.metadata.get("amount_cents") or body.metadata.get("amount")
+        try:
+            proration_amount = int(proration_amount)
+        except (TypeError, ValueError):
+            proration_amount = 0
+        if proration_amount:
+            currency = body.metadata.get("currency", sub.get("currency", "usd"))
+            provider_invoice_id = body.metadata.get("provider_invoice_id")
+            invoice_id = body.metadata.get("invoice_id") or provider_invoice_id or new_id("inv")
+            invoice = {
+                "invoice_id": invoice_id,
+                "subscription_id": body.subscription_id,
+                "subscriber_id": sub["subscriber_id"],
+                "provider_invoice_id": provider_invoice_id or new_id("stub_inv"),
+                "amount_cents": abs(int(proration_amount)),
+                "currency": currency,
+                "status": "paid" if proration_amount > 0 else "credited",
+                "period_start": body.metadata.get("period_start", ts),
+                "period_end": body.metadata.get("period_end", sub.get("current_period_end")),
+                "created_at": ts,
+                "is_proration": True,
+                "proration_amount_cents": int(proration_amount),
+                "proration_period_start": body.metadata.get("proration_period_start", sub.get("start_at")),
+                "proration_period_end": body.metadata.get("proration_period_end", sub.get("current_period_end")),
+            }
+            save_invoice(invoice)
+            record_billing_payment(invoice, body.subscription_id)
+            record_billing_transaction(
+                user_sub=sub["subscriber_id"],
+                amount_cents=int(proration_amount),
+                currency=currency,
+                description=f"Subscription proration {body.subscription_id}",
+                status="COMPLETED",
+                external_ref=invoice_id,
+                metadata={"subscription_id": body.subscription_id, "creator_id": sub["creator_id"]},
+            )
+            entry_type = "proration_charge" if proration_amount > 0 else "proration_credit"
+            entry = {
+                "entry_id": new_id("led"),
+                "subscription_id": body.subscription_id,
+                "subscriber_id": sub["subscriber_id"],
+                "entry_type": entry_type,
+                "amount_cents": abs(int(proration_amount)),
+                "currency": currency,
+                "created_at": ts,
+                "metadata": {"invoice_id": invoice_id, "proration_amount_cents": proration_amount},
+            }
+            save_ledger_entry(sub["creator_id"], entry)
+    elif event_type == "invoice.paid":
         sub["status"] = "active"
         sub["current_period_end"] = ts + interval_seconds(sub.get("interval", "month"))
         sub["auto_renew"] = True

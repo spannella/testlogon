@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -217,6 +218,37 @@ def update_payment_status(user_id: str, external_id: str, status: str, raw: Opti
     ddb_update(pk, pay_sk(external_id), "SET " + ", ".join(sets), values, names=names)
 
 
+def _parse_iso_ts(value: Optional[str]) -> Optional[int]:
+    if not value:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    try:
+        text = str(value)
+        if text.endswith("Z"):
+            text = text.replace("Z", "+00:00")
+        return int(datetime.fromisoformat(text).timestamp())
+    except Exception:
+        return None
+
+
+def _renewal_fields(status: str, cancel_at_period_end: Optional[bool] = None) -> Tuple[bool, str, bool]:
+    status_lower = (status or "").lower()
+    if cancel_at_period_end:
+        return False, "cancel_at_period_end", True
+    if status_lower in ("canceling",):
+        return False, "cancel_at_period_end", True
+    if status_lower in ("canceled", "cancelled", "expired", "suspended", "failed"):
+        return False, "manual", False
+    return True, "auto", False
+
+
+def _subscription_period_end(resource: Dict[str, Any]) -> int:
+    billing_info = resource.get("billing_info") or {}
+    period_end = _parse_iso_ts(billing_info.get("next_billing_time") or billing_info.get("final_payment_time"))
+    return int(period_end or 0)
+
+
 def upsert_subscription(
     user_id: str,
     subscription_id: str,
@@ -226,11 +258,43 @@ def upsert_subscription(
     payment_token_id: Optional[str] = None,
     next_renewal_time: Optional[str] = None,
     last_external_id: Optional[str] = None,
+    current_period_end: Optional[int] = None,
+    auto_renew: Optional[bool] = None,
+    renewal_policy: Optional[str] = None,
+    cancel_at_period_end: Optional[bool] = None,
+    trial_start: Optional[int] = None,
+    trial_end: Optional[int] = None,
+    proration_policy: Optional[str] = None,
+    price_cents: Optional[int] = None,
+    interval: Optional[str] = None,
     raw: Optional[Dict[str, Any]] = None,
 ) -> None:
     pk = user_pk(user_id)
     sk = sub_sk(subscription_id)
-    existing = ddb_get(pk, sk)
+    existing = ddb_get(pk, sk) or {}
+    status_lower = (status or "").lower()
+    default_cancel_at_period_end = status_lower == "canceling"
+    auto_renew_default, renewal_policy_default, cancel_default = _renewal_fields(
+        status_lower,
+        cancel_at_period_end=default_cancel_at_period_end,
+    )
+    auto_renew_value = auto_renew if auto_renew is not None else existing.get("auto_renew", auto_renew_default)
+    renewal_policy_value = renewal_policy or existing.get("renewal_policy") or renewal_policy_default
+    cancel_at_period_end_value = (
+        cancel_at_period_end
+        if cancel_at_period_end is not None
+        else existing.get("cancel_at_period_end", cancel_default)
+    )
+    current_period_end_value = (
+        current_period_end
+        if current_period_end is not None
+        else existing.get("current_period_end") or _parse_iso_ts(next_renewal_time) or 0
+    )
+    trial_start_value = trial_start if trial_start is not None else existing.get("trial_start", 0)
+    trial_end_value = trial_end if trial_end is not None else existing.get("trial_end", 0)
+    proration_policy_value = proration_policy or existing.get("proration_policy") or "full"
+    price_cents_value = price_cents if price_cents is not None else existing.get("price_cents", DEFAULT_MONTHLY_PRICE_CENTS)
+    interval_value = interval or existing.get("interval") or "month"
     item = existing or {
         "pk": pk,
         "sk": sk,
@@ -239,6 +303,15 @@ def upsert_subscription(
     }
     item["status"] = status
     item["plan_id"] = plan_id
+    item["current_period_end"] = int(current_period_end_value)
+    item["auto_renew"] = bool(auto_renew_value)
+    item["renewal_policy"] = renewal_policy_value
+    item["cancel_at_period_end"] = bool(cancel_at_period_end_value)
+    item["trial_start"] = int(trial_start_value)
+    item["trial_end"] = int(trial_end_value)
+    item["proration_policy"] = proration_policy_value
+    item["price_cents"] = int(price_cents_value)
+    item["interval"] = interval_value
     item["updated_at"] = now_ts()
     if payment_token_id:
         item["payment_token_id"] = payment_token_id
@@ -1032,11 +1105,20 @@ async def subscribe_monthly(body: SubscribeMonthlyIn, x_user_id: Optional[str] =
     approve = _find_link(resp, "approve") or _find_link(resp, "payer-action") or _find_link(resp, "payer_action")
 
     if sub_id:
+        auto_renew_value, renewal_policy_value, cancel_at_period_end_value = _renewal_fields(
+            (resp.get("status") or "created").lower()
+        )
         upsert_subscription(
             user_id=user_id,
             subscription_id=str(sub_id),
             status=(resp.get("status") or "created").lower(),
             plan_id=body.plan_id,
+            auto_renew=auto_renew_value,
+            renewal_policy=renewal_policy_value,
+            cancel_at_period_end=cancel_at_period_end_value,
+            proration_policy="full",
+            price_cents=DEFAULT_MONTHLY_PRICE_CENTS,
+            interval="month",
             raw={"create_subscription": resp},
         )
 
@@ -1048,7 +1130,17 @@ def cancel_subscription(body: CancelSubscriptionIn, x_user_id: Optional[str] = H
     user_id = require_user(x_user_id)
     idem = body.idempotency_key or f"subcancel:{user_id}:{body.subscription_id}:{int(now_ts()/300)}"
     paypal_cancel_subscription(subscription_id=body.subscription_id, reason=body.reason, idempotency_key=idem)
-    upsert_subscription(user_id, body.subscription_id, status="canceled", plan_id="unknown", raw={"cancel_reason": body.reason})
+    auto_renew_value, renewal_policy_value, cancel_at_period_end_value = _renewal_fields("canceled")
+    upsert_subscription(
+        user_id,
+        body.subscription_id,
+        status="canceled",
+        plan_id="unknown",
+        auto_renew=auto_renew_value,
+        renewal_policy=renewal_policy_value,
+        cancel_at_period_end=cancel_at_period_end_value,
+        raw={"cancel_reason": body.reason},
+    )
     return {"ok": True}
 
 
@@ -1270,26 +1362,83 @@ async def paypal_webhook(req: Request):
         if amount_cents:
             apply_balance_delta(pk, {"owed_settled_cents": amount_cents})
 
+    elif event_type == "BILLING.SUBSCRIPTION.CREATED":
+        sub_id = str(resource.get("id") or "")
+        if sub_id:
+            status_value = (resource.get("status") or "created").lower()
+            auto_renew_value, renewal_policy_value, cancel_at_period_end_value = _renewal_fields(status_value)
+            upsert_subscription(
+                user_id,
+                sub_id,
+                status=status_value,
+                plan_id="monthly",
+                current_period_end=_subscription_period_end(resource),
+                auto_renew=auto_renew_value,
+                renewal_policy=renewal_policy_value,
+                cancel_at_period_end=cancel_at_period_end_value,
+                proration_policy="full",
+                price_cents=DEFAULT_MONTHLY_PRICE_CENTS,
+                interval="month",
+                raw={"event": event},
+            )
+
     elif event_type == "BILLING.SUBSCRIPTION.ACTIVATED":
         sub_id = str(resource.get("id") or "")
         if sub_id:
-            upsert_subscription(user_id, sub_id, status="active", plan_id="monthly", raw={"event": event})
+            auto_renew_value, renewal_policy_value, cancel_at_period_end_value = _renewal_fields("active")
+            upsert_subscription(
+                user_id,
+                sub_id,
+                status="active",
+                plan_id="monthly",
+                current_period_end=_subscription_period_end(resource),
+                auto_renew=auto_renew_value,
+                renewal_policy=renewal_policy_value,
+                cancel_at_period_end=cancel_at_period_end_value,
+                proration_policy="full",
+                price_cents=DEFAULT_MONTHLY_PRICE_CENTS,
+                interval="month",
+                raw={"event": event},
+            )
 
     elif event_type in ("BILLING.SUBSCRIPTION.CANCELLED", "BILLING.SUBSCRIPTION.SUSPENDED", "BILLING.SUBSCRIPTION.EXPIRED"):
         sub_id = str(resource.get("id") or "")
         if sub_id:
+            status_value = event_type.split(".")[-1].lower()
+            auto_renew_value, renewal_policy_value, cancel_at_period_end_value = _renewal_fields(status_value)
             upsert_subscription(
                 user_id,
                 sub_id,
-                status=event_type.split(".")[-1].lower(),
+                status=status_value,
                 plan_id="monthly",
+                current_period_end=_subscription_period_end(resource),
+                auto_renew=auto_renew_value,
+                renewal_policy=renewal_policy_value,
+                cancel_at_period_end=cancel_at_period_end_value,
+                proration_policy="full",
+                price_cents=DEFAULT_MONTHLY_PRICE_CENTS,
+                interval="month",
                 raw={"event": event},
             )
 
     elif event_type in ("BILLING.SUBSCRIPTION.PAYMENT.FAILED",):
         sub_id = str(resource.get("billing_agreement_id") or resource.get("id") or "")
         if sub_id:
-            upsert_subscription(user_id, sub_id, status="past_due", plan_id="monthly", raw={"event": event})
+            auto_renew_value, renewal_policy_value, cancel_at_period_end_value = _renewal_fields("past_due")
+            upsert_subscription(
+                user_id,
+                sub_id,
+                status="past_due",
+                plan_id="monthly",
+                current_period_end=_subscription_period_end(resource),
+                auto_renew=auto_renew_value,
+                renewal_policy=renewal_policy_value,
+                cancel_at_period_end=cancel_at_period_end_value,
+                proration_policy="full",
+                price_cents=DEFAULT_MONTHLY_PRICE_CENTS,
+                interval="month",
+                raw={"event": event},
+            )
 
     else:
         ddb_put(

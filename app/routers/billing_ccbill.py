@@ -33,7 +33,9 @@ from app.services.billing_ccbill import (
     list_payment_methods,
     mark_webhook_processed,
     new_ledger_entry,
+    _parse_ccbill_date,
     pay_balance,
+    renewal_fields,
     settle_or_reverse_ledger,
     sanitize_ccbill_payload,
     subscribe_monthly,
@@ -53,6 +55,12 @@ from app.services.billing_dunning import (
 )
 
 router = APIRouter(tags=["billing"])
+
+
+def _trial_bounds(payload: Dict[str, Any]) -> Tuple[Optional[int], Optional[int]]:
+    trial_start = _parse_ccbill_date(payload.get("trialStartDate") or payload.get("trialStart") or payload.get("trial_start"))
+    trial_end = _parse_ccbill_date(payload.get("trialEndDate") or payload.get("trialEnd") or payload.get("trial_end"))
+    return trial_start, trial_end
 
 
 def _pm_sk(payment_token_id: str) -> str:
@@ -616,11 +624,23 @@ async def ccbill_webhook(req: Request):
                 )
 
         if subscription_id:
+            auto_renew_value, renewal_policy_value, cancel_at_period_end_value = renewal_fields("active")
+            trial_start, trial_end = _trial_bounds(payload)
+            current_period_end = _parse_ccbill_date(payload.get("nextRenewalDate"))
             upsert_subscription(
                 user_sub=user_sub,
                 subscription_id=str(subscription_id),
                 status="active",
                 plan_id=plan_id,
+                auto_renew=auto_renew_value,
+                renewal_policy=renewal_policy_value,
+                cancel_at_period_end=cancel_at_period_end_value,
+                current_period_end=current_period_end,
+                trial_start=trial_start,
+                trial_end=trial_end,
+                proration_policy="full",
+                price_cents=amount,
+                interval="month",
                 next_renewal_date=payload.get("nextRenewalDate"),
                 last_transaction_id=str(transaction_id) if transaction_id else None,
                 raw=safe_meta,
@@ -636,7 +656,24 @@ async def ccbill_webhook(req: Request):
             settle_or_reverse_ledger(user_sub, led_sk_value, "reversed")
             update_payment_status(user_sub, str(transaction_id), "failed", raw=safe_meta)
         if subscription_id:
-            upsert_subscription(user_sub=user_sub, subscription_id=str(subscription_id), status="failed", plan_id=plan_id, raw=safe_meta)
+            auto_renew_value, renewal_policy_value, cancel_at_period_end_value = renewal_fields("failed")
+            trial_start, trial_end = _trial_bounds(payload)
+            current_period_end = _parse_ccbill_date(payload.get("nextRenewalDate"))
+            upsert_subscription(
+                user_sub=user_sub,
+                subscription_id=str(subscription_id),
+                status="failed",
+                plan_id=plan_id,
+                auto_renew=auto_renew_value,
+                renewal_policy=renewal_policy_value,
+                cancel_at_period_end=cancel_at_period_end_value,
+                current_period_end=current_period_end,
+                trial_start=trial_start,
+                trial_end=trial_end,
+                proration_policy="full",
+                interval="month",
+                raw=safe_meta,
+            )
         if pay:
             schedule_ccbill_dunning(
                 user_sub=user_sub,
@@ -674,11 +711,23 @@ async def ccbill_webhook(req: Request):
             )
 
         if subscription_id:
+            auto_renew_value, renewal_policy_value, cancel_at_period_end_value = renewal_fields("active")
+            trial_start, trial_end = _trial_bounds(payload)
+            current_period_end = _parse_ccbill_date(payload.get("nextRenewalDate"))
             upsert_subscription(
                 user_sub=user_sub,
                 subscription_id=str(subscription_id),
                 status="active",
                 plan_id=plan_id,
+                auto_renew=auto_renew_value,
+                renewal_policy=renewal_policy_value,
+                cancel_at_period_end=cancel_at_period_end_value,
+                current_period_end=current_period_end,
+                trial_start=trial_start,
+                trial_end=trial_end,
+                proration_policy="full",
+                price_cents=billed_cents,
+                interval="month",
                 next_renewal_date=payload.get("nextRenewalDate"),
                 last_transaction_id=str(transaction_id) if transaction_id else None,
                 raw=safe_meta,
@@ -687,11 +736,22 @@ async def ccbill_webhook(req: Request):
     elif event_type == "RenewalFailure":
         safe_meta = _webhook_meta(event_type, payload, q)
         if subscription_id:
+            auto_renew_value, renewal_policy_value, cancel_at_period_end_value = renewal_fields("past_due")
+            trial_start, trial_end = _trial_bounds(payload)
+            current_period_end = _parse_ccbill_date(payload.get("nextRenewalDate"))
             upsert_subscription(
                 user_sub=user_sub,
                 subscription_id=str(subscription_id),
                 status="past_due",
                 plan_id=plan_id,
+                auto_renew=auto_renew_value,
+                renewal_policy=renewal_policy_value,
+                cancel_at_period_end=cancel_at_period_end_value,
+                current_period_end=current_period_end,
+                trial_start=trial_start,
+                trial_end=trial_end,
+                proration_policy="full",
+                interval="month",
                 next_renewal_date=payload.get("nextRenewalDate"),
                 last_transaction_id=str(transaction_id) if transaction_id else None,
                 raw=safe_meta,
@@ -707,11 +767,22 @@ async def ccbill_webhook(req: Request):
     elif event_type == "Cancellation":
         safe_meta = _webhook_meta(event_type, payload, q)
         if subscription_id:
+            auto_renew_value, renewal_policy_value, cancel_at_period_end_value = renewal_fields("canceled")
+            trial_start, trial_end = _trial_bounds(payload)
+            current_period_end = _parse_ccbill_date(payload.get("nextRenewalDate"))
             upsert_subscription(
                 user_sub=user_sub,
                 subscription_id=str(subscription_id),
                 status="canceled",
                 plan_id=plan_id,
+                auto_renew=auto_renew_value,
+                renewal_policy=renewal_policy_value,
+                cancel_at_period_end=cancel_at_period_end_value,
+                current_period_end=current_period_end,
+                trial_start=trial_start,
+                trial_end=trial_end,
+                proration_policy="full",
+                interval="month",
                 last_transaction_id=str(transaction_id) if transaction_id else None,
                 raw=safe_meta,
             )
