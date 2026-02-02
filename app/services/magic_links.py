@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request
 
 from app.core.aws import ses
 from app.core.crypto import sha256_str
+from app.core.normalize import client_ip_from_request
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
@@ -81,3 +82,13 @@ def mark_magic_link_used(token: str) -> None:
         )
     except Exception:
         raise HTTPException(401, "Invalid or expired token")
+
+def magic_link_mismatch(record: Dict[str, Any], req: Request) -> Dict[str, bool]:
+    expected_ip = record.get("ip", "") or ""
+    expected_ua = record.get("user_agent", "") or ""
+    current_ip = client_ip_from_request(req)
+    current_ua = (req.headers.get("user-agent", "")[:512])
+    return {
+        "ip_mismatch": bool(expected_ip and current_ip and expected_ip != current_ip),
+        "ua_mismatch": bool(expected_ua and current_ua and expected_ua != current_ua),
+    }

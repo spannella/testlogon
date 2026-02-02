@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+import hashlib
+import hmac
+import requests
 from typing import Any, Dict, List, Optional, Set
 
 from boto3.dynamodb.conditions import Key
@@ -227,6 +230,41 @@ def send_alert_sms(to_numbers: List[str], body_text: str) -> None:
     except Exception:
         pass
 
+def _webhook_event_types() -> Set[str]:
+    if not S.alerts_webhook_event_types:
+        return set()
+    return {t.strip() for t in S.alerts_webhook_event_types.split(",") if t.strip()}
+
+def send_alert_webhook(payload: Dict[str, Any], *, alert_type: str, alert_id: str = "") -> None:
+    if not S.alerts_webhook_url:
+        return
+    allowed = _webhook_event_types()
+    if allowed and alert_type not in allowed:
+        return
+    body = {
+        "alert_type": alert_type,
+        "event": payload.get("event"),
+        "outcome": payload.get("outcome"),
+        "user_sub": payload.get("user_sub"),
+        "ts": payload.get("ts"),
+        "alert_id": alert_id,
+        "details": payload,
+    }
+    data = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if S.alerts_webhook_secret:
+        sig = hmac.new(S.alerts_webhook_secret.encode("utf-8"), data, hashlib.sha256).hexdigest()
+        headers["X-Alert-Signature"] = f"sha256={sig}"
+    try:
+        requests.post(
+            S.alerts_webhook_url,
+            data=data,
+            headers=headers,
+            timeout=S.alerts_webhook_timeout_seconds,
+        )
+    except Exception:
+        pass
+
 def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
     payload: Dict[str, Any] = {"event": event, "user_sub": user_sub, "ts": now_ts(), **fields}
     if request is not None:
@@ -276,6 +314,7 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
         wr = write_alert(user_sub, event=event, outcome=outcome, title=title, details={**payload, "alert_type": alert_type})
         alert_id = (wr or {}).get("alert_id", "")
         send_push_for_alert(user_sub, alert_type, title, f"{event} ({outcome})", alert_id or "")
+        send_alert_webhook(payload, alert_type=alert_type, alert_id=alert_id or "")
     except Exception:
         alert_id = ""
 

@@ -87,33 +87,33 @@ async def password_recovery_start(req: Request, body: PasswordRecoveryStartReq) 
     username = _normalized_username(body.username)
     enforce_lockout(username, client_ip_from_request(req), "password_recovery_start")
     rate_limit_password_recovery(username, client_ip_from_request(req), "start")
+    delivery = {}
+    required: List[str] = []
+    challenge_id = None
     try:
         resp = cognito_forgot_password(username)
+        delivery = resp.get("CodeDeliveryDetails") or {}
+        required = _challenge_required_factors(username)
+        if required:
+            challenge_id = create_stepup_challenge(req, username, required_factors=required)
+            T.sessions.update_item(
+                Key={"user_sub": username, "session_id": challenge_id},
+                UpdateExpression="SET purpose=:p",
+                ExpressionAttributeValues={":p": "password_recovery"},
+            )
+        audit_event(
+            "password_recovery_start",
+            username,
+            req,
+            outcome="success",
+            delivery_medium=delivery.get("DeliveryMedium"),
+        )
     except Exception:
         record_lockout_failure(username, client_ip_from_request(req), "password_recovery_start")
-        raise
-    delivery = resp.get("CodeDeliveryDetails") or {}
-    required = _challenge_required_factors(username)
-    challenge_id = None
-    if required:
-        challenge_id = create_stepup_challenge(req, username, required_factors=required)
-        T.sessions.update_item(
-            Key={"user_sub": username, "session_id": challenge_id},
-            UpdateExpression="SET purpose=:p",
-            ExpressionAttributeValues={":p": "password_recovery"},
-        )
-    audit_event(
-        "password_recovery_start",
-        username,
-        req,
-        outcome="success",
-        delivery_medium=delivery.get("DeliveryMedium"),
-        delivery_destination=delivery.get("Destination"),
-    )
     return {
         "status": "ok",
         "delivery_medium": delivery.get("DeliveryMedium"),
-        "delivery_destination": delivery.get("Destination"),
+        "delivery_destination": "",
         "challenge_id": challenge_id,
         "required_factors": required,
     }
