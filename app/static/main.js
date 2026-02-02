@@ -5239,6 +5239,17 @@ const fileMgrState = {
   items: [],
   renamePath: null,
   renameValue: "",
+  cursor: null,
+  hasMore: false,
+  sortBy: "name",
+  sortDir: "asc",
+  pageSize: 50,
+  bulkOp: null,
+  sharedMode: false,
+  sharedOwner: null,
+  sharedPermission: "read",
+  sharedRoot: null,
+  sharedItems: [],
 };
 
 function fileMgrStatus(msg) {
@@ -5249,6 +5260,231 @@ function fileMgrStatus(msg) {
 function fileMgrAuditStatus(msg) {
   const el = document.getElementById("filemgrAuditStatus");
   if (el) el.textContent = msg || "";
+}
+
+function fileMgrPageStatus(msg) {
+  const el = document.getElementById("filemgrPageStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function fileMgrSharedStatus(msg) {
+  const el = document.getElementById("filemgrSharedStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function fileMgrCanWrite() {
+  if (!fileMgrState.sharedMode) return true;
+  return fileMgrState.sharedPermission === "write";
+}
+
+function fileMgrSharedQueryParams() {
+  const params = new URLSearchParams();
+  if (fileMgrState.sharedOwner) {
+    params.set("owner", fileMgrState.sharedOwner);
+  }
+  return params;
+}
+
+function setFileMgrSharedMode({ owner, permission, root }) {
+  fileMgrState.sharedMode = Boolean(owner);
+  fileMgrState.sharedOwner = owner || null;
+  fileMgrState.sharedPermission = permission || "read";
+  fileMgrState.sharedRoot = root || null;
+  fileMgrState.cursor = null;
+  clearFileMgrSelection();
+  const banner = document.getElementById("filemgrSharedBanner");
+  const label = document.getElementById("filemgrSharedLabel");
+  if (banner) {
+    if (fileMgrState.sharedMode) {
+      banner.classList.remove("hidden");
+      if (label) {
+        label.textContent = `Shared from ${fileMgrState.sharedOwner} (${fileMgrState.sharedPermission})`;
+      }
+    } else {
+      banner.classList.add("hidden");
+      if (label) label.textContent = "";
+    }
+  }
+  updateFileMgrSharedUi();
+}
+
+function exitFileMgrSharedMode() {
+  setFileMgrSharedMode({ owner: null, permission: "read", root: null });
+}
+
+function updateFileMgrSharedUi() {
+  const canWrite = fileMgrCanWrite();
+  const disableWhenShared = fileMgrState.sharedMode && !canWrite;
+  const controls = [
+    "filemgrCreateFolderBtn",
+    "filemgrUploadInput",
+    "filemgrUploadBtn",
+    "filemgrUploadZipInput",
+    "filemgrUploadZipBtn",
+    "filemgrBulkMoveBtn",
+    "filemgrBulkDeleteBtn",
+    "filemgrSelectAll",
+  ];
+  controls.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.disabled = disableWhenShared;
+  });
+  const searchControls = [
+    "filemgrSearch",
+    "filemgrSearchBtn",
+    "filemgrSearchText",
+    "filemgrSearchTextBtn",
+    "filemgrClearSearchBtn",
+  ];
+  searchControls.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.disabled = fileMgrState.sharedMode;
+  });
+  if (fileMgrState.sharedMode) {
+    clearFileMgrSearch();
+  }
+}
+
+function formatFileMgrError(err) {
+  if (!err) return "Unknown error";
+  const msg = String(err).replace(/^Error:\s*/, "");
+  return msg || "Unknown error";
+}
+
+function renderFileMgrBulkOps() {
+  const container = document.getElementById("filemgrBulkOps");
+  if (!container) return;
+  const op = fileMgrState.bulkOp;
+  if (!op) {
+    container.innerHTML = "";
+    return;
+  }
+  const failedItems = op.items.filter((item) => item.status === "failed");
+  const completed = Math.min(op.completed, op.total);
+  const statusText = op.inProgress
+    ? "Running"
+    : "Completed";
+  const summaryPills = `
+    <span class="pill ok">Success: ${op.success}</span>
+    <span class="pill warn">Skipped: ${op.skipped}</span>
+    <span class="pill bad">Failed: ${op.failed}</span>
+  `;
+  const failuresHtml = failedItems.length
+    ? `
+      <div style="margin-top:8px;">
+        <div class="muted">Failures</div>
+        <div class="list" style="margin-top:6px;">
+          ${failedItems
+            .map((item) => `
+              <div class="list-item">
+                <div class="grow">
+                  <div class="mono">${escapeHtml(item.path || "")}</div>
+                  <div class="muted">${escapeHtml(item.error || "Unknown error")}</div>
+                </div>
+                <span class="pill bad">Failed</span>
+              </div>
+            `)
+            .join("")}
+        </div>
+      </div>
+    `
+    : "";
+  container.innerHTML = `
+    <div class="item">
+      <div class="row-inline" style="justify-content:space-between;">
+        <div>
+          <b>Bulk ${escapeHtml(op.type)}</b>
+          <span class="muted">· ${statusText}</span>
+        </div>
+        <button id="filemgrBulkClearBtn"${op.inProgress ? " disabled" : ""}>Clear</button>
+      </div>
+      <div class="row-inline" style="margin-top:6px; gap:10px;">
+        <progress value="${completed}" max="${op.total}"></progress>
+        <span class="muted">${completed}/${op.total}</span>
+      </div>
+      <div class="row-inline" style="margin-top:6px; gap:8px;">
+        ${summaryPills}
+      </div>
+      ${failuresHtml}
+    </div>
+  `;
+  const clearBtn = document.getElementById("filemgrBulkClearBtn");
+  if (clearBtn) {
+    clearBtn.onclick = () => {
+      fileMgrState.bulkOp = null;
+      renderFileMgrBulkOps();
+    };
+  }
+}
+
+function startFileMgrBulkOp(type, items) {
+  fileMgrState.bulkOp = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    type,
+    total: items.length,
+    completed: 0,
+    success: 0,
+    failed: 0,
+    skipped: 0,
+    inProgress: true,
+    items: items.map((item) => ({
+      path: item.path,
+      name: item.name,
+      type: item.type,
+      status: "pending",
+      error: "",
+    })),
+  };
+  renderFileMgrBulkOps();
+  return fileMgrState.bulkOp;
+}
+
+async function runFileMgrBulkOp(type, items, handler) {
+  const op = startFileMgrBulkOp(type, items);
+  const tasks = items.map((item, index) => (async () => {
+    try {
+      const result = await handler(item);
+      if (result === "skipped") {
+        op.items[index].status = "skipped";
+        op.skipped += 1;
+      } else {
+        op.items[index].status = "success";
+        op.success += 1;
+      }
+      return result;
+    } catch (e) {
+      op.items[index].status = "failed";
+      op.items[index].error = formatFileMgrError(e);
+      op.failed += 1;
+      throw e;
+    } finally {
+      op.completed += 1;
+      renderFileMgrBulkOps();
+    }
+  })());
+  await Promise.allSettled(tasks);
+  op.inProgress = false;
+  renderFileMgrBulkOps();
+  return op;
+}
+
+function updateFileMgrPaginationControls() {
+  const loadMoreBtn = document.getElementById("filemgrLoadMoreBtn");
+  if (loadMoreBtn) {
+    loadMoreBtn.disabled = !fileMgrState.hasMore;
+  }
+  if (fileMgrState.hasMore) {
+    fileMgrPageStatus(`Loaded ${fileMgrState.items.length} item(s).`);
+  } else {
+    fileMgrPageStatus(fileMgrState.items.length ? `Loaded ${fileMgrState.items.length} item(s).` : "");
+  }
+}
+
+function setFileMgrSort(sortBy, sortDir) {
+  fileMgrState.sortBy = sortBy || "name";
+  fileMgrState.sortDir = sortDir || "asc";
 }
 
 function normalizeFolderPath(path) {
@@ -5276,10 +5512,10 @@ function renderFileMgrBreadcrumb() {
   const segments = path.split("/").filter(Boolean);
   container.innerHTML = "";
   const root = document.createElement("button");
-  root.textContent = "/";
+  root.textContent = fileMgrState.sharedMode ? `Shared: ${fileMgrState.sharedOwner || ""}` : "/";
   root.className = "mono";
   root.onclick = async () => {
-    setFileMgrPath("/");
+    setFileMgrPath(fileMgrState.sharedMode ? fileMgrState.sharedRoot || "/" : "/");
     await refreshFileManager();
   };
   container.appendChild(root);
@@ -5346,6 +5582,9 @@ function selectedFileMgrItems() {
 }
 
 function toggleFileMgrSelectAll(checked) {
+  if (fileMgrState.sharedMode && !fileMgrCanWrite()) {
+    return;
+  }
   if (checked) {
     fileMgrState.items.forEach((item) => fileMgrState.selectedPaths.add(item.path));
   } else {
@@ -5466,12 +5705,19 @@ function finishFileMgrTransfer(transfer, label, options = {}) {
   }, 1600);
 }
 
-async function apiUploadFileManager(path, file, onProgress, onCancelReady) {
+async function apiUploadFileManager(path, file, onProgress, onCancelReady, options = {}) {
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
   const form = new FormData();
   form.append("file", file);
-  const url = `${API_BASE}/v1/fs/upload?path=${encodeURIComponent(path)}`;
+  const sharedOwner = options.sharedOwner;
+  const endpoint = sharedOwner ? "/v1/fs/shared-upload" : "/v1/fs/upload";
+  const params = new URLSearchParams();
+  params.set("path", path);
+  if (sharedOwner) {
+    params.set("owner", sharedOwner);
+  }
+  const url = `${API_BASE}${endpoint}?${params.toString()}`;
   return await new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", url);
@@ -5500,18 +5746,36 @@ async function apiUploadFileManager(path, file, onProgress, onCancelReady) {
   });
 }
 
-async function fileMgrDownload(path, filename, button) {
-  if (fileMgrState.activeDownloads.has(path)) {
+function fileMgrDownloadKey(path, ownerOverride = null) {
+  if (ownerOverride) return `shared:${ownerOverride}:${path}`;
+  if (!fileMgrState.sharedMode) return path;
+  return `${fileMgrState.sharedOwner || "shared"}:${path}`;
+}
+
+async function fileMgrDownload(path, filename, button, options = {}) {
+  const ownerOverride = options.owner || null;
+  const downloadKey = fileMgrDownloadKey(path, ownerOverride);
+  if (fileMgrState.activeDownloads.has(downloadKey)) {
     fileMgrStatus("Download already in progress for this file.");
     return;
   }
-  if (fileMgrState.downloadedPaths.has(path)) {
+  if (fileMgrState.downloadedPaths.has(downloadKey)) {
     const ok = confirm("Download this file again?");
     if (!ok) return;
   }
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
-  const url = `${API_BASE}/v1/fs/download?path=${encodeURIComponent(path)}`;
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const isShared = Boolean(ownerOverride || fileMgrState.sharedMode);
+  const owner = ownerOverride || fileMgrState.sharedOwner;
+  const endpoint = isShared ? "/v1/fs/shared-download" : "/v1/fs/download";
+  const params = new URLSearchParams();
+  params.set("path", path);
+  if (isShared && owner) {
+    params.set("owner", owner);
+  }
+  const url = `${API_BASE}${endpoint}?${params.toString()}`;
   let cancel = null;
   let canceled = false;
   const transfer = createFileMgrTransfer(`Download: ${filename || path}`, () => {
@@ -5520,7 +5784,7 @@ async function fileMgrDownload(path, filename, button) {
     finishFileMgrTransfer(transfer, "Download canceled");
   });
   updateFileMgrTransfer(transfer, 0, null, "Preparing download");
-  fileMgrState.activeDownloads.add(path);
+  fileMgrState.activeDownloads.add(downloadKey);
   if (button) button.disabled = true;
   try {
     await new Promise((resolve, reject) => {
@@ -5557,14 +5821,14 @@ async function fileMgrDownload(path, filename, button) {
       xhr.send();
     });
     finishFileMgrTransfer(transfer, "Download complete");
-    fileMgrState.downloadedPaths.add(path);
+    fileMgrState.downloadedPaths.add(downloadKey);
   } catch (e) {
     if (!canceled) {
       finishFileMgrTransfer(transfer, "Download failed", { error: true, sticky: true });
       throw e;
     }
   } finally {
-    fileMgrState.activeDownloads.delete(path);
+    fileMgrState.activeDownloads.delete(downloadKey);
     if (button) button.disabled = false;
   }
 }
@@ -5572,8 +5836,15 @@ async function fileMgrDownload(path, filename, button) {
 async function fileMgrPreview(path) {
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
-  const url = `${API_BASE}/v1/fs/preview?path=${encodeURIComponent(path)}`;
-  const headers = { "Authorization": "Bearer " + tok };
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const endpoint = fileMgrState.sharedMode ? "/v1/fs/shared-preview" : "/v1/fs/preview";
+  const params = new URLSearchParams();
+  params.set("path", path);
+  if (fileMgrState.sharedMode && fileMgrState.sharedOwner) {
+    params.set("owner", fileMgrState.sharedOwner);
+  }
+  const url = `${API_BASE}${endpoint}?${params.toString()}`;
   const res = await fetch(url, {
     method: "GET",
     headers,
@@ -5586,15 +5857,72 @@ async function fileMgrPreview(path) {
   setTimeout(() => URL.revokeObjectURL(previewUrl), 2000);
 }
 
+async function fileMgrDetails(path) {
+  const tok = accessToken();
+  if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const endpoint = fileMgrState.sharedMode ? "/v1/fs/shared-info" : "/v1/fs/info";
+  const params = new URLSearchParams();
+  params.set("path", path);
+  if (fileMgrState.sharedMode && fileMgrState.sharedOwner) {
+    params.set("owner", fileMgrState.sharedOwner);
+  }
+  const url = `${API_BASE}${endpoint}?${params.toString()}`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Authorization": "Bearer " + tok,
+      "X-SESSION-ID": sid,
+    },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const info = await res.json();
+  const rows = [
+    ["Path", info.path],
+    ["Type", info.type],
+    ["Name", info.name],
+    ["Parent", info.parent],
+    ["Size", info.size != null ? fmtBytes(info.size) : ""],
+    ["Content type", info.content_type],
+    ["Created", info.created_at],
+    ["Updated", info.updated_at],
+    ["Uploaded", info.upload_at],
+    ["Uploaded by", info.upload_by],
+    ["Last download", info.last_download_at],
+    ["Last downloaded by", info.last_download_by],
+    ["Duration (s)", info.duration_seconds != null ? String(info.duration_seconds) : ""],
+  ];
+  const bodyHtml = `
+    <div class="stack">
+      <table class="mono" style="width:100%; border-collapse:collapse;">
+        <tbody>
+          ${rows.map(([label, value]) => `
+            <tr>
+              <td style="padding:4px 8px; color:#666; width:160px;">${escapeHtml(label)}</td>
+              <td style="padding:4px 8px;">${escapeHtml(value || "")}</td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+  modalShow({
+    title: "File details",
+    bodyHtml,
+    actions: [{ text: "Close", onClick: modalClose }],
+  });
+}
+
 async function fileMgrDownloadZip(paths) {
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
-  const headers = {
-    "Authorization": "Bearer " + tok,
-    "Content-Type": "application/json",
-  };
-  addCsrfHeader(headers);
-  const res = await fetch(`${API_BASE}/v1/fs/download-zip`, {
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const sharedParams = fileMgrSharedQueryParams();
+  const endpoint = fileMgrState.sharedMode ? "/v1/fs/shared-download-zip" : "/v1/fs/download-zip";
+  const url = `${API_BASE}${endpoint}${sharedParams.toString() ? `?${sharedParams.toString()}` : ""}`;
+  const res = await fetch(url, {
     method: "POST",
     headers,
     body: JSON.stringify(paths || []),
@@ -5609,6 +5937,81 @@ async function fileMgrDownloadZip(paths) {
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+}
+
+async function refreshSharedWithMe() {
+  const list = document.getElementById("filemgrSharedList");
+  if (!list) return;
+  fileMgrSharedStatus("Loading...");
+  await ensureUiSession();
+  const res = await apiGet("/v1/fs/shared-with-me");
+  fileMgrState.sharedItems = res.items || [];
+  renderSharedWithMe();
+  fileMgrSharedStatus(`Loaded ${fileMgrState.sharedItems.length} item(s).`);
+}
+
+function renderSharedWithMe() {
+  const list = document.getElementById("filemgrSharedList");
+  if (!list) return;
+  list.innerHTML = "";
+  const items = fileMgrState.sharedItems || [];
+  if (!items.length) {
+    list.innerHTML = "<div class='muted'>No shared items.</div>";
+    return;
+  }
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    const isFolder = (item.path || "").endsWith("/");
+    const sharedRoot = isFolder ? normalizeFolderPath(item.path || "/") : (item.path || "/");
+    row.innerHTML = `
+      <div class="grow">
+        <div class="mono">${escapeHtml(item.path || "")}</div>
+        <div class="muted">From ${escapeHtml(item.owner || "")}</div>
+        <div class="muted">Shared ${escapeHtml(item.shared_at || "")}</div>
+      </div>
+      <div class="muted">${escapeHtml(item.permission || "read")}</div>
+      <div class="muted">${escapeHtml(item.expires_at || "")}</div>
+      <div class="row-inline">
+        <button data-action="open">Open</button>
+        ${isFolder ? "" : '<button data-action="download">Download</button>'}
+      </div>
+    `;
+    row.querySelectorAll("button").forEach((btn) => {
+      btn.onclick = async () => {
+        const action = btn.getAttribute("data-action");
+        if (action === "open") {
+          setFileMgrSharedMode({
+            owner: item.owner,
+            permission: item.permission || "read",
+            root: sharedRoot,
+          });
+          if (isFolder) {
+            setFileMgrPath(item.path || "/");
+            await refreshFileManager();
+          } else {
+            await fileMgrDownload(
+              item.path,
+              item.path?.split("/").slice(-1)[0] || "download",
+              null,
+              { owner: item.owner }
+            );
+            exitFileMgrSharedMode();
+          }
+          return;
+        }
+        if (action === "download" && !isFolder) {
+          await fileMgrDownload(
+            item.path,
+            item.path?.split("/").slice(-1)[0] || "download",
+            null,
+            { owner: item.owner }
+          );
+        }
+      };
+    });
+    list.appendChild(row);
+  });
 }
 
 function renderFileMgrSearchResults() {
@@ -5633,6 +6036,7 @@ function renderFileMgrSearchResults() {
       <div class="muted">${item.type === "file" ? fmtBytes(item.size || 0) : ""}</div>
       <div class="row-inline">
         <button data-action="open" data-path="${escapeHtml(item.path || "")}" data-type="${escapeHtml(item.type || "")}">Open</button>
+        <button data-action="details">Details</button>
         ${isFolder ? "" : '<button data-action="download">Download</button><button data-action="preview">Preview</button>'}
       </div>
     `;
@@ -5658,6 +6062,10 @@ function renderFileMgrSearchResults() {
           }
           if (action === "preview") {
             await fileMgrPreview(p);
+            return;
+          }
+          if (action === "details") {
+            await fileMgrDetails(p);
             return;
           }
         } catch (e) {
@@ -5731,8 +6139,10 @@ function renderFileMgrList(items) {
     const isFolder = item.type === "folder";
     const isSelected = fileMgrState.selectedPaths.has(item.path);
     const isRenaming = fileMgrState.renamePath === item.path;
+    const canWrite = fileMgrCanWrite();
+    const disableEdits = fileMgrState.sharedMode && !canWrite;
     row.innerHTML = `
-      <td><input type="checkbox" data-path="${escapeHtml(item.path || "")}" ${isSelected ? "checked" : ""} /></td>
+      <td><input type="checkbox" data-path="${escapeHtml(item.path || "")}" ${isSelected ? "checked" : ""} ${disableEdits ? "disabled" : ""} /></td>
       <td class="mono">
         ${isRenaming ? `<input type="text" class="mono" data-rename-input value="${escapeHtml(fileMgrState.renameValue || item.name || "")}" />` : escapeHtml(item.name || "")}
       </td>
@@ -5746,8 +6156,15 @@ function renderFileMgrList(items) {
               ? '<button data-action="open">Open</button>'
               : '<button data-action="download">Download</button><button data-action="preview">Preview</button>'
           }
-          ${isRenaming ? '<button data-action="rename-save">Save</button><button data-action="rename-cancel">Cancel</button>' : '<button data-action="rename">Rename</button>'}
-          <button data-action="delete" class="danger">Delete</button>
+          <button data-action="details">Details</button>
+          ${
+            disableEdits
+              ? ""
+              : (isRenaming
+                ? '<button data-action="rename-save">Save</button><button data-action="rename-cancel">Cancel</button>'
+                : '<button data-action="rename">Rename</button>')
+          }
+          ${disableEdits ? "" : '<button data-action="delete" class="danger">Delete</button>'}
         </div>
       </td>
     `;
@@ -5775,6 +6192,10 @@ function renderFileMgrList(items) {
             renderFileMgrList(fileMgrState.items);
             return;
           }
+          if (action === "details") {
+            await fileMgrDetails(item.path);
+            return;
+          }
           if (action === "rename-cancel") {
             fileMgrState.renamePath = null;
             fileMgrState.renameValue = "";
@@ -5785,8 +6206,14 @@ function renderFileMgrList(items) {
             const input = row.querySelector("[data-rename-input]");
             const newName = input ? input.value.trim() : "";
             if (!newName) return;
-            const endpoint = isFolder ? "/v1/fs/rename-folder" : "/v1/fs/rename-file";
-            await apiPost(endpoint, { path: item.path, new_name: newName });
+            const endpoint = fileMgrState.sharedMode
+              ? (isFolder ? "/v1/fs/shared-rename-folder" : "/v1/fs/shared-rename-file")
+              : (isFolder ? "/v1/fs/rename-folder" : "/v1/fs/rename-file");
+            const params = new URLSearchParams();
+            if (fileMgrState.sharedMode && fileMgrState.sharedOwner) {
+              params.set("owner", fileMgrState.sharedOwner);
+            }
+            await apiPost(`${endpoint}${params.toString() ? `?${params.toString()}` : ""}`, { path: item.path, new_name: newName });
             fileMgrState.renamePath = null;
             fileMgrState.renameValue = "";
             await refreshFileManager();
@@ -5795,8 +6222,15 @@ function renderFileMgrList(items) {
           if (action === "delete") {
             const ok = confirm(`Delete ${item.type} ${item.name}?`);
             if (!ok) return;
-            const endpoint = isFolder ? "/v1/fs/folder" : "/v1/fs/file";
-            await apiDelete(`${endpoint}?path=${encodeURIComponent(item.path)}`);
+            const endpoint = fileMgrState.sharedMode
+              ? (isFolder ? "/v1/fs/shared-folder" : "/v1/fs/shared-file")
+              : (isFolder ? "/v1/fs/folder" : "/v1/fs/file");
+            const params = new URLSearchParams();
+            params.set("path", item.path);
+            if (fileMgrState.sharedMode && fileMgrState.sharedOwner) {
+              params.set("owner", fileMgrState.sharedOwner);
+            }
+            await apiDelete(`${endpoint}?${params.toString()}`);
             await refreshFileManager();
           }
         } catch (e) {
@@ -5820,8 +6254,14 @@ function renderFileMgrList(items) {
           ev.preventDefault();
           const newName = renameInput.value.trim();
           if (!newName) return;
-          const endpoint = isFolder ? "/v1/fs/rename-folder" : "/v1/fs/rename-file";
-          await apiPost(endpoint, { path: item.path, new_name: newName });
+          const endpoint = fileMgrState.sharedMode
+            ? (isFolder ? "/v1/fs/shared-rename-folder" : "/v1/fs/shared-rename-file")
+            : (isFolder ? "/v1/fs/rename-folder" : "/v1/fs/rename-file");
+          const params = new URLSearchParams();
+          if (fileMgrState.sharedMode && fileMgrState.sharedOwner) {
+            params.set("owner", fileMgrState.sharedOwner);
+          }
+          await apiPost(`${endpoint}${params.toString() ? `?${params.toString()}` : ""}`, { path: item.path, new_name: newName });
           fileMgrState.renamePath = null;
           fileMgrState.renameValue = "";
           await refreshFileManager();
@@ -5842,20 +6282,42 @@ function renderFileMgrList(items) {
     tbody.appendChild(empty);
   }
   updateFileMgrSelectAll();
+  updateFileMgrPaginationControls();
 }
 
-async function refreshFileManager() {
+async function refreshFileManager(options = {}) {
   const table = document.getElementById("filemgrTable");
   if (!table) return;
+  const append = options.append === true;
   try {
-    fileMgrStatus("Loading...");
+    fileMgrStatus(append ? "Loading more..." : "Loading...");
     await ensureUiSession();
     const path = currentFileMgrPath();
-    const res = await apiGet(`/v1/fs/list?path=${encodeURIComponent(path)}`);
+    const params = new URLSearchParams();
+    params.set("path", path);
+    params.set("limit", String(fileMgrState.pageSize || 50));
+    params.set("sort_by", fileMgrState.sortBy || "name");
+    params.set("sort_dir", fileMgrState.sortDir || "asc");
+    if (fileMgrState.sharedMode && fileMgrState.sharedOwner) {
+      params.set("owner", fileMgrState.sharedOwner);
+    }
+    if (append && fileMgrState.cursor) {
+      params.set("cursor", fileMgrState.cursor);
+    } else {
+      fileMgrState.cursor = null;
+    }
+    const endpoint = fileMgrState.sharedMode ? "/v1/fs/shared-list" : "/v1/fs/list";
+    const res = await apiGet(`${endpoint}?${params.toString()}`);
     setFileMgrPath(res.path || path);
-    fileMgrState.items = res.items || [];
-    clearFileMgrSelection();
+    const nextItems = res.items || [];
+    fileMgrState.items = append ? fileMgrState.items.concat(nextItems) : nextItems;
+    if (!append) {
+      clearFileMgrSelection();
+    }
     renderFileMgrList(fileMgrState.items);
+    fileMgrState.cursor = res.cursor || null;
+    fileMgrState.hasMore = Boolean(fileMgrState.cursor);
+    updateFileMgrPaginationControls();
     fileMgrStatus(`Loaded ${res.items ? res.items.length : 0} items.`);
   } catch (e) {
     fileMgrStatus(String(e));
@@ -5869,7 +6331,12 @@ async function createFileMgrFolder() {
   if (!name) return;
   const path = currentFileMgrPath() + name + "/";
   await ensureUiSession();
-  await apiPost("/v1/fs/folder", { path });
+  if (fileMgrState.sharedMode && !fileMgrCanWrite()) {
+    fileMgrStatus("Shared view is read-only.");
+    return;
+  }
+  const endpoint = fileMgrState.sharedMode ? `/v1/fs/shared-folder?owner=${encodeURIComponent(fileMgrState.sharedOwner || "")}` : "/v1/fs/folder";
+  await apiPost(endpoint, { path });
   nameInput.value = "";
   await refreshFileManager();
 }
@@ -5878,6 +6345,10 @@ async function uploadFileMgr() {
   const input = document.getElementById("filemgrUploadInput");
   if (!input || !input.files || !input.files.length) return;
   await ensureUiSession();
+  if (fileMgrState.sharedMode && !fileMgrCanWrite()) {
+    fileMgrStatus("Shared view is read-only.");
+    return;
+  }
   const files = Array.from(input.files);
   const uploadOne = async (file) => {
     const path = currentFileMgrPath() + file.name;
@@ -5902,7 +6373,8 @@ async function uploadFileMgr() {
         },
         (cancelFn) => {
           cancel = cancelFn;
-        }
+        },
+        { sharedOwner: fileMgrState.sharedMode ? fileMgrState.sharedOwner : null }
       );
       finishFileMgrTransfer(transfer, "Upload complete");
     } catch (e) {
@@ -5926,14 +6398,22 @@ async function uploadZipFileMgr() {
   if (!input || !input.files || !input.files.length) return;
   const file = input.files[0];
   await ensureUiSession();
+  if (fileMgrState.sharedMode && !fileMgrCanWrite()) {
+    fileMgrStatus("Shared view is read-only.");
+    return;
+  }
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
   const form = new FormData();
   form.append("zip_file", file);
   const dest = currentFileMgrPath();
-  const headers = { "Authorization": "Bearer " + tok };
-  addCsrfHeader(headers);
-  const res = await fetch(`${API_BASE}/v1/fs/upload-zip?dest_folder=${encodeURIComponent(dest)}`, {
+  const endpoint = fileMgrState.sharedMode ? "/v1/fs/shared-upload-zip" : "/v1/fs/upload-zip";
+  const params = new URLSearchParams();
+  params.set("dest_folder", dest);
+  if (fileMgrState.sharedMode && fileMgrState.sharedOwner) {
+    params.set("owner", fileMgrState.sharedOwner);
+  }
+  const res = await fetch(`${API_BASE}${endpoint}?${params.toString()}`, {
     method: "POST",
     headers,
     body: form,
@@ -5960,12 +6440,28 @@ async function bulkDeleteFileMgr() {
     fileMgrStatus("Select at least one file or folder to delete.");
     return;
   }
+  if (fileMgrState.sharedMode && !fileMgrCanWrite()) {
+    fileMgrStatus("Shared view is read-only.");
+    return;
+  }
   const ok = confirm(`Delete ${items.length} item(s)?`);
   if (!ok) return;
   await ensureUiSession();
-  for (const item of items) {
-    const endpoint = item.type === "folder" ? "/v1/fs/folder" : "/v1/fs/file";
-    await apiDelete(`${endpoint}?path=${encodeURIComponent(item.path)}`);
+  const op = await runFileMgrBulkOp("delete", items, async (item) => {
+    const endpoint = fileMgrState.sharedMode
+      ? (item.type === "folder" ? "/v1/fs/shared-folder" : "/v1/fs/shared-file")
+      : (item.type === "folder" ? "/v1/fs/folder" : "/v1/fs/file");
+    const params = new URLSearchParams();
+    params.set("path", item.path);
+    if (fileMgrState.sharedMode && fileMgrState.sharedOwner) {
+      params.set("owner", fileMgrState.sharedOwner);
+    }
+    await apiDelete(`${endpoint}?${params.toString()}`);
+  });
+  if (op.failed > 0) {
+    fileMgrStatus(`Delete completed with ${op.failed} failure(s).`);
+  } else {
+    fileMgrStatus(`Deleted ${op.success} item(s).`);
   }
   await refreshFileManager();
 }
@@ -5976,18 +6472,32 @@ async function bulkMoveFileMgr() {
     fileMgrStatus("Select at least one file or folder to move.");
     return;
   }
+  if (fileMgrState.sharedMode && !fileMgrCanWrite()) {
+    fileMgrStatus("Shared view is read-only.");
+    return;
+  }
   const destInput = prompt("Move selected items to folder:", currentFileMgrPath());
   if (!destInput) return;
   const destFolder = normalizeFolderPath(destInput);
   await ensureUiSession();
-  for (const item of items) {
+  const op = await runFileMgrBulkOp("move", items, async (item) => {
     const dst = item.type === "folder"
       ? `${destFolder}${item.name}/`
       : `${destFolder}${item.name}`;
     if (dst === item.path) {
-      continue;
+      return "skipped";
     }
-    await apiPost("/v1/fs/move", { src: item.path, dst });
+    const endpoint = fileMgrState.sharedMode ? "/v1/fs/shared-move" : "/v1/fs/move";
+    const params = new URLSearchParams();
+    if (fileMgrState.sharedMode && fileMgrState.sharedOwner) {
+      params.set("owner", fileMgrState.sharedOwner);
+    }
+    await apiPost(`${endpoint}${params.toString() ? `?${params.toString()}` : ""}`, { src: item.path, dst });
+  });
+  if (op.failed > 0) {
+    fileMgrStatus(`Move completed with ${op.failed} failure(s).`);
+  } else {
+    fileMgrStatus(`Moved ${op.success} item(s).`);
   }
   await refreshFileManager();
 }
@@ -5995,6 +6505,10 @@ async function bulkMoveFileMgr() {
 async function searchFileMgr() {
   const input = document.getElementById("filemgrSearch");
   if (!input) return;
+  if (fileMgrState.sharedMode) {
+    fileMgrStatus("Search is unavailable in shared view.");
+    return;
+  }
   const prefix = input.value.trim();
   if (!prefix) return;
   await ensureUiSession();
@@ -6006,6 +6520,10 @@ async function searchFileMgr() {
 async function searchFileMgrText() {
   const input = document.getElementById("filemgrSearchText");
   if (!input) return;
+  if (fileMgrState.sharedMode) {
+    fileMgrStatus("Search is unavailable in shared view.");
+    return;
+  }
   const query = input.value.trim();
   if (!query) return;
   await ensureUiSession();
@@ -6629,6 +7147,59 @@ document.getElementById("profileAuditRefreshBtn").onclick = async () => {
 };
 
 document.getElementById("filemgrRefreshBtn").onclick = refreshFileManager;
+document.getElementById("filemgrSharedRefreshBtn").onclick = async () => {
+  try {
+    await refreshSharedWithMe();
+  } catch (e) {
+    fileMgrSharedStatus(String(e));
+  }
+};
+document.getElementById("filemgrSharedClearBtn").onclick = () => {
+  fileMgrState.sharedItems = [];
+  renderSharedWithMe();
+  fileMgrSharedStatus("Cleared.");
+};
+document.getElementById("filemgrExitSharedBtn").onclick = async () => {
+  exitFileMgrSharedMode();
+  setFileMgrPath("/");
+  await refreshFileManager();
+};
+document.getElementById("filemgrLoadMoreBtn").onclick = async () => {
+  if (!fileMgrState.hasMore) return;
+  try {
+    await refreshFileManager({ append: true });
+  } catch (e) {
+    fileMgrStatus(String(e));
+  }
+};
+const filemgrSortBy = document.getElementById("filemgrSortBy");
+const filemgrSortDirBtn = document.getElementById("filemgrSortDirBtn");
+const filemgrPageSize = document.getElementById("filemgrPageSize");
+if (filemgrSortBy) {
+  filemgrSortBy.value = fileMgrState.sortBy;
+  filemgrSortBy.onchange = async (ev) => {
+    setFileMgrSort(ev.target.value, fileMgrState.sortDir);
+    fileMgrState.cursor = null;
+    await refreshFileManager();
+  };
+}
+if (filemgrSortDirBtn) {
+  filemgrSortDirBtn.textContent = fileMgrState.sortDir === "desc" ? "Desc" : "Asc";
+  filemgrSortDirBtn.onclick = async () => {
+    fileMgrState.sortDir = fileMgrState.sortDir === "desc" ? "asc" : "desc";
+    filemgrSortDirBtn.textContent = fileMgrState.sortDir === "desc" ? "Desc" : "Asc";
+    fileMgrState.cursor = null;
+    await refreshFileManager();
+  };
+}
+if (filemgrPageSize) {
+  filemgrPageSize.value = String(fileMgrState.pageSize);
+  filemgrPageSize.onchange = async (ev) => {
+    fileMgrState.pageSize = Number(ev.target.value) || 50;
+    fileMgrState.cursor = null;
+    await refreshFileManager();
+  };
+}
 document.getElementById("filemgrAuditRefreshBtn").onclick = async () => {
   try {
     await refreshFileMgrAudit();
@@ -6704,6 +7275,7 @@ document.getElementById("filemgrSearchTextBtn").onclick = async () => {
   }
 };
 document.getElementById("filemgrClearSearchBtn").onclick = clearFileMgrSearch;
+refreshSharedWithMe().catch(() => {});
 document.getElementById("addressRefreshBtn").onclick = async () => {
   try {
     setAddressStatus("Refreshing...");

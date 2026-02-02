@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 import shutil
 import subprocess
 import uuid
 import tempfile
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 import boto3
 import zipstream
-from boto3.dynamodb.conditions import Key
+from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 from fastapi import HTTPException, UploadFile
 
@@ -20,6 +22,7 @@ from app.core.aws import ddb
 from app.core.settings import S
 
 _s3 = boto3.client("s3", region_name=S.aws_region or "us-east-1")
+logger = logging.getLogger(__name__)
 
 
 def _table():
@@ -36,6 +39,19 @@ def _bucket() -> str:
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
+    if not ts:
+        return None
+    try:
+        return datetime.fromisoformat(ts)
+    except ValueError:
+        return None
+
+
+def _ttl_epoch(ts: datetime) -> int:
+    return int(ts.timestamp())
 
 
 def norm_path(path: str, is_folder: Optional[bool] = None) -> str:
@@ -114,24 +130,62 @@ def delete_node(owner: str, path: str) -> None:
     tbl.delete_item(Key=node_key(owner, path))
 
 
-def list_children(owner: str, folder_path: str, *, include_deleted: bool = False) -> List[Dict[str, Any]]:
+def list_children_page(
+    owner: str,
+    folder_path: str,
+    *,
+    include_deleted: bool = False,
+    limit: Optional[int] = None,
+    cursor: Optional[Dict[str, Any]] = None,
+    scan_forward: Optional[bool] = None,
+) -> tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
     tbl = _table()
+
     def _filter(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if include_deleted:
             return items
         return [it for it in items if not it.get("deleted_at")]
+
+    def _query_kwargs() -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {}
+        if limit is not None:
+            kwargs["Limit"] = limit
+        if cursor:
+            kwargs["ExclusiveStartKey"] = cursor
+        if scan_forward is not None:
+            kwargs["ScanIndexForward"] = scan_forward
+        return kwargs
+
     try:
         resp = tbl.query(
             IndexName="GSI2",
             KeyConditionExpression=Key("GSI2PK").eq(f"PARENT#{folder_path}"),
+            **_query_kwargs(),
         )
-        return _filter(resp.get("Items", []))
+        return _filter(resp.get("Items", [])), resp.get("LastEvaluatedKey")
     except ClientError:
         prefix = f"NODE#{folder_path}"
         resp = tbl.query(
             KeyConditionExpression=Key("PK").eq(pk_user(owner)) & Key("SK").begins_with(prefix),
+            **_query_kwargs(),
         )
-        return _filter(resp.get("Items", []))
+        return _filter(resp.get("Items", [])), resp.get("LastEvaluatedKey")
+
+
+def list_children(owner: str, folder_path: str, *, include_deleted: bool = False) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    cursor: Optional[Dict[str, Any]] = None
+    while True:
+        batch, cursor = list_children_page(
+            owner,
+            folder_path,
+            include_deleted=include_deleted,
+            cursor=cursor,
+        )
+        items.extend(batch)
+        if not cursor:
+            break
+    return items
 
 
 def is_ancestor_path(folder_path: str, maybe_child_path: str) -> bool:
@@ -329,11 +383,41 @@ def _soft_delete_node(user: str, item: Dict[str, Any], deleted_by: str) -> None:
         return
     tbl = _table()
     deleted_at = now_iso()
-    tbl.update_item(
-        Key=node_key(user, item["path"]),
-        UpdateExpression="SET deleted_at=:t, deleted_by=:u, updated_at=:t",
-        ExpressionAttributeValues={":t": deleted_at, ":u": deleted_by},
+    purge_after_dt = datetime.now(timezone.utc) + timedelta(days=S.filemgr_retention_days)
+    purge_after = purge_after_dt.isoformat()
+    ttl_attr = S.ddb_ttl_attr
+    expression_names = {}
+    expression_values = {":t": deleted_at, ":u": deleted_by, ":p": purge_after, ":s": "pending"}
+    update_expr = (
+        "SET deleted_at=:t, deleted_by=:u, updated_at=:t, "
+        "purge_after=:p, purge_status=:s"
     )
+    if ttl_attr:
+        expression_names["#ttl"] = ttl_attr
+        expression_values[":ttl"] = _ttl_epoch(purge_after_dt)
+        update_expr += ", #ttl=:ttl"
+    update_kwargs: Dict[str, Any] = {
+        "Key": node_key(user, item["path"]),
+        "UpdateExpression": update_expr,
+        "ExpressionAttributeValues": expression_values,
+    }
+    if expression_names:
+        update_kwargs["ExpressionAttributeNames"] = expression_names
+    tbl.update_item(**update_kwargs)
+    if item.get("s3_bucket") and item.get("s3_key"):
+        try:
+            _s3.put_object_tagging(
+                Bucket=item["s3_bucket"],
+                Key=item["s3_key"],
+                Tagging={
+                    "TagSet": [
+                        {"Key": "filemgr_deleted", "Value": "true"},
+                        {"Key": "filemgr_purge_after", "Value": purge_after},
+                    ]
+                },
+            )
+        except ClientError:
+            logger.exception("Failed to tag deleted file manager object")
 
 
 def _search_text_scan(user: str, query: str, *, limit: int = 50) -> List[Dict[str, Any]]:
@@ -921,21 +1005,46 @@ def move_node(user: str, src: str, dst: str) -> Dict[str, Any]:
     return {"type": "file", "src": old_path, "dst": new_path}
 
 
-def download_zip(user: str, paths: List[str]) -> zipstream.ZipFile:
-    nodes = []
+def download_zip(user: str, paths: List[str]) -> tuple[zipstream.ZipFile, int]:
+    entries: List[tuple[Dict[str, Any], str]] = []
+    entry_names: Dict[str, int] = {}
+
+    def add_entry(node: Dict[str, Any], entry_name: str) -> None:
+        normalized = entry_name.lstrip("/")
+        if not normalized:
+            return
+        if normalized in entry_names:
+            raise HTTPException(409, f"duplicate entry name in zip: {normalized}")
+        entry_names[normalized] = 1
+        entries.append((node, normalized))
+
+    def walk_folder(folder_path: str, prefix: str) -> None:
+        children = list_children(user, folder_path)
+        for child in children:
+            if child.get("parent") != folder_path:
+                continue
+            if child.get("type") == "folder":
+                walk_folder(child["path"], prefix + child["name"] + "/")
+            else:
+                add_entry(child, prefix + child["name"])
+
     for path in paths:
-        p = norm_path(path, is_folder=False)
-        node = get_node(user, p)
-        if node["type"] != "file":
-            raise HTTPException(400, f"not a file: {path}")
-        nodes.append(node)
+        normalized = norm_path(path, is_folder=None)
+        node = get_node(user, normalized if normalized.endswith("/") else normalized)
+        if node["type"] == "folder":
+            folder = norm_path(node["path"], is_folder=True)
+            _, name = split_parent_name(folder)
+            prefix = f"{name}/" if name else ""
+            walk_folder(folder, prefix)
+        else:
+            add_entry(node, node["name"])
 
     zf = zipstream.ZipFile(mode="w", compression=zipstream.ZIP_DEFLATED)
-    for node in nodes:
+    for node, entry_name in entries:
         obj = _s3.get_object(Bucket=node["s3_bucket"], Key=node["s3_key"])
         body = obj["Body"]
-        zf.write_iter(node["name"], iter(lambda: body.read(1024 * 1024), b""))
-    return zf
+        zf.write_iter(entry_name, iter(lambda: body.read(1024 * 1024), b""))
+    return zf, len(entries)
 
 
 def upload_zip(user: str, dest_folder: str, zip_file: UploadFile) -> List[str]:
@@ -1149,6 +1258,49 @@ def list_shared_with_me(user: str) -> List[Dict[str, Any]]:
     return items
 
 
+def list_shared_with_me_by_owner(user: str, owner: str) -> List[Dict[str, Any]]:
+    tbl = _table()
+    prefix = f"SHARED#FROM#{owner}#PATH#"
+    resp = tbl.query(
+        KeyConditionExpression=Key("PK").eq(pk_user(user)) & Key("SK").begins_with(prefix)
+    )
+    items = []
+    for it in resp.get("Items", []):
+        items.append({
+            "owner": it["owner"],
+            "path": it["path"],
+            "shared_at": it.get("shared_at"),
+            "permission": it.get("permission", "read"),
+            "expires_at": it.get("expires_at"),
+        })
+    items.sort(key=lambda x: x["path"])
+    return items
+
+
+def require_shared_access(user: str, owner: str, path: str, *, permission: str = "read") -> Dict[str, Any]:
+    if permission not in {"read", "write"}:
+        raise HTTPException(status_code=400, detail="invalid permission")
+    p = norm_path(path, is_folder=None)
+    candidates = list_shared_with_me_by_owner(user, owner)
+    best: Optional[Dict[str, Any]] = None
+    for candidate in candidates:
+        shared_path = norm_path(candidate["path"], is_folder=None)
+        if shared_path.endswith("/"):
+            if is_ancestor_path(shared_path, p):
+                if not best or len(shared_path) > len(best["path"]):
+                    best = candidate
+        elif shared_path == p:
+            best = candidate
+    if not best:
+        raise HTTPException(status_code=404, detail="not shared")
+    expires_at = _parse_iso(best.get("expires_at"))
+    if expires_at and expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=403, detail="share expired")
+    shared_permission = best.get("permission", "read")
+    if permission == "write" and shared_permission != "write":
+        raise HTTPException(status_code=403, detail="permission denied")
+    return best
+
 def _delete_shares_for_path(owner: str, path: str) -> None:
     tbl = _table()
     prefix = f"SHARE#{path}#TO#"
@@ -1187,3 +1339,122 @@ def _move_shares(owner: str, old_path: str, new_path: str) -> None:
             "permission": it.get("permission", "read"),
             "expires_at": it.get("expires_at"),
         })
+
+
+def _purge_node_item(
+    tbl,
+    item: Dict[str, Any],
+    now: datetime,
+    *,
+    key: Optional[Dict[str, Any]] = None,
+) -> str:
+    if not item.get("deleted_at"):
+        return "skipped"
+    if item.get("purge_status") == "purged":
+        return "skipped"
+    purge_after = _parse_iso(item.get("purge_after"))
+    if purge_after and purge_after > now:
+        return "skipped"
+    if item.get("s3_bucket") and item.get("s3_key"):
+        try:
+            _s3.delete_object(Bucket=item["s3_bucket"], Key=item["s3_key"])
+        except ClientError:
+            return "error"
+    key = key or {"PK": item.get("PK"), "SK": item.get("SK")}
+    if not key.get("PK") or not key.get("SK"):
+        return "error"
+    tbl.update_item(
+        Key=key,
+        UpdateExpression="SET purge_status=:s, purged_at=:t, updated_at=:t",
+        ExpressionAttributeValues={":s": "purged", ":t": now_iso()},
+    )
+    return "purged"
+
+
+def purge_deleted_nodes(user: str, *, limit: Optional[int] = None) -> Dict[str, Any]:
+    tbl = _table()
+    purge_limit = limit or S.filemgr_purge_scan_limit
+    purged = 0
+    skipped = 0
+    errors = 0
+    now = datetime.now(timezone.utc)
+    start_key: Optional[Dict[str, Any]] = None
+
+    while purged + skipped + errors < purge_limit:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("PK").eq(pk_user(user)) & Key("SK").begins_with("NODE#"),
+            "Limit": max(50, min(purge_limit, S.filemgr_purge_scan_limit)),
+        }
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = tbl.query(**kwargs)
+        items = resp.get("Items", [])
+        for item in items:
+            if purged + skipped + errors >= purge_limit:
+                break
+            result = _purge_node_item(tbl, item, now, key=node_key(user, item["path"]))
+            if result == "purged":
+                purged += 1
+            elif result == "error":
+                errors += 1
+            else:
+                skipped += 1
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
+    return {"purged": purged, "skipped": skipped, "errors": errors}
+
+
+def purge_deleted_nodes_global(*, limit: Optional[int] = None) -> Dict[str, Any]:
+    tbl = _table()
+    purge_limit = limit or S.filemgr_purge_scan_limit
+    purged = 0
+    skipped = 0
+    errors = 0
+    now = datetime.now(timezone.utc)
+    start_key: Optional[Dict[str, Any]] = None
+    filter_expr = Attr("SK").begins_with("NODE#") & Attr("deleted_at").exists()
+
+    while purged + skipped + errors < purge_limit:
+        remaining = purge_limit - (purged + skipped + errors)
+        if remaining <= 0:
+            break
+        kwargs: Dict[str, Any] = {"FilterExpression": filter_expr, "Limit": min(200, remaining)}
+        if start_key:
+            kwargs["ExclusiveStartKey"] = start_key
+        resp = tbl.scan(**kwargs)
+        items = resp.get("Items", [])
+        for item in items:
+            if purged + skipped + errors >= purge_limit:
+                break
+            result = _purge_node_item(tbl, item, now)
+            if result == "purged":
+                purged += 1
+            elif result == "error":
+                errors += 1
+            else:
+                skipped += 1
+        start_key = resp.get("LastEvaluatedKey")
+        if not start_key:
+            break
+    return {"purged": purged, "skipped": skipped, "errors": errors}
+
+
+async def filemgr_purge_loop() -> None:
+    interval = max(60, int(S.filemgr_purge_interval_seconds))
+    while True:
+        try:
+            purge_deleted_nodes_global()
+        except Exception:
+            logger.exception("File manager purge loop failed")
+        await asyncio.sleep(interval)
+
+
+def start_filemgr_purge_task() -> None:
+    if not S.filemgr_purge_enabled:
+        logger.info("File manager purge disabled")
+        return
+    if not S.filemgr_table_name:
+        logger.info("File manager purge skipped: FILEMGR_TABLE not configured")
+        return
+    asyncio.create_task(filemgr_purge_loop())

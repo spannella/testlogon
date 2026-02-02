@@ -206,6 +206,10 @@ class Settings:
     # File manager
     filemgr_table_name: str = os.environ.get("FILEMGR_TABLE", "")
     filemgr_bucket: str = os.environ.get("FILEMGR_BUCKET", "")
+    filemgr_retention_days: int = int(os.environ.get("FILEMGR_RETENTION_DAYS", "30"))
+    filemgr_purge_scan_limit: int = int(os.environ.get("FILEMGR_PURGE_SCAN_LIMIT", "200"))
+    filemgr_purge_enabled: bool = os.environ.get("FILEMGR_PURGE_ENABLED", "false").lower() == "true"
+    filemgr_purge_interval_seconds: int = int(os.environ.get("FILEMGR_PURGE_INTERVAL_SECONDS", "900"))
 
     # Subscriptions
     subscriptions_table_name: str = os.environ.get("SUBSCRIPTIONS_TABLE_NAME", "subscriptions")
