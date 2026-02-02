@@ -207,7 +207,9 @@ async def password_recovery_sms_verify(req: Request, body: PasswordRecoverySmsVe
     _ensure_factor_required(chal, "sms")
     attempts = int(chal.get("sms_code_attempts", 0))
     sent_at = int(chal.get("sms_code_sent_at", 0))
-    if attempts >= S.sms_code_max_attempts and (now_ts() - sent_at) < S.sms_code_attempt_window_seconds:
+    max_attempts = int(getattr(S, "sms_code_max_attempts", 8))
+    attempt_window = int(getattr(S, "sms_code_attempt_window_seconds", 600))
+    if attempts >= max_attempts and (now_ts() - sent_at) < attempt_window:
         audit_event(
             "password_recovery_sms_verify",
             body.username,

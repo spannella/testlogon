@@ -588,6 +588,7 @@
 
     <div class="section" style="margin-top:16px;">
       <h4 style="margin:0 0 8px 0;">Create event</h4>
+      <input id="eventIdInput" type="hidden" />
       <div class="row-inline">
         <input id="eventNameInput" placeholder="Event name" style="flex:1;"/>
         <input id="eventTimezoneInput" placeholder="Timezone (optional)" style="width:220px;"/>
@@ -606,6 +607,7 @@
         <input id="eventStartInput" class="mono" placeholder="Start (ISO-8601, e.g. 2024-01-01T09:00:00Z)" style="flex:1;"/>
         <input id="eventEndInput" class="mono" placeholder="End (ISO-8601, e.g. 2024-01-01T10:00:00Z)" style="flex:1;"/>
         <button id="eventCreateBtn">Add event</button>
+        <button id="eventCancelEditBtn" class="muted">Cancel edit</button>
       </div>
       <div id="eventCreateStatus" class="muted" style="margin-top:6px;"></div>
     </div>
@@ -619,13 +621,96 @@
     </div>
 
     <div class="section" style="margin-top:16px;">
+      <h4 style="margin:0 0 8px 0;">Working hours</h4>
+      <div class="muted">Define default availability windows per weekday for the active calendar.</div>
+      <div class="grid" style="margin-top:8px;">
+        <div>
+          <label class="muted">Monday</label>
+          <div class="row-inline">
+            <input id="workMonStart" type="time" />
+            <input id="workMonEnd" type="time" />
+          </div>
+        </div>
+        <div>
+          <label class="muted">Tuesday</label>
+          <div class="row-inline">
+            <input id="workTueStart" type="time" />
+            <input id="workTueEnd" type="time" />
+          </div>
+        </div>
+        <div>
+          <label class="muted">Wednesday</label>
+          <div class="row-inline">
+            <input id="workWedStart" type="time" />
+            <input id="workWedEnd" type="time" />
+          </div>
+        </div>
+        <div>
+          <label class="muted">Thursday</label>
+          <div class="row-inline">
+            <input id="workThuStart" type="time" />
+            <input id="workThuEnd" type="time" />
+          </div>
+        </div>
+        <div>
+          <label class="muted">Friday</label>
+          <div class="row-inline">
+            <input id="workFriStart" type="time" />
+            <input id="workFriEnd" type="time" />
+          </div>
+        </div>
+        <div>
+          <label class="muted">Saturday</label>
+          <div class="row-inline">
+            <input id="workSatStart" type="time" />
+            <input id="workSatEnd" type="time" />
+          </div>
+        </div>
+        <div>
+          <label class="muted">Sunday</label>
+          <div class="row-inline">
+            <input id="workSunStart" type="time" />
+            <input id="workSunEnd" type="time" />
+          </div>
+        </div>
+      </div>
+      <div class="row-inline" style="margin-top:8px;">
+        <button id="workingHoursSaveBtn">Save working hours</button>
+        <span id="workingHoursStatus" class="muted"></span>
+      </div>
+    </div>
+
+    <div class="section" style="margin-top:16px;">
       <h4 style="margin:0 0 8px 0;">Availability</h4>
       <div class="row-inline">
         <input id="openingsStartInput" class="mono" placeholder="Start window (ISO-8601 UTC)" style="flex:1;"/>
         <input id="openingsEndInput" class="mono" placeholder="End window (ISO-8601 UTC)" style="flex:1;"/>
         <button id="openingsLoadBtn">Load openings</button>
       </div>
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="openingsStartPicker" type="datetime-local" style="flex:1;" />
+        <input id="openingsEndPicker" type="datetime-local" style="flex:1;" />
+      </div>
       <div id="calendarOpeningsList" class="list" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="section" style="margin-top:16px;">
+      <h4 style="margin:0 0 8px 0;">Team availability</h4>
+      <div class="muted">Merge multiple calendars to find common openings.</div>
+      <div class="row-inline" style="margin-top:8px;">
+        <textarea id="teamCalendarIdsInput" class="mono" placeholder="Calendar IDs (comma or newline separated)" rows="2" style="flex:1;"></textarea>
+      </div>
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="teamOpeningsStartInput" class="mono" placeholder="Start window (ISO-8601 UTC)" style="flex:1;"/>
+        <input id="teamOpeningsEndInput" class="mono" placeholder="End window (ISO-8601 UTC)" style="flex:1;"/>
+        <button id="teamOpeningsLoadBtn">Load team openings</button>
+      </div>
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="teamOpeningsStartPicker" type="datetime-local" style="flex:1;" />
+        <input id="teamOpeningsEndPicker" type="datetime-local" style="flex:1;" />
+      </div>
+      <div id="calendarTeamStatus" class="muted" style="margin-top:6px;"></div>
+      <div id="calendarTeamOpeningsList" class="list" style="margin-top:8px;"></div>
     </div>
   </div>
 

@@ -18,7 +18,10 @@ def _pk_subscriber(subscriber_id: str) -> str:
 
 
 def get_subscription_settings(creator_id: str) -> Dict[str, Any]:
-    item = T.subscriptions.get_item(Key={"pk": _pk_creator(creator_id), "sk": "SETTINGS"}).get("Item")
+    try:
+        item = T.subscriptions.get_item(Key={"pk": _pk_creator(creator_id), "sk": "SETTINGS"}).get("Item")
+    except Exception:
+        item = None
     if not item:
         return {"require_subscription": False, "disable_auto_renew": False, "updated_at": 0}
     return {

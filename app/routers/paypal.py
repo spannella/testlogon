@@ -937,8 +937,15 @@ async def capture_order(body: CaptureOrderIn, x_user_id: Optional[str] = Header(
         settle_or_reverse_ledger(user_id, led_sk_value, "settled")
         update_payment_status(user_id, order_id, "succeeded", raw={"capture": cap})
         if purchase_txn_id:
-            mark_completed(user_id, purchase_txn_id, order_id, "PayPal capture succeeded")
-        else:
+            try:
+                mark_completed(user_id, purchase_txn_id, order_id, "PayPal capture succeeded")
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+                purchase_txn_id = None
+            except Exception:
+                purchase_txn_id = None
+        if not purchase_txn_id:
             purchase_txn_id = record_billing_transaction(
                 user_sub=user_id,
                 amount_cents=amount,
@@ -963,8 +970,15 @@ async def capture_order(body: CaptureOrderIn, x_user_id: Optional[str] = Header(
         settle_or_reverse_ledger(user_id, led_sk_value, "reversed")
         update_payment_status(user_id, order_id, "failed", raw={"capture": cap})
         if purchase_txn_id:
-            mark_reverted(user_id, purchase_txn_id, status.lower() or "paypal_capture_failed")
-        else:
+            try:
+                mark_reverted(user_id, purchase_txn_id, status.lower() or "paypal_capture_failed")
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+                purchase_txn_id = None
+            except Exception:
+                purchase_txn_id = None
+        if not purchase_txn_id:
             record_billing_transaction(
                 user_sub=user_id,
                 amount_cents=amount,

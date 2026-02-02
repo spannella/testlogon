@@ -156,6 +156,10 @@ class AlertToastPrefsReq(BaseModel):
 class AlertPushPrefsReq(BaseModel):
     push_event_types: List[str] = Field(default_factory=list)
 
+class AlertWebhookPrefsReq(BaseModel):
+    webhook_urls: List[str] = Field(default_factory=list)
+    webhook_event_types: List[str] = Field(default_factory=list)
+
 class AlertEmailBeginReq(BaseModel):
     email: str
 
@@ -577,6 +581,15 @@ class OpeningsOut(BaseModel):
 class EventsPageOut(BaseModel):
     events: List[EventOut]
     next_cursor: str | None = None
+
+    def __len__(self) -> int:
+        return len(self.events)
+
+    def __iter__(self):
+        return iter(self.events)
+
+    def __getitem__(self, index: int) -> EventOut:
+        return self.events[index]
 
 
 class RecurrenceRule(BaseModel):

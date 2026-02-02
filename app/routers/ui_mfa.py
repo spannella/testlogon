@@ -31,6 +31,9 @@ from app.core.time import now_ts
 
 router = APIRouter(prefix="/ui/mfa", tags=["ui-mfa"])
 
+def _sessions_table_enabled() -> bool:
+    return bool(getattr(S, "ddb_sessions_table", ""))
+
 def _challenge_progress(chal: dict, passed_factor: str) -> dict:
     required = list(chal.get("required_factors") or [])
     passed = dict(chal.get("passed") or {})
@@ -78,11 +81,12 @@ async def ui_sms_begin(req: Request, body: SmsBeginReq, user_sub: str = Depends(
     if not can_send_verification(user_sub, "sms"):
         raise HTTPException(429, "Rate limited")
     rate_limit_or_429(user_sub, "sms_login")
-    T.sessions.update_item(
-        Key={"user_sub": user_sub, "session_id": body.challenge_id},
-        UpdateExpression="SET sms_code_sent_at=:t, sms_code_attempts=:z",
-        ExpressionAttributeValues={":t": now_ts(), ":z": 0},
-    )
+    if _sessions_table_enabled():
+        T.sessions.update_item(
+            Key={"user_sub": user_sub, "session_id": body.challenge_id},
+            UpdateExpression="SET sms_code_sent_at=:t, sms_code_attempts=:z",
+            ExpressionAttributeValues={":t": now_ts(), ":z": 0},
+        )
     # Send to all enabled numbers
     send_to = nums[:S.sms_device_limit]
     for n in send_to:
@@ -120,22 +124,24 @@ async def ui_sms_verify(
         except Exception:
             continue
     if not ok:
-        T.sessions.update_item(
-            Key={"user_sub": user_sub, "session_id": body.challenge_id},
-            UpdateExpression="SET sms_code_attempts = :n",
-            ExpressionAttributeValues={":n": attempts + 1},
-        )
+        if _sessions_table_enabled():
+            T.sessions.update_item(
+                Key={"user_sub": user_sub, "session_id": body.challenge_id},
+                UpdateExpression="SET sms_code_attempts = :n",
+                ExpressionAttributeValues={":n": attempts + 1},
+            )
         audit_event("mfa_sms_verify", user_sub, req, outcome="failure", challenge_id=body.challenge_id)
         record_lockout_failure(user_sub, client_ip_from_request(req), "mfa_sms")
         raise HTTPException(401, "Bad SMS code")
-    try:
-        T.sessions.update_item(
-            Key={"user_sub": user_sub, "session_id": body.challenge_id},
-            UpdateExpression="REMOVE sms_code_sent_at SET sms_code_attempts = :z",
-            ExpressionAttributeValues={":z": 0},
-        )
-    except Exception:
-        pass
+    if _sessions_table_enabled():
+        try:
+            T.sessions.update_item(
+                Key={"user_sub": user_sub, "session_id": body.challenge_id},
+                UpdateExpression="REMOVE sms_code_sent_at SET sms_code_attempts = :z",
+                ExpressionAttributeValues={":z": 0},
+            )
+        except Exception:
+            pass
     mark_factor_passed(user_sub, body.challenge_id, "sms")
     sid = maybe_finalize(req, user_sub, body.challenge_id)
     if sid:
@@ -158,7 +164,8 @@ async def ui_email_begin(req: Request, body: EmailBeginReq, user_sub: str = Depe
     code = gen_numeric_code(6)
     # store hashed code on the challenge item (best effort)
     from app.core.crypto import sha256_str
-    T.sessions.update_item(Key={"user_sub": user_sub, "session_id": body.challenge_id}, UpdateExpression="SET email_code_hash=:h, email_code_sent_at=:t, email_code_attempts=:z", ExpressionAttributeValues={":h": sha256_str(code), ":t": now_ts(), ":z": 0})
+    if _sessions_table_enabled():
+        T.sessions.update_item(Key={"user_sub": user_sub, "session_id": body.challenge_id}, UpdateExpression="SET email_code_hash=:h, email_code_sent_at=:t, email_code_attempts=:z", ExpressionAttributeValues={":h": sha256_str(code), ":t": now_ts(), ":z": 0})
     send_to = emails[:S.email_device_limit]
     for e in send_to:
         send_email_code(e, "login", code)

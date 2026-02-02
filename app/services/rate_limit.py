@@ -9,7 +9,13 @@ from app.core.settings import S
 from app.core.tables import T
 from app.services.ttl import with_ttl
 
+
+def _sessions_table_enabled() -> bool:
+    return bool(getattr(S, "ddb_sessions_table", ""))
+
 def rate_limit_or_429(user_sub: str, factor: str) -> None:
+    if not _sessions_table_enabled():
+        return
     now = now_ts()
     earliest = now - S.mfa_send_min_interval_seconds
     bucket = now // 3600
@@ -46,6 +52,8 @@ def rate_limit_or_429(user_sub: str, factor: str) -> None:
         raise HTTPException(429, "Too many verification sends; try again shortly")
 
 def _bucket_limit(user_sub: str, sid: str, max_n: int, win: int) -> bool:
+    if not _sessions_table_enabled():
+        return True
     now = now_ts()
     it = T.sessions.get_item(Key={"user_sub": user_sub, "session_id": sid}).get("Item") or {}
     start = int(it.get("bucket_start", 0))
@@ -162,6 +170,8 @@ def _lockout_key(user_sub: str, action: str) -> str:
     return f"lockout#{action}"
 
 def enforce_lockout(user_sub: str, ip: str, action: str) -> None:
+    if not _sessions_table_enabled():
+        return
     now = now_ts()
     for target in (user_sub, _ip_user(ip)):
         sid = _lockout_key(target, action)
@@ -171,10 +181,14 @@ def enforce_lockout(user_sub: str, ip: str, action: str) -> None:
             raise HTTPException(429, "Account temporarily locked; try again later")
 
 def record_lockout_failure(user_sub: str, ip: str, action: str) -> None:
+    if not _sessions_table_enabled():
+        return
     for target in (user_sub, _ip_user(ip)):
         _record_lockout_failure_target(target, action)
 
 def clear_lockout(user_sub: str, ip: str, action: str) -> None:
+    if not _sessions_table_enabled():
+        return
     for target in (user_sub, _ip_user(ip)):
         sid = _lockout_key(target, action)
         try:
@@ -183,6 +197,8 @@ def clear_lockout(user_sub: str, ip: str, action: str) -> None:
             pass
 
 def _record_lockout_failure_target(user_sub: str, action: str) -> None:
+    if not _sessions_table_enabled():
+        return
     now = now_ts()
     sid = _lockout_key(user_sub, action)
     it = T.sessions.get_item(Key={"user_sub": user_sub, "session_id": sid}).get("Item") or {}
@@ -236,4 +252,11 @@ def can_send_alert_channel(user_sub: str, channel: str) -> bool:
         max_n = int(os.environ.get("ALERTS_PUSH_MAX_PER_WINDOW", "20"))
         win = int(os.environ.get("ALERTS_PUSH_WINDOW_SECONDS", "3600"))
         return _bucket_limit(user_sub, "rl#alert_push", max_n, win)
+    if channel == "webhook":
+        return _bucket_limit(
+            user_sub,
+            "rl#alert_webhook",
+            S.alerts_webhook_max_per_window,
+            S.alerts_webhook_window_seconds,
+        )
     return True

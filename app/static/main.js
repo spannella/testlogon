@@ -330,7 +330,8 @@ function fmtBytes(value) {
   const units = ["B", "KB", "MB", "GB", "TB"];
   const idx = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
   const scaled = size / Math.pow(1024, idx);
-  return `${scaled.toFixed(scaled >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
+  const precision = (scaled >= 10 || idx === 0 || Number.isInteger(scaled)) ? 0 : 1;
+  return `${scaled.toFixed(precision)} ${units[idx]}`;
 }
 
 /* ===================== billing (CCBill) ===================== */
@@ -2661,6 +2662,12 @@ function renderCalendarEvents(events) {
     const when = evt.all_day
       ? `All day ${escapeHtml(evt.all_day_date || "")}`
       : `${escapeHtml(evt.start_utc || "")} → ${escapeHtml(evt.end_utc || "")}`;
+    const buttons = `
+      <div class="row-inline" style="margin-top:6px;">
+        <button data-action="edit" data-id="${escapeHtml(evt.event_id || "")}">Edit</button>
+        <button class="danger" data-action="delete" data-id="${escapeHtml(evt.event_id || "")}">Delete</button>
+      </div>
+    `;
     row.innerHTML = `
       <div class="row">
         <div class="grow"><b>${escapeHtml(evt.name || "")}</b></div>
@@ -2668,7 +2675,14 @@ function renderCalendarEvents(events) {
       </div>
       <div class="muted">${when} (${escapeHtml(evt.timezone || "")})</div>
       ${evt.description ? `<div class="muted">${escapeHtml(evt.description)}</div>` : ""}
+      ${buttons}
     `;
+    row.querySelector('[data-action="edit"]').onclick = () => {
+      setEventEditMode(evt);
+    };
+    row.querySelector('[data-action="delete"]').onclick = async () => {
+      await deleteCalendarEvent(evt.event_id);
+    };
     wrap.appendChild(row);
   });
 }
@@ -2689,6 +2703,83 @@ function renderCalendarOpenings(openings) {
   });
 }
 
+function renderTeamOpenings(openings) {
+  const wrap = document.getElementById("calendarTeamOpeningsList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!openings || openings.length === 0) {
+    wrap.innerHTML = '<div class="muted">No shared openings for selected window.</div>';
+    return;
+  }
+  openings.forEach(o => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `<div class="mono">${escapeHtml(o.start_utc)} → ${escapeHtml(o.end_utc)}</div>`;
+    wrap.appendChild(row);
+  });
+}
+
+function parseTeamCalendarIds(raw) {
+  return raw
+    .split(/[\n,]+/)
+    .map(value => value.trim())
+    .filter(Boolean);
+}
+
+function toIsoUtc(value) {
+  if (!value) return "";
+  if (value.endsWith("Z") || value.includes("+")) return value;
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return value;
+  return dt.toISOString();
+}
+
+function setEventEditMode(evt) {
+  document.getElementById("eventIdInput").value = evt.event_id || "";
+  document.getElementById("eventNameInput").value = evt.name || "";
+  document.getElementById("eventDescriptionInput").value = evt.description || "";
+  document.getElementById("eventTimezoneInput").value = evt.timezone || "";
+  document.getElementById("eventAllDayToggle").checked = !!evt.all_day;
+  document.getElementById("eventAllDayDateInput").value = evt.all_day_date || "";
+  document.getElementById("eventStartInput").value = evt.start_utc || "";
+  document.getElementById("eventEndInput").value = evt.end_utc || "";
+  document.getElementById("eventCreateBtn").textContent = "Save event";
+  document.getElementById("eventCreateStatus").textContent = `Editing ${evt.event_id}`;
+}
+
+function resetEventForm() {
+  document.getElementById("eventIdInput").value = "";
+  document.getElementById("eventNameInput").value = "";
+  document.getElementById("eventDescriptionInput").value = "";
+  document.getElementById("eventTimezoneInput").value = "";
+  document.getElementById("eventAllDayToggle").checked = false;
+  document.getElementById("eventAllDayDateInput").value = "";
+  document.getElementById("eventStartInput").value = "";
+  document.getElementById("eventEndInput").value = "";
+  document.getElementById("eventCreateBtn").textContent = "Add event";
+}
+
+function buildWorkingHours() {
+  const days = [
+    { key: "mon", start: "workMonStart", end: "workMonEnd" },
+    { key: "tue", start: "workTueStart", end: "workTueEnd" },
+    { key: "wed", start: "workWedStart", end: "workWedEnd" },
+    { key: "thu", start: "workThuStart", end: "workThuEnd" },
+    { key: "fri", start: "workFriStart", end: "workFriEnd" },
+    { key: "sat", start: "workSatStart", end: "workSatEnd" },
+    { key: "sun", start: "workSunStart", end: "workSunEnd" },
+  ];
+  const workingHours = {};
+  days.forEach(day => {
+    const start = document.getElementById(day.start).value;
+    const end = document.getElementById(day.end).value;
+    if (start && end) {
+      workingHours[day.key] = [{ start, end }];
+    }
+  });
+  return workingHours;
+}
+
 async function createCalendar() {
   try {
     await ensureUiSession();
@@ -2700,6 +2791,36 @@ async function createCalendar() {
     await refreshCalendarEvents();
   } catch (e) {
     setCalendarStatus("Error: " + e.message);
+  }
+}
+
+async function loadTeamOpenings() {
+  const status = document.getElementById("calendarTeamStatus");
+  const ids = parseTeamCalendarIds(document.getElementById("teamCalendarIdsInput").value);
+  const startPicker = document.getElementById("teamOpeningsStartPicker").value.trim();
+  const endPicker = document.getElementById("teamOpeningsEndPicker").value.trim();
+  const start = startPicker ? toIsoUtc(startPicker) : document.getElementById("teamOpeningsStartInput").value.trim();
+  const end = endPicker ? toIsoUtc(endPicker) : document.getElementById("teamOpeningsEndInput").value.trim();
+  if (!ids.length) {
+    if (status) status.textContent = "Enter at least one calendar ID.";
+    return;
+  }
+  if (!start || !end) {
+    if (status) status.textContent = "Enter start and end window.";
+    return;
+  }
+  try {
+    await ensureUiSession();
+    if (status) status.textContent = "Loading...";
+    const res = await apiPost("/ui/calendars/availability", {
+      calendar_ids: ids,
+      start_utc: start,
+      end_utc: end,
+    });
+    renderTeamOpenings(res || []);
+    if (status) status.textContent = `Found ${Array.isArray(res) ? res.length : 0} openings.`;
+  } catch (e) {
+    if (status) status.textContent = "Error: " + e.message;
   }
 }
 
@@ -2720,6 +2841,7 @@ async function createCalendarEvent() {
   }
   try {
     await ensureUiSession();
+    const eventId = document.getElementById("eventIdInput").value.trim();
     const payload = {
       name: document.getElementById("eventNameInput").value.trim(),
       description: document.getElementById("eventDescriptionInput").value.trim(),
@@ -2729,11 +2851,33 @@ async function createCalendarEvent() {
       start_utc: document.getElementById("eventStartInput").value.trim() || null,
       end_utc: document.getElementById("eventEndInput").value.trim() || null,
     };
-    const res = await apiPost(`/ui/calendars/${encodeURIComponent(calendarId)}/events`, payload);
-    document.getElementById("eventCreateStatus").textContent = `Added event ${res.event_id}`;
+    const res = eventId
+      ? await apiPatch(`/ui/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`, payload)
+      : await apiPost(`/ui/calendars/${encodeURIComponent(calendarId)}/events`, payload);
+    if (eventId) {
+      document.getElementById("eventCreateStatus").textContent = `Updated event ${res.event_id}`;
+      resetEventForm();
+    } else {
+      document.getElementById("eventCreateStatus").textContent = `Added event ${res.event_id}`;
+    }
     await refreshCalendarEvents();
   } catch (e) {
     document.getElementById("eventCreateStatus").textContent = "Error: " + e.message;
+  }
+}
+
+async function deleteCalendarEvent(eventId) {
+  if (!eventId) return;
+  if (!confirm("Delete this event?")) return;
+  const calendarId = getCalendarId();
+  if (!calendarId) return;
+  try {
+    await ensureUiSession();
+    await apiDelete(`/ui/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`);
+    setCalendarStatus(`Deleted event ${eventId}`);
+    await refreshCalendarEvents();
+  } catch (e) {
+    setCalendarStatus("Error: " + e.message);
   }
 }
 
@@ -2743,8 +2887,10 @@ async function loadCalendarOpenings() {
     setCalendarStatus("Set a calendar ID first.");
     return;
   }
-  const start = document.getElementById("openingsStartInput").value.trim();
-  const end = document.getElementById("openingsEndInput").value.trim();
+  const startPicker = document.getElementById("openingsStartPicker").value.trim();
+  const endPicker = document.getElementById("openingsEndPicker").value.trim();
+  const start = startPicker ? toIsoUtc(startPicker) : document.getElementById("openingsStartInput").value.trim();
+  const end = endPicker ? toIsoUtc(endPicker) : document.getElementById("openingsEndInput").value.trim();
   if (!start || !end) {
     setCalendarStatus("Enter start and end window.");
     return;
@@ -2756,6 +2902,23 @@ async function loadCalendarOpenings() {
     renderCalendarOpenings(res || []);
   } catch (e) {
     setCalendarStatus("Error: " + e.message);
+  }
+}
+
+async function saveWorkingHours() {
+  const calendarId = getCalendarId();
+  const status = document.getElementById("workingHoursStatus");
+  if (!calendarId) {
+    if (status) status.textContent = "Set a calendar ID first.";
+    return;
+  }
+  try {
+    await ensureUiSession();
+    const workingHours = buildWorkingHours();
+    await apiPatch(`/ui/calendars/${encodeURIComponent(calendarId)}`, { working_hours: workingHours });
+    if (status) status.textContent = "Saved.";
+  } catch (e) {
+    if (status) status.textContent = "Error: " + e.message;
   }
 }
 async function confirmAddAlertSms(challenge_id, code) {
@@ -4056,8 +4219,8 @@ function renderCartItems(items) {
       <td class=\"mono\">${escapeHtml(item.sku)}</td>
       <td>${escapeHtml(item.name)}</td>
       <td><input id=\"${qtyId}\" type=\"number\" min=\"0\" value=\"${item.quantity}\" style=\"width:80px\"/></td>
-      <td>${fmtMoney(item.unit_price_cents, \"usd\")}</td>
-      <td>${fmtMoney(item.line_total_cents, \"usd\")}</td>
+      <td>${fmtMoney(item.unit_price_cents, "usd")}</td>
+      <td>${fmtMoney(item.line_total_cents, "usd")}</td>
       <td>
         <button data-action=\"update\" data-sku=\"${escapeHtml(item.sku)}\">Update</button>
         <button class=\"danger\" data-action=\"remove\" data-sku=\"${escapeHtml(item.sku)}\">Remove</button>
@@ -5584,12 +5747,25 @@ document.getElementById("eventCreateBtn").onclick = async () => {
   await createCalendarEvent();
 };
 
+document.getElementById("eventCancelEditBtn").onclick = () => {
+  resetEventForm();
+  document.getElementById("eventCreateStatus").textContent = "Edit canceled.";
+};
+
 document.getElementById("eventsRefreshBtn").onclick = async () => {
   await refreshCalendarEvents();
 };
 
 document.getElementById("openingsLoadBtn").onclick = async () => {
   await loadCalendarOpenings();
+};
+
+document.getElementById("workingHoursSaveBtn").onclick = async () => {
+  await saveWorkingHours();
+};
+
+document.getElementById("teamOpeningsLoadBtn").onclick = async () => {
+  await loadTeamOpenings();
 };
 
 document.getElementById("alertTypesSaveBtn").onclick = async () => {
@@ -5905,34 +6081,35 @@ document.getElementById("accountReactivateBtn").onclick = () => {
   });
 };
 
-initBillingUi();
-renderPasswordRecovery();
-document.getElementById("billingRefreshBtn").onclick = refreshBillingAll;
-document.getElementById("paySettledBalanceBtn").onclick = payBillingSettledBalance;
-document.getElementById("autopay").onchange = setBillingAutopay;
-document.getElementById("paneAddCardBtn").onclick = () => showBillingPane("add_card");
-document.getElementById("paneAddBankBtn").onclick = () => showBillingPane("add_bank");
-document.getElementById("paneVerifyBankBtn").onclick = () => showBillingPane("verify_bank");
-document.getElementById("paneListMethodsBtn").onclick = () => showBillingPane("list_methods");
-document.getElementById("addCardBtn").onclick = addBillingCard;
-document.getElementById("addBankAccountBtn").onclick = addBillingBankAccount;
-document.getElementById("usePendingSetupIntentBtn").onclick = useBillingPendingSetupIntent;
-document.getElementById("verifyByAmountsBtn").onclick = verifyBillingByAmounts;
-document.getElementById("verifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
-document.getElementById("loadLedgerBtn").onclick = loadBillingLedger;
-document.getElementById("stripeRefreshBtn").onclick = refreshBillingAll;
-document.getElementById("stripePaySettledBalanceBtn").onclick = payBillingSettledBalance;
-document.getElementById("stripe_autopay").onchange = setBillingAutopay;
-document.getElementById("stripePaneAddCardBtn").onclick = () => showStripePane("add_card");
-document.getElementById("stripePaneAddBankBtn").onclick = () => showStripePane("add_bank");
-document.getElementById("stripePaneVerifyBankBtn").onclick = () => showStripePane("verify_bank");
-document.getElementById("stripePaneListMethodsBtn").onclick = () => showStripePane("list_methods");
-document.getElementById("stripeAddCardBtn").onclick = addBillingCard;
-document.getElementById("stripeAddBankAccountBtn").onclick = addBillingBankAccount;
-document.getElementById("stripeUsePendingSetupIntentBtn").onclick = useBillingPendingSetupIntent;
-document.getElementById("stripeVerifyByAmountsBtn").onclick = verifyBillingByAmounts;
-document.getElementById("stripeVerifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
-document.getElementById("stripeLoadLedgerBtn").onclick = loadBillingLedger;
+if (!window.__SKIP_BOOT__) {
+  initBillingUi();
+  renderPasswordRecovery();
+  document.getElementById("billingRefreshBtn").onclick = refreshBillingAll;
+  document.getElementById("paySettledBalanceBtn").onclick = payBillingSettledBalance;
+  document.getElementById("autopay").onchange = setBillingAutopay;
+  document.getElementById("paneAddCardBtn").onclick = () => showBillingPane("add_card");
+  document.getElementById("paneAddBankBtn").onclick = () => showBillingPane("add_bank");
+  document.getElementById("paneVerifyBankBtn").onclick = () => showBillingPane("verify_bank");
+  document.getElementById("paneListMethodsBtn").onclick = () => showBillingPane("list_methods");
+  document.getElementById("addCardBtn").onclick = addBillingCard;
+  document.getElementById("addBankAccountBtn").onclick = addBillingBankAccount;
+  document.getElementById("usePendingSetupIntentBtn").onclick = useBillingPendingSetupIntent;
+  document.getElementById("verifyByAmountsBtn").onclick = verifyBillingByAmounts;
+  document.getElementById("verifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
+  document.getElementById("loadLedgerBtn").onclick = loadBillingLedger;
+  document.getElementById("stripeRefreshBtn").onclick = refreshBillingAll;
+  document.getElementById("stripePaySettledBalanceBtn").onclick = payBillingSettledBalance;
+  document.getElementById("stripe_autopay").onchange = setBillingAutopay;
+  document.getElementById("stripePaneAddCardBtn").onclick = () => showStripePane("add_card");
+  document.getElementById("stripePaneAddBankBtn").onclick = () => showStripePane("add_bank");
+  document.getElementById("stripePaneVerifyBankBtn").onclick = () => showStripePane("verify_bank");
+  document.getElementById("stripePaneListMethodsBtn").onclick = () => showStripePane("list_methods");
+  document.getElementById("stripeAddCardBtn").onclick = addBillingCard;
+  document.getElementById("stripeAddBankAccountBtn").onclick = addBillingBankAccount;
+  document.getElementById("stripeUsePendingSetupIntentBtn").onclick = useBillingPendingSetupIntent;
+  document.getElementById("stripeVerifyByAmountsBtn").onclick = verifyBillingByAmounts;
+  document.getElementById("stripeVerifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
+  document.getElementById("stripeLoadLedgerBtn").onclick = loadBillingLedger;
 
 setInputValue("msgApiBase", API_BASE);
 document.getElementById("msgLoadConvosBtn").onclick = loadMessagingConvos;
@@ -6005,13 +6182,12 @@ document.getElementById("newsfeedNotifsRefreshBtn").onclick = async () => {
   }
 };
 document.getElementById("newsfeedConnectBtn").onclick = connectNewsfeedSse;
-document.getElementById("newsfeedDisconnectBtn").onclick = () => {
+  document.getElementById("newsfeedDisconnectBtn").onclick = () => {
   disconnectNewsfeedSse();
   logNewsfeedSse("Disconnected.");
 };
 
 /* ===================== boot ===================== */
-if (!window.__SKIP_BOOT__) {
   setCalendarId(getCalendarId());
   if (!accessToken()) { openTokenModal(); } else { refreshAll(); }
   startToastSSE();

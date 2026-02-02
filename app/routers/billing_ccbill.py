@@ -133,7 +133,7 @@ def get_settings(ctx=Depends(require_ui_session)):
 
 
 @router.post("/api/billing/autopay")
-def set_autopay(body: SetAutopayIn, req: Request = None, ctx=Depends(require_ui_session)):
+def set_autopay(body: SetAutopayIn, ctx=Depends(require_ui_session), req: Request = None):
     user_sub = ctx["user_sub"]
     existing = T.billing.get_item(Key={"user_sub": user_sub, "sk": "BILLING"}).get("Item")
     if not existing:
@@ -173,7 +173,7 @@ def get_balance(ctx=Depends(require_ui_session)):
 
 
 @router.post("/api/billing/payment-methods/ccbill-token")
-def save_payment_token(body: SavePaymentTokenIn, req: Request = None, ctx=Depends(require_ui_session)):
+def save_payment_token(body: SavePaymentTokenIn, ctx=Depends(require_ui_session), req: Request = None):
     user_sub = ctx["user_sub"]
     existing = list_payment_methods(user_sub)
     next_priority = 0 if not existing else (max(int(x.get("priority", 0)) for x in existing) + 1)
@@ -226,7 +226,7 @@ def list_payment_methods_endpoint(ctx=Depends(require_ui_session)):
 
 
 @router.post("/api/billing/payment-methods/priority")
-def set_priority(body: SetPriorityIn, req: Request = None, ctx=Depends(require_ui_session)):
+def set_priority(body: SetPriorityIn, ctx=Depends(require_ui_session), req: Request = None):
     user_sub = ctx["user_sub"]
     sk = _pm_sk(body.payment_token_id)
     if not T.billing.get_item(Key={"user_sub": user_sub, "sk": sk}).get("Item"):
@@ -249,7 +249,7 @@ def set_priority(body: SetPriorityIn, req: Request = None, ctx=Depends(require_u
 
 
 @router.post("/api/billing/payment-methods/default")
-def set_default(body: SetDefaultIn, req: Request = None, ctx=Depends(require_ui_session)):
+def set_default(body: SetDefaultIn, ctx=Depends(require_ui_session), req: Request = None):
     user_sub = ctx["user_sub"]
     if not T.billing.get_item(Key={"user_sub": user_sub, "sk": _pm_sk(body.payment_token_id)}).get("Item"):
         raise HTTPException(404, "Payment method not found")
@@ -267,7 +267,7 @@ def set_default(body: SetDefaultIn, req: Request = None, ctx=Depends(require_ui_
 
 
 @router.delete("/api/billing/payment-methods/{payment_token_id}")
-def remove_payment_method(payment_token_id: str, req: Request = None, ctx=Depends(require_ui_session)):
+def remove_payment_method(payment_token_id: str, ctx=Depends(require_ui_session), req: Request = None):
     user_sub = ctx["user_sub"]
     sk = _pm_sk(payment_token_id)
     if not T.billing.get_item(Key={"user_sub": user_sub, "sk": sk}).get("Item"):
@@ -390,7 +390,7 @@ async def subscribe_monthly_endpoint(body: SubscribeMonthlyIn, request: Request,
 
 
 @router.post("/api/billing/refund")
-def refund_payment(body: RefundIn, req: Request = None, ctx=Depends(require_ui_session)):
+def refund_payment(body: RefundIn, ctx=Depends(require_ui_session), req: Request = None):
     user_sub = ctx["user_sub"]
     pay = T.billing.get_item(Key={"user_sub": user_sub, "sk": _pay_sk(body.transaction_id)}).get("Item")
     if not pay:
@@ -584,12 +584,12 @@ async def ccbill_webhook(req: Request):
             if T.billing.get_item(Key={"user_sub": user_sub, "sk": str(ledger_sk_hint)}).get("Item"):
                 led_sk_to_settle = str(ledger_sk_hint)
 
-            if led_sk_to_settle:
-                if pay and pay.get("status") in ("pending", "processing", "requires_action"):
-                    apply_balance_delta(user_sub, {"payments_pending_cents": -amount, "payments_settled_cents": amount})
-                settle_or_reverse_ledger(user_sub, led_sk_to_settle, "settled")
-                if transaction_id:
-                    update_payment_status(user_sub, str(transaction_id), "succeeded", raw=safe_meta)
+        if led_sk_to_settle:
+            if pay and pay.get("status") in ("pending", "processing", "requires_action"):
+                apply_balance_delta(user_sub, {"payments_pending_cents": -amount, "payments_settled_cents": amount})
+            settle_or_reverse_ledger(user_sub, led_sk_to_settle, "settled")
+            if transaction_id:
+                update_payment_status(user_sub, str(transaction_id), "succeeded", raw=safe_meta)
         else:
             led_sk_value2, led_item = new_ledger_entry(
                 user_sub=user_sub,
