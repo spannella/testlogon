@@ -70,6 +70,13 @@
       <input id="msgSearchQuery" placeholder="Search text" style="flex:1;" />
       <input id="msgSearchSender" placeholder="Sender ID (optional)" style="flex:1;" />
       <input id="msgSearchAfter" placeholder="After ts (unix seconds)" class="mono" style="flex:1;" />
+      <select id="msgSearchKind" multiple>
+        <option value="text">Text</option>
+        <option value="image">Image</option>
+        <option value="file">File</option>
+        <option value="audio">Audio</option>
+        <option value="video">Video</option>
+      </select>
     </div>
     <div class="row-inline" style="margin-top:8px;">
       <button id="msgSearchConvoBtn">Search convo</button>
@@ -84,6 +91,38 @@
     <div class="row-inline" style="margin-top:8px;">
       <button id="msgSendBtn">Send</button>
       <span class="muted" id="msgMessageStatus"></span>
+    </div>
+    <div class="section">
+      <h4 style="margin:0 0 6px 0;">Optional link preview</h4>
+      <div class="row-inline">
+        <input id="msgPreviewUrl" placeholder="Preview URL (optional)" style="flex:1;" />
+        <input id="msgPreviewTitle" placeholder="Title (optional)" style="flex:1;" />
+      </div>
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="msgPreviewDescription" placeholder="Description (optional)" style="flex:1;" />
+      </div>
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="msgPreviewImage" placeholder="Image URL (optional)" style="flex:1;" />
+        <input id="msgPreviewSite" placeholder="Site name (optional)" style="flex:1;" />
+      </div>
+    </div>
+    <div class="section">
+      <h4 style="margin:0 0 6px 0;">Attachments</h4>
+      <input id="msgFileInput" type="file" />
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="msgFilePath" placeholder="File-manager path (optional)" style="flex:1;" />
+        <select id="msgFileKind">
+          <option value="file">File</option>
+          <option value="audio">Voice note</option>
+          <option value="video">Video</option>
+        </select>
+        <input id="msgFileDuration" type="number" min="1" placeholder="Duration seconds (optional)" />
+      </div>
+      <div class="row-inline" style="margin-top:8px;">
+        <button id="msgSendFileBtn">Upload &amp; Send</button>
+        <button id="msgSendPathBtn">Send by path</button>
+        <span class="muted" id="msgAttachmentStatus"></span>
+      </div>
     </div>
   </div>
 </div>

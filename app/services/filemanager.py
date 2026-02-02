@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 import uuid
+import tempfile
 import zipfile
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -186,6 +189,95 @@ def _node_matches(tokens: List[str], item: Dict[str, Any]) -> bool:
     haystack = _node_haystack(item)
     return all(token in haystack for token in tokens)
 
+
+def _maybe_probe_duration(bucket: str, s3_key: str, content_type: Optional[str]) -> Optional[int]:
+    if not content_type or not (content_type.startswith("audio/") or content_type.startswith("video/")):
+        return None
+    if not shutil.which("ffprobe"):
+        return None
+    with tempfile.NamedTemporaryFile(suffix=".media") as tmp:
+        try:
+            _s3.download_fileobj(bucket, s3_key, tmp)
+            tmp.flush()
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    tmp.name,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except ClientError:
+            return None
+        except OSError:
+            return None
+    if result.returncode != 0:
+        return None
+    try:
+        return int(float(result.stdout.strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _maybe_generate_thumbnail(
+    bucket: str,
+    s3_key: str,
+    content_type: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    if not content_type or not content_type.startswith("video/"):
+        return None
+    if not shutil.which("ffmpeg"):
+        return None
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = f"{tmpdir}/input"
+        output_path = f"{tmpdir}/thumb.jpg"
+        try:
+            with open(input_path, "wb") as infile:
+                _s3.download_fileobj(bucket, s3_key, infile)
+            result = subprocess.run(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    input_path,
+                    "-ss",
+                    "00:00:01",
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    "scale=320:-1",
+                    output_path,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except ClientError:
+            return None
+        except OSError:
+            return None
+        if result.returncode != 0:
+            return None
+        thumb_key = f"{s3_key}_thumb.jpg"
+        try:
+            _s3.upload_file(
+                Filename=output_path,
+                Bucket=bucket,
+                Key=thumb_key,
+                ExtraArgs={"ContentType": "image/jpeg"},
+            )
+        except ClientError:
+            return None
+    return {"bucket": bucket, "key": thumb_key, "content_type": "image/jpeg"}
+
+
 def _token_pk(user: str, token: str) -> str:
     return f"TOKEN#{token}#USER#{user}"
 
@@ -356,6 +448,9 @@ def upload_file(user: str, path: str, file: UploadFile) -> Dict[str, Any]:
     except ClientError as exc:
         raise HTTPException(500, f"s3 error: {exc}") from exc
 
+    duration_seconds = _maybe_probe_duration(bucket, s3_key, file.content_type)
+    thumbnail = _maybe_generate_thumbnail(bucket, s3_key, file.content_type)
+
     item = {
         "PK": pk_user(user),
         "SK": sk_node(p),
@@ -370,6 +465,8 @@ def upload_file(user: str, path: str, file: UploadFile) -> Dict[str, Any]:
         "upload_by": user,
         "size": size,
         "content_type": file.content_type or "application/octet-stream",
+        "duration_seconds": duration_seconds,
+        "thumbnail": thumbnail,
         "s3_bucket": bucket,
         "s3_key": s3_key,
         "etag": etag,
@@ -381,6 +478,88 @@ def upload_file(user: str, path: str, file: UploadFile) -> Dict[str, Any]:
     put_node(item)
     _put_token_entries(user, item)
     return {"path": p, "size": size}
+
+
+def presign_upload(user: str, path: str, *, content_type: Optional[str]) -> Dict[str, Any]:
+    bucket = _bucket()
+    p = norm_path(path, is_folder=False)
+    parent, name = split_parent_name(p)
+    ensure_folder_exists(user, parent)
+    require_not_exists(user, p)
+
+    obj_id = str(uuid.uuid4())
+    s3_key = f"{user}/objects/{obj_id}"
+    upload_url = _s3.generate_presigned_url(
+        ClientMethod="put_object",
+        Params={
+            "Bucket": bucket,
+            "Key": s3_key,
+            "ContentType": content_type or "application/octet-stream",
+        },
+        ExpiresIn=900,
+    )
+    return {
+        "upload_url": upload_url,
+        "bucket": bucket,
+        "key": s3_key,
+        "path": p,
+        "content_type": content_type or "application/octet-stream",
+        "name": name,
+        "parent": parent,
+    }
+
+
+def register_presigned_upload(
+    user: str,
+    path: str,
+    *,
+    s3_key: str,
+    content_type: Optional[str],
+) -> Dict[str, Any]:
+    bucket = _bucket()
+    p = norm_path(path, is_folder=False)
+    parent, name = split_parent_name(p)
+    ensure_folder_exists(user, parent)
+    require_not_exists(user, p)
+
+    try:
+        head = _s3.head_object(Bucket=bucket, Key=s3_key)
+        size = int(head.get("ContentLength", 0))
+        etag = head.get("ETag")
+        resolved_content_type = content_type or head.get("ContentType") or "application/octet-stream"
+    except ClientError as exc:
+        raise HTTPException(500, f"s3 error: {exc}") from exc
+
+    duration_seconds = _maybe_probe_duration(bucket, s3_key, resolved_content_type)
+    thumbnail = _maybe_generate_thumbnail(bucket, s3_key, resolved_content_type)
+
+    item = {
+        "PK": pk_user(user),
+        "SK": sk_node(p),
+        "type": "file",
+        "path": p,
+        "name": name,
+        "name_lc": name.lower(),
+        "parent": parent,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "upload_at": now_iso(),
+        "upload_by": user,
+        "size": size,
+        "content_type": resolved_content_type,
+        "duration_seconds": duration_seconds,
+        "thumbnail": thumbnail,
+        "s3_bucket": bucket,
+        "s3_key": s3_key,
+        "etag": etag,
+        "GSI1PK": pk_user(user),
+        "GSI1SK": f"NAME#{name.lower()}#PATH#{p}",
+        "GSI2PK": f"PARENT#{parent}",
+        "GSI2SK": f"TYPE#file#NAME#{name.lower()}#PATH#{p}",
+    }
+    put_node(item)
+    _put_token_entries(user, item)
+    return {"path": p, "size": size, "content_type": resolved_content_type, "duration_seconds": duration_seconds}
 
 
 def build_download_url(path: str) -> str:
@@ -507,6 +686,21 @@ def download_file(user: str, path: str) -> Dict[str, Any]:
         pass
 
     return {"node": node, "object": obj}
+
+
+def download_thumbnail(user: str, path: str) -> Dict[str, Any]:
+    p = norm_path(path, is_folder=False)
+    node = get_node(user, p)
+    if node.get("type") != "file":
+        raise HTTPException(400, "not a file")
+    thumb = node.get("thumbnail")
+    if not thumb:
+        raise HTTPException(404, "thumbnail not available")
+    try:
+        obj = _s3.get_object(Bucket=thumb["bucket"], Key=thumb["key"])
+    except ClientError as exc:
+        raise HTTPException(500, f"s3 error: {exc}") from exc
+    return {"node": node, "thumbnail": thumb, "object": obj}
 
 
 def is_previewable(node: Dict[str, Any]) -> bool:

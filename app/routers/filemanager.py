@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile, Body, Request, HTTPException
+from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 
 from app.services.filemanager import (
     create_empty_folder,
     download_file,
+    download_thumbnail,
     download_zip,
     is_previewable,
     list_children,
@@ -24,6 +26,8 @@ from app.services.filemanager import (
     upload_zip,
     get_node,
     search_text,
+    presign_upload,
+    register_presigned_upload,
 )
 from app.services.alerts import audit_event
 from app.services.sessions import require_ui_session
@@ -33,6 +37,25 @@ router = APIRouter(prefix="/v1/fs", tags=["filemanager"])
 
 def _current_user(ctx=Depends(require_ui_session)) -> str:
     return ctx["user_sub"]
+
+
+class PresignUploadIn(BaseModel):
+    path: str = Field(..., description="Full file path, e.g. /docs/a.txt")
+    content_type: Optional[str] = Field(default=None, description="Optional content type")
+
+
+class PresignUploadOut(BaseModel):
+    upload_url: str
+    bucket: str
+    key: str
+    path: str
+    content_type: str
+
+
+class CompleteUploadIn(BaseModel):
+    path: str = Field(..., description="Full file path, e.g. /docs/a.txt")
+    key: str = Field(..., description="S3 object key from presign response")
+    content_type: Optional[str] = Field(default=None, description="Optional content type override")
 
 
 @router.get("/list")
@@ -69,6 +92,8 @@ def file_info(path: str = Query(...), user: str = Depends(_current_user)):
         "last_download_at": it.get("last_download_at"),
         "last_download_by": it.get("last_download_by"),
         "size": it.get("size"),
+        "duration_seconds": it.get("duration_seconds"),
+        "thumbnail": it.get("thumbnail"),
         "content_type": it.get("content_type"),
         "shared": it.get("shared", False),
     }
@@ -115,6 +140,33 @@ def upload_fs_file(
         path=result.get("path"),
         size=result.get("size"),
         content_type=file.content_type,
+    )
+    return {"ok": True, **result}
+
+
+@router.post("/presign-upload", response_model=PresignUploadOut)
+def presign_fs_upload(inp: PresignUploadIn, user: str = Depends(_current_user)):
+    result = presign_upload(user, inp.path, content_type=inp.content_type)
+    return PresignUploadOut(
+        upload_url=result["upload_url"],
+        bucket=result["bucket"],
+        key=result["key"],
+        path=result["path"],
+        content_type=result["content_type"],
+    )
+
+
+@router.post("/complete-upload")
+def complete_fs_upload(inp: CompleteUploadIn, req: Request = None, user: str = Depends(_current_user)):
+    result = register_presigned_upload(user, inp.path, s3_key=inp.key, content_type=inp.content_type)
+    audit_event(
+        "filemgr_file_uploaded",
+        user,
+        req,
+        outcome="success",
+        path=result.get("path"),
+        size=result.get("size"),
+        content_type=result.get("content_type"),
     )
     return {"ok": True, **result}
 
@@ -176,6 +228,28 @@ def preview_fs_file(path: str = Query(...), req: Request = None, user: str = Dep
         gen(),
         media_type=node.get("content_type", "application/octet-stream"),
         headers={"Content-Disposition": f'inline; filename="{node["name"]}"'},
+    )
+
+
+@router.get("/thumbnail")
+def thumbnail_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
+    result = download_thumbnail(user, path)
+    node = result["node"]
+    thumb = result["thumbnail"]
+    obj = result["object"]
+
+    def gen():
+        body = obj["Body"]
+        while True:
+            chunk = body.read(1024 * 1024)
+            if not chunk:
+                break
+            yield chunk
+
+    return StreamingResponse(
+        gen(),
+        media_type=thumb.get("content_type", "image/jpeg"),
+        headers={"Content-Disposition": f'inline; filename="{node["name"]}_thumb.jpg"'},
     )
 
 
