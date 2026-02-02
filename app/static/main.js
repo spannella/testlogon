@@ -2507,6 +2507,8 @@ async function refreshAll() {
       refreshAddresses(),
       refreshShoppingCart(),
       billingRefreshAll(),
+      refreshCalendarAccess(),
+      refreshCalendarShares(),
       refreshCalendarEvents(),
     ]);
     await pollToastsOnce();
@@ -2621,6 +2623,17 @@ function setCalendarStatus(msg) {
   if (el) el.textContent = msg || "";
 }
 
+const eventsPagination = {
+  currentCursor: null,
+  nextCursor: null,
+  prevStack: [],
+  lastQueryKey: "",
+};
+
+let calendarAccessItems = [];
+let calendarShares = [];
+let bookingLinks = [];
+
 function renderCalendarEvents(events) {
   const wrap = document.getElementById("calendarEventsList");
   if (!wrap) return;
@@ -2635,11 +2648,21 @@ function renderCalendarEvents(events) {
     const when = evt.all_day
       ? `All day ${escapeHtml(evt.all_day_date || "")}`
       : `${escapeHtml(evt.start_utc || "")} → ${escapeHtml(evt.end_utc || "")}`;
+    const recurrenceButtons = evt.recurrence_rule && evt.start_utc
+      ? `
+      <div class="row-inline" style="margin-top:6px;">
+        <button data-action="exclude" data-id="${escapeHtml(evt.event_id || "")}" data-start="${escapeHtml(evt.start_utc || "")}">Exclude occurrence</button>
+        <button data-action="override" data-id="${escapeHtml(evt.event_id || "")}" data-start="${escapeHtml(evt.start_utc || "")}">Edit occurrence</button>
+        <button class="muted" data-action="clear" data-id="${escapeHtml(evt.event_id || "")}" data-start="${escapeHtml(evt.start_utc || "")}">Clear exception</button>
+      </div>
+      `
+      : "";
     const buttons = `
       <div class="row-inline" style="margin-top:6px;">
         <button data-action="edit" data-id="${escapeHtml(evt.event_id || "")}">Edit</button>
         <button class="danger" data-action="delete" data-id="${escapeHtml(evt.event_id || "")}">Delete</button>
       </div>
+      ${recurrenceButtons}
     `;
     row.innerHTML = `
       <div class="row">
@@ -2656,6 +2679,17 @@ function renderCalendarEvents(events) {
     row.querySelector('[data-action="delete"]').onclick = async () => {
       await deleteCalendarEvent(evt.event_id);
     };
+    if (recurrenceButtons) {
+      row.querySelector('[data-action="exclude"]').onclick = async (ev) => {
+        await excludeEventOccurrence(ev.target.getAttribute("data-id"), ev.target.getAttribute("data-start"));
+      };
+      row.querySelector('[data-action="override"]').onclick = async (ev) => {
+        await overrideEventOccurrence(ev.target.getAttribute("data-id"), ev.target.getAttribute("data-start"), evt);
+      };
+      row.querySelector('[data-action="clear"]').onclick = async (ev) => {
+        await clearEventOccurrenceException(ev.target.getAttribute("data-id"), ev.target.getAttribute("data-start"));
+      };
+    }
     wrap.appendChild(row);
   });
 }
@@ -2692,6 +2726,216 @@ function renderTeamOpenings(openings) {
   });
 }
 
+function renderEventConflicts(conflicts) {
+  const wrap = document.getElementById("eventConflictsList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!conflicts || conflicts.length === 0) {
+    wrap.innerHTML = '<div class="muted">No conflicts found.</div>';
+    return;
+  }
+  conflicts.forEach(evt => {
+    const row = document.createElement("div");
+    row.className = "item";
+    const when = evt.all_day
+      ? `All day ${escapeHtml(evt.all_day_date || "")}`
+      : `${escapeHtml(evt.start_utc || "")} → ${escapeHtml(evt.end_utc || "")}`;
+    row.innerHTML = `
+      <div class="row">
+        <div class="grow"><b>${escapeHtml(evt.name || "")}</b></div>
+        <div class="mono">${escapeHtml(evt.event_id || "")}</div>
+      </div>
+      <div class="muted">${when} (${escapeHtml(evt.timezone || "")})</div>
+    `;
+    wrap.appendChild(row);
+  });
+}
+
+function renderEventSuggestions(suggestions) {
+  const wrap = document.getElementById("eventSuggestionsList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!suggestions || suggestions.length === 0) {
+    wrap.innerHTML = '<div class="muted">No suggested slots available.</div>';
+    return;
+  }
+  suggestions.forEach(slot => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `
+      <div class="row-inline" style="align-items:center;">
+        <div class="mono grow">${escapeHtml(slot.start_utc)} → ${escapeHtml(slot.end_utc)}</div>
+        <button data-action="apply" data-start="${escapeHtml(slot.start_utc)}" data-end="${escapeHtml(slot.end_utc)}">Use slot</button>
+      </div>
+    `;
+    row.querySelector('[data-action="apply"]').onclick = (ev) => {
+      const start = ev.target.getAttribute("data-start");
+      const end = ev.target.getAttribute("data-end");
+      if (!start || !end) return;
+      document.getElementById("eventAllDayToggle").checked = false;
+      document.getElementById("eventAllDayDateInput").value = "";
+      document.getElementById("eventStartInput").value = start;
+      document.getElementById("eventEndInput").value = end;
+      document.getElementById("eventCreateStatus").textContent = "Applied suggested slot.";
+    };
+    wrap.appendChild(row);
+  });
+}
+
+function renderCalendarAccess(items) {
+  calendarAccessItems = Array.isArray(items) ? items : [];
+  const wrap = document.getElementById("calendarAccessList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!calendarAccessItems.length) {
+    wrap.innerHTML = '<div class="muted">No accessible calendars yet.</div>';
+    return;
+  }
+  calendarAccessItems.forEach(item => {
+    const row = document.createElement("div");
+    row.className = "item";
+    row.innerHTML = `
+      <div class="row">
+        <div class="grow"><b>${escapeHtml(item.name || "Calendar")}</b></div>
+        <div class="mono">${escapeHtml(item.calendar_id || "")}</div>
+      </div>
+      <div class="muted">Owner: ${escapeHtml(item.owner_user_id || "")} · Permission: ${escapeHtml(item.permission || "read")}</div>
+      <div class="row-inline" style="margin-top:6px;">
+        <button data-action="use" data-id="${escapeHtml(item.calendar_id || "")}">Use calendar</button>
+      </div>
+    `;
+    row.querySelector('[data-action="use"]').onclick = async (ev) => {
+      const calendarId = ev.target.getAttribute("data-id");
+      setCalendarId(calendarId || "");
+      if (calendarId) {
+        setCalendarStatus(`Using calendar ${calendarId}`);
+        resetEventsPagination();
+        await refreshBookingLinks();
+        await refreshCalendarEvents();
+        await refreshCalendarShares();
+      }
+    };
+    wrap.appendChild(row);
+  });
+}
+
+function renderCalendarShares(items) {
+  calendarShares = Array.isArray(items) ? items : [];
+  const wrap = document.getElementById("calendarSharesList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!calendarShares.length) {
+    wrap.innerHTML = '<div class="muted">No shares for this calendar.</div>';
+    return;
+  }
+  calendarShares.forEach(share => {
+    const row = document.createElement("div");
+    row.className = "item";
+    row.innerHTML = `
+      <div class="row">
+        <div class="grow"><b>${escapeHtml(share.user_sub || "")}</b></div>
+        <div class="mono">${escapeHtml(share.permission || "read")}</div>
+      </div>
+      <div class="muted">Shared at ${escapeHtml(share.created_at_utc || "")}</div>
+      <div class="row-inline" style="margin-top:6px;">
+        <button class="danger" data-action="revoke" data-user="${escapeHtml(share.user_sub || "")}">Revoke</button>
+      </div>
+    `;
+    row.querySelector('[data-action="revoke"]').onclick = async (ev) => {
+      const userSub = ev.target.getAttribute("data-user");
+      if (!userSub) return;
+      await deleteCalendarShare(userSub);
+    };
+    wrap.appendChild(row);
+  });
+}
+
+function renderBookingLinks(links) {
+  bookingLinks = Array.isArray(links) ? links : [];
+  const wrap = document.getElementById("bookingLinksList");
+  if (wrap) {
+    wrap.innerHTML = "";
+    if (!bookingLinks.length) {
+      wrap.innerHTML = '<div class="muted">No booking links yet.</div>';
+    } else {
+      bookingLinks.forEach(link => {
+        const row = document.createElement("div");
+        row.className = "item";
+        const publicUrl = link.public_url || `/booking/${link.link_id}`;
+        row.innerHTML = `
+          <div class="row">
+            <div class="grow"><b>${escapeHtml(link.name || "")}</b></div>
+            <div class="mono">${escapeHtml(link.link_id || "")}</div>
+          </div>
+          <div class="muted">Duration: ${escapeHtml(String(link.duration_minutes || 0))} min · ${escapeHtml(link.timezone || "UTC")}</div>
+          <div class="row-inline" style="margin-top:6px; align-items:center;">
+            <div class="mono grow">${escapeHtml(publicUrl)}</div>
+            <button data-action="copy" data-url="${escapeHtml(publicUrl)}">Copy URL</button>
+            <button data-action="use" data-id="${escapeHtml(link.link_id || "")}">Use for preview</button>
+          </div>
+        `;
+        row.querySelector('[data-action="copy"]').onclick = async (ev) => {
+          const url = ev.target.getAttribute("data-url");
+          if (!url) return;
+          try {
+            await navigator.clipboard.writeText(url);
+            const status = document.getElementById("bookingLinkStatus");
+            if (status) status.textContent = "Copied link URL.";
+          } catch (e) {
+            prompt("Copy booking link URL:", url);
+          }
+        };
+        row.querySelector('[data-action="use"]').onclick = (ev) => {
+          const linkId = ev.target.getAttribute("data-id");
+          const select = document.getElementById("bookingLinkSelect");
+          if (select && linkId) {
+            select.value = linkId;
+          }
+        };
+        wrap.appendChild(row);
+      });
+    }
+  }
+
+  const select = document.getElementById("bookingLinkSelect");
+  if (select) {
+    select.innerHTML = "";
+    if (!bookingLinks.length) {
+      const opt = document.createElement("option");
+      opt.value = "";
+      opt.textContent = "No booking links available";
+      select.appendChild(opt);
+    } else {
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Select booking link";
+      select.appendChild(placeholder);
+      bookingLinks.forEach(link => {
+        const opt = document.createElement("option");
+        opt.value = link.link_id || "";
+        opt.textContent = `${link.name || "Booking link"} (${link.duration_minutes || 0} min)`;
+        select.appendChild(opt);
+      });
+    }
+  }
+}
+
+function renderBookingOpenings(openings) {
+  const wrap = document.getElementById("bookingOpeningsList");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  if (!openings || openings.length === 0) {
+    wrap.innerHTML = '<div class="muted">No openings for selected window.</div>';
+    return;
+  }
+  openings.forEach(o => {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `<div class="mono">${escapeHtml(o.start_utc)} → ${escapeHtml(o.end_utc)}</div>`;
+    wrap.appendChild(row);
+  });
+}
+
 function parseTeamCalendarIds(raw) {
   return raw
     .split(/[\n,]+/)
@@ -2707,6 +2951,60 @@ function toIsoUtc(value) {
   return dt.toISOString();
 }
 
+function getEventFilters() {
+  const startPicker = document.getElementById("eventsStartPicker").value.trim();
+  const endPicker = document.getElementById("eventsEndPicker").value.trim();
+  const start = startPicker ? toIsoUtc(startPicker) : document.getElementById("eventsStartInput").value.trim();
+  const end = endPicker ? toIsoUtc(endPicker) : document.getElementById("eventsEndInput").value.trim();
+  const limitRaw = document.getElementById("eventsLimitSelect").value;
+  const limit = limitRaw ? Number.parseInt(limitRaw, 10) : null;
+  return { start, end, limit };
+}
+
+function updateEventsStatus(message) {
+  const status = document.getElementById("eventsStatus");
+  if (status) status.textContent = message || "";
+}
+
+function updateEventsPaginationControls() {
+  const prevBtn = document.getElementById("eventsPrevBtn");
+  const nextBtn = document.getElementById("eventsNextBtn");
+  if (prevBtn) prevBtn.disabled = eventsPagination.prevStack.length === 0;
+  if (nextBtn) nextBtn.disabled = !eventsPagination.nextCursor;
+}
+
+function resetEventsPagination() {
+  eventsPagination.currentCursor = null;
+  eventsPagination.nextCursor = null;
+  eventsPagination.prevStack = [];
+  updateEventsPaginationControls();
+}
+
+function updateBookingLinkStatus(message) {
+  const status = document.getElementById("bookingLinkStatus");
+  if (status) status.textContent = message || "";
+}
+
+function updateBookingOpeningsStatus(message) {
+  const status = document.getElementById("bookingOpeningsStatus");
+  if (status) status.textContent = message || "";
+}
+
+function updateEventConflictStatus(message) {
+  const status = document.getElementById("eventConflictStatus");
+  if (status) status.textContent = message || "";
+}
+
+function updateCalendarAccessStatus(message) {
+  const status = document.getElementById("calendarAccessStatus");
+  if (status) status.textContent = message || "";
+}
+
+function updateCalendarShareStatus(message) {
+  const status = document.getElementById("calendarShareStatus");
+  if (status) status.textContent = message || "";
+}
+
 function setEventEditMode(evt) {
   document.getElementById("eventIdInput").value = evt.event_id || "";
   document.getElementById("eventNameInput").value = evt.name || "";
@@ -2716,6 +3014,17 @@ function setEventEditMode(evt) {
   document.getElementById("eventAllDayDateInput").value = evt.all_day_date || "";
   document.getElementById("eventStartInput").value = evt.start_utc || "";
   document.getElementById("eventEndInput").value = evt.end_utc || "";
+  document.getElementById("eventRecurrenceFreq").value = evt.recurrence_rule?.freq || "";
+  document.getElementById("eventRecurrenceInterval").value = evt.recurrence_rule?.interval || "";
+  document.getElementById("eventRecurrenceCount").value = evt.recurrence_rule?.count || "";
+  document.getElementById("eventRecurrenceUntil").value = evt.recurrence_rule?.until_utc || "";
+  document.getElementById("eventRecurrenceBymonthday").value = (evt.recurrence_rule?.bymonthday || []).join(",");
+  document.getElementById("eventRecurrenceBysetpos").value = (evt.recurrence_rule?.bysetpos || []).join(",");
+  document.getElementById("eventRecurrenceExdates").value = (evt.exdates_utc || []).join("\n");
+  document.querySelectorAll(".eventRecurrenceByday").forEach(box => {
+    const day = box.getAttribute("data-day");
+    box.checked = !!evt.recurrence_rule?.byday?.includes(day);
+  });
   document.getElementById("eventCreateBtn").textContent = "Save event";
   document.getElementById("eventCreateStatus").textContent = `Editing ${evt.event_id}`;
 }
@@ -2729,7 +3038,70 @@ function resetEventForm() {
   document.getElementById("eventAllDayDateInput").value = "";
   document.getElementById("eventStartInput").value = "";
   document.getElementById("eventEndInput").value = "";
+  document.getElementById("eventRecurrenceFreq").value = "";
+  document.getElementById("eventRecurrenceInterval").value = "";
+  document.getElementById("eventRecurrenceCount").value = "";
+  document.getElementById("eventRecurrenceUntil").value = "";
+  document.getElementById("eventRecurrenceBymonthday").value = "";
+  document.getElementById("eventRecurrenceBysetpos").value = "";
+  document.getElementById("eventRecurrenceExdates").value = "";
+  document.querySelectorAll(".eventRecurrenceByday").forEach(box => { box.checked = false; });
   document.getElementById("eventCreateBtn").textContent = "Add event";
+  updateEventConflictStatus("");
+  renderEventConflicts([]);
+  renderEventSuggestions([]);
+}
+
+function parseCsvNumbers(value) {
+  if (!value) return [];
+  return value
+    .split(/[\n,]+/)
+    .map(v => v.trim())
+    .filter(Boolean)
+    .map(v => Number.parseInt(v, 10))
+    .filter(v => !Number.isNaN(v));
+}
+
+function buildRecurrenceRule() {
+  const freq = document.getElementById("eventRecurrenceFreq").value;
+  if (!freq) return null;
+  const intervalRaw = document.getElementById("eventRecurrenceInterval").value.trim();
+  const countRaw = document.getElementById("eventRecurrenceCount").value.trim();
+  const untilRaw = document.getElementById("eventRecurrenceUntil").value.trim();
+  const byday = Array.from(document.querySelectorAll(".eventRecurrenceByday"))
+    .filter(box => box.checked)
+    .map(box => box.getAttribute("data-day"));
+  const bymonthday = parseCsvNumbers(document.getElementById("eventRecurrenceBymonthday").value.trim());
+  const bysetpos = parseCsvNumbers(document.getElementById("eventRecurrenceBysetpos").value.trim());
+  const rule = {
+    freq,
+    interval: intervalRaw ? Number.parseInt(intervalRaw, 10) : 1,
+  };
+  if (countRaw) rule.count = Number.parseInt(countRaw, 10);
+  if (untilRaw) rule.until_utc = toIsoUtc(untilRaw);
+  if (byday.length) rule.byday = byday;
+  if (bymonthday.length) rule.bymonthday = bymonthday;
+  if (bysetpos.length) rule.bysetpos = bysetpos;
+  return rule;
+}
+
+function buildEventPayload() {
+  const exdates = document.getElementById("eventRecurrenceExdates").value
+    .split(/\n+/)
+    .map(value => value.trim())
+    .filter(Boolean)
+    .map(value => toIsoUtc(value));
+  return {
+    name: document.getElementById("eventNameInput").value.trim(),
+    description: document.getElementById("eventDescriptionInput").value.trim(),
+    timezone: document.getElementById("eventTimezoneInput").value.trim() || null,
+    all_day: document.getElementById("eventAllDayToggle").checked,
+    all_day_date: document.getElementById("eventAllDayDateInput").value || null,
+    start_utc: document.getElementById("eventStartInput").value.trim() || null,
+    end_utc: document.getElementById("eventEndInput").value.trim() || null,
+    recurrence_rule: buildRecurrenceRule(),
+    exdates_utc: exdates.length ? exdates : null,
+  };
 }
 
 function buildWorkingHours() {
@@ -2761,9 +3133,151 @@ async function createCalendar() {
     const res = await apiPost("/ui/calendars", { name, timezone });
     setCalendarId(res.calendar_id || "");
     setCalendarStatus(`Created calendar ${res.calendar_id}`);
+    await refreshCalendarAccess();
+    await refreshCalendarShares();
+    await refreshBookingLinks();
     await refreshCalendarEvents();
   } catch (e) {
     setCalendarStatus("Error: " + e.message);
+  }
+}
+
+async function refreshCalendarAccess() {
+  try {
+    await ensureUiSession();
+    updateCalendarAccessStatus("Loading...");
+    const res = await apiGet("/ui/calendars");
+    renderCalendarAccess(res || []);
+    updateCalendarAccessStatus(`Loaded ${Array.isArray(res) ? res.length : 0} calendars.`);
+  } catch (e) {
+    updateCalendarAccessStatus("Error: " + e.message);
+  }
+}
+
+async function refreshCalendarShares() {
+  const calendarId = getCalendarId();
+  if (!calendarId) {
+    renderCalendarShares([]);
+    updateCalendarShareStatus("Set a calendar ID to manage shares.");
+    return;
+  }
+  try {
+    await ensureUiSession();
+    updateCalendarShareStatus("Loading...");
+    const res = await apiGet(`/ui/calendars/${encodeURIComponent(calendarId)}/shares`);
+    renderCalendarShares(res || []);
+    updateCalendarShareStatus(`Loaded ${Array.isArray(res) ? res.length : 0} shares.`);
+  } catch (e) {
+    renderCalendarShares([]);
+    updateCalendarShareStatus("Error: " + e.message);
+  }
+}
+
+async function createCalendarShare() {
+  const calendarId = getCalendarId();
+  if (!calendarId) {
+    updateCalendarShareStatus("Set a calendar ID first.");
+    return;
+  }
+  const userSub = document.getElementById("calendarShareUserInput").value.trim();
+  const permission = document.getElementById("calendarSharePermissionInput").value;
+  if (!userSub) {
+    updateCalendarShareStatus("Enter a user sub to share with.");
+    return;
+  }
+  try {
+    await ensureUiSession();
+    const res = await apiPost(`/ui/calendars/${encodeURIComponent(calendarId)}/shares`, {
+      user_sub: userSub,
+      permission,
+    });
+    updateCalendarShareStatus(`Shared with ${res.user_sub}.`);
+    document.getElementById("calendarShareUserInput").value = "";
+    await refreshCalendarShares();
+    await refreshCalendarAccess();
+  } catch (e) {
+    updateCalendarShareStatus("Error: " + e.message);
+  }
+}
+
+async function deleteCalendarShare(userSub) {
+  const calendarId = getCalendarId();
+  if (!calendarId || !userSub) return;
+  if (!confirm(`Revoke access for ${userSub}?`)) return;
+  try {
+    await ensureUiSession();
+    await apiDelete(`/ui/calendars/${encodeURIComponent(calendarId)}/shares/${encodeURIComponent(userSub)}`);
+    updateCalendarShareStatus(`Revoked access for ${userSub}.`);
+    await refreshCalendarShares();
+    await refreshCalendarAccess();
+  } catch (e) {
+    updateCalendarShareStatus("Error: " + e.message);
+  }
+}
+
+async function refreshBookingLinks() {
+  const calendarId = getCalendarId();
+  if (!calendarId) return;
+  try {
+    await ensureUiSession();
+    const res = await apiGet(`/ui/calendars/${encodeURIComponent(calendarId)}/booking_links`);
+    renderBookingLinks(res || []);
+  } catch (e) {
+    updateBookingLinkStatus("Error: " + e.message);
+  }
+}
+
+async function createBookingLink() {
+  const calendarId = getCalendarId();
+  if (!calendarId) {
+    updateBookingLinkStatus("Set a calendar ID first.");
+    return;
+  }
+  try {
+    await ensureUiSession();
+    const name = document.getElementById("bookingLinkNameInput").value.trim();
+    const duration = document.getElementById("bookingLinkDurationInput").value.trim();
+    const timezone = document.getElementById("bookingLinkTimezoneInput").value.trim() || null;
+    if (!name || !duration) {
+      updateBookingLinkStatus("Enter a name and duration.");
+      return;
+    }
+    const payload = { name, duration_minutes: Number.parseInt(duration, 10), timezone };
+    const res = await apiPost(`/ui/calendars/${encodeURIComponent(calendarId)}/booking_links`, payload);
+    updateBookingLinkStatus(`Created booking link ${res.link_id}`);
+    document.getElementById("bookingLinkNameInput").value = "";
+    document.getElementById("bookingLinkDurationInput").value = "";
+    document.getElementById("bookingLinkTimezoneInput").value = "";
+    await refreshBookingLinks();
+  } catch (e) {
+    updateBookingLinkStatus("Error: " + e.message);
+  }
+}
+
+async function loadBookingLinkOpenings() {
+  const linkId = document.getElementById("bookingLinkSelect").value;
+  if (!linkId) {
+    updateBookingOpeningsStatus("Select a booking link first.");
+    return;
+  }
+  const startPicker = document.getElementById("bookingOpeningsStartPicker").value.trim();
+  const endPicker = document.getElementById("bookingOpeningsEndPicker").value.trim();
+  const start = startPicker ? toIsoUtc(startPicker) : document.getElementById("bookingOpeningsStartInput").value.trim();
+  const end = endPicker ? toIsoUtc(endPicker) : document.getElementById("bookingOpeningsEndInput").value.trim();
+  if (!start || !end) {
+    updateBookingOpeningsStatus("Enter start and end window.");
+    return;
+  }
+  const limitRaw = document.getElementById("bookingOpeningsLimitInput").value.trim();
+  const params = new URLSearchParams({ start_utc: start, end_utc: end });
+  if (limitRaw) params.set("limit", limitRaw);
+  try {
+    updateBookingOpeningsStatus("Loading...");
+    const res = await apiGet(`/booking/${encodeURIComponent(linkId)}/openings?${params.toString()}`);
+    renderBookingOpenings(res || []);
+    updateBookingOpeningsStatus(`Found ${Array.isArray(res) ? res.length : 0} openings.`);
+  } catch (e) {
+    updateBookingOpeningsStatus("Error: " + e.message);
   }
 }
 
@@ -2801,9 +3315,142 @@ async function refreshCalendarEvents() {
   const calendarId = getCalendarId();
   if (!calendarId) return;
   await ensureUiSession();
-  const res = await apiGet(`/ui/calendars/${encodeURIComponent(calendarId)}/events`);
+  const filters = getEventFilters();
+  if ((filters.start && !filters.end) || (!filters.start && filters.end)) {
+    updateEventsStatus("Enter both start and end to filter the event list.");
+    return;
+  }
+  const queryKey = JSON.stringify(filters);
+  if (eventsPagination.lastQueryKey && eventsPagination.lastQueryKey !== queryKey) {
+    resetEventsPagination();
+  }
+  eventsPagination.lastQueryKey = queryKey;
+  const params = new URLSearchParams();
+  if (filters.start) params.set("start_utc", filters.start);
+  if (filters.end) params.set("end_utc", filters.end);
+  if (filters.limit) params.set("limit", String(filters.limit));
+  if (eventsPagination.currentCursor) params.set("cursor", eventsPagination.currentCursor);
+  const qs = params.toString();
+  updateEventsStatus("Loading...");
+  const res = await apiGet(`/ui/calendars/${encodeURIComponent(calendarId)}/events${qs ? `?${qs}` : ""}`);
   const events = Array.isArray(res) ? res : res.events;
   renderCalendarEvents(events || []);
+  eventsPagination.nextCursor = res && !Array.isArray(res) ? res.next_cursor : null;
+  updateEventsPaginationControls();
+  updateEventsStatus(`Loaded ${Array.isArray(events) ? events.length : 0} events.`);
+}
+
+async function previewEventConflicts() {
+  const calendarId = getCalendarId();
+  if (!calendarId) {
+    setCalendarStatus("Set a calendar ID first.");
+    return;
+  }
+  try {
+    await ensureUiSession();
+    updateEventConflictStatus("Checking conflicts...");
+    const eventId = document.getElementById("eventIdInput").value.trim();
+    const payload = buildEventPayload();
+    const res = await apiPost(`/ui/calendars/${encodeURIComponent(calendarId)}/events/conflicts`, {
+      ...payload,
+      event_id: eventId || null,
+    });
+    renderEventConflicts(res?.conflicts || []);
+    renderEventSuggestions([]);
+    const count = Array.isArray(res?.conflicts) ? res.conflicts.length : 0;
+    updateEventConflictStatus(count ? `Found ${count} conflict(s).` : "No conflicts found.");
+  } catch (e) {
+    renderEventConflicts([]);
+    updateEventConflictStatus("Error: " + e.message);
+  }
+}
+
+async function loadEventSuggestions() {
+  const calendarId = getCalendarId();
+  if (!calendarId) {
+    setCalendarStatus("Set a calendar ID first.");
+    return;
+  }
+  const payload = buildEventPayload();
+  if (payload.all_day || !payload.start_utc || !payload.end_utc) {
+    updateEventConflictStatus("Suggestions require start and end times for a timed event.");
+    return;
+  }
+  try {
+    await ensureUiSession();
+    updateEventConflictStatus("Loading suggestions...");
+    const durationMinutes = Math.max(
+      1,
+      Math.round((new Date(payload.end_utc).getTime() - new Date(payload.start_utc).getTime()) / 60000)
+    );
+    const res = await apiPost(`/ui/calendars/${encodeURIComponent(calendarId)}/events/suggestions`, {
+      start_utc: payload.start_utc,
+      end_utc: payload.end_utc,
+      duration_minutes: durationMinutes,
+      limit: 5,
+      window_days: 7,
+    });
+    renderEventSuggestions(res || []);
+    updateEventConflictStatus(`Found ${Array.isArray(res) ? res.length : 0} suggestion(s).`);
+  } catch (e) {
+    renderEventSuggestions([]);
+    updateEventConflictStatus("Error: " + e.message);
+  }
+}
+
+async function excludeEventOccurrence(eventId, occurrenceStart) {
+  const calendarId = getCalendarId();
+  if (!calendarId || !eventId || !occurrenceStart) return;
+  if (!confirm("Exclude this occurrence?")) return;
+  try {
+    await ensureUiSession();
+    await apiPost(
+      `/ui/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}/occurrences/${encodeURIComponent(occurrenceStart)}/exclude`,
+      {}
+    );
+    setCalendarStatus("Occurrence excluded.");
+    await refreshCalendarEvents();
+  } catch (e) {
+    setCalendarStatus("Error: " + e.message);
+  }
+}
+
+async function overrideEventOccurrence(eventId, occurrenceStart, evt) {
+  const calendarId = getCalendarId();
+  if (!calendarId || !eventId || !occurrenceStart) return;
+  const defaultStart = evt?.start_utc || occurrenceStart;
+  const defaultEnd = evt?.end_utc || "";
+  const newStart = prompt("New start (ISO-8601 UTC)", defaultStart || "") || "";
+  if (!newStart) return;
+  const newEnd = prompt("New end (ISO-8601 UTC)", defaultEnd || "") || "";
+  if (!newEnd) return;
+  try {
+    await ensureUiSession();
+    await apiPost(
+      `/ui/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}/occurrences/${encodeURIComponent(occurrenceStart)}/override`,
+      { start_utc: newStart, end_utc: newEnd }
+    );
+    setCalendarStatus("Occurrence updated.");
+    await refreshCalendarEvents();
+  } catch (e) {
+    setCalendarStatus("Error: " + e.message);
+  }
+}
+
+async function clearEventOccurrenceException(eventId, occurrenceStart) {
+  const calendarId = getCalendarId();
+  if (!calendarId || !eventId || !occurrenceStart) return;
+  if (!confirm("Clear exception for this occurrence?")) return;
+  try {
+    await ensureUiSession();
+    await apiDelete(
+      `/ui/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}/occurrences/${encodeURIComponent(occurrenceStart)}`
+    );
+    setCalendarStatus("Occurrence exception cleared.");
+    await refreshCalendarEvents();
+  } catch (e) {
+    setCalendarStatus("Error: " + e.message);
+  }
 }
 
 async function createCalendarEvent() {
@@ -2815,15 +3462,7 @@ async function createCalendarEvent() {
   try {
     await ensureUiSession();
     const eventId = document.getElementById("eventIdInput").value.trim();
-    const payload = {
-      name: document.getElementById("eventNameInput").value.trim(),
-      description: document.getElementById("eventDescriptionInput").value.trim(),
-      timezone: document.getElementById("eventTimezoneInput").value.trim() || null,
-      all_day: document.getElementById("eventAllDayToggle").checked,
-      all_day_date: document.getElementById("eventAllDayDateInput").value || null,
-      start_utc: document.getElementById("eventStartInput").value.trim() || null,
-      end_utc: document.getElementById("eventEndInput").value.trim() || null,
-    };
+    const payload = buildEventPayload();
     const res = eventId
       ? await apiPatch(`/ui/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`, payload)
       : await apiPost(`/ui/calendars/${encodeURIComponent(calendarId)}/events`, payload);
@@ -2833,6 +3472,7 @@ async function createCalendarEvent() {
     } else {
       document.getElementById("eventCreateStatus").textContent = `Added event ${res.event_id}`;
     }
+    resetEventsPagination();
     await refreshCalendarEvents();
   } catch (e) {
     document.getElementById("eventCreateStatus").textContent = "Error: " + e.message;
@@ -2848,6 +3488,7 @@ async function deleteCalendarEvent(eventId) {
     await ensureUiSession();
     await apiDelete(`/ui/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`);
     setCalendarStatus(`Deleted event ${eventId}`);
+    resetEventsPagination();
     await refreshCalendarEvents();
   } catch (e) {
     setCalendarStatus("Error: " + e.message);
@@ -5710,14 +6351,28 @@ document.getElementById("calendarSetBtn").onclick = async () => {
   setCalendarId(calendarId);
   if (calendarId) {
     setCalendarStatus(`Using calendar ${calendarId}`);
+    resetEventsPagination();
+    await refreshCalendarShares();
+    await refreshBookingLinks();
     await refreshCalendarEvents();
   } else {
     setCalendarStatus("Calendar cleared.");
+    renderBookingLinks([]);
+    renderCalendarShares([]);
   }
 };
 
 document.getElementById("calendarCreateBtn").onclick = async () => {
   await createCalendar();
+  resetEventsPagination();
+};
+
+document.getElementById("calendarAccessRefreshBtn").onclick = async () => {
+  await refreshCalendarAccess();
+};
+
+document.getElementById("calendarShareCreateBtn").onclick = async () => {
+  await createCalendarShare();
 };
 
 document.getElementById("eventCreateBtn").onclick = async () => {
@@ -5729,8 +6384,47 @@ document.getElementById("eventCancelEditBtn").onclick = () => {
   document.getElementById("eventCreateStatus").textContent = "Edit canceled.";
 };
 
+document.getElementById("eventPreviewConflictsBtn").onclick = async () => {
+  await previewEventConflicts();
+};
+
+document.getElementById("eventSuggestSlotsBtn").onclick = async () => {
+  await loadEventSuggestions();
+};
+
 document.getElementById("eventsRefreshBtn").onclick = async () => {
   await refreshCalendarEvents();
+};
+
+document.getElementById("eventsClearFiltersBtn").onclick = async () => {
+  document.getElementById("eventsStartInput").value = "";
+  document.getElementById("eventsEndInput").value = "";
+  document.getElementById("eventsStartPicker").value = "";
+  document.getElementById("eventsEndPicker").value = "";
+  document.getElementById("eventsLimitSelect").value = "";
+  resetEventsPagination();
+  await refreshCalendarEvents();
+};
+
+document.getElementById("eventsNextBtn").onclick = async () => {
+  if (!eventsPagination.nextCursor) return;
+  eventsPagination.prevStack.push(eventsPagination.currentCursor);
+  eventsPagination.currentCursor = eventsPagination.nextCursor;
+  await refreshCalendarEvents();
+};
+
+document.getElementById("eventsPrevBtn").onclick = async () => {
+  if (!eventsPagination.prevStack.length) return;
+  eventsPagination.currentCursor = eventsPagination.prevStack.pop();
+  await refreshCalendarEvents();
+};
+
+document.getElementById("bookingLinkCreateBtn").onclick = async () => {
+  await createBookingLink();
+};
+
+document.getElementById("bookingOpeningsLoadBtn").onclick = async () => {
+  await loadBookingLinkOpenings();
 };
 
 document.getElementById("openingsLoadBtn").onclick = async () => {

@@ -12,13 +12,20 @@ from app.models import (
     BookingLinkCreateIn,
     BookingLinkOut,
     BookingRequestIn,
+    CalendarAccessOut,
     CalendarCreateIn,
     CalendarOut,
+    CalendarShareIn,
+    CalendarShareOut,
     CalendarUpdateIn,
+    EventConflictPreviewIn,
+    EventConflictPreviewOut,
     EventsPageOut,
     EventCreateIn,
+    EventOccurrenceOverrideIn,
     EventOut,
     EventUpdateIn,
+    EventSuggestionsIn,
     OpeningsOut,
     RecurrenceRule,
     TeamAvailabilityIn,
@@ -121,6 +128,18 @@ def _booking_link_key(link_id: str) -> str:
     return f"booking#{link_id}"
 
 
+def _share_key(user_sub: str) -> str:
+    return f"share#{user_sub}"
+
+
+def _access_partition(user_sub: str) -> str:
+    return f"user#{user_sub}"
+
+
+def _access_key(calendar_id: str) -> str:
+    return f"calendar#{calendar_id}"
+
+
 def _load_event(calendar_id: str, event_id: str) -> Dict[str, Any]:
     item = T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": _event_key(event_id)}).get("Item")
     if not item:
@@ -202,7 +221,80 @@ def _normalize_recurrence_rule(rule: RecurrenceRule | None) -> RecurrenceRule | 
         return None
     if rule.until_utc:
         _ = parse_iso_dt(rule.until_utc)
+    if rule.bymonthday:
+        for day in rule.bymonthday:
+            if day == 0 or day < -31 or day > 31:
+                raise HTTPException(status_code=400, detail="Invalid bymonthday value")
+    if rule.bysetpos:
+        for pos in rule.bysetpos:
+            if pos == 0 or pos < -31 or pos > 31:
+                raise HTTPException(status_code=400, detail="Invalid bysetpos value")
     return rule
+
+
+def _normalize_exdates(exdates: list[str] | None, tz_name: str) -> list[str] | None:
+    if not exdates:
+        return None
+    _validate_timezone(tz_name)
+    tz = ZoneInfo(tz_name)
+    normalized: list[str] = []
+    for value in exdates:
+        if not value:
+            continue
+        try:
+            parsed = parse_iso_dt(value)
+        except HTTPException:
+            try:
+                parsed_date = parse_iso_date(value)
+            except HTTPException:
+                raise
+            parsed = datetime(parsed_date.year, parsed_date.month, parsed_date.day, 0, 0, 0, tzinfo=tz).astimezone(timezone.utc)
+        normalized.append(iso_utc(parsed))
+    return sorted(set(normalized))
+
+
+def _normalize_occurrence_override(calendar_tz: str, override: EventOccurrenceOverrideIn) -> Dict[str, Any]:
+    tz_name = override.timezone or calendar_tz
+    _validate_timezone(tz_name)
+    normalized: Dict[str, Any] = {
+        "name": override.name,
+        "description": override.description,
+        "timezone": tz_name,
+        "status": override.status,
+        "category": override.category,
+    }
+    if override.all_day is not None:
+        normalized["all_day"] = override.all_day
+    if override.all_day_date:
+        _ = parse_iso_date(override.all_day_date)
+        normalized["all_day_date"] = override.all_day_date
+    if normalized.get("all_day") and not normalized.get("all_day_date"):
+        raise HTTPException(status_code=400, detail="all_day_date is required for all-day overrides")
+    if override.start_utc:
+        normalized["start_utc"] = iso_utc(parse_iso_dt(override.start_utc))
+    if override.end_utc:
+        normalized["end_utc"] = iso_utc(parse_iso_dt(override.end_utc))
+    if normalized.get("start_utc") and normalized.get("end_utc"):
+        start = parse_iso_dt(normalized["start_utc"])
+        end = parse_iso_dt(normalized["end_utc"])
+        if end <= start:
+            raise HTTPException(status_code=400, detail="end_utc must be after start_utc")
+    return {k: v for k, v in normalized.items() if v is not None}
+
+
+def _normalize_overrides(
+    overrides: Dict[str, EventOccurrenceOverrideIn] | None,
+    calendar_tz: str,
+) -> Dict[str, Dict[str, Any]] | None:
+    if not overrides:
+        return None
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for key, value in overrides.items():
+        if not key:
+            continue
+        occ_key = iso_utc(parse_iso_dt(key))
+        normalized[occ_key] = _normalize_occurrence_override(calendar_tz, value)
+    return normalized or None
 
 
 def _normalize_event_times(calendar_tz: str, payload: EventCreateIn) -> Dict[str, Any]:
@@ -341,32 +433,75 @@ def _expand_rrule(
             if week_start > window_end + timedelta(days=7):
                 break
     elif rrule.freq == "MONTHLY":
-        def add_months(d: datetime, months: int) -> datetime | None:
-            y = d.year + (d.month - 1 + months) // 12
-            m = (d.month - 1 + months) % 12 + 1
-            try:
-                return d.replace(year=y, month=m, day=d.day)
-            except ValueError:
-                return None
-        k = 0
-        cur = series_start_utc
+        def month_last_day(year: int, month: int) -> int:
+            next_month = datetime(year + (month // 12), ((month % 12) + 1), 1, tzinfo=timezone.utc)
+            last_day = (next_month - timedelta(days=1)).day
+            return last_day
+
+        def add_months(year: int, month: int, months: int) -> tuple[int, int]:
+            total = (year * 12 + (month - 1)) + months
+            return total // 12, total % 12 + 1
+
+        def candidate_dates(year: int, month: int) -> list[date]:
+            last_day = month_last_day(year, month)
+            if rrule.bymonthday:
+                days: list[int] = []
+                for day in rrule.bymonthday:
+                    if day > 0 and day <= last_day:
+                        days.append(day)
+                    elif day < 0:
+                        target = last_day + day + 1
+                        if target >= 1:
+                            days.append(target)
+                return [date(year, month, d) for d in sorted(set(days))]
+            bydays = rrule.byday or [list(RRULE_WEEKDAY_MAP.keys())[series_start_utc.weekday()]]
+            weekday_idxs = sorted({RRULE_WEEKDAY_MAP[d] for d in bydays})
+            dates = [
+                date(year, month, day)
+                for day in range(1, last_day + 1)
+                if date(year, month, day).weekday() in weekday_idxs
+            ]
+            if rrule.bysetpos:
+                selected: list[date] = []
+                for pos in rrule.bysetpos:
+                    if pos > 0 and pos <= len(dates):
+                        selected.append(dates[pos - 1])
+                    elif pos < 0 and abs(pos) <= len(dates):
+                        selected.append(dates[pos])
+                return selected
+            return dates
+
+        start_year = series_start_utc.year
+        start_month = series_start_utc.month
+        month_offset = 0
         while True:
-            if until and cur > until:
+            year, month = add_months(start_year, start_month, month_offset)
+            for cand in candidate_dates(year, month):
+                occ_start = datetime(
+                    cand.year,
+                    cand.month,
+                    cand.day,
+                    series_start_utc.hour,
+                    series_start_utc.minute,
+                    series_start_utc.second,
+                    series_start_utc.microsecond,
+                    tzinfo=timezone.utc,
+                )
+                if occ_start < series_start_utc:
+                    continue
+                if until and occ_start > until:
+                    return sorted(occs, key=lambda x: x[0])
+                if remaining is not None and remaining <= 0:
+                    return sorted(occs, key=lambda x: x[0])
+                occ_end = occ_start + duration
+                if overlap(occ_start, occ_end, window_start, window_end):
+                    occs.append((occ_start, occ_end))
+                if remaining is not None:
+                    remaining -= 1
+            month_offset += rrule.interval
+            if until and datetime(year, month, 1, tzinfo=timezone.utc) > until + timedelta(days=31):
                 break
-            if remaining is not None and remaining <= 0:
-                break
-            occ_start = cur
-            occ_end = cur + duration
-            if overlap(occ_start, occ_end, window_start, window_end):
-                occs.append((occ_start, occ_end))
-            if remaining is not None:
-                remaining -= 1
-            k += rrule.interval
-            nxt = add_months(series_start_utc, k)
-            if nxt is None:
-                continue
-            cur = nxt
-            if cur > window_end + timedelta(days=31):
+            if datetime(year, month, 1, tzinfo=timezone.utc) > window_end + timedelta(days=31):
                 break
     return sorted(occs, key=lambda x: x[0])
 
@@ -385,8 +520,13 @@ def _expand_event_occurrences(
     if not occs:
         return []
     tz = ZoneInfo(event.get("timezone", "UTC"))
+    exdates = {str(value) for value in (event.get("exdates_utc") or [])}
+    overrides = event.get("recurrence_overrides") or {}
     occurrences: list[Dict[str, Any]] = []
     for occ_start, occ_end in occs:
+        occ_key = iso_utc(occ_start)
+        if occ_key in exdates:
+            continue
         occ = {**event}
         if event.get("all_day"):
             local_date = occ_start.astimezone(tz).date()
@@ -396,6 +536,17 @@ def _expand_event_occurrences(
         else:
             occ["start_utc"] = iso_utc(occ_start)
             occ["end_utc"] = iso_utc(occ_end)
+        override = overrides.get(occ_key)
+        if isinstance(override, dict):
+            occ.update(override)
+        try:
+            occ_interval = _event_time_interval(occ)
+        except Exception:
+            occ_interval = None
+        if occ_interval:
+            start, end = occ_interval
+            if not overlap(start, end, window_start, window_end):
+                continue
         occurrences.append(occ)
     return occurrences
 
@@ -428,13 +579,86 @@ def _ensure_no_conflicts(
                 raise HTTPException(status_code=409, detail="Event conflicts with an existing event")
 
 
-def _load_calendar(calendar_id: str, user_sub: str) -> Dict[str, Any]:
+def _find_conflicts(
+    calendar_id: str,
+    normalized: Dict[str, Any],
+    *,
+    exclude_event_id: str | None = None,
+) -> tuple[list[Dict[str, Any]], datetime, datetime]:
+    requested_start, requested_end = _event_payload_interval(normalized)
+    if not _is_busy_status(normalized.get("status", "busy")):
+        return [], requested_start, requested_end
+    conflicts: list[Dict[str, Any]] = []
+    for event in _list_events(calendar_id)[0]:
+        if exclude_event_id and event.get("event_id") == exclude_event_id:
+            continue
+        if event.get("recurrence_rule"):
+            occurrences = _expand_event_occurrences(event, requested_start, requested_end)
+            for occ in occurrences:
+                interval = _event_to_busy_interval(occ)
+                if interval is None:
+                    continue
+                start, end = interval
+                if overlap(requested_start, requested_end, start, end):
+                    conflicts.append(occ)
+        else:
+            interval = _event_to_busy_interval(event)
+            if interval is None:
+                continue
+            start, end = interval
+            if overlap(requested_start, requested_end, start, end):
+                conflicts.append(event)
+    return conflicts, requested_start, requested_end
+
+
+def _suggest_slots(
+    openings: list[tuple[datetime, datetime]],
+    duration: timedelta,
+    limit: int,
+) -> list[tuple[datetime, datetime]]:
+    suggestions: list[tuple[datetime, datetime]] = []
+    for start, end in openings:
+        if end - start < duration:
+            continue
+        suggestions.append((start, start + duration))
+        if len(suggestions) >= limit:
+            break
+    return suggestions
+
+
+def _load_calendar_access(calendar_id: str, user_sub: str, *, write: bool = False) -> Dict[str, Any]:
+    meta = T.calendar.get_item(Key=_calendar_keys(calendar_id)).get("Item")
+    if not meta:
+        raise HTTPException(status_code=404, detail="Calendar not found")
+    if meta.get("owner_user_sub") == user_sub:
+        return meta
+    share = T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": _share_key(user_sub)}).get("Item")
+    if not share:
+        raise HTTPException(status_code=403, detail="Calendar access denied")
+    permission = share.get("permission", "read")
+    if write and permission != "write":
+        raise HTTPException(status_code=403, detail="Calendar write access denied")
+    return meta
+
+
+def _require_calendar_owner(calendar_id: str, user_sub: str) -> Dict[str, Any]:
     meta = T.calendar.get_item(Key=_calendar_keys(calendar_id)).get("Item")
     if not meta:
         raise HTTPException(status_code=404, detail="Calendar not found")
     if meta.get("owner_user_sub") != user_sub:
-        raise HTTPException(status_code=403, detail="Calendar access denied")
+        raise HTTPException(status_code=403, detail="Calendar owner access denied")
     return meta
+
+
+def _calendar_access_item(user_sub: str, calendar_id: str, permission: str) -> Dict[str, Any]:
+    return {
+        "calendar_id": _access_partition(user_sub),
+        "sk": _access_key(calendar_id),
+        "type": "calendar_access",
+        "target_calendar_id": calendar_id,
+        "permission": permission,
+        "created_at_utc": iso_utc(utc_now()),
+    }
 
 
 def _list_events(
@@ -592,6 +816,8 @@ def _event_out(item: Dict[str, Any], calendar_id: str) -> EventOut:
         status=item.get("status", "busy"),
         category=item.get("category"),
         recurrence_rule=item.get("recurrence_rule"),
+        exdates_utc=item.get("exdates_utc"),
+        recurrence_overrides=item.get("recurrence_overrides"),
         created_at_utc=item.get("created_at_utc", ""),
     )
 
@@ -617,6 +843,7 @@ async def create_calendar(body: CalendarCreateIn, ctx: Dict[str, str] = Depends(
         "created_at_utc": now,
     }
     T.calendar.put_item(Item=item)
+    T.calendar.put_item(Item=_calendar_access_item(ctx["user_sub"], calendar_id, "owner"))
     return CalendarOut(
         calendar_id=calendar_id,
         name=body.name,
@@ -630,6 +857,242 @@ async def create_calendar(body: CalendarCreateIn, ctx: Dict[str, str] = Depends(
     )
 
 
+@router.get("/calendars", response_model=list[CalendarAccessOut])
+async def list_calendars(ctx: Dict[str, str] = Depends(require_ui_session)):
+    access_response = T.calendar.query(
+        KeyConditionExpression=Key("calendar_id").eq(_access_partition(ctx["user_sub"])) & Key("sk").begins_with("calendar#"),
+        ScanIndexForward=True,
+    )
+    access_items = access_response.get("Items", [])
+    access_by_calendar = {item.get("target_calendar_id"): item for item in access_items if item.get("target_calendar_id")}
+    owner_scan = T.calendar.scan(
+        FilterExpression=Attr("sk").eq("meta")
+        & Attr("type").eq("calendar")
+        & Attr("owner_user_sub").eq(ctx["user_sub"])
+    )
+    for item in owner_scan.get("Items", []):
+        calendar_id = item.get("calendar_id")
+        if not calendar_id or calendar_id in access_by_calendar:
+            continue
+        access_item = _calendar_access_item(ctx["user_sub"], calendar_id, "owner")
+        access_by_calendar[calendar_id] = access_item
+        T.calendar.put_item(Item=access_item)
+    result: list[CalendarAccessOut] = []
+    for calendar_id, access in access_by_calendar.items():
+        if not calendar_id:
+            continue
+        meta = T.calendar.get_item(Key=_calendar_keys(calendar_id)).get("Item")
+        if not meta:
+            continue
+        permission = access.get("permission", "read")
+        result.append(
+            CalendarAccessOut(
+                calendar_id=calendar_id,
+                name=meta.get("name", ""),
+                timezone=meta.get("timezone", "UTC"),
+                owner_user_id=meta.get("owner_user_sub", ""),
+                permission=permission if permission in {"owner", "read", "write"} else "read",
+            )
+        )
+    return result
+
+
+@router.post("/calendars/{calendar_id}/shares", response_model=CalendarShareOut)
+async def share_calendar(
+    calendar_id: str,
+    body: CalendarShareIn,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    _require_calendar_owner(calendar_id, ctx["user_sub"])
+    if body.user_sub == ctx["user_sub"]:
+        raise HTTPException(status_code=400, detail="Cannot share a calendar with yourself")
+    now = iso_utc(utc_now())
+    item = {
+        "calendar_id": calendar_id,
+        "sk": _share_key(body.user_sub),
+        "type": "calendar_share",
+        "user_sub": body.user_sub,
+        "permission": body.permission,
+        "created_at_utc": now,
+        "granted_by": ctx["user_sub"],
+    }
+    T.calendar.put_item(Item=item)
+    T.calendar.put_item(Item=_calendar_access_item(body.user_sub, calendar_id, body.permission))
+    audit_event(
+        "calendar_share_create",
+        ctx["user_sub"],
+        None,
+        outcome="success",
+        calendar_id=calendar_id,
+        shared_with=body.user_sub,
+        permission=body.permission,
+    )
+    return CalendarShareOut(
+        calendar_id=calendar_id,
+        user_sub=body.user_sub,
+        permission=body.permission,
+        created_at_utc=now,
+    )
+
+
+@router.get("/calendars/{calendar_id}/shares", response_model=list[CalendarShareOut])
+async def list_calendar_shares(
+    calendar_id: str,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    _require_calendar_owner(calendar_id, ctx["user_sub"])
+    response = T.calendar.query(
+        KeyConditionExpression=Key("calendar_id").eq(calendar_id) & Key("sk").begins_with("share#"),
+        ScanIndexForward=True,
+    )
+    items = response.get("Items", [])
+    return [
+        CalendarShareOut(
+            calendar_id=calendar_id,
+            user_sub=item.get("user_sub", ""),
+            permission=item.get("permission", "read"),
+            created_at_utc=item.get("created_at_utc", ""),
+        )
+        for item in items
+    ]
+
+
+@router.delete("/calendars/{calendar_id}/shares/{user_sub}")
+async def delete_calendar_share(
+    calendar_id: str,
+    user_sub: str,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    _require_calendar_owner(calendar_id, ctx["user_sub"])
+    T.calendar.delete_item(Key={"calendar_id": calendar_id, "sk": _share_key(user_sub)})
+    T.calendar.delete_item(Key={"calendar_id": _access_partition(user_sub), "sk": _access_key(calendar_id)})
+    audit_event(
+        "calendar_share_delete",
+        ctx["user_sub"],
+        None,
+        outcome="success",
+        calendar_id=calendar_id,
+        shared_with=user_sub,
+    )
+    return {"ok": True}
+
+
+@router.post("/calendars/{calendar_id}/events/conflicts", response_model=EventConflictPreviewOut)
+async def preview_event_conflicts(
+    calendar_id: str,
+    body: EventConflictPreviewIn,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    meta = _load_calendar_access(calendar_id, ctx["user_sub"], write=True)
+    _validate_booking_settings(body.booking_enabled, body.approval_required)
+    status = _normalize_event_status(body.status)
+    recurrence_rule = _normalize_recurrence_rule(body.recurrence_rule)
+    normalized = _normalize_event_times(meta["timezone"], body)
+    normalized["status"] = status
+    event_snapshot = {
+        "all_day": normalized["all_day"],
+        "timezone": normalized["timezone"],
+        "all_day_date": normalized["all_day_date"],
+        "start_utc": normalized["start_utc"],
+        "end_utc": normalized["end_utc"],
+    }
+    requested_start, requested_end = _event_time_interval(event_snapshot)
+    conflicts: list[Dict[str, Any]] = []
+    if _is_busy_status(status):
+        conflicts, requested_start, requested_end = _find_conflicts(
+            calendar_id,
+            normalized,
+            exclude_event_id=body.event_id,
+        )
+    return EventConflictPreviewOut(
+        requested_start_utc=iso_utc(requested_start),
+        requested_end_utc=iso_utc(requested_end),
+        timezone=normalized["timezone"],
+        conflicts=[_event_out(item, calendar_id) for item in conflicts],
+    )
+
+
+@router.post("/calendars/{calendar_id}/events/suggestions", response_model=list[OpeningsOut])
+async def suggest_event_slots(
+    calendar_id: str,
+    body: EventSuggestionsIn,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    meta = _load_calendar_access(calendar_id, ctx["user_sub"], write=True)
+    start_dt = parse_iso_dt(body.start_utc)
+    end_dt = parse_iso_dt(body.end_utc)
+    if end_dt <= start_dt:
+        raise HTTPException(status_code=400, detail="end_utc must be after start_utc")
+    duration_minutes = body.duration_minutes
+    if duration_minutes is None:
+        duration_minutes = int((end_dt - start_dt).total_seconds() / 60)
+    if duration_minutes <= 0:
+        raise HTTPException(status_code=400, detail="duration_minutes must be positive")
+    window_end = start_dt + timedelta(days=body.window_days or 7)
+    if window_end <= start_dt:
+        raise HTTPException(status_code=400, detail="window_days must be positive")
+    openings = _calendar_openings(meta, start_dt, window_end)
+    suggestions = _suggest_slots(openings, timedelta(minutes=duration_minutes), body.limit or 5)
+    return [OpeningsOut(start_utc=iso_utc(s), end_utc=iso_utc(e)) for s, e in suggestions]
+
+
+@router.post("/calendars/{calendar_id}/events/{event_id}/occurrences/{occurrence_start}/exclude", response_model=EventOut)
+async def exclude_event_occurrence(
+    calendar_id: str,
+    event_id: str,
+    occurrence_start: str,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    _load_calendar_access(calendar_id, ctx["user_sub"], write=True)
+    item = _load_event(calendar_id, event_id)
+    occ_key = iso_utc(parse_iso_dt(occurrence_start))
+    exdates = _normalize_exdates(item.get("exdates_utc") or [], item.get("timezone", "UTC")) or []
+    if occ_key not in exdates:
+        exdates.append(occ_key)
+    updated = {**item, "exdates_utc": sorted(set(exdates))}
+    T.calendar.put_item(Item=updated)
+    return _event_out(updated, calendar_id)
+
+
+@router.post("/calendars/{calendar_id}/events/{event_id}/occurrences/{occurrence_start}/override", response_model=EventOut)
+async def override_event_occurrence(
+    calendar_id: str,
+    event_id: str,
+    occurrence_start: str,
+    body: EventOccurrenceOverrideIn,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    _load_calendar_access(calendar_id, ctx["user_sub"], write=True)
+    item = _load_event(calendar_id, event_id)
+    occ_key = iso_utc(parse_iso_dt(occurrence_start))
+    overrides = item.get("recurrence_overrides") or {}
+    overrides[occ_key] = _normalize_occurrence_override(item.get("timezone", "UTC"), body)
+    updated = {**item, "recurrence_overrides": overrides}
+    T.calendar.put_item(Item=updated)
+    return _event_out(updated, calendar_id)
+
+
+@router.delete("/calendars/{calendar_id}/events/{event_id}/occurrences/{occurrence_start}", response_model=EventOut)
+async def clear_event_occurrence_exception(
+    calendar_id: str,
+    event_id: str,
+    occurrence_start: str,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    _load_calendar_access(calendar_id, ctx["user_sub"], write=True)
+    item = _load_event(calendar_id, event_id)
+    occ_key = iso_utc(parse_iso_dt(occurrence_start))
+    exdates = _normalize_exdates(item.get("exdates_utc") or [], item.get("timezone", "UTC")) or []
+    overrides = item.get("recurrence_overrides") or {}
+    if occ_key in exdates:
+        exdates = [value for value in exdates if value != occ_key]
+    if occ_key in overrides:
+        overrides.pop(occ_key, None)
+    updated = {**item, "exdates_utc": exdates or None, "recurrence_overrides": overrides or None}
+    T.calendar.put_item(Item=updated)
+    return _event_out(updated, calendar_id)
+
+
 @router.post("/calendars/{calendar_id}/events", response_model=EventOut)
 async def create_event(
     calendar_id: str,
@@ -637,12 +1100,14 @@ async def create_event(
     force: bool = Query(False, description="Allow conflicts when true"),
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
-    meta = _load_calendar(calendar_id, ctx["user_sub"])
+    meta = _load_calendar_access(calendar_id, ctx["user_sub"], write=True)
     _validate_booking_settings(body.booking_enabled, body.approval_required)
     status = _normalize_event_status(body.status)
     recurrence_rule = _normalize_recurrence_rule(body.recurrence_rule)
     normalized = _normalize_event_times(meta["timezone"], body)
     normalized["status"] = status
+    exdates = _normalize_exdates(body.exdates_utc, normalized["timezone"])
+    overrides = _normalize_overrides(body.recurrence_overrides, normalized["timezone"])
     if meta.get("conflict_detection") and not force and _is_busy_status(status):
         _ensure_no_conflicts(calendar_id, normalized)
     event_id = uuid.uuid4().hex
@@ -660,6 +1125,8 @@ async def create_event(
         "status": status,
         "category": body.category,
         "recurrence_rule": recurrence_rule.model_dump() if recurrence_rule else None,
+        "exdates_utc": exdates,
+        "recurrence_overrides": overrides,
         "created_at_utc": now,
         **normalized,
     }
@@ -695,6 +1162,8 @@ async def create_event(
         status=status,
         category=body.category,
         recurrence_rule=recurrence_rule,
+        exdates_utc=exdates,
+        recurrence_overrides=overrides,
         created_at_utc=now,
     )
 
@@ -705,7 +1174,7 @@ async def create_booking_link(
     body: BookingLinkCreateIn,
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
-    meta = _load_calendar(calendar_id, ctx["user_sub"])
+    meta = _load_calendar_access(calendar_id, ctx["user_sub"], write=True)
     tz_name = body.timezone or meta.get("timezone", "UTC")
     _validate_timezone(tz_name)
     link_id = uuid.uuid4().hex
@@ -733,6 +1202,31 @@ async def create_booking_link(
     )
 
 
+@router.get("/calendars/{calendar_id}/booking_links", response_model=list[BookingLinkOut])
+async def list_booking_links(
+    calendar_id: str,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    _load_calendar_access(calendar_id, ctx["user_sub"])
+    response = T.calendar.query(
+        KeyConditionExpression=Key("calendar_id").eq(calendar_id) & Key("sk").begins_with("booking#"),
+        ScanIndexForward=True,
+    )
+    items = response.get("Items", [])
+    return [
+        BookingLinkOut(
+            link_id=item["link_id"],
+            calendar_id=calendar_id,
+            name=item.get("name", ""),
+            duration_minutes=int(item.get("duration_minutes", 0)),
+            timezone=item.get("timezone", "UTC"),
+            created_at_utc=item.get("created_at_utc", ""),
+            public_url=f"/booking/{item['link_id']}",
+        )
+        for item in items
+    ]
+
+
 @router.get("/calendars/{calendar_id}/events", response_model=EventsPageOut)
 async def list_events(
     calendar_id: str,
@@ -748,7 +1242,7 @@ async def list_events(
     cursor: Annotated[str | None, Query(description="Pagination cursor")] = None,
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
-    _load_calendar(calendar_id, ctx["user_sub"])
+    _load_calendar_access(calendar_id, ctx["user_sub"])
     start_dt = parse_iso_dt(start_utc) if start_utc else None
     end_dt = parse_iso_dt(end_utc) if end_utc else None
     items, next_cursor = _list_events(
@@ -775,7 +1269,7 @@ async def update_calendar(
     body: CalendarUpdateIn,
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
-    meta = _load_calendar(calendar_id, ctx["user_sub"])
+    meta = _require_calendar_owner(calendar_id, ctx["user_sub"])
     name = body.name if body.name is not None else meta.get("name", "")
     timezone_name = body.timezone if body.timezone is not None else meta.get("timezone", "UTC")
     if body.timezone is not None:
@@ -828,7 +1322,7 @@ async def update_event(
     body: EventUpdateIn,
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
-    meta = _load_calendar(calendar_id, ctx["user_sub"])
+    meta = _load_calendar_access(calendar_id, ctx["user_sub"], write=True)
     item = _load_event(calendar_id, event_id)
     raw_recurrence = body.recurrence_rule if body.recurrence_rule is not None else item.get("recurrence_rule")
     recurrence_rule = RecurrenceRule(**raw_recurrence) if raw_recurrence else None
@@ -850,12 +1344,18 @@ async def update_event(
         status=body.status if body.status is not None else item.get("status", "busy"),
         category=body.category if body.category is not None else item.get("category"),
         recurrence_rule=recurrence_rule,
+        exdates_utc=body.exdates_utc if body.exdates_utc is not None else item.get("exdates_utc"),
+        recurrence_overrides=(
+            body.recurrence_overrides if body.recurrence_overrides is not None else item.get("recurrence_overrides")
+        ),
     )
     _validate_booking_settings(payload.booking_enabled, payload.approval_required)
     status = _normalize_event_status(payload.status)
     recurrence_rule = _normalize_recurrence_rule(payload.recurrence_rule)
     normalized = _normalize_event_times(meta["timezone"], payload)
     normalized["status"] = status
+    exdates = _normalize_exdates(payload.exdates_utc, normalized["timezone"])
+    overrides = _normalize_overrides(payload.recurrence_overrides, normalized["timezone"])
     if meta.get("conflict_detection") and _is_busy_status(status):
         _ensure_no_conflicts(calendar_id, normalized, exclude_event_id=event_id)
     updated = {
@@ -868,6 +1368,8 @@ async def update_event(
         "status": status,
         "category": payload.category,
         "recurrence_rule": recurrence_rule.model_dump() if recurrence_rule else None,
+        "exdates_utc": exdates,
+        "recurrence_overrides": overrides,
         **normalized,
     }
     T.calendar.put_item(Item=updated)
@@ -895,7 +1397,7 @@ async def delete_event(
     event_id: str,
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
-    _load_calendar(calendar_id, ctx["user_sub"])
+    _load_calendar_access(calendar_id, ctx["user_sub"], write=True)
     item = _load_event(calendar_id, event_id)
     T.calendar.delete_item(Key={"calendar_id": calendar_id, "sk": _event_key(event_id)})
     audit_event(
@@ -918,13 +1420,24 @@ async def delete_event(
 
 @router.delete("/calendars/{calendar_id}")
 async def delete_calendar(calendar_id: str, ctx: Dict[str, str] = Depends(require_ui_session)):
-    _load_calendar(calendar_id, ctx["user_sub"])
+    _require_calendar_owner(calendar_id, ctx["user_sub"])
     events, _ = _list_events(calendar_id)
+    share_response = T.calendar.query(
+        KeyConditionExpression=Key("calendar_id").eq(calendar_id) & Key("sk").begins_with("share#"),
+        ScanIndexForward=True,
+    )
+    shares = share_response.get("Items", [])
     with T.calendar.batch_writer() as batch:
         batch.delete_item(Key={"calendar_id": calendar_id, "sk": "meta"})
         for event in events:
             event_sk = event.get("sk") or _event_key(event["event_id"])
             batch.delete_item(Key={"calendar_id": calendar_id, "sk": event_sk})
+        for share in shares:
+            user_sub = share.get("user_sub")
+            if user_sub:
+                batch.delete_item(Key={"calendar_id": _access_partition(user_sub), "sk": _access_key(calendar_id)})
+            batch.delete_item(Key={"calendar_id": calendar_id, "sk": share.get("sk")})
+        batch.delete_item(Key={"calendar_id": _access_partition(ctx["user_sub"]), "sk": _access_key(calendar_id)})
     return {"ok": True}
 
 
@@ -936,7 +1449,7 @@ async def list_openings(
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
     window_start, window_end = parse_availability_window(start_utc, end_utc)
-    meta = _load_calendar(calendar_id, ctx["user_sub"])
+    meta = _load_calendar_access(calendar_id, ctx["user_sub"])
     free = _calendar_openings(meta, window_start, window_end)
     return [OpeningsOut(start_utc=iso_utc(s), end_utc=iso_utc(e)) for s, e in free]
 
@@ -948,7 +1461,7 @@ async def list_team_openings(body: TeamAvailabilityIn, ctx: Dict[str, str] = Dep
         raise HTTPException(status_code=400, detail="calendar_ids is required")
     combined: list[tuple[datetime, datetime]] | None = None
     for calendar_id in body.calendar_ids:
-        meta = _load_calendar(calendar_id, ctx["user_sub"])
+        meta = _load_calendar_access(calendar_id, ctx["user_sub"])
         openings = _calendar_openings(meta, window_start, window_end)
         combined = openings if combined is None else _intersect_intervals(combined, openings)
     free = combined or []
