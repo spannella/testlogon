@@ -2502,6 +2502,7 @@ async function refreshAll() {
       refreshAlerts(),
       refreshProfile(),
       refreshFileManager(),
+      refreshFileMgrAudit(),
       refreshAddresses(),
       refreshShoppingCart(),
       billingRefreshAll(),
@@ -4046,10 +4047,19 @@ async function uploadProfilePhoto(kind, fileInputId) {
 const fileMgrState = {
   path: "/",
   searchResults: [],
+  selectedPaths: new Set(),
+  items: [],
+  renamePath: null,
+  renameValue: "",
 };
 
 function fileMgrStatus(msg) {
   const el = document.getElementById("filemgrStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function fileMgrAuditStatus(msg) {
+  const el = document.getElementById("filemgrAuditStatus");
   if (el) el.textContent = msg || "";
 }
 
@@ -4068,6 +4078,93 @@ function setFileMgrPath(path) {
   fileMgrState.path = normalizeFolderPath(path || "/");
   const input = document.getElementById("filemgrPath");
   if (input) input.value = fileMgrState.path;
+  renderFileMgrBreadcrumb();
+}
+
+function renderFileMgrBreadcrumb() {
+  const container = document.getElementById("filemgrBreadcrumb");
+  if (!container) return;
+  const path = normalizeFolderPath(fileMgrState.path || "/");
+  const segments = path.split("/").filter(Boolean);
+  container.innerHTML = "";
+  const root = document.createElement("button");
+  root.textContent = "/";
+  root.className = "mono";
+  root.onclick = async () => {
+    setFileMgrPath("/");
+    await refreshFileManager();
+  };
+  container.appendChild(root);
+  let cur = "/";
+  segments.forEach((seg) => {
+    cur = normalizeFolderPath(cur + seg + "/");
+    const sep = document.createElement("span");
+    sep.textContent = "›";
+    sep.className = "muted";
+    container.appendChild(sep);
+    const btn = document.createElement("button");
+    btn.textContent = seg;
+    btn.className = "mono";
+    btn.onclick = async () => {
+      setFileMgrPath(cur);
+      await refreshFileManager();
+    };
+    container.appendChild(btn);
+  });
+}
+
+function setFileMgrSelected(path, selected) {
+  if (!path) return;
+  if (selected) {
+    fileMgrState.selectedPaths.add(path);
+  } else {
+    fileMgrState.selectedPaths.delete(path);
+  }
+  updateFileMgrSelectionStatus();
+  updateFileMgrSelectAll();
+}
+
+function clearFileMgrSelection() {
+  fileMgrState.selectedPaths.clear();
+  updateFileMgrSelectionStatus();
+  updateFileMgrSelectAll();
+}
+
+function updateFileMgrSelectionStatus() {
+  const status = document.getElementById("filemgrStatus");
+  if (!status) return;
+  if (fileMgrState.selectedPaths.size > 0) {
+    status.textContent = `Selected ${fileMgrState.selectedPaths.size} item(s).`;
+  } else if (status.textContent.startsWith("Selected")) {
+    status.textContent = "";
+  }
+}
+
+function updateFileMgrSelectAll() {
+  const selectAll = document.getElementById("filemgrSelectAll");
+  if (!selectAll) return;
+  if (!fileMgrState.items.length) {
+    selectAll.checked = false;
+    selectAll.indeterminate = false;
+    return;
+  }
+  const selectedCount = fileMgrState.items.filter((item) => fileMgrState.selectedPaths.has(item.path)).length;
+  selectAll.checked = selectedCount === fileMgrState.items.length;
+  selectAll.indeterminate = selectedCount > 0 && selectedCount < fileMgrState.items.length;
+}
+
+function selectedFileMgrItems() {
+  return fileMgrState.items.filter((item) => fileMgrState.selectedPaths.has(item.path));
+}
+
+function toggleFileMgrSelectAll(checked) {
+  if (checked) {
+    fileMgrState.items.forEach((item) => fileMgrState.selectedPaths.add(item.path));
+  } else {
+    fileMgrState.selectedPaths.clear();
+  }
+  renderFileMgrList(fileMgrState.items);
+  updateFileMgrSelectionStatus();
 }
 
 async function apiUploadFileManager(path, file) {
@@ -4114,6 +4211,51 @@ async function fileMgrDownload(path, filename) {
   setTimeout(() => URL.revokeObjectURL(link.href), 2000);
 }
 
+async function fileMgrPreview(path) {
+  const tok = accessToken();
+  if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const url = `${API_BASE}/v1/fs/preview?path=${encodeURIComponent(path)}`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "Authorization": "Bearer " + tok,
+      "X-SESSION-ID": sid,
+    },
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const blob = await res.blob();
+  const previewUrl = URL.createObjectURL(blob);
+  window.open(previewUrl, "_blank");
+  setTimeout(() => URL.revokeObjectURL(previewUrl), 2000);
+}
+
+async function fileMgrDownloadZip(paths) {
+  const tok = accessToken();
+  if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const res = await fetch(`${API_BASE}/v1/fs/download-zip`, {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + tok,
+      "X-SESSION-ID": sid,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(paths || []),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const blob = await res.blob();
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "download.zip";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+}
+
 function renderFileMgrSearchResults() {
   const list = document.getElementById("filemgrSearchResults");
   if (!list) return;
@@ -4126,6 +4268,7 @@ function renderFileMgrSearchResults() {
   results.forEach((item) => {
     const row = document.createElement("div");
     row.className = "list-item";
+    const isFolder = item.type === "folder";
     row.innerHTML = `
       <div class="grow">
         <div class="mono">${escapeHtml(item.name || "")}</div>
@@ -4133,22 +4276,95 @@ function renderFileMgrSearchResults() {
       </div>
       <div class="muted">${escapeHtml(item.type || "")}</div>
       <div class="muted">${item.type === "file" ? fmtBytes(item.size || 0) : ""}</div>
-      <div><button data-path="${escapeHtml(item.path || "")}" data-type="${escapeHtml(item.type || "")}">Open</button></div>
+      <div class="row-inline">
+        <button data-action="open" data-path="${escapeHtml(item.path || "")}" data-type="${escapeHtml(item.type || "")}">Open</button>
+        ${isFolder ? "" : '<button data-action="download">Download</button><button data-action="preview">Preview</button>'}
+      </div>
     `;
-    row.querySelector("button").onclick = async (ev) => {
-      const p = ev.target.getAttribute("data-path");
-      const t = ev.target.getAttribute("data-type");
-      if (!p) return;
-      if (t === "folder") {
-        setFileMgrPath(p);
-      } else {
-        const parent = p.split("/").slice(0, -1).join("/") + "/";
-        setFileMgrPath(parent || "/");
+    row.querySelectorAll("button").forEach((btn) => {
+      btn.onclick = async () => {
+        const action = btn.getAttribute("data-action");
+        const p = btn.getAttribute("data-path") || item.path;
+        if (!p) return;
+        try {
+          if (action === "open") {
+            if (item.type === "folder") {
+              setFileMgrPath(p);
+            } else {
+              const parent = p.split("/").slice(0, -1).join("/") + "/";
+              setFileMgrPath(parent || "/");
+            }
+            await refreshFileManager();
+            return;
+          }
+          if (action === "download") {
+            await fileMgrDownload(p, item.name);
+            return;
+          }
+          if (action === "preview") {
+            await fileMgrPreview(p);
+            return;
+          }
+        } catch (e) {
+          fileMgrStatus(String(e));
+        }
+      };
+    });
+    list.appendChild(row);
+  });
+}
+
+function formatFileMgrAuditPath(details) {
+  if (!details) return "";
+  if (details.src && details.dst) return `${details.src} → ${details.dst}`;
+  return details.path || "";
+}
+
+function renderFileMgrAuditList(alerts) {
+  const list = document.getElementById("filemgrAuditList");
+  if (!list) return;
+  list.innerHTML = "";
+  if (!alerts.length) {
+    list.innerHTML = "<div class='muted'>No recent file activity.</div>";
+    return;
+  }
+  alerts.forEach((a) => {
+    const details = a.details || {};
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "list-item list-button";
+    if (a.alert_id) row.setAttribute("data-aid", a.alert_id);
+    const path = formatFileMgrAuditPath(details);
+    const outcome = details.outcome || a.outcome || "";
+    row.innerHTML = `
+      <div class="grow">
+        <div><b>${escapeHtml(a.title || a.event || "File activity")}</b></div>
+        <div class="muted mono">${escapeHtml(path)}${path ? " • " : ""}${escapeHtml(outcome)} • ${fmtTs(a.ts)}</div>
+      </div>
+      <div class="muted">${a.read ? "Read" : "Unread"}</div>
+    `;
+    row.onclick = async () => {
+      if (!a.alert_id || a.read) return;
+      try {
+        await apiPost("/ui/alerts/mark_read", { alert_ids: [a.alert_id] });
+        row.classList.add("list-item-muted");
+      } catch (e) {
+        // ignore
       }
-      await refreshFileManager();
     };
     list.appendChild(row);
   });
+}
+
+async function refreshFileMgrAudit() {
+  const list = document.getElementById("filemgrAuditList");
+  if (!list) return;
+  fileMgrAuditStatus("Loading...");
+  await ensureUiSession();
+  const res = await apiGet("/ui/alerts?limit=100");
+  const items = (res.alerts || []).filter((a) => (a.event || "").startsWith("filemgr_"));
+  renderFileMgrAuditList(items);
+  fileMgrAuditStatus(`Loaded ${items.length} event(s).`);
 }
 
 function renderFileMgrList(items) {
@@ -4158,15 +4374,24 @@ function renderFileMgrList(items) {
   (items || []).forEach((item) => {
     const row = document.createElement("tr");
     const isFolder = item.type === "folder";
+    const isSelected = fileMgrState.selectedPaths.has(item.path);
+    const isRenaming = fileMgrState.renamePath === item.path;
     row.innerHTML = `
-      <td class="mono">${escapeHtml(item.name || "")}</td>
+      <td><input type="checkbox" data-path="${escapeHtml(item.path || "")}" ${isSelected ? "checked" : ""} /></td>
+      <td class="mono">
+        ${isRenaming ? `<input type="text" class="mono" data-rename-input value="${escapeHtml(fileMgrState.renameValue || item.name || "")}" />` : escapeHtml(item.name || "")}
+      </td>
       <td>${escapeHtml(item.type || "")}</td>
       <td>${isFolder ? "" : fmtBytes(item.size || 0)}</td>
       <td class="muted">${escapeHtml(item.updated_at || "")}</td>
       <td>
         <div class="row-inline">
-          ${isFolder ? '<button data-action="open">Open</button>' : '<button data-action="download">Download</button>'}
-          <button data-action="rename">Rename</button>
+          ${
+            isFolder
+              ? '<button data-action="open">Open</button>'
+              : '<button data-action="download">Download</button><button data-action="preview">Preview</button>'
+          }
+          ${isRenaming ? '<button data-action="rename-save">Save</button><button data-action="rename-cancel">Cancel</button>' : '<button data-action="rename">Rename</button>'}
           <button data-action="delete" class="danger">Delete</button>
         </div>
       </td>
@@ -4185,11 +4410,30 @@ function renderFileMgrList(items) {
             await fileMgrDownload(item.path, item.name);
             return;
           }
+          if (action === "preview") {
+            await fileMgrPreview(item.path);
+            return;
+          }
           if (action === "rename") {
-            const newName = prompt("New name:", item.name || "");
+            fileMgrState.renamePath = item.path;
+            fileMgrState.renameValue = item.name || "";
+            renderFileMgrList(fileMgrState.items);
+            return;
+          }
+          if (action === "rename-cancel") {
+            fileMgrState.renamePath = null;
+            fileMgrState.renameValue = "";
+            renderFileMgrList(fileMgrState.items);
+            return;
+          }
+          if (action === "rename-save") {
+            const input = row.querySelector("[data-rename-input]");
+            const newName = input ? input.value.trim() : "";
             if (!newName) return;
             const endpoint = isFolder ? "/v1/fs/rename-folder" : "/v1/fs/rename-file";
             await apiPost(endpoint, { path: item.path, new_name: newName });
+            fileMgrState.renamePath = null;
+            fileMgrState.renameValue = "";
             await refreshFileManager();
             return;
           }
@@ -4205,13 +4449,44 @@ function renderFileMgrList(items) {
         }
       };
     });
+    const checkbox = row.querySelector("input[type=\"checkbox\"]");
+    if (checkbox) {
+      checkbox.onchange = (ev) => {
+        const path = ev.target.getAttribute("data-path");
+        setFileMgrSelected(path, ev.target.checked);
+      };
+    }
+    const renameInput = row.querySelector("[data-rename-input]");
+    if (renameInput) {
+      renameInput.focus();
+      renameInput.select();
+      renameInput.onkeydown = async (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          const newName = renameInput.value.trim();
+          if (!newName) return;
+          const endpoint = isFolder ? "/v1/fs/rename-folder" : "/v1/fs/rename-file";
+          await apiPost(endpoint, { path: item.path, new_name: newName });
+          fileMgrState.renamePath = null;
+          fileMgrState.renameValue = "";
+          await refreshFileManager();
+        }
+        if (ev.key === "Escape") {
+          ev.preventDefault();
+          fileMgrState.renamePath = null;
+          fileMgrState.renameValue = "";
+          renderFileMgrList(fileMgrState.items);
+        }
+      };
+    }
     tbody.appendChild(row);
   });
   if (!items || items.length === 0) {
     const empty = document.createElement("tr");
-    empty.innerHTML = '<td colspan="5" class="muted">No files in this folder.</td>';
+    empty.innerHTML = '<td colspan="6" class="muted">No files in this folder.</td>';
     tbody.appendChild(empty);
   }
+  updateFileMgrSelectAll();
 }
 
 async function refreshFileManager() {
@@ -4223,7 +4498,9 @@ async function refreshFileManager() {
     const path = currentFileMgrPath();
     const res = await apiGet(`/v1/fs/list?path=${encodeURIComponent(path)}`);
     setFileMgrPath(res.path || path);
-    renderFileMgrList(res.items || []);
+    fileMgrState.items = res.items || [];
+    clearFileMgrSelection();
+    renderFileMgrList(fileMgrState.items);
     fileMgrStatus(`Loaded ${res.items ? res.items.length : 0} items.`);
   } catch (e) {
     fileMgrStatus(String(e));
@@ -4250,6 +4527,79 @@ async function uploadFileMgr() {
   await ensureUiSession();
   await apiUploadFileManager(path, file);
   input.value = "";
+  await refreshFileManager();
+}
+
+async function uploadZipFileMgr() {
+  const input = document.getElementById("filemgrUploadZipInput");
+  if (!input || !input.files || !input.files.length) return;
+  const file = input.files[0];
+  await ensureUiSession();
+  const tok = accessToken();
+  if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const form = new FormData();
+  form.append("zip_file", file);
+  const dest = currentFileMgrPath();
+  const res = await fetch(`${API_BASE}/v1/fs/upload-zip?dest_folder=${encodeURIComponent(dest)}`, {
+    method: "POST",
+    headers: {
+      "Authorization": "Bearer " + tok,
+      "X-SESSION-ID": sid,
+    },
+    body: form,
+  });
+  if (!res.ok) throw new Error(await res.text());
+  input.value = "";
+  await refreshFileManager();
+}
+
+async function downloadSelectedZipFileMgr() {
+  const paths = Array.from(fileMgrState.selectedPaths || []);
+  if (!paths.length) {
+    fileMgrStatus("Select at least one file or folder to download.");
+    return;
+  }
+  await ensureUiSession();
+  await fileMgrDownloadZip(paths);
+}
+
+async function bulkDeleteFileMgr() {
+  const items = selectedFileMgrItems();
+  if (!items.length) {
+    fileMgrStatus("Select at least one file or folder to delete.");
+    return;
+  }
+  const ok = confirm(`Delete ${items.length} item(s)?`);
+  if (!ok) return;
+  await ensureUiSession();
+  for (const item of items) {
+    const endpoint = item.type === "folder" ? "/v1/fs/folder" : "/v1/fs/file";
+    await apiDelete(`${endpoint}?path=${encodeURIComponent(item.path)}`);
+  }
+  await refreshFileManager();
+}
+
+async function bulkMoveFileMgr() {
+  const items = selectedFileMgrItems();
+  if (!items.length) {
+    fileMgrStatus("Select at least one file or folder to move.");
+    return;
+  }
+  const destInput = prompt("Move selected items to folder:", currentFileMgrPath());
+  if (!destInput) return;
+  const destFolder = normalizeFolderPath(destInput);
+  await ensureUiSession();
+  for (const item of items) {
+    const dst = item.type === "folder"
+      ? `${destFolder}${item.name}/`
+      : `${destFolder}${item.name}`;
+    if (dst === item.path) {
+      continue;
+    }
+    await apiPost("/v1/fs/move", { src: item.path, dst });
+  }
   await refreshFileManager();
 }
 
@@ -4819,9 +5169,12 @@ document.getElementById("profileAuditRefreshBtn").onclick = async () => {
 };
 
 document.getElementById("filemgrRefreshBtn").onclick = refreshFileManager;
-document.getElementById("filemgrGoBtn").onclick = async () => {
-  setFileMgrPath(currentFileMgrPath());
-  await refreshFileManager();
+document.getElementById("filemgrAuditRefreshBtn").onclick = async () => {
+  try {
+    await refreshFileMgrAudit();
+  } catch (e) {
+    fileMgrAuditStatus(String(e));
+  }
 };
 document.getElementById("filemgrUpBtn").onclick = async () => {
   const path = currentFileMgrPath();
@@ -4844,6 +5197,37 @@ document.getElementById("filemgrUploadBtn").onclick = async () => {
   } catch (e) {
     fileMgrStatus(String(e));
   }
+};
+document.getElementById("filemgrUploadZipBtn").onclick = async () => {
+  try {
+    await uploadZipFileMgr();
+  } catch (e) {
+    fileMgrStatus(String(e));
+  }
+};
+document.getElementById("filemgrDownloadZipBtn").onclick = async () => {
+  try {
+    await downloadSelectedZipFileMgr();
+  } catch (e) {
+    fileMgrStatus(String(e));
+  }
+};
+document.getElementById("filemgrBulkMoveBtn").onclick = async () => {
+  try {
+    await bulkMoveFileMgr();
+  } catch (e) {
+    fileMgrStatus(String(e));
+  }
+};
+document.getElementById("filemgrBulkDeleteBtn").onclick = async () => {
+  try {
+    await bulkDeleteFileMgr();
+  } catch (e) {
+    fileMgrStatus(String(e));
+  }
+};
+document.getElementById("filemgrSelectAll").onclick = (ev) => {
+  toggleFileMgrSelectAll(ev.target.checked);
 };
 document.getElementById("filemgrSearchBtn").onclick = async () => {
   try {
