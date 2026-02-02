@@ -2679,7 +2679,8 @@ async function refreshCalendarEvents() {
   const calendarId = getCalendarId();
   if (!calendarId) return;
   await ensureUiSession();
-  const events = await apiGet(`/ui/calendars/${encodeURIComponent(calendarId)}/events`);
+  const res = await apiGet(`/ui/calendars/${encodeURIComponent(calendarId)}/events`);
+  const events = Array.isArray(res) ? res : res.events;
   renderCalendarEvents(events || []);
 }
 

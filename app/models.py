@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, conint
 
@@ -427,15 +427,28 @@ class ShoppingCartPurchaseOut(BaseModel):
     purchase_txn_id: Optional[str] = None
 
 
+class WorkingHoursWindow(BaseModel):
+    start: str
+    end: str
+
+
 class CalendarCreateIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     timezone: str = Field(default="UTC", max_length=64)
+    conflict_detection: bool = False
+    working_hours: Dict[str, List[WorkingHoursWindow]] | None = None
+    buffer_before_minutes: int = 0
+    buffer_after_minutes: int = 0
 
 
 class CalendarOut(BaseModel):
     calendar_id: str
     name: str
     timezone: str
+    conflict_detection: bool = False
+    working_hours: Dict[str, List[WorkingHoursWindow]] | None = None
+    buffer_before_minutes: int = 0
+    buffer_after_minutes: int = 0
     owner_user_id: str
     created_at_utc: str
 
@@ -443,6 +456,10 @@ class CalendarOut(BaseModel):
 class CalendarUpdateIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     timezone: str | None = Field(default=None, max_length=64)
+    conflict_detection: bool | None = None
+    working_hours: Dict[str, List[WorkingHoursWindow]] | None = None
+    buffer_before_minutes: int | None = None
+    buffer_after_minutes: int | None = None
 
 
 class EventCreateIn(BaseModel):
@@ -453,6 +470,12 @@ class EventCreateIn(BaseModel):
     end_utc: str | None = None
     all_day: bool = False
     all_day_date: str | None = None
+    attendees: List[str] = Field(default_factory=list)
+    booking_enabled: bool = False
+    approval_required: bool = False
+    status: str = "busy"
+    category: str | None = None
+    recurrence_rule: RecurrenceRule | None = None
 
 
 class EventOut(BaseModel):
@@ -465,6 +488,12 @@ class EventOut(BaseModel):
     end_utc: str | None = None
     all_day: bool
     all_day_date: str | None = None
+    attendees: List[str]
+    booking_enabled: bool
+    approval_required: bool
+    status: str
+    category: str | None = None
+    recurrence_rule: RecurrenceRule | None = None
     created_at_utc: str
 
 
@@ -476,11 +505,55 @@ class EventUpdateIn(BaseModel):
     end_utc: str | None = None
     all_day: bool | None = None
     all_day_date: str | None = None
+    attendees: List[str] | None = None
+    booking_enabled: bool | None = None
+    approval_required: bool | None = None
+    status: str | None = None
+    category: str | None = None
+    recurrence_rule: RecurrenceRule | None = None
 
 
 class OpeningsOut(BaseModel):
     start_utc: str
     end_utc: str
+
+
+class EventsPageOut(BaseModel):
+    events: List[EventOut]
+    next_cursor: str | None = None
+
+
+class RecurrenceRule(BaseModel):
+    freq: Literal["DAILY", "WEEKLY", "MONTHLY"]
+    interval: int = Field(default=1, ge=1)
+    until_utc: Optional[str] = None
+    count: Optional[int] = Field(default=None, ge=1)
+    byday: Optional[List[Literal["MO", "TU", "WE", "TH", "FR", "SA", "SU"]]] = None
+
+
+class BookingLinkCreateIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    duration_minutes: conint(ge=5, le=1440)
+    timezone: str | None = Field(default=None, max_length=64)
+
+
+class BookingLinkOut(BaseModel):
+    link_id: str
+    calendar_id: str
+    name: str
+    duration_minutes: int
+    timezone: str
+    created_at_utc: str
+    public_url: str
+
+
+class BookingRequestIn(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=5000)
+    start_utc: str
+    end_utc: str
+    timezone: str | None = Field(default=None, max_length=64)
+    notify: bool = False
 
 
 class TeamAvailabilityIn(BaseModel):
