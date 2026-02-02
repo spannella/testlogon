@@ -180,4 +180,11 @@ def can_send_alert_channel(user_sub: str, channel: str) -> bool:
         max_n = int(os.environ.get("ALERTS_PUSH_MAX_PER_WINDOW", "20"))
         win = int(os.environ.get("ALERTS_PUSH_WINDOW_SECONDS", "3600"))
         return _bucket_limit(user_sub, "rl#alert_push", max_n, win)
+    if channel == "webhook":
+        return _bucket_limit(
+            user_sub,
+            "rl#alert_webhook",
+            S.alerts_webhook_max_per_window,
+            S.alerts_webhook_window_seconds,
+        )
     return True

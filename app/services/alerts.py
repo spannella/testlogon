@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Set
 
 from boto3.dynamodb.conditions import Key
@@ -23,6 +24,7 @@ ALERT_EVENT_TYPES: List[str] = [
     "challenge_failed","api_key_created","api_key_revoked","api_key_ip_rules_updated","session_revoked",
     "totp_device_added","totp_device_removed","rate_limited","access_denied","security_event",
     "device_new","device_location_mismatch","device_trust","device_revoke",
+    "calendar_event_created","calendar_event_updated","calendar_event_deleted",
 ]
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.
@@ -80,6 +82,12 @@ def event_to_type(event: str, outcome: str, status_code: Optional[int] = None) -
         return "totp_device_added"
     if e.startswith("totp_device_remove"):
         return "totp_device_removed"
+    if e == "calendar_event_create":
+        return "calendar_event_created"
+    if e == "calendar_event_update":
+        return "calendar_event_updated"
+    if e == "calendar_event_delete":
+        return "calendar_event_deleted"
     if e.startswith("ui_rate_limited") or (status_code == 429):
         return "rate_limited"
     if status_code in (401, 403):
@@ -93,6 +101,7 @@ def get_alert_prefs(user_sub: str) -> Dict[str, Any]:
             "emails": [], "sms_numbers": [],
             "email_event_types": [], "sms_event_types": [],
             "toast_event_types": [], "push_event_types": [],
+            "webhook_urls": [], "webhook_event_types": [],
         }
     return {
         "emails": it.get("emails", []),
@@ -101,6 +110,8 @@ def get_alert_prefs(user_sub: str) -> Dict[str, Any]:
         "sms_event_types": it.get("sms_event_types", []),
         "toast_event_types": it.get("toast_event_types", []),
         "push_event_types": it.get("push_event_types", []),
+        "webhook_urls": it.get("webhook_urls", []),
+        "webhook_event_types": it.get("webhook_event_types", []),
     }
 
 def set_alert_prefs(
@@ -112,6 +123,8 @@ def set_alert_prefs(
     sms_event_types: Optional[List[str]] = None,
     toast_event_types: Optional[List[str]] = None,
     push_event_types: Optional[List[str]] = None,
+    webhook_urls: Optional[List[str]] = None,
+    webhook_event_types: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     cur = get_alert_prefs(user_sub)
     emails = cur["emails"] if emails is None else emails
@@ -120,6 +133,8 @@ def set_alert_prefs(
     sms_event_types = cur["sms_event_types"] if sms_event_types is None else sms_event_types
     toast_event_types = cur["toast_event_types"] if toast_event_types is None else toast_event_types
     push_event_types = cur["push_event_types"] if push_event_types is None else push_event_types
+    webhook_urls = cur["webhook_urls"] if webhook_urls is None else webhook_urls
+    webhook_event_types = cur["webhook_event_types"] if webhook_event_types is None else webhook_event_types
 
     emails_n = []
     seen = set()
@@ -146,6 +161,8 @@ def set_alert_prefs(
     sms_types = [t for t in (sms_event_types or []) if t in allowed]
     toast_types = [t for t in (toast_event_types or []) if t in allowed]
     push_types = [t for t in (push_event_types or []) if t in allowed]
+    webhook_types = [t for t in (webhook_event_types or []) if t in allowed]
+    webhook_urls_n = _normalize_webhook_urls(webhook_urls or [])
 
     T.alert_prefs.put_item(Item={
         "user_sub": user_sub,
@@ -155,6 +172,8 @@ def set_alert_prefs(
         "sms_event_types": sms_types,
         "toast_event_types": toast_types,
         "push_event_types": push_types,
+        "webhook_urls": webhook_urls_n,
+        "webhook_event_types": webhook_types,
         "updated_at": now_ts(),
     })
     return get_alert_prefs(user_sub)
@@ -224,6 +243,33 @@ def send_alert_sms(to_numbers: List[str], body_text: str) -> None:
         sns = sns_client()
         for n in to_numbers[:5]:
             sns.publish(PhoneNumber=n, Message=body_text[:1400])
+    except Exception:
+        pass
+
+def _normalize_webhook_urls(values: List[str]) -> List[str]:
+    cleaned: List[str] = []
+    seen = set()
+    for raw in values:
+        url = (raw or "").strip()
+        if not url:
+            continue
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            continue
+        if url not in seen:
+            seen.add(url)
+            cleaned.append(url[:500])
+    return cleaned
+
+def send_alert_webhook(urls: List[str], payload: Dict[str, Any]) -> None:
+    if not S.alerts_webhook_enabled:
+        return
+    if not urls:
+        return
+    try:
+        import requests
+        for url in urls[:5]:
+            requests.post(url, json=payload, timeout=S.alerts_webhook_timeout_seconds)
     except Exception:
         pass
 
@@ -326,6 +372,24 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
             if reason:
                 line += f" reason={str(reason)[:80]}"
             send_alert_sms(nums, line)
+    except Exception:
+        pass
+
+    # Optional webhook fanout
+    try:
+        prefs = get_alert_prefs(user_sub)
+        urls = prefs.get("webhook_urls") or []
+        enabled_webhooks = set(prefs.get("webhook_event_types") or [])
+        if urls and (alert_type in enabled_webhooks) and can_send_alert_channel(user_sub, "webhook"):
+            webhook_payload = {
+                "alert_id": alert_id,
+                "alert_type": alert_type,
+                "event": event,
+                "outcome": outcome,
+                "title": title,
+                "details": payload,
+            }
+            send_alert_webhook(urls, webhook_payload)
     except Exception:
         pass
 
