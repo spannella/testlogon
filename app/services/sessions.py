@@ -1,19 +1,105 @@
 from __future__ import annotations
 
+import hmac
+import secrets
 import uuid
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+import jwt
 from boto3.dynamodb.conditions import Key
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, Header, HTTPException, Request, Response
 
 from app.auth.deps import get_authenticated_user_sub
+from app.core.crypto import sha256_str
 from app.core.normalize import client_ip_from_request
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 from app.metrics import record_session_created, record_session_revoked
-from app.services.device_trust import record_device_login
+from app.services.device_trust import ensure_device_cookie, record_device_login
 from app.services.ttl import with_ttl
+
+@dataclass(frozen=True)
+class SessionInfo:
+    session_id: str
+    csrf_token: str
+    user_sub: str
+
+def set_session_cookies(response: Response, session: SessionInfo) -> None:
+    response.set_cookie(
+        S.ui_session_cookie_name,
+        session.session_id,
+        max_age=S.ui_session_ttl_seconds,
+        httponly=True,
+        secure=S.ui_cookie_secure,
+        samesite=S.ui_cookie_samesite,
+    )
+    _issue_refresh_token(response, session.session_id, session.user_sub)
+    access = mint_access_token(session.user_sub, session.session_id)
+    if access:
+        response.set_cookie(
+            S.ui_access_token_cookie_name,
+            access,
+            max_age=S.ui_access_token_ttl_seconds,
+            httponly=True,
+            secure=S.ui_cookie_secure,
+            samesite=S.ui_cookie_samesite,
+        )
+    response.set_cookie(
+        S.ui_csrf_cookie_name,
+        session.csrf_token,
+        max_age=S.ui_session_ttl_seconds,
+        httponly=False,
+        secure=S.ui_cookie_secure,
+        samesite=S.ui_cookie_samesite,
+    )
+
+def revoke_session(user_sub: str, session_id: str) -> None:
+    if not session_id:
+        return
+    ts = now_ts()
+    try:
+        T.sessions.update_item(
+            Key={"user_sub": user_sub, "session_id": session_id},
+            UpdateExpression="SET revoked=:t, revoked_at=:now",
+            ExpressionAttributeValues={":t": True, ":now": ts},
+        )
+    except Exception:
+        pass
+    if is_real_ui_session_id(session_id):
+        record_session_revoked(user_sub)
+
+def clear_session_cookies(response: Response) -> None:
+    response.delete_cookie(S.ui_session_cookie_name)
+    response.delete_cookie(S.ui_csrf_cookie_name)
+    response.delete_cookie(S.ui_access_token_cookie_name)
+    response.delete_cookie(S.ui_refresh_token_cookie_name)
+
+def rotate_session_cookies(
+    request: Request,
+    response: Response,
+    user_sub: str,
+    session: SessionInfo,
+) -> None:
+    prior = request.cookies.get(S.ui_session_cookie_name)
+    if prior and prior != session.session_id:
+        revoke_session(user_sub, prior)
+    set_session_cookies(response, session)
+    ensure_device_cookie(request, response, user_sub)
+
+def rotate_existing_session(
+    request: Request,
+    response: Response,
+    ctx: Dict[str, str],
+    *,
+    mfa_verified_at: Optional[int] = None,
+) -> SessionInfo:
+    session = create_real_session(request, ctx["user_sub"], mfa_verified_at=mfa_verified_at)
+    revoke_session(ctx["user_sub"], ctx["session_id"])
+    set_session_cookies(response, session)
+    ensure_device_cookie(request, response, ctx["user_sub"])
+    return session
 
 def is_real_ui_session_id(session_id: str) -> bool:
     if session_id.startswith("chal_") or session_id.startswith("rl#"):
@@ -22,14 +108,76 @@ def is_real_ui_session_id(session_id: str) -> bool:
         return False
     return len(session_id) == 36 and session_id.count("-") == 4
 
+def mint_access_token(user_sub: str, session_id: str) -> str:
+    if not S.ui_access_token_secret:
+        return ""
+    payload = {
+        "sub": user_sub,
+        "sid": session_id,
+        "exp": now_ts() + S.ui_access_token_ttl_seconds,
+        "iat": now_ts(),
+    }
+    return jwt.encode(payload, S.ui_access_token_secret, algorithm="HS256")
+
+def _issue_refresh_token(response: Response, session_id: str, user_sub: str) -> None:
+    token = secrets.token_urlsafe(48)
+    token_hash = sha256_str(token)
+    try:
+        T.sessions.update_item(
+            Key={"user_sub": user_sub, "session_id": session_id},
+            UpdateExpression="SET refresh_token_hash=:h, refresh_token_issued_at=:t",
+            ExpressionAttributeValues={":h": token_hash, ":t": now_ts()},
+        )
+    except Exception:
+        pass
+    response.set_cookie(
+        S.ui_refresh_token_cookie_name,
+        token,
+        max_age=S.ui_refresh_token_ttl_seconds,
+        httponly=True,
+        secure=S.ui_cookie_secure,
+        samesite=S.ui_cookie_samesite,
+    )
+
+def rotate_refresh_token(response: Response, user_sub: str, session_id: str, refresh_token: str) -> None:
+    if not refresh_token:
+        raise HTTPException(400, "Missing refresh token")
+    it = T.sessions.get_item(Key={"user_sub": user_sub, "session_id": session_id}).get("Item") or {}
+    stored = it.get("refresh_token_hash", "")
+    if not stored or not hmac.compare_digest(stored, sha256_str(refresh_token)):
+        raise HTTPException(401, "Invalid refresh token")
+    _issue_refresh_token(response, session_id, user_sub)
+    access = mint_access_token(user_sub, session_id)
+    if access:
+        response.set_cookie(
+            S.ui_access_token_cookie_name,
+            access,
+            max_age=S.ui_access_token_ttl_seconds,
+            httponly=True,
+            secure=S.ui_cookie_secure,
+            samesite=S.ui_cookie_samesite,
+        )
+
 async def require_ui_session(
     request: Request,
     user_sub: str = Depends(get_authenticated_user_sub),
     x_session_id: Optional[str] = Header(default=None, alias="X-SESSION-ID"),
 ) -> Dict[str, str]:
-    if not x_session_id:
-        raise HTTPException(401, "Missing X-SESSION-ID")
-    it = T.sessions.get_item(Key={"user_sub": user_sub, "session_id": x_session_id}).get("Item")
+    session_id = None
+    access_cookie = request.cookies.get(S.ui_access_token_cookie_name)
+    if access_cookie and S.ui_access_token_secret:
+        try:
+            payload = jwt.decode(access_cookie, S.ui_access_token_secret, algorithms=["HS256"])
+            session_id = payload.get("sid")
+        except jwt.ExpiredSignatureError as exc:
+            raise HTTPException(401, "Access token expired") from exc
+        except jwt.PyJWTError:
+            session_id = None
+    session_cookie = request.cookies.get(S.ui_session_cookie_name)
+    session_id = session_id or session_cookie or x_session_id
+    if not session_id:
+        raise HTTPException(401, "Missing session")
+    it = T.sessions.get_item(Key={"user_sub": user_sub, "session_id": session_id}).get("Item")
     if not it:
         raise HTTPException(401, "Unknown session")
     if it.get("revoked", False):
@@ -43,7 +191,7 @@ async def require_ui_session(
     if ttl_epoch and ttl_epoch <= ts:
         try:
             T.sessions.update_item(
-                Key={"user_sub": user_sub, "session_id": x_session_id},
+                Key={"user_sub": user_sub, "session_id": session_id},
                 UpdateExpression="SET revoked=:t, revoked_at=:now",
                 ExpressionAttributeValues={":t": True, ":now": ts},
             )
@@ -52,9 +200,19 @@ async def require_ui_session(
         raise HTTPException(401, "Session expired")
     last = int(it.get("last_seen_at", 0) or 0)
     if last and (ts - last) > S.ui_inactivity_seconds:
-        T.sessions.update_item(Key={"user_sub": user_sub, "session_id": x_session_id}, UpdateExpression="SET revoked=:t", ExpressionAttributeValues={":t": True})
+        T.sessions.update_item(Key={"user_sub": user_sub, "session_id": session_id}, UpdateExpression="SET revoked=:t", ExpressionAttributeValues={":t": True})
         raise HTTPException(401, "Session expired (inactive)")
 
+    device_info = record_device_login(request, user_sub)
+    if not device_info.get("trusted", False) and (
+        device_info.get("new_device")
+        or device_info.get("location_mismatch")
+        or device_info.get("token_mismatch")
+    ):
+        if compute_required_factors(user_sub):
+            require_fresh_mfa({"user_sub": user_sub, "session_id": session_id})
+        else:
+            raise HTTPException(401, "Re-auth required")
     if getattr(S, "ddb_sessions_table", ""):
         device_info = record_device_login(request, user_sub)
         if not device_info.get("trusted", False) and (device_info.get("new_device") or device_info.get("location_mismatch")):
@@ -63,23 +221,34 @@ async def require_ui_session(
             else:
                 raise HTTPException(401, "Re-auth required")
 
+    if session_cookie and request.method.upper() not in ("GET", "HEAD", "OPTIONS"):
+        csrf_header = request.headers.get(S.ui_csrf_header_name, "")
+        csrf_cookie = request.cookies.get(S.ui_csrf_cookie_name, "")
+        expected = it.get("csrf_token", "")
+        if not expected or not csrf_cookie or not csrf_header:
+            raise HTTPException(403, "Missing CSRF token")
+        if csrf_header != csrf_cookie or csrf_cookie != expected:
+            raise HTTPException(403, "CSRF validation failed")
+
     # Touch last_seen (best effort)
     try:
-        T.sessions.update_item(Key={"user_sub": user_sub, "session_id": x_session_id}, UpdateExpression="SET last_seen_at=:t", ExpressionAttributeValues={":t": ts})
+        T.sessions.update_item(Key={"user_sub": user_sub, "session_id": session_id}, UpdateExpression="SET last_seen_at=:t", ExpressionAttributeValues={":t": ts})
     except Exception:
         pass
 
     request.state.user_sub = user_sub
-    return {"user_sub": user_sub, "session_id": x_session_id}
+    return {"user_sub": user_sub, "session_id": session_id}
 
-def create_real_session(req: Request, user_sub: str, *, mfa_verified_at: Optional[int] = None) -> str:
+def create_real_session(req: Request, user_sub: str, *, mfa_verified_at: Optional[int] = None) -> SessionInfo:
     session_id = str(uuid.uuid4())
+    csrf_token = secrets.token_urlsafe(32)
     ts = now_ts()
     ttl = ts + S.ui_session_ttl_seconds
     is_new_user = _is_new_user(user_sub)
     item: Dict[str, Any] = {
         "user_sub": user_sub,
         "session_id": session_id,
+        "csrf_token": csrf_token,
         "created_at": ts,
         "last_seen_at": ts,
         "ip": client_ip_from_request(req),
@@ -95,7 +264,7 @@ def create_real_session(req: Request, user_sub: str, *, mfa_verified_at: Optiona
     except Exception:
         pass
     record_session_created(user_sub, is_new_user)
-    return session_id
+    return SessionInfo(session_id=session_id, csrf_token=csrf_token, user_sub=user_sub)
 
 
 def _is_new_user(user_sub: str) -> bool:
@@ -223,7 +392,7 @@ def create_action_challenge(
     T.sessions.put_item(Item=with_ttl(item, ttl_epoch=expires))
     return challenge_id
 
-def maybe_finalize(req: Request, user_sub: str, challenge_id: str) -> Optional[str]:
+def maybe_finalize(req: Request, user_sub: str, challenge_id: str) -> Optional[SessionInfo]:
     chal = load_challenge_or_401(user_sub, challenge_id)
     if not challenge_done(chal):
         return None

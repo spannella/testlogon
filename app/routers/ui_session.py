@@ -2,23 +2,29 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from boto3.dynamodb.conditions import Key
 
 from app.auth.deps import get_authenticated_user_sub
 from app.models import UiSessionFinalizeReq, UiSessionStartReq, UiSessionStartResp
 from app.core.normalize import client_ip_from_request
+from app.core.settings import S
 from app.services.alerts import audit_event
-from app.services.rate_limit import rate_limit_login_attempt
+from app.services.mfa import list_enabled_emails
+from app.services.device_trust import record_device_login
+from app.services.rate_limit import rate_limit_login_attempt, record_login_anomaly
 from app.services.device_trust import trust_current_device
 from app.services.sessions import (
     compute_required_factors,
+    clear_session_cookies,
     create_real_session,
     create_stepup_challenge,
     is_real_ui_session_id,
     load_challenge_or_401,
     maybe_finalize,
     require_ui_session,
+    rotate_session_cookies,
+    rotate_refresh_token,
 )
 from app.metrics import record_session_revoked
 from app.core.tables import T
@@ -27,27 +33,72 @@ from app.core.time import now_ts
 router = APIRouter(prefix="/ui", tags=["ui-session"])
 
 @router.post("/session/start", response_model=UiSessionStartResp)
-async def ui_session_start(req: Request, body: UiSessionStartReq, user_sub: str = Depends(get_authenticated_user_sub)):
+async def ui_session_start(
+    req: Request,
+    body: UiSessionStartReq,
+    response: Response,
+    user_sub: str = Depends(get_authenticated_user_sub),
+):
     rate_limit_login_attempt(user_sub, client_ip_from_request(req))
+    anomaly = record_login_anomaly(user_sub, client_ip_from_request(req))
+    if anomaly.get("user_threshold_exceeded") or anomaly.get("ip_threshold_exceeded"):
+        audit_event(
+            "login_anomaly",
+            user_sub,
+            req,
+            outcome="warning",
+            ip_prefix=anomaly.get("ip_prefix"),
+            user_ip_count=anomaly.get("user_ip_count"),
+            ip_user_count=anomaly.get("ip_user_count"),
+        )
     required = compute_required_factors(user_sub)
+    device_info = record_device_login(req, user_sub)
+    suspicious = device_info.get("new_device") or device_info.get("location_mismatch")
+    if suspicious and "email" not in required:
+        if list_enabled_emails(user_sub):
+            required = required + ["email"]
+            audit_event(
+                "login_suspicious",
+                user_sub,
+                req,
+                outcome="warning",
+                reason="device_mismatch_requires_email",
+                device_id=device_info.get("device_id"),
+            )
+        else:
+            audit_event(
+                "login_suspicious",
+                user_sub,
+                req,
+                outcome="warning",
+                reason="device_mismatch_no_email",
+                device_id=device_info.get("device_id"),
+            )
     if not required:
-        sid = create_real_session(req, user_sub)
-        audit_event("ui_session_start", user_sub, req, outcome="success", session_id=sid)
-        return UiSessionStartResp(auth_required=False, session_id=sid, required_factors=[])
+        session = create_real_session(req, user_sub)
+        rotate_session_cookies(req, response, user_sub, session)
+        audit_event("ui_session_start", user_sub, req, outcome="success", session_id=session.session_id)
+        return UiSessionStartResp(auth_required=False, session_id=session.session_id, required_factors=[])
     challenge_id = create_stepup_challenge(req, user_sub, required_factors=required)
     audit_event("ui_session_start", user_sub, req, outcome="info", required_factors=required, challenge_id=challenge_id)
     return UiSessionStartResp(auth_required=True, challenge_id=challenge_id, required_factors=required)
 
 @router.post("/session/finalize")
-async def ui_session_finalize(req: Request, body: UiSessionFinalizeReq, user_sub: str = Depends(get_authenticated_user_sub)):
+async def ui_session_finalize(
+    req: Request,
+    body: UiSessionFinalizeReq,
+    response: Response,
+    user_sub: str = Depends(get_authenticated_user_sub),
+):
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     sid = maybe_finalize(req, user_sub, body.challenge_id)
     if sid:
+        rotate_session_cookies(req, response, user_sub, sid)
         if body.remember_device:
             device_id = trust_current_device(req, user_sub)
             audit_event("device_trust", user_sub, req, outcome="success", device_id=device_id)
-        audit_event("ui_session_finalize", user_sub, req, outcome="success", challenge_id=body.challenge_id, session_id=sid)
-        return {"status": "ok", "session_id": sid}
+        audit_event("ui_session_finalize", user_sub, req, outcome="success", challenge_id=body.challenge_id, session_id=sid.session_id)
+        return {"status": "ok", "session_id": sid.session_id}
     audit_event("ui_session_finalize", user_sub, req, outcome="pending", challenge_id=body.challenge_id, passed=chal.get("passed", {}))
     return {"status": "pending", "required_factors": chal.get("required_factors", []), "passed": chal.get("passed", {})}
 
@@ -79,7 +130,12 @@ async def ui_sessions(ctx: Dict[str, str] = Depends(require_ui_session)):
     return {"sessions": out}
 
 @router.post("/sessions/revoke")
-async def ui_sessions_revoke(req: Request, body: Dict[str, Any], ctx: Dict[str, str] = Depends(require_ui_session)):
+async def ui_sessions_revoke(
+    req: Request,
+    body: Dict[str, Any],
+    response: Response,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
     target = body.get("session_id","")
     if not target:
         return {"status":"error","reason":"missing session_id"}
@@ -87,7 +143,39 @@ async def ui_sessions_revoke(req: Request, body: Dict[str, Any], ctx: Dict[str, 
     if is_real_ui_session_id(target):
         record_session_revoked(ctx["user_sub"])
     audit_event("ui_session_revoke", ctx["user_sub"], req, outcome="success", session_id=target)
+    if target == ctx["session_id"]:
+        clear_session_cookies(response)
     return {"status":"ok"}
+
+@router.post("/session/logout")
+async def ui_session_logout(
+    req: Request,
+    response: Response,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    T.sessions.update_item(
+        Key={"user_sub": ctx["user_sub"], "session_id": ctx["session_id"]},
+        UpdateExpression="SET revoked=:t, revoked_at=:now",
+        ExpressionAttributeValues={":t": True, ":now": now_ts()},
+    )
+    record_session_revoked(ctx["user_sub"])
+    audit_event("ui_session_revoke", ctx["user_sub"], req, outcome="success", session_id=ctx["session_id"])
+    clear_session_cookies(response)
+    return {"status": "ok"}
+
+@router.post("/session/refresh")
+async def ui_session_refresh(
+    req: Request,
+    response: Response,
+    user_sub: str = Depends(get_authenticated_user_sub),
+):
+    session_id = req.cookies.get(S.ui_session_cookie_name) or req.headers.get("X-SESSION-ID", "")
+    if not session_id:
+        raise HTTPException(401, "Missing session")
+    refresh_token = req.cookies.get(S.ui_refresh_token_cookie_name, "")
+    rotate_refresh_token(response, user_sub, session_id, refresh_token)
+    audit_event("ui_session_refresh", user_sub, req, outcome="success", session_id=session_id)
+    return {"status": "ok"}
 
 @router.post("/sessions/revoke_others")
 async def ui_sessions_revoke_others(req: Request, ctx: Dict[str, str] = Depends(require_ui_session)):

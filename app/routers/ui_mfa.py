@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from app.auth.deps import get_authenticated_user_sub
 from app.core.settings import S
@@ -25,7 +25,7 @@ from app.services.rate_limit import (
     record_lockout_failure,
     clear_lockout,
 )
-from app.services.sessions import load_challenge_or_401, mark_factor_passed, maybe_finalize, revoke_challenge
+from app.services.sessions import load_challenge_or_401, mark_factor_passed, maybe_finalize, revoke_challenge, rotate_session_cookies
 from app.core.tables import T
 from app.core.time import now_ts
 
@@ -46,7 +46,12 @@ def _challenge_progress(chal: dict, passed_factor: str) -> dict:
     }
 
 @router.post("/totp/verify")
-async def ui_totp_verify(req: Request, body: TotpVerifyReq, user_sub: str = Depends(get_authenticated_user_sub)):
+async def ui_totp_verify(
+    req: Request,
+    body: TotpVerifyReq,
+    response: Response,
+    user_sub: str = Depends(get_authenticated_user_sub),
+):
     enforce_lockout(user_sub, client_ip_from_request(req), "mfa_totp")
     rate_limit_mfa_verify(user_sub, client_ip_from_request(req), "totp")
     chal = load_challenge_or_401(user_sub, body.challenge_id)
@@ -59,9 +64,11 @@ async def ui_totp_verify(req: Request, body: TotpVerifyReq, user_sub: str = Depe
         raise HTTPException(401, "Bad TOTP")
     mark_factor_passed(user_sub, body.challenge_id, "totp")
     sid = maybe_finalize(req, user_sub, body.challenge_id)
+    if sid:
+        rotate_session_cookies(req, response, user_sub, sid)
     audit_event("mfa_totp_verify", user_sub, req, outcome="success", challenge_id=body.challenge_id, device_id=dev)
     clear_lockout(user_sub, client_ip_from_request(req), "mfa_totp")
-    return {"status":"ok","session_id": sid, **_challenge_progress(chal, "totp")}
+    return {"status":"ok","session_id": sid.session_id if sid else None, **_challenge_progress(chal, "totp")}
 
 @router.post("/sms/begin")
 async def ui_sms_begin(req: Request, body: SmsBeginReq, user_sub: str = Depends(get_authenticated_user_sub)):
@@ -88,7 +95,12 @@ async def ui_sms_begin(req: Request, body: SmsBeginReq, user_sub: str = Depends(
     return {"status":"sent","sent_to": send_to}
 
 @router.post("/sms/verify")
-async def ui_sms_verify(req: Request, body: SmsVerifyReq, user_sub: str = Depends(get_authenticated_user_sub)):
+async def ui_sms_verify(
+    req: Request,
+    body: SmsVerifyReq,
+    response: Response,
+    user_sub: str = Depends(get_authenticated_user_sub),
+):
     enforce_lockout(user_sub, client_ip_from_request(req), "mfa_sms")
     rate_limit_mfa_verify(user_sub, client_ip_from_request(req), "sms")
     chal = load_challenge_or_401(user_sub, body.challenge_id)
@@ -132,9 +144,11 @@ async def ui_sms_verify(req: Request, body: SmsVerifyReq, user_sub: str = Depend
             pass
     mark_factor_passed(user_sub, body.challenge_id, "sms")
     sid = maybe_finalize(req, user_sub, body.challenge_id)
+    if sid:
+        rotate_session_cookies(req, response, user_sub, sid)
     audit_event("mfa_sms_verify", user_sub, req, outcome="success", challenge_id=body.challenge_id)
     clear_lockout(user_sub, client_ip_from_request(req), "mfa_sms")
-    return {"status":"ok","session_id": sid, **_challenge_progress(chal, "sms")}
+    return {"status":"ok","session_id": sid.session_id if sid else None, **_challenge_progress(chal, "sms")}
 
 @router.post("/email/begin")
 async def ui_email_begin(req: Request, body: EmailBeginReq, user_sub: str = Depends(get_authenticated_user_sub)):
@@ -159,7 +173,12 @@ async def ui_email_begin(req: Request, body: EmailBeginReq, user_sub: str = Depe
     return {"status":"sent","sent_to": send_to}
 
 @router.post("/email/verify")
-async def ui_email_verify(req: Request, body: EmailVerifyReq, user_sub: str = Depends(get_authenticated_user_sub)):
+async def ui_email_verify(
+    req: Request,
+    body: EmailVerifyReq,
+    response: Response,
+    user_sub: str = Depends(get_authenticated_user_sub),
+):
     enforce_lockout(user_sub, client_ip_from_request(req), "mfa_email")
     rate_limit_mfa_verify(user_sub, client_ip_from_request(req), "email")
     chal = load_challenge_or_401(user_sub, body.challenge_id)
@@ -190,12 +209,20 @@ async def ui_email_verify(req: Request, body: EmailVerifyReq, user_sub: str = De
         pass
     mark_factor_passed(user_sub, body.challenge_id, "email")
     sid = maybe_finalize(req, user_sub, body.challenge_id)
+    if sid:
+        rotate_session_cookies(req, response, user_sub, sid)
     audit_event("mfa_email_verify", user_sub, req, outcome="success", challenge_id=body.challenge_id)
     clear_lockout(user_sub, client_ip_from_request(req), "mfa_email")
-    return {"status":"ok","session_id": sid, **_challenge_progress(chal, "email")}
+    return {"status":"ok","session_id": sid.session_id if sid else None, **_challenge_progress(chal, "email")}
 
 @router.post("/recovery/{factor}")
-async def ui_recovery_factor(req: Request, factor: str, body: RecoveryReq, user_sub: str = Depends(get_authenticated_user_sub)):
+async def ui_recovery_factor(
+    req: Request,
+    factor: str,
+    body: RecoveryReq,
+    response: Response,
+    user_sub: str = Depends(get_authenticated_user_sub),
+):
     enforce_lockout(user_sub, client_ip_from_request(req), f"mfa_recovery_{factor}")
     rate_limit_mfa_verify(user_sub, client_ip_from_request(req), f"recovery_{factor}")
     chal = load_challenge_or_401(user_sub, body.challenge_id)
@@ -210,6 +237,8 @@ async def ui_recovery_factor(req: Request, factor: str, body: RecoveryReq, user_
         raise
     mark_factor_passed(user_sub, body.challenge_id, factor)
     sid = maybe_finalize(req, user_sub, body.challenge_id)
+    if sid:
+        rotate_session_cookies(req, response, user_sub, sid)
     audit_event("mfa_recovery", user_sub, req, outcome="success", challenge_id=body.challenge_id, factor=factor)
     clear_lockout(user_sub, client_ip_from_request(req), f"mfa_recovery_{factor}")
-    return {"status":"ok","session_id": sid, **_challenge_progress(chal, factor)}
+    return {"status":"ok","session_id": sid.session_id if sid else None, **_challenge_progress(chal, factor)}

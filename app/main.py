@@ -18,6 +18,7 @@ from app.routers.push import router as push_router
 from app.routers.recovery import router as recovery_router
 from app.routers.password_recovery import router as password_recovery_router
 from app.routers.passwordless import router as passwordless_router
+from app.routers.webauthn import router as webauthn_router
 from app.routers.misc import router as misc_router
 from app.routers.billing_ccbill import router as billing_ccbill_router
 from app.routers.paypal import router as paypal_router
@@ -71,6 +72,7 @@ def create_app() -> FastAPI:
     app.include_router(recovery_router)
     app.include_router(password_recovery_router)
     app.include_router(passwordless_router)
+    app.include_router(webauthn_router)
     app.include_router(misc_router)
     app.include_router(billing_ccbill_router)
     app.include_router(paypal_router)

@@ -4,6 +4,7 @@ import os
 from fastapi import HTTPException
 
 from app.core.time import now_ts
+from app.core.crypto import sha256_str
 from app.core.settings import S
 from app.core.tables import T
 from app.services.ttl import with_ttl
@@ -73,6 +74,77 @@ def _bucket_limit(user_sub: str, sid: str, max_n: int, win: int) -> bool:
 
 def _ip_user(ip: str) -> str:
     return f"ip#{ip}" if ip else "ip#unknown"
+
+def _ip_prefix(ip: str) -> str:
+    if not ip:
+        return ""
+    if ":" in ip:
+        parts = ip.split(":")
+        return ":".join(parts[:4])
+    parts = ip.split(".")
+    return ".".join(parts[:3]) if len(parts) >= 3 else ip
+
+def _anom_window_reset(item: Dict[str, Any], window_seconds: int) -> Dict[str, Any]:
+    now = now_ts()
+    window_start = int(item.get("window_start", 0))
+    if not window_start or (now - window_start) >= window_seconds:
+        return {"window_start": now, "set": set()}
+    return {"window_start": window_start, "set": set(item.get("set", []) or [])}
+
+def record_login_anomaly(user_sub: str, ip: str) -> Dict[str, Any]:
+    now = now_ts()
+    window = S.login_anomaly_window_seconds
+    ip_prefix = _ip_prefix(ip)
+    user_key = {"user_sub": user_sub, "session_id": "anom#login_ips"}
+    ip_key = {"user_sub": _ip_user(ip_prefix), "session_id": "anom#login_targets"}
+
+    user_item = T.sessions.get_item(Key=user_key).get("Item") or {}
+    ip_item = T.sessions.get_item(Key=ip_key).get("Item") or {}
+
+    user_state = _anom_window_reset({"window_start": user_item.get("window_start", 0), "set": user_item.get("ip_prefixes", [])}, window)
+    ip_state = _anom_window_reset({"window_start": ip_item.get("window_start", 0), "set": ip_item.get("target_hashes", [])}, window)
+
+    if ip_prefix:
+        user_state["set"].add(ip_prefix)
+    ip_state["set"].add(sha256_str(user_sub))
+
+    ttl = now + window + 3600
+    try:
+        T.sessions.put_item(Item=with_ttl(
+            {
+                "user_sub": user_sub,
+                "session_id": "anom#login_ips",
+                "window_start": user_state["window_start"],
+                "ip_prefixes": list(user_state["set"]),
+                "last_seen_at": now,
+            },
+            ttl_epoch=ttl,
+        ))
+    except Exception:
+        pass
+    try:
+        T.sessions.put_item(Item=with_ttl(
+            {
+                "user_sub": _ip_user(ip_prefix),
+                "session_id": "anom#login_targets",
+                "window_start": ip_state["window_start"],
+                "target_hashes": list(ip_state["set"]),
+                "last_seen_at": now,
+            },
+            ttl_epoch=ttl,
+        ))
+    except Exception:
+        pass
+
+    user_ip_count = len(user_state["set"])
+    ip_user_count = len(ip_state["set"])
+    return {
+        "ip_prefix": ip_prefix,
+        "user_ip_count": user_ip_count,
+        "ip_user_count": ip_user_count,
+        "user_threshold_exceeded": user_ip_count >= S.login_anomaly_ip_prefix_threshold,
+        "ip_threshold_exceeded": ip_user_count >= S.login_anomaly_user_threshold,
+    }
 
 def rate_limit_login_attempt(user_sub: str, ip: str) -> None:
     if not _bucket_limit(user_sub, "rl#login", S.login_attempt_max_per_window, S.login_attempt_window_seconds):
