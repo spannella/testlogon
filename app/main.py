@@ -37,6 +37,7 @@ from app.routers.catalog import router as catalog_router
 from app.routers.subscription_server import router as subscription_server_router
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
+from app.services.filemanager import start_filemgr_purge_task
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Security Backend (refactored)", version="0.1.0")
@@ -85,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(newsfeed_router)
     app.add_event_handler("startup", newsfeed_startup)
     app.add_event_handler("startup", start_billing_dunning_task)
+    app.add_event_handler("startup", start_filemgr_purge_task)
     app.include_router(purchase_history_router)
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)

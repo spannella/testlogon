@@ -525,6 +525,10 @@
   <div class="card" style="width:100%">
     <h3>File Manager</h3>
     <div class="muted">Browse folders, upload files, and manage downloads.</div>
+    <div id="filemgrSharedBanner" class="row-inline hidden" style="margin-top:8px; justify-content:space-between;">
+      <div class="muted" id="filemgrSharedLabel"></div>
+      <button id="filemgrExitSharedBtn">Exit shared view</button>
+    </div>
     <div class="row-inline" style="margin-top:10px;">
       <div id="filemgrBreadcrumb" class="mono" style="flex:1; display:flex; flex-wrap:wrap; gap:6px;"></div>
       <input id="filemgrPath" class="mono hidden" />
@@ -543,6 +547,7 @@
       <button id="filemgrBulkDeleteBtn" class="danger">Delete selected</button>
     </div>
     <div class="list" id="filemgrTransfers" style="margin-top:8px;"></div>
+    <div class="list" id="filemgrBulkOps" style="margin-top:8px;"></div>
     <div class="row-inline" style="margin-top:10px;">
       <input id="filemgrSearch" placeholder="Search prefix" />
       <button id="filemgrSearchBtn">Search</button>
@@ -550,6 +555,33 @@
       <button id="filemgrSearchTextBtn">Search text</button>
       <button id="filemgrClearSearchBtn">Clear</button>
       <span id="filemgrStatus" class="muted"></span>
+    </div>
+    <div class="row-inline" style="margin-top:10px;">
+      <label for="filemgrSortBy" class="muted">Sort by</label>
+      <select id="filemgrSortBy">
+        <option value="name">Name</option>
+        <option value="updated">Updated</option>
+        <option value="size">Size</option>
+      </select>
+      <button id="filemgrSortDirBtn" class="muted" title="Toggle sort direction">Asc</button>
+      <label for="filemgrPageSize" class="muted">Page size</label>
+      <select id="filemgrPageSize">
+        <option value="25">25</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+        <option value="200">200</option>
+      </select>
+      <button id="filemgrLoadMoreBtn">Load more</button>
+      <span id="filemgrPageStatus" class="muted"></span>
+    </div>
+    <div class="section" style="margin-top:16px;">
+      <div class="row-inline">
+        <h4 style="margin:0;">Shared with me</h4>
+        <button id="filemgrSharedRefreshBtn">Refresh</button>
+        <button id="filemgrSharedClearBtn">Clear</button>
+        <span id="filemgrSharedStatus" class="muted"></span>
+      </div>
+      <div id="filemgrSharedList" class="list" style="margin-top:8px;"></div>
     </div>
     <div id="filemgrSearchResults" class="list" style="margin-top:10px;"></div>
     <table id="filemgrTable">
