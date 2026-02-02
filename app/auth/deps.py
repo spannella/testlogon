@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import base64
 import json
-from functools import lru_cache
-from typing import Any, Dict, Optional
+import time
+from typing import Any, Dict, Optional, Tuple
 
 import jwt
 import requests
 from fastapi import HTTPException, Request
 
 from app.core.settings import S
+
+_JWKS_CACHE: Optional[Dict[str, Any]] = None
+_JWKS_FETCHED_AT: float = 0.0
 
 
 def _cognito_enabled() -> bool:
@@ -21,16 +24,29 @@ def _cognito_issuer() -> str:
     return f"https://cognito-idp.{region}.amazonaws.com/{S.cognito_user_pool_id}"
 
 
-@lru_cache(maxsize=1)
-def _cognito_jwks() -> Dict[str, Any]:
+def _fetch_cognito_jwks() -> Tuple[Dict[str, Any], float]:
     url = f"{_cognito_issuer()}/.well-known/jwks.json"
     resp = requests.get(url, timeout=10)
     resp.raise_for_status()
-    return resp.json()
+    return resp.json(), time.time()
+
+
+def _cognito_jwks(*, force_refresh: bool = False) -> Dict[str, Any]:
+    global _JWKS_CACHE, _JWKS_FETCHED_AT
+    ttl = max(0, int(S.cognito_jwks_ttl_seconds))
+    now = time.time()
+    is_stale = not _JWKS_CACHE or (ttl and (now - _JWKS_FETCHED_AT) >= ttl)
+    if force_refresh or is_stale:
+        _JWKS_CACHE, _JWKS_FETCHED_AT = _fetch_cognito_jwks()
+    return _JWKS_CACHE or {}
 
 
 def _resolve_cognito_key(kid: str) -> Dict[str, Any]:
     keys = _cognito_jwks().get("keys", [])
+    for key in keys:
+        if key.get("kid") == kid:
+            return key
+    keys = _cognito_jwks(force_refresh=True).get("keys", [])
     for key in keys:
         if key.get("kid") == kid:
             return key

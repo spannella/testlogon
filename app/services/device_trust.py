@@ -48,9 +48,10 @@ def record_device_login(req: Request, user_sub: str) -> Dict[str, Any]:
             "trusted": False,
         })
         audit_event("device_new", user_sub, req, outcome="info", device_id=device_id, ip=ip, ip_prefix=ip_prefix)
-        return {"device_id": device_id, "new_device": True, "location_mismatch": False}
+        return {"device_id": device_id, "new_device": True, "location_mismatch": False, "trusted": False}
 
     last_prefix = it.get("last_ip_prefix", "")
+    trusted = bool(it.get("trusted", False))
     location_mismatch = bool(last_prefix and ip_prefix and last_prefix != ip_prefix)
     if location_mismatch:
         audit_event("device_location_mismatch", user_sub, req, outcome="warning", device_id=device_id, ip=ip, ip_prefix=ip_prefix, previous_ip_prefix=last_prefix)
@@ -64,7 +65,14 @@ def record_device_login(req: Request, user_sub: str) -> Dict[str, Any]:
     except Exception:
         pass
 
-    return {"device_id": device_id, "new_device": False, "location_mismatch": location_mismatch}
+    return {"device_id": device_id, "new_device": False, "location_mismatch": location_mismatch, "trusted": trusted}
+
+
+def trust_current_device(req: Request, user_sub: str) -> str:
+    info = record_device_login(req, user_sub)
+    device_id = info["device_id"]
+    _update_trust(user_sub, device_id, True)
+    return device_id
 
 
 def list_devices(user_sub: str) -> List[Dict[str, Any]]:
