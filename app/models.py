@@ -180,6 +180,8 @@ class PurchaseTransactionInfo(PurchaseTransactionSummary):
     reverted_at: Optional[int] = None
     version: int
     metadata: Optional[Dict[str, Any]] = None
+    receipt_path: Optional[str] = None
+    receipt_generated_at: Optional[int] = None
 
 
 class PurchaseTransactionCreated(BaseModel):
@@ -205,6 +207,15 @@ class PurchaseCancelReq(BaseModel):
 class PurchaseCancelRespondReq(BaseModel):
     decision: str
     note: Optional[str] = None
+
+
+class ReceiptLinkOut(BaseModel):
+    txn_id: str
+    receipt_path: str
+    receipt_url: str
+    generated_at: int
+
+
 class CatalogPageOut(BaseModel):
     next_token: Optional[str] = None
 

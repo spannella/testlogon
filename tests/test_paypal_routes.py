@@ -364,6 +364,35 @@ def test_missing_user_header_raises_401():
     assert excinfo.value.status_code == 401
 
 
+def test_charge_once_records_purchase_txn(monkeypatch):
+    recorded: Dict[str, Any] = {}
+
+    monkeypatch.setattr(paypal, "apply_balance_delta", lambda *args, **kwargs: None)
+    monkeypatch.setattr(paypal, "ddb_put", lambda item, **kwargs: recorded.setdefault("ledger_put", item))
+    monkeypatch.setattr(
+        paypal,
+        "new_ledger_entry",
+        lambda **kwargs: ("LEDGER#1", {"pk": "USER#user", "sk": "LEDGER#1"}),
+    )
+    monkeypatch.setattr(
+        paypal,
+        "paypal_create_order",
+        lambda **kwargs: {"id": "ORDER-1", "links": [{"rel": "approve", "href": "https://approve"}]},
+    )
+    monkeypatch.setattr(paypal, "record_billing_transaction", lambda **kwargs: "txn_1")
+
+    def fake_put_payment_record(**kwargs):
+        recorded["payment_record"] = kwargs
+
+    monkeypatch.setattr(paypal, "put_payment_record", fake_put_payment_record)
+
+    body = paypal.OneTimeChargeIn(amount_cents=2500, payment_token_id="pm_1", reason="one-time")
+    resp = asyncio.run(paypal.charge_once(body, request=None, x_user_id="user"))
+
+    assert resp["order_id"] == "ORDER-1"
+    assert recorded["payment_record"]["purchase_txn_id"] == "txn_1"
+
+
 def test_charge_once_requires_default_payment_method(monkeypatch):
     monkeypatch.setattr(paypal, "ddb_get", lambda pk, sk: {"autopay_enabled": False})
 

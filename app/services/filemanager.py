@@ -436,6 +436,51 @@ def upload_profile_photo(
     return {"path": path, "size": size}
 
 
+def upload_billing_receipt(
+    user: str,
+    *,
+    txn_id: str,
+    content: bytes,
+) -> Dict[str, Any]:
+    bucket = _bucket()
+    obj_id = str(uuid.uuid4())
+    folder = norm_path("/billing/receipts/", is_folder=True)
+    _auto_create_parents(user, folder)
+    path = norm_path(f"{folder}{txn_id}.pdf", is_folder=False)
+    require_not_exists(user, path)
+
+    resp = _s3.put_object(Bucket=bucket, Key=f"{user}/objects/{obj_id}", Body=content, ContentType="application/pdf")
+    etag = resp.get("ETag")
+    size = len(content)
+
+    parent, name = split_parent_name(path)
+    item = {
+        "PK": pk_user(user),
+        "SK": sk_node(path),
+        "type": "file",
+        "path": path,
+        "name": name,
+        "name_lc": name.lower(),
+        "parent": parent,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "upload_at": now_iso(),
+        "upload_by": user,
+        "size": size,
+        "content_type": "application/pdf",
+        "s3_bucket": bucket,
+        "s3_key": f"{user}/objects/{obj_id}",
+        "etag": etag,
+        "GSI1PK": pk_user(user),
+        "GSI1SK": f"NAME#{name.lower()}#PATH#{path}",
+        "GSI2PK": f"PARENT#{parent}",
+        "GSI2SK": f"TYPE#file#NAME#{name.lower()}#PATH#{path}",
+    }
+    put_node(item)
+    _put_token_entries(user, item)
+    return {"path": path, "size": size}
+
+
 def upload_catalog_image(
     item_id: str,
     *,
