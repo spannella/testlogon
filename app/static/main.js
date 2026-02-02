@@ -306,7 +306,8 @@ function fmtBytes(value) {
   const units = ["B", "KB", "MB", "GB", "TB"];
   const idx = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
   const scaled = size / Math.pow(1024, idx);
-  return `${scaled.toFixed(scaled >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
+  const precision = (scaled >= 10 || idx === 0 || Number.isInteger(scaled)) ? 0 : 1;
+  return `${scaled.toFixed(precision)} ${units[idx]}`;
 }
 
 /* ===================== billing (CCBill) ===================== */
@@ -4024,8 +4025,8 @@ function renderCartItems(items) {
       <td class=\"mono\">${escapeHtml(item.sku)}</td>
       <td>${escapeHtml(item.name)}</td>
       <td><input id=\"${qtyId}\" type=\"number\" min=\"0\" value=\"${item.quantity}\" style=\"width:80px\"/></td>
-      <td>${fmtMoney(item.unit_price_cents, \"usd\")}</td>
-      <td>${fmtMoney(item.line_total_cents, \"usd\")}</td>
+      <td>${fmtMoney(item.unit_price_cents, "usd")}</td>
+      <td>${fmtMoney(item.line_total_cents, "usd")}</td>
       <td>
         <button data-action=\"update\" data-sku=\"${escapeHtml(item.sku)}\">Update</button>
         <button class=\"danger\" data-action=\"remove\" data-sku=\"${escapeHtml(item.sku)}\">Remove</button>
@@ -5877,34 +5878,35 @@ document.getElementById("accountReactivateBtn").onclick = () => {
   });
 };
 
-initBillingUi();
-renderPasswordRecovery();
-document.getElementById("billingRefreshBtn").onclick = refreshBillingAll;
-document.getElementById("paySettledBalanceBtn").onclick = payBillingSettledBalance;
-document.getElementById("autopay").onchange = setBillingAutopay;
-document.getElementById("paneAddCardBtn").onclick = () => showBillingPane("add_card");
-document.getElementById("paneAddBankBtn").onclick = () => showBillingPane("add_bank");
-document.getElementById("paneVerifyBankBtn").onclick = () => showBillingPane("verify_bank");
-document.getElementById("paneListMethodsBtn").onclick = () => showBillingPane("list_methods");
-document.getElementById("addCardBtn").onclick = addBillingCard;
-document.getElementById("addBankAccountBtn").onclick = addBillingBankAccount;
-document.getElementById("usePendingSetupIntentBtn").onclick = useBillingPendingSetupIntent;
-document.getElementById("verifyByAmountsBtn").onclick = verifyBillingByAmounts;
-document.getElementById("verifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
-document.getElementById("loadLedgerBtn").onclick = loadBillingLedger;
-document.getElementById("stripeRefreshBtn").onclick = refreshBillingAll;
-document.getElementById("stripePaySettledBalanceBtn").onclick = payBillingSettledBalance;
-document.getElementById("stripe_autopay").onchange = setBillingAutopay;
-document.getElementById("stripePaneAddCardBtn").onclick = () => showStripePane("add_card");
-document.getElementById("stripePaneAddBankBtn").onclick = () => showStripePane("add_bank");
-document.getElementById("stripePaneVerifyBankBtn").onclick = () => showStripePane("verify_bank");
-document.getElementById("stripePaneListMethodsBtn").onclick = () => showStripePane("list_methods");
-document.getElementById("stripeAddCardBtn").onclick = addBillingCard;
-document.getElementById("stripeAddBankAccountBtn").onclick = addBillingBankAccount;
-document.getElementById("stripeUsePendingSetupIntentBtn").onclick = useBillingPendingSetupIntent;
-document.getElementById("stripeVerifyByAmountsBtn").onclick = verifyBillingByAmounts;
-document.getElementById("stripeVerifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
-document.getElementById("stripeLoadLedgerBtn").onclick = loadBillingLedger;
+if (!window.__SKIP_BOOT__) {
+  initBillingUi();
+  renderPasswordRecovery();
+  document.getElementById("billingRefreshBtn").onclick = refreshBillingAll;
+  document.getElementById("paySettledBalanceBtn").onclick = payBillingSettledBalance;
+  document.getElementById("autopay").onchange = setBillingAutopay;
+  document.getElementById("paneAddCardBtn").onclick = () => showBillingPane("add_card");
+  document.getElementById("paneAddBankBtn").onclick = () => showBillingPane("add_bank");
+  document.getElementById("paneVerifyBankBtn").onclick = () => showBillingPane("verify_bank");
+  document.getElementById("paneListMethodsBtn").onclick = () => showBillingPane("list_methods");
+  document.getElementById("addCardBtn").onclick = addBillingCard;
+  document.getElementById("addBankAccountBtn").onclick = addBillingBankAccount;
+  document.getElementById("usePendingSetupIntentBtn").onclick = useBillingPendingSetupIntent;
+  document.getElementById("verifyByAmountsBtn").onclick = verifyBillingByAmounts;
+  document.getElementById("verifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
+  document.getElementById("loadLedgerBtn").onclick = loadBillingLedger;
+  document.getElementById("stripeRefreshBtn").onclick = refreshBillingAll;
+  document.getElementById("stripePaySettledBalanceBtn").onclick = payBillingSettledBalance;
+  document.getElementById("stripe_autopay").onchange = setBillingAutopay;
+  document.getElementById("stripePaneAddCardBtn").onclick = () => showStripePane("add_card");
+  document.getElementById("stripePaneAddBankBtn").onclick = () => showStripePane("add_bank");
+  document.getElementById("stripePaneVerifyBankBtn").onclick = () => showStripePane("verify_bank");
+  document.getElementById("stripePaneListMethodsBtn").onclick = () => showStripePane("list_methods");
+  document.getElementById("stripeAddCardBtn").onclick = addBillingCard;
+  document.getElementById("stripeAddBankAccountBtn").onclick = addBillingBankAccount;
+  document.getElementById("stripeUsePendingSetupIntentBtn").onclick = useBillingPendingSetupIntent;
+  document.getElementById("stripeVerifyByAmountsBtn").onclick = verifyBillingByAmounts;
+  document.getElementById("stripeVerifyByDescriptorBtn").onclick = verifyBillingByDescriptor;
+  document.getElementById("stripeLoadLedgerBtn").onclick = loadBillingLedger;
 
 setInputValue("msgApiBase", API_BASE);
 document.getElementById("msgLoadConvosBtn").onclick = loadMessagingConvos;
@@ -5977,13 +5979,12 @@ document.getElementById("newsfeedNotifsRefreshBtn").onclick = async () => {
   }
 };
 document.getElementById("newsfeedConnectBtn").onclick = connectNewsfeedSse;
-document.getElementById("newsfeedDisconnectBtn").onclick = () => {
+  document.getElementById("newsfeedDisconnectBtn").onclick = () => {
   disconnectNewsfeedSse();
   logNewsfeedSse("Disconnected.");
 };
 
 /* ===================== boot ===================== */
-if (!window.__SKIP_BOOT__) {
   setCalendarId(getCalendarId());
   if (!accessToken()) { openTokenModal(); } else { refreshAll(); }
   startToastSSE();

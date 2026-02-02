@@ -551,6 +551,15 @@ class EventsPageOut(BaseModel):
     events: List[EventOut]
     next_cursor: str | None = None
 
+    def __len__(self) -> int:
+        return len(self.events)
+
+    def __iter__(self):
+        return iter(self.events)
+
+    def __getitem__(self, index: int) -> EventOut:
+        return self.events[index]
+
 
 class RecurrenceRule(BaseModel):
     freq: Literal["DAILY", "WEEKLY", "MONTHLY"]

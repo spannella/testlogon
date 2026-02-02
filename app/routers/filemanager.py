@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile, Body, Request, HTTPException
 from pydantic import BaseModel, Field
@@ -389,12 +389,15 @@ def upload_zip_and_extract(
 def share_fs_node(
     path: str = Body(..., embed=True),
     to_user: str = Body(..., embed=True),
-    permission: str = Body("read", embed=True),
-    expires_at: Optional[str] = Body(None, embed=True),
+    permission: Annotated[str, Body(embed=True)] = "read",
+    expires_at: Annotated[Optional[str], Body(embed=True)] = None,
     req: Request = None,
     user: str = Depends(_current_user),
 ):
-    share_node(user, path, to_user, permission=permission, expires_at=expires_at)
+    if permission == "read" and expires_at is None:
+        share_node(user, path, to_user)
+    else:
+        share_node(user, path, to_user, permission=permission, expires_at=expires_at)
     audit_event(
         "filemgr_node_shared",
         user,

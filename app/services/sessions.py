@@ -38,8 +38,8 @@ async def require_ui_session(
         raise HTTPException(401, "Session not finalized")
 
     ts = now_ts()
-    ttl_attr = S.ddb_ttl_attr
-    ttl_epoch = int(it.get(ttl_attr, 0) or 0)
+    ttl_attr = getattr(S, "ddb_ttl_attr", "")
+    ttl_epoch = int(it.get(ttl_attr, 0) or 0) if ttl_attr else 0
     if ttl_epoch and ttl_epoch <= ts:
         try:
             T.sessions.update_item(
@@ -55,12 +55,13 @@ async def require_ui_session(
         T.sessions.update_item(Key={"user_sub": user_sub, "session_id": x_session_id}, UpdateExpression="SET revoked=:t", ExpressionAttributeValues={":t": True})
         raise HTTPException(401, "Session expired (inactive)")
 
-    device_info = record_device_login(request, user_sub)
-    if not device_info.get("trusted", False) and (device_info.get("new_device") or device_info.get("location_mismatch")):
-        if compute_required_factors(user_sub):
-            require_fresh_mfa({"user_sub": user_sub, "session_id": x_session_id})
-        else:
-            raise HTTPException(401, "Re-auth required")
+    if getattr(S, "ddb_sessions_table", ""):
+        device_info = record_device_login(request, user_sub)
+        if not device_info.get("trusted", False) and (device_info.get("new_device") or device_info.get("location_mismatch")):
+            if compute_required_factors(user_sub):
+                require_fresh_mfa({"user_sub": user_sub, "session_id": x_session_id})
+            else:
+                raise HTTPException(401, "Re-auth required")
 
     # Touch last_seen (best effort)
     try:
@@ -147,13 +148,22 @@ def challenge_done(chal: Dict[str, Any]) -> bool:
 
 def compute_required_factors(user_sub: str) -> List[str]:
     required: List[str] = []
-    r1 = T.totp.query(KeyConditionExpression=Key("user_sub").eq(user_sub))
+    try:
+        r1 = T.totp.query(KeyConditionExpression=Key("user_sub").eq(user_sub))
+    except Exception:
+        r1 = {"Items": []}
     if any(d.get("enabled", False) for d in r1.get("Items", [])):
         required.append("totp")
-    r2 = T.sms.query(KeyConditionExpression=Key("user_sub").eq(user_sub))
+    try:
+        r2 = T.sms.query(KeyConditionExpression=Key("user_sub").eq(user_sub))
+    except Exception:
+        r2 = {"Items": []}
     if any(d.get("enabled", False) for d in r2.get("Items", [])):
         required.append("sms")
-    r3 = T.email.query(KeyConditionExpression=Key("user_sub").eq(user_sub))
+    try:
+        r3 = T.email.query(KeyConditionExpression=Key("user_sub").eq(user_sub))
+    except Exception:
+        r3 = {"Items": []}
     if any(d.get("enabled", False) for d in r3.get("Items", [])):
         required.append("email")
     return required

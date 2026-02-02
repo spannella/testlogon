@@ -309,12 +309,16 @@ def _node_tokens(item: Dict[str, Any]) -> List[str]:
 
 
 def _put_token_entries(user: str, item: Dict[str, Any]) -> None:
+    if not S.filemgr_table_name:
+        return
     tbl = _table()
     for token in _node_tokens(item):
         tbl.put_item(Item=_token_entry(user, item, token))
 
 
 def _delete_token_entries(user: str, item: Dict[str, Any]) -> None:
+    if not S.filemgr_table_name:
+        return
     tbl = _table()
     for token in _node_tokens(item):
         tbl.delete_item(Key={"PK": _token_pk(user, token), "SK": _token_sk(item["path"])})
