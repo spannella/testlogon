@@ -6,7 +6,9 @@ import os
 import re
 import time
 import uuid
+from html.parser import HTMLParser
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence
+from urllib.parse import urljoin, urlparse
 
 import anyio
 import boto3
@@ -15,6 +17,7 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.exceptions import ClientError, NoCredentialsError
 import requests
+import snowballstemmer
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -313,6 +316,7 @@ class MessageOut(BaseModel):
     revoked_at: Optional[int] = None
     revoked_by: Optional[str] = None
     delivered_to_count: Optional[int] = None
+    delivered_to_user_ids: Optional[List[str]] = None
     read_by_count: Optional[int] = None
     read_by_user_ids: Optional[List[str]] = None
     reactions_counts: Optional[Dict[str, int]] = None
@@ -353,18 +357,40 @@ def _tokenize_message(text: str, max_len: int = 32) -> list[str]:
     return [t[:max_len] for t in tokens if t]
 
 
+def _stem_tokens(tokens: Sequence[str]) -> list[str]:
+    stemmer = snowballstemmer.stemmer("english")
+    return [stem for stem in stemmer.stemWords(list(tokens)) if stem]
+
+
+def _token_ngrams(token: str, *, min_len: int = 3, max_len: int = 5) -> list[str]:
+    if len(token) < min_len:
+        return []
+    ngrams: list[str] = []
+    for size in range(min_len, min(max_len, len(token)) + 1):
+        for idx in range(0, len(token) - size + 1):
+            ngrams.append(token[idx : idx + size])
+    return ngrams
+
+
 def build_message_search_tokens(text: str, *, max_len: int = 32, max_prefix_len: int = 8) -> list[str]:
-    tokens = _tokenize_message(text, max_len=max_len)
+    tokens = _stem_tokens(_tokenize_message(text, max_len=max_len))
     out: list[str] = []
     for token in tokens:
         out.append(token)
         for i in range(1, min(len(token), max_prefix_len) + 1):
             out.append(token[:i])
+        out.extend(_token_ngrams(token))
     return list(dict.fromkeys(out))
 
 
 def build_message_query_tokens(query: str, *, max_len: int = 32) -> list[str]:
-    return list(dict.fromkeys(_tokenize_message(query, max_len=max_len)))
+    tokens = _stem_tokens(_tokenize_message(query, max_len=max_len))
+    out: list[str] = []
+    for token in tokens:
+        out.append(token)
+        out.extend(build_prefix_tokens(token))
+        out.extend(_token_ngrams(token))
+    return list(dict.fromkeys(out))
 
 
 def _message_search_key(conversation_id: str, message_id: str) -> str:
@@ -428,6 +454,7 @@ def _opensearch_index_message(
     sender_id: str,
     created_at: int,
     text: str,
+    kind: str,
 ) -> None:
     if not _opensearch_enabled():
         return
@@ -438,6 +465,8 @@ def _opensearch_index_message(
         "sender_id": sender_id,
         "created_at": int(created_at),
         "text": text,
+        "search_text": text,
+        "kind": kind,
     }
     _opensearch_request("PUT", f"/{OPENSEARCH_INDEX}/_doc/{doc_id}", body=body)
 
@@ -450,6 +479,7 @@ def _opensearch_search_messages(
     allowed_conversation_ids: Optional[set[str]] = None,
     sender_id: Optional[str] = None,
     after_ts: Optional[int] = None,
+    kinds: Optional[Sequence[str]] = None,
 ) -> Optional[list[str]]:
     if not _opensearch_enabled():
         return None
@@ -462,15 +492,22 @@ def _opensearch_search_messages(
         filters.append({"term": {"sender_id": sender_id}})
     if after_ts is not None:
         filters.append({"range": {"created_at": {"gte": int(after_ts)}}})
+    if kinds:
+        filters.append({"terms": {"kind": list(kinds)}})
     body: Dict[str, Any] = {
         "size": limit,
         "query": {
             "bool": {
-                "must": {"simple_query_string": {"query": query, "fields": ["text"]}},
+                "must": {
+                    "simple_query_string": {
+                        "query": query,
+                        "fields": ["text^2", "search_text^3"],
+                    }
+                },
                 "filter": filters,
             }
         },
-        "sort": [{"created_at": "desc"}],
+        "sort": [{"_score": "desc"}, {"created_at": "desc"}],
     }
     resp = _opensearch_request("POST", f"/{OPENSEARCH_INDEX}/_search", body=body)
     if not resp:
@@ -485,6 +522,8 @@ def index_message_search(
     sender_id: str,
     created_at: int,
     text: str,
+    *,
+    kind: str = "text",
 ) -> None:
     if _message_search_enabled():
         tokens = build_message_search_tokens(text)
@@ -505,7 +544,7 @@ def index_message_search(
                     )
         except ClientError:
             return
-    _opensearch_index_message(conversation_id, message_id, sender_id, created_at, text)
+    _opensearch_index_message(conversation_id, message_id, sender_id, created_at, text, kind)
 
 
 def remove_message_search(
@@ -531,6 +570,54 @@ def _filter_message_visible(message_item: dict, user_id: str) -> bool:
     if message_item.get("revoked_at"):
         return False
     return user_id not in deleted_for
+
+
+def _message_search_text(message_item: dict) -> str:
+    return str(message_item.get("search_text") or message_item.get("text") or "")
+
+
+def _is_searchable_kind(kind: Optional[str]) -> bool:
+    return kind in {"text", "file", "audio", "video"}
+
+
+def _filter_search_kinds(kinds: Optional[Sequence[str]]) -> Optional[set[str]]:
+    if not kinds:
+        return None
+    normalized = {str(k).strip().lower() for k in kinds if str(k).strip()}
+    allowed = {"text", "image", "file", "audio", "video"}
+    filtered = {k for k in normalized if k in allowed}
+    return filtered or None
+
+
+def _message_relevance_score(message_item: dict, query: str) -> float:
+    query = (query or "").lower().strip()
+    if not query:
+        return 0.0
+    text = _message_search_text(message_item).lower()
+    if not text:
+        return 0.0
+    tokens = _stem_tokens(_tokenize_message(query))
+    score = 0.0
+    for token in tokens:
+        if not token:
+            continue
+        if token in text:
+            score += 3.0
+        else:
+            ngrams = _token_ngrams(token, min_len=3, max_len=4)
+            if any(ngram in text for ngram in ngrams):
+                score += 1.0
+    created_at = int(message_item.get("created_at", 0) or 0)
+    if created_at:
+        age_days = max(0.0, (now_ts() - created_at) / 86400)
+        score += max(0.0, 1.5 - (age_days / 14.0))
+    return score
+
+
+def _rank_messages_by_relevance(items: list[dict], query: str) -> list[dict]:
+    scored = [(item, _message_relevance_score(item, query)) for item in items]
+    scored.sort(key=lambda x: (x[1], int(x[0].get("created_at", 0) or 0)), reverse=True)
+    return [item for item, _ in scored]
 
 
 def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOut:
@@ -624,6 +711,7 @@ def _fallback_search_messages(
     user_id: str,
     sender_id: Optional[str] = None,
     after_ts: Optional[int] = None,
+    kinds: Optional[set[str]] = None,
 ) -> list[dict]:
     query_lower = query.lower()
     matches: list[dict] = []
@@ -645,10 +733,12 @@ def _fallback_search_messages(
                 continue
             if after_ts is not None and int(item.get("created_at", 0)) < int(after_ts):
                 continue
-            if item.get("kind") != "text":
+            if kinds and item.get("kind") not in kinds:
                 continue
-            text = (item.get("text") or "").lower()
-            if query_lower in text:
+            if not _is_searchable_kind(item.get("kind")):
+                continue
+            text = _message_search_text(item).lower()
+            if text and query_lower in text:
                 matches.append(item)
                 if len(matches) >= limit:
                     break
@@ -704,7 +794,100 @@ def _serialize_preview(preview: Optional[LinkPreviewIn]) -> Optional[dict]:
     return preview.dict(exclude_none=True)
 
 
-def _message_receipt_summary(message_item: dict, participants: Sequence[dict]) -> tuple[int, List[str]]:
+class _LinkPreviewParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.title: Optional[str] = None
+        self.meta: Dict[str, str] = {}
+        self._in_title = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        attrs_map = {k.lower(): v for k, v in attrs}
+        if tag.lower() == "title":
+            self._in_title = True
+            return
+        if tag.lower() == "meta":
+            key = attrs_map.get("property") or attrs_map.get("name")
+            content = attrs_map.get("content")
+            if key and content:
+                self.meta[key.lower()] = content.strip()
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() == "title":
+            self._in_title = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_title and not self.title:
+            text = data.strip()
+            if text:
+                self.title = text
+
+
+def _extract_first_url(text: str) -> Optional[str]:
+    if not text:
+        return None
+    match = re.search(r"(https?://[^\s<>()]+)", text)
+    if not match:
+        return None
+    url = match.group(1).rstrip(".,!?)]}\"'")
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    return url
+
+
+def _fetch_link_preview(url: str) -> Optional[dict]:
+    try:
+        resp = requests.get(
+            url,
+            timeout=3,
+            headers={"User-Agent": "MessagingPreviewBot/1.0"},
+            stream=True,
+        )
+    except requests.RequestException:
+        return None
+    try:
+        if resp.status_code >= 400:
+            return None
+        content_type = resp.headers.get("Content-Type", "")
+        if "text/html" not in content_type:
+            return None
+        content = b""
+        try:
+            for chunk in resp.iter_content(chunk_size=65536):
+                if not chunk:
+                    break
+                content += chunk
+                if len(content) > 512000:
+                    break
+        except requests.RequestException:
+            return None
+    finally:
+        resp.close()
+    parser = _LinkPreviewParser()
+    try:
+        parser.feed(content.decode(errors="ignore"))
+    except Exception:
+        return None
+    title = parser.meta.get("og:title") or parser.title
+    description = parser.meta.get("og:description") or parser.meta.get("description")
+    image_url = parser.meta.get("og:image")
+    site_name = parser.meta.get("og:site_name")
+    if image_url:
+        image_url = urljoin(url, image_url)
+    preview = {
+        "url": url,
+        "title": title,
+        "description": description,
+        "image_url": image_url,
+        "site_name": site_name,
+    }
+    if not any(preview.values()):
+        return None
+    return {k: v for k, v in preview.items() if v}
+
+
+def _message_receipt_summary(message_item: dict, participants: Sequence[dict]) -> tuple[List[str], List[str]]:
     if _message_receipts_enabled():
         convo_id = message_item.get("conversation_id")
         message_id = message_item.get("message_id")
@@ -716,27 +899,30 @@ def _message_receipt_summary(message_item: dict, participants: Sequence[dict]) -
                 ScanIndexForward=True,
             )
             items = resp.get("Items", [])
-            delivered = [it for it in items if int(it.get("delivered_at", 0) or 0) > 0]
+            delivered_users = [it["user_id"] for it in items if int(it.get("delivered_at", 0) or 0) > 0]
             read_by = [it["user_id"] for it in items if int(it.get("read_at", 0) or 0) > 0]
+            delivered_users.sort()
             read_by.sort()
-            return len(delivered), read_by
+            return delivered_users, read_by
     active = [p for p in participants if p.get("status") == "active"]
     sender_id = message_item.get("sender_id")
     delivered = [p for p in active if p.get("user_id") != sender_id]
-    delivered_count = len(delivered)
+    delivered_users = [p["user_id"] for p in delivered if p.get("user_id")]
     created_at = int(message_item.get("created_at", 0) or 0)
     read_by = [
         p["user_id"]
         for p in active
         if int(p.get("last_read_at", 0) or 0) >= created_at
     ]
+    delivered_users.sort()
     read_by.sort()
-    return delivered_count, read_by
+    return delivered_users, read_by
 
 
 def _apply_message_receipts(message_out: MessageOut, message_item: dict, participants: Sequence[dict]) -> MessageOut:
-    delivered_count, read_by = _message_receipt_summary(message_item, participants)
-    message_out.delivered_to_count = delivered_count
+    delivered_users, read_by = _message_receipt_summary(message_item, participants)
+    message_out.delivered_to_user_ids = delivered_users
+    message_out.delivered_to_count = len(delivered_users)
     message_out.read_by_user_ids = read_by
     message_out.read_by_count = len(read_by)
     return message_out
@@ -1450,6 +1636,7 @@ def search_messages_in_conversation(
     limit: int = Query(50, ge=1, le=200),
     sender_id: Optional[str] = Query(None, max_length=64),
     after_ts: Optional[int] = Query(None, ge=0),
+    kind: Optional[List[str]] = Query(None),
     user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, conversation_id)
@@ -1457,21 +1644,24 @@ def search_messages_in_conversation(
         sender_id = None
     if not isinstance(after_ts, int):
         after_ts = None
+    kind_filter = _filter_search_kinds(kind)
     opensearch_keys = _opensearch_search_messages(
         q,
         limit=limit,
         conversation_id=conversation_id,
         sender_id=sender_id,
         after_ts=after_ts,
+        kinds=kind_filter,
     )
     if opensearch_keys is not None:
         message_items = _fetch_message_items(opensearch_keys)
         matches = [
             item
             for item in message_items
-            if item.get("kind") == "text" and _filter_message_visible(item, user_id)
+            if _is_searchable_kind(item.get("kind")) and _filter_message_visible(item, user_id)
             and (not sender_id or item.get("sender_id") == sender_id)
             and (after_ts is None or int(item.get("created_at", 0)) >= int(after_ts))
+            and (not kind_filter or item.get("kind") in kind_filter)
         ]
     else:
         query_tokens = build_message_query_tokens(q)
@@ -1490,18 +1680,20 @@ def search_messages_in_conversation(
                 user_id=user_id,
                 sender_id=sender_id,
                 after_ts=after_ts,
+                kinds=kind_filter,
             )
         else:
             message_items = _fetch_message_items([item["message_key"] for item in indexed])
             matches = [
                 item
                 for item in message_items
-                if item.get("kind") == "text" and _filter_message_visible(item, user_id)
+                if _is_searchable_kind(item.get("kind")) and _filter_message_visible(item, user_id)
                 and (not sender_id or item.get("sender_id") == sender_id)
                 and (after_ts is None or int(item.get("created_at", 0)) >= int(after_ts))
+                and (not kind_filter or item.get("kind") in kind_filter)
             ]
 
-    matches.sort(key=lambda x: int(x.get("created_at", 0)), reverse=True)
+    matches = _rank_messages_by_relevance(matches, q)
     parts = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id)).get("Items", [])
     out = []
     for item in matches[:limit]:
@@ -1516,12 +1708,14 @@ def search_messages_all_conversations(
     limit: int = Query(50, ge=1, le=200),
     sender_id: Optional[str] = Query(None, max_length=64),
     after_ts: Optional[int] = Query(None, ge=0),
+    kind: Optional[List[str]] = Query(None),
     user_id: str = Depends(get_messaging_user_id),
 ):
     if not isinstance(sender_id, str):
         sender_id = None
     if not isinstance(after_ts, int):
         after_ts = None
+    kind_filter = _filter_search_kinds(kind)
     parts = tbl_parts.query(KeyConditionExpression=Key("user_id").eq(user_id), Limit=200).get("Items", [])
     allowed_conversation_ids = {p["conversation_id"] for p in parts if p.get("status") == "active"}
     if not allowed_conversation_ids:
@@ -1533,6 +1727,7 @@ def search_messages_all_conversations(
         allowed_conversation_ids=allowed_conversation_ids,
         sender_id=sender_id,
         after_ts=after_ts,
+        kinds=kind_filter,
     )
 
     matches: list[dict]
@@ -1542,10 +1737,11 @@ def search_messages_all_conversations(
             item
             for item in message_items
             if item.get("conversation_id") in allowed_conversation_ids
-            and item.get("kind") == "text"
+            and _is_searchable_kind(item.get("kind"))
             and _filter_message_visible(item, user_id)
             and (not sender_id or item.get("sender_id") == sender_id)
             and (after_ts is None or int(item.get("created_at", 0)) >= int(after_ts))
+            and (not kind_filter or item.get("kind") in kind_filter)
         ]
     else:
         query_tokens = build_message_query_tokens(q)
@@ -1569,6 +1765,7 @@ def search_messages_all_conversations(
                         user_id=user_id,
                         sender_id=sender_id,
                         after_ts=after_ts,
+                        kinds=kind_filter,
                     )
                 )
         else:
@@ -1577,13 +1774,14 @@ def search_messages_all_conversations(
                 item
                 for item in message_items
                 if item.get("conversation_id") in allowed_conversation_ids
-                and item.get("kind") == "text"
+                and _is_searchable_kind(item.get("kind"))
                 and _filter_message_visible(item, user_id)
                 and (not sender_id or item.get("sender_id") == sender_id)
                 and (after_ts is None or int(item.get("created_at", 0)) >= int(after_ts))
+                and (not kind_filter or item.get("kind") in kind_filter)
             ]
 
-    matches.sort(key=lambda x: int(x.get("created_at", 0)), reverse=True)
+    matches = _rank_messages_by_relevance(matches, q)
     convo_participants: Dict[str, List[dict]] = {}
     for item in matches[:limit]:
         cid = item.get("conversation_id")
@@ -1630,6 +1828,10 @@ def send_text_message(
         "reactions": {},
     }
     link_preview = _serialize_preview(inp.preview)
+    if not link_preview:
+        url = _extract_first_url(inp.text)
+        if url:
+            link_preview = _fetch_link_preview(url)
     if link_preview:
         item["preview"] = link_preview
     ttl = _message_retention_ttl(convo, ts)
@@ -1641,7 +1843,7 @@ def send_text_message(
     tbl_msgs.put_item(Item=item)
     _bump_unread_counts(conversation_id, user_id, resp.get("Items", []))
     _record_delivery_receipts(conversation_id, mid, user_id, resp.get("Items", []))
-    index_message_search(conversation_id, mid, user_id, ts, inp.text)
+    index_message_search(conversation_id, mid, user_id, ts, inp.text, kind="text")
 
     preview_text = inp.text[:140]
     tbl_convos.update_item(
@@ -1791,18 +1993,21 @@ def create_file_message(
     ts = now_ts()
     preview = _serialize_preview(inp.preview)
 
+    duration_seconds = inp.duration_seconds or node.get("duration_seconds")
     item: Dict[str, Any] = {
         "conversation_id": conversation_id,
         "message_id": mid,
         "sender_id": user_id,
         "created_at": ts,
         "kind": inp.kind,
+        "search_text": f"{node.get('name', '')} {node.get('path', '')}".strip(),
         "file": {
             "path": node.get("path"),
             "name": node.get("name"),
             "size": node.get("size"),
             "content_type": content_type,
-            "duration_seconds": inp.duration_seconds,
+            "duration_seconds": duration_seconds,
+            "thumbnail": node.get("thumbnail"),
         },
         "deleted_for": set(),
         "reactions": {},
@@ -1818,6 +2023,8 @@ def create_file_message(
     tbl_msgs.put_item(Item=item)
     _bump_unread_counts(conversation_id, user_id, resp.get("Items", []))
     _record_delivery_receipts(conversation_id, mid, user_id, resp.get("Items", []))
+    if item.get("search_text"):
+        index_message_search(conversation_id, mid, user_id, ts, item["search_text"], kind=inp.kind)
 
     preview_label = {
         "file": "[file]",
@@ -1922,8 +2129,8 @@ def revoke_message_for_all(
         UpdateExpression="SET revoked_at = :ts, revoked_by = :uid",
         ExpressionAttributeValues={":ts": ts, ":uid": user_id},
     )
-    if msg.get("kind") == "text":
-        remove_message_search(conversation_id, message_id, msg.get("text", ""))
+    if _is_searchable_kind(msg.get("kind")):
+        remove_message_search(conversation_id, message_id, _message_search_text(msg))
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,
@@ -2192,6 +2399,7 @@ def forward_message(
 
     if kind == "text":
         item["text"] = src.get("text", "")
+        item["search_text"] = item["text"]
         if src.get("preview"):
             item["preview"] = src.get("preview")
         preview = "[fwd] " + (item["text"] or "")[:140]
@@ -2200,13 +2408,26 @@ def forward_message(
         preview = "[fwd image]"
     else:
         item["file"] = src.get("file")
+        if src.get("search_text"):
+            item["search_text"] = src.get("search_text")
+        elif item.get("file"):
+            name = item["file"].get("name") or ""
+            path = item["file"].get("path") or ""
+            item["search_text"] = f"{name} {path}".strip()
         if src.get("preview"):
             item["preview"] = src.get("preview")
         preview = f"[fwd {kind}]"
 
     tbl_msgs.put_item(Item=item)
-    if kind == "text":
-        index_message_search(target_conversation_id, mid, user_id, ts, item.get("text", ""))
+    if _is_searchable_kind(kind):
+        index_message_search(
+            target_conversation_id,
+            mid,
+            user_id,
+            ts,
+            _message_search_text(item),
+            kind=kind,
+        )
     _record_delivery_receipts(
         target_conversation_id,
         mid,

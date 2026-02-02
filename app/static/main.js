@@ -3168,6 +3168,18 @@ function setMsgStatus(id, msg) {
   el.textContent = msg || "";
 }
 
+function setMsgAttachmentStatus(msg) {
+  setMsgStatus("msgAttachmentStatus", msg);
+}
+
+function uiSessionHeaders() {
+  const tok = accessToken();
+  if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  return { Authorization: `Bearer ${tok}`, "X-SESSION-ID": sid };
+}
+
 async function msgRequest(path, { method = "GET", body = null } = {}) {
   const uid = msgUserId();
   const headers = {};
@@ -3194,6 +3206,173 @@ async function msgRequest(path, { method = "GET", body = null } = {}) {
   return res.json();
 }
 
+async function fileManagerUpload(path, file) {
+  const headers = uiSessionHeaders();
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`${msgApiBase()}/v1/fs/upload?path=${encodeURIComponent(path)}`, {
+    method: "POST",
+    headers,
+    body: form,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Upload failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+async function fileManagerPresignUpload(path, file) {
+  const headers = uiSessionHeaders();
+  headers["Content-Type"] = "application/json";
+  const res = await fetch(`${msgApiBase()}/v1/fs/presign-upload`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ path, content_type: file.type || "application/octet-stream" }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Presign failed: ${res.status}`);
+  }
+  const data = await res.json();
+  const uploadRes = await fetch(data.upload_url, {
+    method: "PUT",
+    headers: { "Content-Type": data.content_type || "application/octet-stream" },
+    body: file,
+  });
+  if (!uploadRes.ok) {
+    throw new Error(`Upload failed: ${uploadRes.status}`);
+  }
+  const completeRes = await fetch(`${msgApiBase()}/v1/fs/complete-upload`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ path: data.path, key: data.key, content_type: data.content_type }),
+  });
+  if (!completeRes.ok) {
+    const text = await completeRes.text();
+    throw new Error(text || `Complete upload failed: ${completeRes.status}`);
+  }
+  return completeRes.json();
+}
+
+async function fetchFileBlob(path, { preview }) {
+  const headers = uiSessionHeaders();
+  const endpoint = preview ? "/v1/fs/preview" : "/v1/fs/download";
+  const res = await fetch(`${msgApiBase()}${endpoint}?path=${encodeURIComponent(path)}`, { headers });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Download failed: ${res.status}`);
+  }
+  return res.blob();
+}
+
+async function downloadFilePath(path, filename) {
+  const blob = await fetchFileBlob(path, { preview: false });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename || "download";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function previewFilePath(path) {
+  const blob = await fetchFileBlob(path, { preview: true });
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank", "noopener");
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function formatBytes(bytes) {
+  if (bytes === 0) return "0 B";
+  if (!bytes) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const idx = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / Math.pow(1024, idx);
+  return `${value.toFixed(value >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
+}
+
+function buildPreviewPayload() {
+  const url = readInput("msgPreviewUrl");
+  const title = readInput("msgPreviewTitle");
+  const description = readInput("msgPreviewDescription");
+  const imageUrl = readInput("msgPreviewImage");
+  const siteName = readInput("msgPreviewSite");
+  if (!url && (title || description || imageUrl || siteName)) {
+    return { error: "Preview URL is required when adding preview metadata." };
+  }
+  if (!url) return { preview: null };
+  return {
+    preview: {
+      url,
+      title: title || null,
+      description: description || null,
+      image_url: imageUrl || null,
+      site_name: siteName || null,
+    },
+  };
+}
+
+function renderLinkPreview(preview) {
+  if (!preview) return "";
+  const image = preview.image_url
+    ? `<div><img src="${preview.image_url}" alt="Preview image" style="max-width:200px;max-height:120px;border-radius:6px;" /></div>`
+    : "";
+  const title = preview.title ? `<div><b>${preview.title}</b></div>` : "";
+  const description = preview.description ? `<div class="muted">${preview.description}</div>` : "";
+  const site = preview.site_name ? `<div class="muted">${preview.site_name}</div>` : "";
+  const url = preview.url ? `<a href="${preview.url}" target="_blank" rel="noopener">${preview.url}</a>` : "";
+  return `
+    <div class="item" style="margin-top:8px;">
+      ${image}
+      ${title}
+      ${description}
+      ${site}
+      ${url}
+    </div>
+  `;
+}
+
+function renderFileMeta(file, kind) {
+  if (!file) return "";
+  const meta = [];
+  if (file.content_type) meta.push(file.content_type);
+  if (file.size) meta.push(formatBytes(file.size));
+  if (file.duration_seconds) meta.push(`${file.duration_seconds}s`);
+  const thumbnail = file.thumbnail
+    ? `<div><img src="${msgApiBase()}/v1/fs/thumbnail?path=${encodeURIComponent(file.path)}" alt="Attachment thumbnail" style="max-width:200px;max-height:120px;border-radius:6px;" /></div>`
+    : "";
+  const label = kind === "audio" ? "Voice note" : kind === "video" ? "Video" : "File";
+  return `
+    ${thumbnail}
+    <div><b>${label}</b> ${file.name || ""}</div>
+    <div class="muted">${meta.join(" • ")}</div>
+    ${file.path ? `<div class="muted mono">${file.path}</div>` : ""}
+  `;
+}
+
+async function createInlinePlayer({ kind, path, name, container }) {
+  const blob = await fetchFileBlob(path, { preview: false });
+  const url = URL.createObjectURL(blob);
+  let el = null;
+  if (kind === "audio") {
+    el = document.createElement("audio");
+  } else if (kind === "video") {
+    el = document.createElement("video");
+    el.style.maxWidth = "320px";
+  }
+  if (!el) return null;
+  el.controls = true;
+  el.src = url;
+  el.onended = () => URL.revokeObjectURL(url);
+  el.onpause = () => {};
+  el.title = name || "";
+  container.appendChild(el);
+  return el;
+}
+
 function renderMessagingConvos() {
   const list = document.getElementById("msgConvoList");
   if (!list) return;
@@ -3208,10 +3387,11 @@ function renderMessagingConvos() {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "list-button";
+    const unread = c.unread_count ? ` • unread ${c.unread_count}` : "";
     btn.innerHTML = `
       <div style="text-align:left;">
         <div><b>${c.title || c.conversation_id}</b></div>
-        <div class="muted">${c.type} • ${c.status} • participants ${c.participant_count}</div>
+        <div class="muted">${c.type} • ${c.status} • participants ${c.participant_count}${unread}</div>
         <div class="muted">${c.last_message_preview || "No messages yet"}</div>
       </div>
     `;
@@ -3240,13 +3420,79 @@ function renderMessagingMessages(messages) {
   messages.forEach((m) => {
     const row = document.createElement("div");
     row.className = "item";
-    const body = m.kind === "image"
-      ? `<em>[image]</em> ${m.image ? (m.image.key || "") : ""}`
-      : (m.text || "");
-    row.innerHTML = `
-      <div class="muted">${m.sender_id} • ${new Date(m.created_at * 1000).toLocaleString()}</div>
-      <div>${body}</div>
-    `;
+    const body = document.createElement("div");
+    if (m.kind === "image") {
+      body.innerHTML = `<div><em>[image]</em> ${m.image ? (m.image.key || "") : ""}</div>`;
+    } else if (m.kind === "file" || m.kind === "audio" || m.kind === "video") {
+      body.innerHTML = renderFileMeta(m.file, m.kind);
+    } else {
+      body.innerHTML = `<div>${m.text || ""}</div>`;
+    }
+    if (m.preview) {
+      body.insertAdjacentHTML("beforeend", renderLinkPreview(m.preview));
+    }
+    if (m.delivered_to_count || m.read_by_count) {
+      const delivered = m.delivered_to_count ? `Delivered to ${m.delivered_to_count}` : "";
+      const readBy = m.read_by_count ? `Read by ${m.read_by_count}` : "";
+      const statusText = [delivered, readBy].filter(Boolean).join(" • ");
+      if (statusText) {
+        body.insertAdjacentHTML("beforeend", `<div class="muted" style="margin-top:6px;">${statusText}</div>`);
+      }
+    }
+    row.innerHTML = `<div class="muted">${m.sender_id} • ${new Date(m.created_at * 1000).toLocaleString()}</div>`;
+    row.appendChild(body);
+    if (m.file && m.file.path) {
+      const actionRow = document.createElement("div");
+      actionRow.className = "row-inline";
+      actionRow.style.marginTop = "6px";
+      if (m.kind === "audio" || m.kind === "video") {
+        const playBtn = document.createElement("button");
+        playBtn.type = "button";
+        playBtn.textContent = "Play inline";
+        playBtn.onclick = async () => {
+          setMsgAttachmentStatus("Loading media...");
+          try {
+            await createInlinePlayer({
+              kind: m.kind,
+              path: m.file.path,
+              name: m.file.name,
+              container: actionRow,
+            });
+            setMsgAttachmentStatus("Media ready.");
+          } catch (e) {
+            setMsgAttachmentStatus(String(e.message || e));
+          }
+        };
+        actionRow.appendChild(playBtn);
+      }
+      const downloadBtn = document.createElement("button");
+      downloadBtn.type = "button";
+      downloadBtn.textContent = "Download";
+      downloadBtn.onclick = async () => {
+        setMsgAttachmentStatus("Downloading...");
+        try {
+          await downloadFilePath(m.file.path, m.file.name);
+          setMsgAttachmentStatus("Download started.");
+        } catch (e) {
+          setMsgAttachmentStatus(String(e.message || e));
+        }
+      };
+      const previewBtn = document.createElement("button");
+      previewBtn.type = "button";
+      previewBtn.textContent = "Preview";
+      previewBtn.onclick = async () => {
+        setMsgAttachmentStatus("Opening preview...");
+        try {
+          await previewFilePath(m.file.path);
+          setMsgAttachmentStatus("Preview opened.");
+        } catch (e) {
+          setMsgAttachmentStatus(String(e.message || e));
+        }
+      };
+      actionRow.appendChild(downloadBtn);
+      actionRow.appendChild(previewBtn);
+      row.appendChild(actionRow);
+    }
     list.appendChild(row);
   });
 }
@@ -3335,14 +3581,30 @@ function renderMessagingSearchResults(messages) {
   messages.forEach((m) => {
     const row = document.createElement("div");
     row.className = "item";
-    const body = m.kind === "image"
-      ? `<em>[image]</em> ${m.image ? (m.image.key || "") : ""}`
-      : (m.text || "");
+    let body = "";
+    if (m.kind === "image") {
+      body = `<em>[image]</em> ${m.image ? (m.image.key || "") : ""}`;
+    } else if (m.kind === "file" || m.kind === "audio" || m.kind === "video") {
+      body = renderFileMeta(m.file, m.kind);
+    } else {
+      body = m.text || "";
+    }
     const convo = m.conversation_id ? ` • ${m.conversation_id}` : "";
     row.innerHTML = `
       <div class="muted">${m.sender_id}${convo} • ${new Date(m.created_at * 1000).toLocaleString()}</div>
       <div>${body}</div>
     `;
+    if (m.preview) {
+      row.insertAdjacentHTML("beforeend", renderLinkPreview(m.preview));
+    }
+    if (m.delivered_to_count || m.read_by_count) {
+      const delivered = m.delivered_to_count ? `Delivered to ${m.delivered_to_count}` : "";
+      const readBy = m.read_by_count ? `Read by ${m.read_by_count}` : "";
+      const statusText = [delivered, readBy].filter(Boolean).join(" • ");
+      if (statusText) {
+        row.insertAdjacentHTML("beforeend", `<div class="muted" style="margin-top:6px;">${statusText}</div>`);
+      }
+    }
     list.appendChild(row);
   });
 }
@@ -3355,6 +3617,10 @@ async function searchMessagingMessages({ allConversations }) {
   }
   const senderId = readInput("msgSearchSender");
   const afterRaw = readInput("msgSearchAfter");
+  const kindSelect = document.getElementById("msgSearchKind");
+  const kinds = kindSelect
+    ? Array.from(kindSelect.selectedOptions).map((opt) => opt.value).filter(Boolean)
+    : [];
   let afterTs = null;
   if (afterRaw) {
     afterTs = parseInt(afterRaw, 10);
@@ -3370,6 +3636,9 @@ async function searchMessagingMessages({ allConversations }) {
   const params = new URLSearchParams({ q: query, limit: "200" });
   if (senderId) params.set("sender_id", senderId);
   if (afterTs !== null) params.set("after_ts", String(afterTs));
+  if (kinds.length) {
+    kinds.forEach((kind) => params.append("kind", kind));
+  }
   const path = allConversations
     ? `/messaging/messages/search?${params.toString()}`
     : `/messaging/conversations/${messagingState.activeConversationId}/messages/search?${params.toString()}`;
@@ -3387,6 +3656,12 @@ function clearMessagingSearch() {
   setInputValue("msgSearchQuery", "");
   setInputValue("msgSearchSender", "");
   setInputValue("msgSearchAfter", "");
+  const kindSelect = document.getElementById("msgSearchKind");
+  if (kindSelect) {
+    Array.from(kindSelect.options).forEach((opt) => {
+      opt.selected = false;
+    });
+  }
   setMsgStatus("msgSearchStatus", "");
   renderMessagingSearchResults([]);
 }
@@ -3402,18 +3677,93 @@ async function sendMessagingMessage() {
     setMsgStatus("msgMessageStatus", "Message text required.");
     return;
   }
+  const previewResult = buildPreviewPayload();
+  if (previewResult.error) {
+    setMsgStatus("msgMessageStatus", previewResult.error);
+    return;
+  }
   setMsgStatus("msgMessageStatus", "Sending...");
   try {
     await msgRequest(`/messaging/conversations/${cid}/messages`, {
       method: "POST",
-      body: { text },
+      body: { text, preview: previewResult.preview || null },
     });
     setInputValue("msgText", "");
+    setInputValue("msgPreviewUrl", "");
+    setInputValue("msgPreviewTitle", "");
+    setInputValue("msgPreviewDescription", "");
+    setInputValue("msgPreviewImage", "");
+    setInputValue("msgPreviewSite", "");
     await loadMessagingMessages();
     await loadMessagingConvos();
     setMsgStatus("msgMessageStatus", "Sent.");
   } catch (e) {
     setMsgStatus("msgMessageStatus", String(e));
+  }
+}
+
+async function sendMessagingAttachment({ useUpload }) {
+  const cid = messagingState.activeConversationId;
+  if (!cid) {
+    setMsgAttachmentStatus("Select a conversation first.");
+    return;
+  }
+  const kind = readInput("msgFileKind") || "file";
+  const durationRaw = readInput("msgFileDuration");
+  let duration = null;
+  if (durationRaw) {
+    duration = parseInt(durationRaw, 10);
+    if (Number.isNaN(duration) || duration <= 0) {
+      setMsgAttachmentStatus("Duration must be a positive number.");
+      return;
+    }
+  }
+  const previewResult = buildPreviewPayload();
+  if (previewResult.error) {
+    setMsgAttachmentStatus(previewResult.error);
+    return;
+  }
+  let path = readInput("msgFilePath");
+  const fileInput = document.getElementById("msgFileInput");
+  const file = fileInput ? fileInput.files[0] : null;
+
+  if (useUpload) {
+    if (!file) {
+      setMsgAttachmentStatus("Choose a file to upload.");
+      return;
+    }
+    if (!path) {
+      path = `/messaging/${cid}/${file.name}`;
+    }
+  } else {
+    if (!path) {
+      setMsgAttachmentStatus("Provide a file-manager path.");
+      return;
+    }
+  }
+
+  setMsgAttachmentStatus(useUpload ? "Uploading..." : "Sending...");
+  try {
+    if (useUpload) {
+      await fileManagerPresignUpload(path, file);
+    }
+    await msgRequest(`/messaging/conversations/${cid}/messages/file`, {
+      method: "POST",
+      body: {
+        path,
+        kind,
+        duration_seconds: duration || null,
+        preview: previewResult.preview || null,
+      },
+    });
+    if (fileInput) fileInput.value = "";
+    setInputValue("msgFilePath", "");
+    setInputValue("msgFileDuration", "");
+    await loadMessagingMessages();
+    await loadMessagingConvos();
+    setMsgAttachmentStatus("Sent.");
+  } catch (e) {
+    setMsgAttachmentStatus(String(e.message || e));
   }
 }
 
@@ -5562,6 +5912,8 @@ document.getElementById("msgCreateConvoBtn").onclick = createMessagingConvo;
 document.getElementById("msgAcceptConvoBtn").onclick = acceptMessagingConvo;
 document.getElementById("msgLoadMessagesBtn").onclick = loadMessagingMessages;
 document.getElementById("msgSendBtn").onclick = sendMessagingMessage;
+document.getElementById("msgSendFileBtn").onclick = () => sendMessagingAttachment({ useUpload: true });
+document.getElementById("msgSendPathBtn").onclick = () => sendMessagingAttachment({ useUpload: false });
 document.getElementById("msgSearchConvoBtn").onclick = () => searchMessagingMessages({ allConversations: false });
 document.getElementById("msgSearchAllBtn").onclick = () => searchMessagingMessages({ allConversations: true });
 document.getElementById("msgSearchClearBtn").onclick = clearMessagingSearch;
