@@ -5,6 +5,7 @@ import hmac
 import ipaddress
 import json
 import time
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -254,6 +255,37 @@ def update_payment_status(user_sub: str, transaction_id: str, status: str, raw: 
     )
 
 
+def _parse_ccbill_date(value: Optional[str]) -> Optional[int]:
+    if not value:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    text = str(value)
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y%m%d"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            return int(parsed.replace(tzinfo=timezone.utc).timestamp())
+        except ValueError:
+            continue
+    try:
+        if text.endswith("Z"):
+            text = text.replace("Z", "+00:00")
+        return int(datetime.fromisoformat(text).timestamp())
+    except ValueError:
+        return None
+
+
+def renewal_fields(status: str, cancel_at_period_end: Optional[bool] = None) -> Tuple[bool, str, bool]:
+    status_lower = (status or "").lower()
+    if cancel_at_period_end:
+        return False, "cancel_at_period_end", True
+    if status_lower in ("canceling",):
+        return False, "cancel_at_period_end", True
+    if status_lower in ("canceled", "cancelled", "expired", "suspended", "failed"):
+        return False, "manual", False
+    return True, "auto", False
+
+
 def upsert_subscription(
     user_sub: str,
     subscription_id: str,
@@ -263,9 +295,41 @@ def upsert_subscription(
     payment_token_id: Optional[str] = None,
     next_renewal_date: Optional[str] = None,
     last_transaction_id: Optional[str] = None,
+    current_period_end: Optional[int] = None,
+    auto_renew: Optional[bool] = None,
+    renewal_policy: Optional[str] = None,
+    cancel_at_period_end: Optional[bool] = None,
+    trial_start: Optional[int] = None,
+    trial_end: Optional[int] = None,
+    proration_policy: Optional[str] = None,
+    price_cents: Optional[int] = None,
+    interval: Optional[str] = None,
     raw: Optional[Dict[str, Any]] = None,
 ) -> None:
-    existing = T.billing.get_item(Key={"user_sub": user_sub, "sk": _billing_sk("SUB", subscription_id)}).get("Item")
+    existing = T.billing.get_item(Key={"user_sub": user_sub, "sk": _billing_sk("SUB", subscription_id)}).get("Item") or {}
+    status_lower = (status or "").lower()
+    default_cancel_at_period_end = status_lower == "canceling"
+    auto_renew_default, renewal_policy_default, cancel_default = renewal_fields(
+        status_lower,
+        cancel_at_period_end=default_cancel_at_period_end,
+    )
+    auto_renew_value = auto_renew if auto_renew is not None else existing.get("auto_renew", auto_renew_default)
+    renewal_policy_value = renewal_policy or existing.get("renewal_policy") or renewal_policy_default
+    cancel_at_period_end_value = (
+        cancel_at_period_end
+        if cancel_at_period_end is not None
+        else existing.get("cancel_at_period_end", cancel_default)
+    )
+    current_period_end_value = (
+        current_period_end
+        if current_period_end is not None
+        else existing.get("current_period_end") or _parse_ccbill_date(next_renewal_date) or 0
+    )
+    trial_start_value = trial_start if trial_start is not None else existing.get("trial_start", 0)
+    trial_end_value = trial_end if trial_end is not None else existing.get("trial_end", 0)
+    proration_policy_value = proration_policy or existing.get("proration_policy") or "full"
+    price_cents_value = price_cents if price_cents is not None else existing.get("price_cents", S.default_monthly_price_cents)
+    interval_value = interval or existing.get("interval") or "month"
     item = existing or {
         "user_sub": user_sub,
         "sk": _billing_sk("SUB", subscription_id),
@@ -274,6 +338,15 @@ def upsert_subscription(
     }
     item["status"] = status
     item["plan_id"] = plan_id
+    item["current_period_end"] = int(current_period_end_value)
+    item["auto_renew"] = bool(auto_renew_value)
+    item["renewal_policy"] = renewal_policy_value
+    item["cancel_at_period_end"] = bool(cancel_at_period_end_value)
+    item["trial_start"] = int(trial_start_value)
+    item["trial_end"] = int(trial_end_value)
+    item["proration_policy"] = proration_policy_value
+    item["price_cents"] = int(price_cents_value)
+    item["interval"] = interval_value
     item["updated_at"] = now_ts()
     if payment_token_id:
         item["payment_token_id"] = payment_token_id
