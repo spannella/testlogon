@@ -4047,6 +4047,9 @@ async function uploadProfilePhoto(kind, fileInputId) {
 const fileMgrState = {
   path: "/",
   searchResults: [],
+  transfers: new Map(),
+  activeDownloads: new Set(),
+  downloadedPaths: new Set(),
   selectedPaths: new Set(),
   items: [],
   renamePath: null,
@@ -4167,7 +4170,118 @@ function toggleFileMgrSelectAll(checked) {
   updateFileMgrSelectionStatus();
 }
 
-async function apiUploadFileManager(path, file) {
+function clearFileMgrErrorTransfers() {
+  fileMgrState.transfers.forEach((transfer) => {
+    if (transfer.error) {
+      transfer.item?.remove();
+      fileMgrState.transfers.delete(transfer.id);
+    }
+  });
+}
+
+function createFileMgrTransfer(label, onCancel) {
+  const container = document.getElementById("filemgrTransfers");
+  if (!container) return null;
+  clearFileMgrErrorTransfers();
+  const id = `transfer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const statusId = `${id}-status`;
+  const item = document.createElement("div");
+  item.className = "list-item transfer-item";
+  item.innerHTML = `
+    <div class="grow">
+      <div class="mono">${escapeHtml(label)}</div>
+      <div class="muted" data-role="status" id="${statusId}">Starting...</div>
+    </div>
+    <progress value="0" max="100" aria-label="${escapeHtml(label)}" aria-describedby="${statusId}"></progress>
+    <button class="danger" data-role="cancel">Cancel</button>
+  `;
+  container.prepend(item);
+  const cancelBtn = item.querySelector('[data-role="cancel"]');
+  if (cancelBtn) {
+    if (onCancel) {
+      cancelBtn.onclick = onCancel;
+    } else {
+      cancelBtn.disabled = true;
+    }
+  }
+  const transfer = {
+    id,
+    item,
+    status: item.querySelector('[data-role="status"]'),
+    bar: item.querySelector("progress"),
+    cancelBtn,
+    error: false,
+    startedAt: Date.now(),
+    lastTickAt: null,
+    lastLoaded: 0,
+  };
+  fileMgrState.transfers.set(id, transfer);
+  return transfer;
+}
+
+function updateFileMgrTransfer(transfer, loaded, total, label) {
+  if (!transfer) return;
+  let speedText = "";
+  let etaText = "";
+  if (typeof loaded === "number") {
+    const now = Date.now();
+    if (!transfer.lastTickAt) {
+      transfer.lastTickAt = now;
+      transfer.lastLoaded = loaded;
+    } else {
+      const deltaMs = now - transfer.lastTickAt;
+      if (deltaMs > 0) {
+        const deltaBytes = loaded - transfer.lastLoaded;
+        const bytesPerSec = deltaBytes / (deltaMs / 1000);
+        if (bytesPerSec > 0) {
+          speedText = ` @ ${fmtBytes(bytesPerSec)}/s`;
+          if (typeof total === "number" && total > 0 && loaded <= total) {
+            const remaining = total - loaded;
+            const etaSeconds = remaining / bytesPerSec;
+            if (Number.isFinite(etaSeconds)) {
+              etaText = `, ETA ${Math.max(1, Math.round(etaSeconds))}s`;
+            }
+          }
+        }
+      }
+      transfer.lastTickAt = now;
+      transfer.lastLoaded = loaded;
+    }
+  }
+  if (transfer.status) {
+    const bytes = typeof loaded === "number" ? fmtBytes(loaded) : "";
+    const hasTotal = typeof total === "number" && total > 0;
+    const totalText = hasTotal ? ` / ${fmtBytes(total)}` : "";
+    const sizeText = bytes ? ` (${bytes}${totalText})` : "";
+    const fallback = hasTotal ? "" : " (total size unknown)";
+    transfer.status.textContent = `${label}${sizeText}${fallback}${speedText}${etaText}`;
+  }
+  if (transfer.bar) {
+    if (typeof total === "number" && total > 0) {
+      transfer.bar.max = total;
+      transfer.bar.value = loaded;
+    } else {
+      transfer.bar.removeAttribute("value");
+    }
+  }
+}
+
+function finishFileMgrTransfer(transfer, label, options = {}) {
+  if (!transfer) return;
+  if (transfer.status) transfer.status.textContent = label;
+  if (transfer.cancelBtn) transfer.cancelBtn.disabled = true;
+  if (options.error) {
+    transfer.error = true;
+    transfer.item?.classList.add("error");
+  }
+  if (options.sticky) return;
+  setTimeout(() => {
+    transfer.item?.remove();
+    fileMgrState.transfers.delete(transfer.id);
+  }, 1600);
+}
+
+async function apiUploadFileManager(path, file, onProgress, onCancelReady) {
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
   const sid = sessionId();
@@ -4175,40 +4289,101 @@ async function apiUploadFileManager(path, file) {
   const form = new FormData();
   form.append("file", file);
   const url = `${API_BASE}/v1/fs/upload?path=${encodeURIComponent(path)}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Authorization": "Bearer " + tok,
-      "X-SESSION-ID": sid,
-    },
-    body: form,
+  return await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("Authorization", "Bearer " + tok);
+    xhr.setRequestHeader("X-SESSION-ID", sid);
+    xhr.responseType = "json";
+    xhr.upload.onprogress = (event) => {
+      if (onProgress) onProgress(event);
+    };
+    if (onCancelReady) {
+      onCancelReady(() => xhr.abort());
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(xhr.response);
+        return;
+      }
+      const detail = xhr.response && xhr.response.detail ? xhr.response.detail : xhr.responseText;
+      reject(new Error(detail || "Upload failed"));
+    };
+    xhr.onerror = () => reject(new Error("Upload failed"));
+    xhr.onabort = () => reject(new Error("Upload canceled"));
+    xhr.send(form);
   });
-  if (!res.ok) throw new Error(await res.text());
-  return await res.json();
 }
 
-async function fileMgrDownload(path, filename) {
+async function fileMgrDownload(path, filename, button) {
+  if (fileMgrState.activeDownloads.has(path)) {
+    fileMgrStatus("Download already in progress for this file.");
+    return;
+  }
+  if (fileMgrState.downloadedPaths.has(path)) {
+    const ok = confirm("Download this file again?");
+    if (!ok) return;
+  }
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
   const sid = sessionId();
   if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
   const url = `${API_BASE}/v1/fs/download?path=${encodeURIComponent(path)}`;
-  const res = await fetch(url, {
-    method: "GET",
-    headers: {
-      "Authorization": "Bearer " + tok,
-      "X-SESSION-ID": sid,
-    },
+  let cancel = null;
+  let canceled = false;
+  const transfer = createFileMgrTransfer(`Download: ${filename || path}`, () => {
+    canceled = true;
+    if (cancel) cancel();
+    finishFileMgrTransfer(transfer, "Download canceled");
   });
-  if (!res.ok) throw new Error(await res.text());
-  const blob = await res.blob();
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(blob);
-  link.download = filename || "download";
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+  updateFileMgrTransfer(transfer, 0, null, "Preparing download");
+  fileMgrState.activeDownloads.add(path);
+  if (button) button.disabled = true;
+  try {
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("GET", url);
+      xhr.setRequestHeader("Authorization", "Bearer " + tok);
+      xhr.setRequestHeader("X-SESSION-ID", sid);
+      xhr.responseType = "blob";
+      cancel = () => xhr.abort();
+      xhr.onprogress = (event) => {
+        if (event.lengthComputable) {
+          updateFileMgrTransfer(transfer, event.loaded, event.total, "Downloading");
+        } else {
+          updateFileMgrTransfer(transfer, event.loaded, null, "Downloading");
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new Error(xhr.responseText || "Download failed"));
+          return;
+        }
+        const blob = xhr.response;
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = filename || "download";
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+        resolve();
+      };
+      xhr.onerror = () => reject(new Error("Download failed"));
+      xhr.onabort = () => reject(new Error("Download canceled"));
+      xhr.send();
+    });
+    finishFileMgrTransfer(transfer, "Download complete");
+    fileMgrState.downloadedPaths.add(path);
+  } catch (e) {
+    if (!canceled) {
+      finishFileMgrTransfer(transfer, "Download failed", { error: true, sticky: true });
+      throw e;
+    }
+  } finally {
+    fileMgrState.activeDownloads.delete(path);
+    if (button) button.disabled = false;
+  }
 }
 
 async function fileMgrPreview(path) {
@@ -4407,7 +4582,7 @@ function renderFileMgrList(items) {
             return;
           }
           if (action === "download") {
-            await fileMgrDownload(item.path, item.name);
+            await fileMgrDownload(item.path, item.name, btn);
             return;
           }
           if (action === "preview") {
@@ -4522,10 +4697,46 @@ async function createFileMgrFolder() {
 async function uploadFileMgr() {
   const input = document.getElementById("filemgrUploadInput");
   if (!input || !input.files || !input.files.length) return;
-  const file = input.files[0];
-  const path = currentFileMgrPath() + file.name;
   await ensureUiSession();
-  await apiUploadFileManager(path, file);
+  const files = Array.from(input.files);
+  const uploadOne = async (file) => {
+    const path = currentFileMgrPath() + file.name;
+    let cancel = null;
+    let canceled = false;
+    const transfer = createFileMgrTransfer(`Upload: ${file.name}`, () => {
+      canceled = true;
+      if (cancel) cancel();
+      finishFileMgrTransfer(transfer, "Upload canceled");
+    });
+    updateFileMgrTransfer(transfer, 0, file.size, "Uploading");
+    try {
+      await apiUploadFileManager(
+        path,
+        file,
+        (event) => {
+          if (event.lengthComputable) {
+            updateFileMgrTransfer(transfer, event.loaded, event.total, "Uploading");
+          } else {
+            updateFileMgrTransfer(transfer, event.loaded, null, "Uploading");
+          }
+        },
+        (cancelFn) => {
+          cancel = cancelFn;
+        }
+      );
+      finishFileMgrTransfer(transfer, "Upload complete");
+    } catch (e) {
+      if (!canceled) {
+        finishFileMgrTransfer(transfer, "Upload failed", { error: true, sticky: true });
+        throw e;
+      }
+    }
+  };
+  const results = await Promise.allSettled(files.map((file) => uploadOne(file)));
+  const failures = results.filter((result) => result.status === "rejected");
+  if (failures.length) {
+    fileMgrStatus(`Upload failed for ${failures.length} file(s).`);
+  }
   input.value = "";
   await refreshFileManager();
 }
