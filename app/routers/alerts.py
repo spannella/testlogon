@@ -25,6 +25,7 @@ from app.models import (
     AlertSmsPrefsReq,
     AlertSmsRemoveReq,
     AlertToastPrefsReq,
+    AlertWebhookPrefsReq,
     MarkReadReq,
 )
 from app.services.alerts import (
@@ -208,6 +209,29 @@ async def set_toast_prefs(body: AlertToastPrefsReq, ctx: Dict[str, str] = Depend
 async def set_push_prefs(body: AlertPushPrefsReq, ctx: Dict[str, str] = Depends(require_ui_session)):
     prefs = set_alert_prefs(ctx["user_sub"], push_event_types=body.push_event_types)
     audit_event("alerts_push_prefs_set", ctx["user_sub"], None, outcome="success", enabled=len(prefs.get("push_event_types") or []))
+    return prefs
+
+
+@router.get("/alerts/webhook_prefs")
+async def get_webhook_prefs(ctx: Dict[str, str] = Depends(require_ui_session)):
+    prefs = get_alert_prefs(ctx["user_sub"])
+    return {"webhook_urls": prefs["webhook_urls"], "event_types": prefs["webhook_event_types"]}
+
+
+@router.post("/alerts/webhook_prefs")
+async def set_webhook_prefs(body: AlertWebhookPrefsReq, ctx: Dict[str, str] = Depends(require_ui_session)):
+    prefs = set_alert_prefs(
+        ctx["user_sub"],
+        webhook_urls=body.webhook_urls,
+        webhook_event_types=body.webhook_event_types,
+    )
+    audit_event(
+        "alerts_webhook_prefs_set",
+        ctx["user_sub"],
+        None,
+        outcome="success",
+        enabled=len(prefs.get("webhook_event_types") or []),
+    )
     return prefs
 
 

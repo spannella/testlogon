@@ -129,6 +129,10 @@ class AlertToastPrefsReq(BaseModel):
 class AlertPushPrefsReq(BaseModel):
     push_event_types: List[str] = Field(default_factory=list)
 
+class AlertWebhookPrefsReq(BaseModel):
+    webhook_urls: List[str] = Field(default_factory=list)
+    webhook_event_types: List[str] = Field(default_factory=list)
+
 class AlertEmailBeginReq(BaseModel):
     email: str
 

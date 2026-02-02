@@ -664,6 +664,21 @@ async def create_event(
         **normalized,
     }
     T.calendar.put_item(Item=item)
+    audit_event(
+        "calendar_event_create",
+        ctx["user_sub"],
+        None,
+        outcome="success",
+        calendar_id=calendar_id,
+        event_id=event_id,
+        name=body.name,
+        timezone=normalized["timezone"],
+        start_utc=normalized["start_utc"],
+        end_utc=normalized["end_utc"],
+        all_day=normalized["all_day"],
+        all_day_date=normalized["all_day_date"],
+        status=status,
+    )
     return EventOut(
         event_id=event_id,
         calendar_id=calendar_id,
@@ -850,6 +865,21 @@ async def update_event(
         **normalized,
     }
     T.calendar.put_item(Item=updated)
+    audit_event(
+        "calendar_event_update",
+        ctx["user_sub"],
+        None,
+        outcome="success",
+        calendar_id=calendar_id,
+        event_id=event_id,
+        name=updated["name"],
+        timezone=updated.get("timezone", "UTC"),
+        start_utc=updated.get("start_utc"),
+        end_utc=updated.get("end_utc"),
+        all_day=updated.get("all_day", False),
+        all_day_date=updated.get("all_day_date"),
+        status=updated.get("status", "busy"),
+    )
     return _event_out(updated, calendar_id)
 
 
@@ -860,8 +890,23 @@ async def delete_event(
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
     _load_calendar(calendar_id, ctx["user_sub"])
-    _load_event(calendar_id, event_id)
+    item = _load_event(calendar_id, event_id)
     T.calendar.delete_item(Key={"calendar_id": calendar_id, "sk": _event_key(event_id)})
+    audit_event(
+        "calendar_event_delete",
+        ctx["user_sub"],
+        None,
+        outcome="success",
+        calendar_id=calendar_id,
+        event_id=event_id,
+        name=item.get("name"),
+        timezone=item.get("timezone", "UTC"),
+        start_utc=item.get("start_utc"),
+        end_utc=item.get("end_utc"),
+        all_day=item.get("all_day", False),
+        all_day_date=item.get("all_day_date"),
+        status=item.get("status", "busy"),
+    )
     return {"ok": True}
 
 
