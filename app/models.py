@@ -513,6 +513,26 @@ class CalendarOut(BaseModel):
     created_at_utc: str
 
 
+class CalendarShareIn(BaseModel):
+    user_sub: str = Field(min_length=1, max_length=200)
+    permission: Literal["read", "write"]
+
+
+class CalendarShareOut(BaseModel):
+    calendar_id: str
+    user_sub: str
+    permission: Literal["read", "write"]
+    created_at_utc: str
+
+
+class CalendarAccessOut(BaseModel):
+    calendar_id: str
+    name: str
+    timezone: str
+    owner_user_id: str
+    permission: Literal["owner", "read", "write"]
+
+
 class CalendarUpdateIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     timezone: str | None = Field(default=None, max_length=64)
@@ -520,6 +540,18 @@ class CalendarUpdateIn(BaseModel):
     working_hours: Dict[str, List[WorkingHoursWindow]] | None = None
     buffer_before_minutes: int | None = None
     buffer_after_minutes: int | None = None
+
+
+class EventOccurrenceOverrideIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=5000)
+    timezone: str | None = Field(default=None, max_length=64)
+    start_utc: str | None = None
+    end_utc: str | None = None
+    all_day: bool | None = None
+    all_day_date: str | None = None
+    status: str | None = None
+    category: str | None = None
 
 
 class EventCreateIn(BaseModel):
@@ -536,6 +568,8 @@ class EventCreateIn(BaseModel):
     status: str = "busy"
     category: str | None = None
     recurrence_rule: RecurrenceRule | None = None
+    exdates_utc: List[str] | None = None
+    recurrence_overrides: Dict[str, EventOccurrenceOverrideIn] | None = None
 
 
 class EventOut(BaseModel):
@@ -554,6 +588,8 @@ class EventOut(BaseModel):
     status: str
     category: str | None = None
     recurrence_rule: RecurrenceRule | None = None
+    exdates_utc: List[str] | None = None
+    recurrence_overrides: Dict[str, EventOccurrenceOverrideIn] | None = None
     created_at_utc: str
 
 
@@ -571,6 +607,27 @@ class EventUpdateIn(BaseModel):
     status: str | None = None
     category: str | None = None
     recurrence_rule: RecurrenceRule | None = None
+    exdates_utc: List[str] | None = None
+    recurrence_overrides: Dict[str, EventOccurrenceOverrideIn] | None = None
+
+
+class EventConflictPreviewIn(EventCreateIn):
+    event_id: str | None = None
+
+
+class EventConflictPreviewOut(BaseModel):
+    requested_start_utc: str
+    requested_end_utc: str
+    timezone: str
+    conflicts: List[EventOut]
+
+
+class EventSuggestionsIn(BaseModel):
+    start_utc: str
+    end_utc: str
+    duration_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
+    limit: Optional[int] = Field(default=5, ge=1, le=50)
+    window_days: Optional[int] = Field(default=7, ge=1, le=30)
 
 
 class OpeningsOut(BaseModel):
@@ -598,6 +655,8 @@ class RecurrenceRule(BaseModel):
     until_utc: Optional[str] = None
     count: Optional[int] = Field(default=None, ge=1)
     byday: Optional[List[Literal["MO", "TU", "WE", "TH", "FR", "SA", "SU"]]] = None
+    bymonthday: Optional[List[int]] = None
+    bysetpos: Optional[List[int]] = None
 
 
 class BookingLinkCreateIn(BaseModel):

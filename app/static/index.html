@@ -587,6 +587,29 @@
     <div id="calendarStatus" class="muted" style="margin-top:6px;"></div>
 
     <div class="section" style="margin-top:16px;">
+      <h4 style="margin:0 0 8px 0;">Calendar access</h4>
+      <div class="muted">View calendars you can access and manage sharing for the active calendar.</div>
+      <div class="row-inline" style="margin-top:8px;">
+        <button id="calendarAccessRefreshBtn">Refresh access</button>
+        <span id="calendarAccessStatus" class="muted"></span>
+      </div>
+      <div id="calendarAccessList" class="list" style="margin-top:8px;"></div>
+      <div class="section" style="margin-top:12px;">
+        <h5 style="margin:0 0 6px 0;">Share calendar</h5>
+        <div class="row-inline">
+          <input id="calendarShareUserInput" placeholder="User sub to share with" style="flex:1;"/>
+          <select id="calendarSharePermissionInput" style="width:160px;">
+            <option value="read">Permission: read</option>
+            <option value="write">Permission: write</option>
+          </select>
+          <button id="calendarShareCreateBtn">Share</button>
+        </div>
+        <div id="calendarShareStatus" class="muted" style="margin-top:6px;"></div>
+        <div id="calendarSharesList" class="list" style="margin-top:8px;"></div>
+      </div>
+    </div>
+
+    <div class="section" style="margin-top:16px;">
       <h4 style="margin:0 0 8px 0;">Create event</h4>
       <input id="eventIdInput" type="hidden" />
       <div class="row-inline">
@@ -610,14 +633,105 @@
         <button id="eventCancelEditBtn" class="muted">Cancel edit</button>
       </div>
       <div id="eventCreateStatus" class="muted" style="margin-top:6px;"></div>
+      <div class="section" style="margin-top:12px;">
+        <h5 style="margin:0 0 6px 0;">Recurrence</h5>
+        <div class="row-inline">
+          <select id="eventRecurrenceFreq" style="width:180px;">
+            <option value="">No recurrence</option>
+            <option value="DAILY">Daily</option>
+            <option value="WEEKLY">Weekly</option>
+            <option value="MONTHLY">Monthly</option>
+          </select>
+          <input id="eventRecurrenceInterval" type="number" min="1" placeholder="Interval" style="width:120px;" />
+          <input id="eventRecurrenceCount" type="number" min="1" placeholder="Count" style="width:120px;" />
+          <input id="eventRecurrenceUntil" class="mono" placeholder="Until (ISO-8601 UTC)" style="flex:1;" />
+        </div>
+        <div class="row-inline" style="margin-top:8px; flex-wrap:wrap;">
+          <label class="muted">By day:</label>
+          <label><input type="checkbox" data-day="MO" class="eventRecurrenceByday"/> Mon</label>
+          <label><input type="checkbox" data-day="TU" class="eventRecurrenceByday"/> Tue</label>
+          <label><input type="checkbox" data-day="WE" class="eventRecurrenceByday"/> Wed</label>
+          <label><input type="checkbox" data-day="TH" class="eventRecurrenceByday"/> Thu</label>
+          <label><input type="checkbox" data-day="FR" class="eventRecurrenceByday"/> Fri</label>
+          <label><input type="checkbox" data-day="SA" class="eventRecurrenceByday"/> Sat</label>
+          <label><input type="checkbox" data-day="SU" class="eventRecurrenceByday"/> Sun</label>
+        </div>
+        <div class="row-inline" style="margin-top:8px;">
+          <input id="eventRecurrenceBymonthday" class="mono" placeholder="BYMONTHDAY (e.g. 15,-1)" style="flex:1;" />
+          <input id="eventRecurrenceBysetpos" class="mono" placeholder="BYSETPOS (e.g. 2,-1)" style="flex:1;" />
+        </div>
+        <div class="muted" style="margin-top:6px;">BYSETPOS works with BYDAY for monthly rules (e.g., 2nd Tuesday).</div>
+        <div class="row-inline" style="margin-top:8px;">
+          <textarea id="eventRecurrenceExdates" rows="2" class="mono" placeholder="EXDATEs (ISO-8601 UTC, one per line)" style="flex:1;"></textarea>
+        </div>
+      </div>
+      <div class="section" style="margin-top:12px;">
+        <h5 style="margin:0 0 6px 0;">Conflict preview</h5>
+        <div class="row-inline">
+          <button id="eventPreviewConflictsBtn">Preview conflicts</button>
+          <button id="eventSuggestSlotsBtn" class="muted">Suggest alternate slots</button>
+          <span id="eventConflictStatus" class="muted"></span>
+        </div>
+        <div id="eventConflictsList" class="list" style="margin-top:8px;"></div>
+        <div id="eventSuggestionsList" class="list" style="margin-top:8px;"></div>
+      </div>
     </div>
 
     <div class="section" style="margin-top:16px;">
       <h4 style="margin:0 0 8px 0;">Events</h4>
+      <div class="muted">Use a start and end window to expand recurring events.</div>
       <div class="row-inline">
+        <input id="eventsStartInput" class="mono" placeholder="Start window (ISO-8601 UTC)" style="flex:1;"/>
+        <input id="eventsEndInput" class="mono" placeholder="End window (ISO-8601 UTC)" style="flex:1;"/>
         <button id="eventsRefreshBtn">Refresh events</button>
+        <button id="eventsClearFiltersBtn" class="muted">Clear filters</button>
+      </div>
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="eventsStartPicker" type="datetime-local" style="flex:1;" />
+        <input id="eventsEndPicker" type="datetime-local" style="flex:1;" />
+        <select id="eventsLimitSelect" style="width:160px;">
+          <option value="">Limit: default</option>
+          <option value="25">Limit: 25</option>
+          <option value="50">Limit: 50</option>
+          <option value="100">Limit: 100</option>
+          <option value="200">Limit: 200</option>
+        </select>
+      </div>
+      <div class="row-inline" style="margin-top:8px;">
+        <button id="eventsPrevBtn" class="muted">Prev page</button>
+        <button id="eventsNextBtn" class="muted">Next page</button>
+        <span id="eventsStatus" class="muted"></span>
       </div>
       <div id="calendarEventsList" class="list" style="margin-top:8px;"></div>
+    </div>
+
+    <div class="section" style="margin-top:16px;">
+      <h4 style="margin:0 0 8px 0;">Booking links</h4>
+      <div class="muted">Create shareable booking links and preview openings.</div>
+      <div class="row-inline" style="margin-top:8px;">
+        <input id="bookingLinkNameInput" placeholder="Link name" style="flex:1;"/>
+        <input id="bookingLinkDurationInput" type="number" min="5" max="1440" placeholder="Duration (minutes)" style="width:200px;"/>
+        <input id="bookingLinkTimezoneInput" placeholder="Timezone (optional)" style="width:220px;"/>
+        <button id="bookingLinkCreateBtn" class="primary">Create link</button>
+      </div>
+      <div id="bookingLinkStatus" class="muted" style="margin-top:6px;"></div>
+      <div id="bookingLinksList" class="list" style="margin-top:8px;"></div>
+      <div class="section" style="margin-top:12px;">
+        <h5 style="margin:0 0 6px 0;">Preview openings</h5>
+        <div class="row-inline">
+          <select id="bookingLinkSelect" style="flex:1;"></select>
+          <input id="bookingOpeningsStartInput" class="mono" placeholder="Start window (ISO-8601 UTC)" style="flex:1;"/>
+          <input id="bookingOpeningsEndInput" class="mono" placeholder="End window (ISO-8601 UTC)" style="flex:1;"/>
+          <button id="bookingOpeningsLoadBtn">Load openings</button>
+        </div>
+        <div class="row-inline" style="margin-top:8px;">
+          <input id="bookingOpeningsStartPicker" type="datetime-local" style="flex:1;" />
+          <input id="bookingOpeningsEndPicker" type="datetime-local" style="flex:1;" />
+          <input id="bookingOpeningsLimitInput" type="number" min="1" max="200" placeholder="Limit" style="width:120px;"/>
+        </div>
+        <div id="bookingOpeningsStatus" class="muted" style="margin-top:6px;"></div>
+        <div id="bookingOpeningsList" class="list" style="margin-top:8px;"></div>
+      </div>
     </div>
 
     <div class="section" style="margin-top:16px;">
