@@ -17,6 +17,7 @@ class UiSessionStartResp(BaseModel):
 
 class UiSessionFinalizeReq(BaseModel):
     challenge_id: str
+    remember_device: bool = False
 
 class UiSessionFinalizeResp(BaseModel):
     status: str
@@ -79,6 +80,23 @@ class PasswordRecoveryRecoveryCodeReq(PasswordRecoveryChallengeReq):
     model_config = ConfigDict(populate_by_name=True)
     factor: str
     recovery_code: str = Field(validation_alias=AliasChoices("recovery_code", "code"))
+
+class PasswordlessStartReq(BaseModel):
+    username: str
+
+class PasswordlessStartResp(BaseModel):
+    status: str
+    sent_to: List[str] = Field(default_factory=list)
+
+class PasswordlessVerifyReq(BaseModel):
+    token: str
+
+class PasswordlessVerifyResp(BaseModel):
+    status: str
+    session_id: Optional[str] = None
+    auth_required: bool = False
+    challenge_id: Optional[str] = None
+    required_factors: List[str] = Field(default_factory=list)
 
 class CreateApiKeyReq(BaseModel):
     label: Optional[str] = None
