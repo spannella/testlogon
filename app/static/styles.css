@@ -17,6 +17,15 @@ button.danger { background:#fff5f5; border-color:#f0b4b4; color:#822; }
 .card .hidden { display:none; }
 input, textarea { width: 100%; padding: 8px 10px; border-radius: 10px; border:1px solid #ddd; margin-top:8px; box-sizing:border-box; font: inherit; }
 textarea { resize: vertical; }
+progress { width: 220px; height: 10px; appearance: none; accent-color:#111; }
+progress::-webkit-progress-bar { background:#eee; border-radius:999px; }
+progress::-webkit-progress-value { background:#111; border-radius:999px; }
+progress::-moz-progress-bar { background:#111; border-radius:999px; }
+.transfer-item { display:flex; align-items:center; gap:10px; }
+.transfer-item progress { flex: 1; }
+.transfer-item button { padding:4px 8px; border-radius:8px; }
+.transfer-item.error { border-color:#f0b4b4; background:#fff0f0; }
+.transfer-item.error .muted { color:#822; }
 table { width:100%; border-collapse:collapse; margin-top:10px; }
 th, td { border-top:1px solid #eee; padding:8px; text-align:left; vertical-align:top; }
 th { font-size: 12px; color:#444; }

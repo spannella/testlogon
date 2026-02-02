@@ -144,7 +144,10 @@ def download_fs_file(path: str = Query(...), req: Request = None, user: str = De
     return StreamingResponse(
         gen(),
         media_type=node.get("content_type", "application/octet-stream"),
-        headers={"Content-Disposition": f'attachment; filename="{node["name"]}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{node["name"]}"',
+            **({"Content-Length": str(node["size"])} if node.get("size") is not None else {}),
+        },
     )
 
 
