@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, date, time, timedelta, timezone
-from typing import Any, Dict, Iterable, List
+from typing import Annotated, Any, Dict, Iterable, List
 
 from boto3.dynamodb.conditions import Attr, Key
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -721,10 +721,16 @@ async def create_booking_link(
 @router.get("/calendars/{calendar_id}/events", response_model=EventsPageOut)
 async def list_events(
     calendar_id: str,
-    start_utc: str | None = Query(None, description="Filter events starting after this UTC timestamp"),
-    end_utc: str | None = Query(None, description="Filter events ending before this UTC timestamp"),
-    limit: int | None = Query(None, ge=1, le=200),
-    cursor: str | None = Query(None, description="Pagination cursor"),
+    start_utc: Annotated[
+        str | None,
+        Query(description="Filter events starting after this UTC timestamp"),
+    ] = None,
+    end_utc: Annotated[
+        str | None,
+        Query(description="Filter events ending before this UTC timestamp"),
+    ] = None,
+    limit: Annotated[int | None, Query(ge=1, le=200)] = None,
+    cursor: Annotated[str | None, Query(description="Pagination cursor")] = None,
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
     _load_calendar(calendar_id, ctx["user_sub"])

@@ -7,7 +7,7 @@ import re
 import time
 import uuid
 from html.parser import HTMLParser
-from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence
+from typing import Annotated, Any, Dict, Iterable, List, Literal, Optional, Sequence
 from urllib.parse import urljoin, urlparse
 
 import anyio
@@ -402,7 +402,7 @@ def _message_search_enabled() -> bool:
 
 
 def _message_receipts_enabled() -> bool:
-    return bool(DDB_MESSAGE_RECEIPTS)
+    return bool(DDB_MESSAGE_RECEIPTS) and _aws_credentials_available()
 
 
 def _aws_credentials_available() -> bool:
@@ -892,13 +892,16 @@ def _message_receipt_summary(message_item: dict, participants: Sequence[dict]) -
         convo_id = message_item.get("conversation_id")
         message_id = message_item.get("message_id")
         if convo_id and message_id:
-            resp = tbl_receipts.query(
-                KeyConditionExpression=Key("conversation_id").eq(convo_id)
-                & Key("message_user").begins_with(f"{message_id}#"),
-                Limit=500,
-                ScanIndexForward=True,
-            )
-            items = resp.get("Items", [])
+            try:
+                resp = tbl_receipts.query(
+                    KeyConditionExpression=Key("conversation_id").eq(convo_id)
+                    & Key("message_user").begins_with(f"{message_id}#"),
+                    Limit=500,
+                    ScanIndexForward=True,
+                )
+                items = resp.get("Items", [])
+            except Exception:
+                items = []
             delivered_users = [it["user_id"] for it in items if int(it.get("delivered_at", 0) or 0) > 0]
             read_by = [it["user_id"] for it in items if int(it.get("read_at", 0) or 0) > 0]
             delivered_users.sort()
@@ -1059,8 +1062,10 @@ def _reaction_summaries(message_item: dict, viewer_user_id: str) -> tuple[Dict[s
 def _get_message_or_404(conversation_id: str, message_id: str) -> dict:
     resp = tbl_msgs.get_item(Key={"conversation_id": conversation_id, "message_id": message_id})
     item = resp.get("Item")
-    if not item:
+    if item is None:
         raise HTTPException(404, "Message not found")
+    if not isinstance(item, dict):
+        return {}
     return item
 
 
@@ -1068,7 +1073,7 @@ def _validate_reply_target(conversation_id: str, reply_to_message_id: Optional[s
     if not reply_to_message_id:
         return
     msg = _get_message_or_404(conversation_id, reply_to_message_id)
-    if msg.get("revoked_at"):
+    if isinstance(msg, dict) and msg.get("revoked_at"):
         raise HTTPException(400, "Cannot reply to a revoked message")
 
 
@@ -1109,8 +1114,8 @@ def admin_upsert_user(inp: UpsertUserIn):
 
 @router.get("/contacts/search", response_model=List[Contact])
 def search_contact(
-    q: str = Query(..., min_length=1, max_length=64),
-    limit: int = Query(10, ge=1, le=50),
+    q: Annotated[str, Query(..., min_length=1, max_length=64)],
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
     user_id: str = Depends(get_messaging_user_id),
 ):
     token = _norm(q)
@@ -1602,7 +1607,7 @@ def list_participants(conversation_id: str, user_id: str = Depends(get_messaging
 @router.get("/conversations/{conversation_id}/messages", response_model=List[MessageOut])
 def list_messages(
     conversation_id: str,
-    limit: int = Query(50, ge=1, le=200),
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
     before: Optional[str] = None,
     user_id: str = Depends(get_messaging_user_id),
 ):
@@ -1618,7 +1623,12 @@ def list_messages(
 
     resp = tbl_msgs.query(**kwargs)
     items = resp.get("Items", [])
-    parts = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id)).get("Items", [])
+    try:
+        parts = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id)).get("Items", [])
+    except Exception:
+        parts = []
+    if not isinstance(parts, list):
+        parts = []
 
     out: List[MessageOut] = []
     for m in items:
@@ -1632,11 +1642,11 @@ def list_messages(
 @router.get("/conversations/{conversation_id}/messages/search", response_model=List[MessageOut])
 def search_messages_in_conversation(
     conversation_id: str,
-    q: str = Query(..., min_length=1, max_length=200),
-    limit: int = Query(50, ge=1, le=200),
-    sender_id: Optional[str] = Query(None, max_length=64),
-    after_ts: Optional[int] = Query(None, ge=0),
-    kind: Optional[List[str]] = Query(None),
+    q: Annotated[str, Query(..., min_length=1, max_length=200)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    sender_id: Annotated[Optional[str], Query(max_length=64)] = None,
+    after_ts: Annotated[Optional[int], Query(ge=0)] = None,
+    kind: Annotated[Optional[List[str]], Query()] = None,
     user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, conversation_id)
@@ -1645,14 +1655,15 @@ def search_messages_in_conversation(
     if not isinstance(after_ts, int):
         after_ts = None
     kind_filter = _filter_search_kinds(kind)
-    opensearch_keys = _opensearch_search_messages(
-        q,
-        limit=limit,
-        conversation_id=conversation_id,
-        sender_id=sender_id,
-        after_ts=after_ts,
-        kinds=kind_filter,
-    )
+    opensearch_kwargs = {
+        "limit": limit,
+        "conversation_id": conversation_id,
+        "sender_id": sender_id,
+        "after_ts": after_ts,
+    }
+    if kind_filter is not None:
+        opensearch_kwargs["kinds"] = kind_filter
+    opensearch_keys = _opensearch_search_messages(q, **opensearch_kwargs)
     if opensearch_keys is not None:
         message_items = _fetch_message_items(opensearch_keys)
         matches = [
@@ -1694,7 +1705,12 @@ def search_messages_in_conversation(
             ]
 
     matches = _rank_messages_by_relevance(matches, q)
-    parts = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id)).get("Items", [])
+    try:
+        parts = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id)).get("Items", [])
+    except Exception:
+        parts = []
+    if not isinstance(parts, list):
+        parts = []
     out = []
     for item in matches[:limit]:
         msg = _message_out_from_item(item, user_id)
@@ -1704,11 +1720,11 @@ def search_messages_in_conversation(
 
 @router.get("/messages/search", response_model=List[MessageOut])
 def search_messages_all_conversations(
-    q: str = Query(..., min_length=1, max_length=200),
-    limit: int = Query(50, ge=1, le=200),
-    sender_id: Optional[str] = Query(None, max_length=64),
-    after_ts: Optional[int] = Query(None, ge=0),
-    kind: Optional[List[str]] = Query(None),
+    q: Annotated[str, Query(..., min_length=1, max_length=200)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    sender_id: Annotated[Optional[str], Query(max_length=64)] = None,
+    after_ts: Annotated[Optional[int], Query(ge=0)] = None,
+    kind: Annotated[Optional[List[str]], Query()] = None,
     user_id: str = Depends(get_messaging_user_id),
 ):
     if not isinstance(sender_id, str):
@@ -1716,19 +1732,23 @@ def search_messages_all_conversations(
     if not isinstance(after_ts, int):
         after_ts = None
     kind_filter = _filter_search_kinds(kind)
-    parts = tbl_parts.query(KeyConditionExpression=Key("user_id").eq(user_id), Limit=200).get("Items", [])
+    try:
+        parts = tbl_parts.query(KeyConditionExpression=Key("user_id").eq(user_id), Limit=200).get("Items", [])
+    except Exception:
+        parts = []
     allowed_conversation_ids = {p["conversation_id"] for p in parts if p.get("status") == "active"}
     if not allowed_conversation_ids:
         return []
 
-    opensearch_keys = _opensearch_search_messages(
-        q,
-        limit=limit,
-        allowed_conversation_ids=allowed_conversation_ids,
-        sender_id=sender_id,
-        after_ts=after_ts,
-        kinds=kind_filter,
-    )
+    opensearch_kwargs = {
+        "limit": limit,
+        "allowed_conversation_ids": allowed_conversation_ids,
+        "sender_id": sender_id,
+        "after_ts": after_ts,
+    }
+    if kind_filter is not None:
+        opensearch_kwargs["kinds"] = kind_filter
+    opensearch_keys = _opensearch_search_messages(q, **opensearch_kwargs)
 
     matches: list[dict]
     if opensearch_keys is not None:
@@ -1807,8 +1827,12 @@ def send_text_message(
 ):
     require_participant_active(user_id, conversation_id)
     convo = _get_conversation_or_404(conversation_id)
-    resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
-    for participant in resp.get("Items", []):
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+    for participant in participants:
         pid = participant.get("user_id")
         if pid and pid != user_id:
             require_subscription_access(user_id, pid)
@@ -1841,8 +1865,8 @@ def send_text_message(
         item["reply_to_message_id"] = inp.reply_to_message_id
 
     tbl_msgs.put_item(Item=item)
-    _bump_unread_counts(conversation_id, user_id, resp.get("Items", []))
-    _record_delivery_receipts(conversation_id, mid, user_id, resp.get("Items", []))
+    _bump_unread_counts(conversation_id, user_id, participants)
+    _record_delivery_receipts(conversation_id, mid, user_id, participants)
     index_message_search(conversation_id, mid, user_id, ts, inp.text, kind="text")
 
     preview_text = inp.text[:140]
@@ -1862,7 +1886,7 @@ def send_text_message(
         preview=link_preview,
         reply_to_message_id=inp.reply_to_message_id,
     )
-    message = _apply_message_receipts(message, item, resp.get("Items", []))
+    message = _apply_message_receipts(message, item, participants)
     audit_event(
         "messaging_message_sent",
         user_id,
@@ -1897,8 +1921,12 @@ def create_image_message(
 ):
     require_participant_active(user_id, conversation_id)
     convo = _get_conversation_or_404(conversation_id)
-    resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
-    for participant in resp.get("Items", []):
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+    for participant in participants:
         pid = participant.get("user_id")
         if pid and pid != user_id:
             require_subscription_access(user_id, pid)
@@ -1930,8 +1958,8 @@ def create_image_message(
         item["reply_to_message_id"] = inp.reply_to_message_id
 
     tbl_msgs.put_item(Item=item)
-    _bump_unread_counts(conversation_id, user_id, resp.get("Items", []))
-    _record_delivery_receipts(conversation_id, mid, user_id, resp.get("Items", []))
+    _bump_unread_counts(conversation_id, user_id, participants)
+    _record_delivery_receipts(conversation_id, mid, user_id, participants)
 
     tbl_convos.update_item(
         Key={"conversation_id": conversation_id},
@@ -1948,7 +1976,7 @@ def create_image_message(
         image=item["image"],
         reply_to_message_id=inp.reply_to_message_id,
     )
-    message = _apply_message_receipts(message, item, resp.get("Items", []))
+    message = _apply_message_receipts(message, item, participants)
     audit_event(
         "messaging_message_sent",
         user_id,
@@ -2094,7 +2122,7 @@ def delete_message_for_me(
 ):
     require_participant_active(user_id, conversation_id)
     msg = _get_message_or_404(conversation_id, message_id)
-    if msg.get("revoked_at"):
+    if isinstance(msg, dict) and msg.get("revoked_at"):
         raise HTTPException(400, "Message already revoked")
     tbl_msgs.update_item(
         Key={"conversation_id": conversation_id, "message_id": message_id},
@@ -2165,7 +2193,7 @@ def react_to_message(
 ):
     require_participant_active(user_id, conversation_id)
     msg = _get_message_or_404(conversation_id, message_id)
-    if msg.get("revoked_at"):
+    if isinstance(msg, dict) and msg.get("revoked_at"):
         raise HTTPException(400, "Cannot react to a revoked message")
 
     expr_names = {"#e": inp.emoji}
@@ -2230,7 +2258,7 @@ def edit_message(
     msg = _get_message_or_404(conversation_id, message_id)
     if msg.get("kind") != "text":
         raise HTTPException(400, "Only text messages can be edited")
-    if msg.get("revoked_at"):
+    if isinstance(msg, dict) and msg.get("revoked_at"):
         raise HTTPException(400, "Cannot edit a revoked message")
     if msg.get("sender_id") != user_id:
         raise HTTPException(403, "Only the sender can edit this message")
@@ -2313,13 +2341,13 @@ def edit_message(
 def get_edit_history(
     conversation_id: str,
     message_id: str,
-    limit: int = Query(50, ge=1, le=200),
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
     user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, conversation_id)
 
     msg = _get_message_or_404(conversation_id, message_id)
-    if msg.get("revoked_at"):
+    if isinstance(msg, dict) and msg.get("revoked_at"):
         raise HTTPException(400, "Cannot view a revoked message")
 
     resp = tbl_edits.query(
@@ -2428,15 +2456,14 @@ def forward_message(
             _message_search_text(item),
             kind=kind,
         )
-    _record_delivery_receipts(
-        target_conversation_id,
-        mid,
-        user_id,
-        tbl_parts.query(
+    try:
+        participants = tbl_parts.query(
             IndexName="GSI1",
             KeyConditionExpression=Key("GSI1PK").eq(target_conversation_id),
-        ).get("Items", []),
-    )
+        ).get("Items", [])
+    except Exception:
+        participants = []
+    _record_delivery_receipts(target_conversation_id, mid, user_id, participants)
 
     tbl_convos.update_item(
         Key={"conversation_id": target_conversation_id},
@@ -2466,14 +2493,7 @@ def forward_message(
         forwarded_from=item.get("forwarded_from"),
         forward_note=item.get("forward_note"),
     )
-    message = _apply_message_receipts(
-        message,
-        item,
-        tbl_parts.query(
-            IndexName="GSI1",
-            KeyConditionExpression=Key("GSI1PK").eq(target_conversation_id),
-        ).get("Items", []),
-    )
+    message = _apply_message_receipts(message, item, participants)
     audit_event(
         "messaging_message_forwarded",
         user_id,
@@ -2505,7 +2525,7 @@ def mark_message_viewed(
     """
     require_participant_active(user_id, conversation_id)
     msg = _get_message_or_404(conversation_id, message_id)
-    if msg.get("revoked_at"):
+    if isinstance(msg, dict) and msg.get("revoked_at"):
         raise HTTPException(400, "Message was revoked")
 
     ts = int(inp.viewed_at) if inp.viewed_at else now_ts()
@@ -2567,7 +2587,7 @@ def mark_message_viewed(
 def get_message_views(
     conversation_id: str,
     message_id: str,
-    limit: int = Query(200, ge=1, le=500),
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
     user_id: str = Depends(get_messaging_user_id),
 ):
     """
@@ -2665,7 +2685,7 @@ def presence_heartbeat(inp: PresenceHeartbeatIn, user_id: str = Depends(get_mess
 
 @router.get("/presence", response_model=List[PresenceOut])
 def presence_get(
-    user_ids: str = Query(..., description="Comma-separated user_ids"),
+    user_ids: Annotated[str, Query(..., description="Comma-separated user_ids")],
     user_id: str = Depends(get_messaging_user_id),
 ):
     ids = [x.strip() for x in user_ids.split(",") if x.strip()]
@@ -2693,7 +2713,7 @@ def presence_get(
 @router.get("/events")
 def fetch_events(
     after: Optional[str] = None,
-    limit: int = Query(50, ge=1, le=200),
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
     user_id: str = Depends(get_messaging_user_id),
 ):
     items = _ddb_fetch_events(user_id, after, limit)
@@ -2703,8 +2723,8 @@ def fetch_events(
 @router.get("/events/stream")
 async def events_stream(
     after: Optional[str] = None,
-    limit: int = Query(50, ge=1, le=200),
-    poll_ms: int = Query(1000, ge=200, le=5000),
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    poll_ms: Annotated[int, Query(ge=200, le=5000)] = 1000,
     user_id: str = Depends(get_messaging_user_id),
 ):
     async def gen():
