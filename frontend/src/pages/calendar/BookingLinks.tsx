@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Copy, Link2, Plus } from "lucide-react";
+import { Copy, Link2, Plus, Eye, ChevronUp, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,8 +26,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { getCalendars, createBookingLink } from "@/api/endpoints/calendar";
-import type { BookingLink, Calendar } from "@/api/types";
+import { getCalendars, createBookingLink, listBookingLinks, getPublicOpenings } from "@/api/endpoints/calendar";
+import type { BookingLink, Calendar, Opening } from "@/api/types";
 
 const linkSchema = z.object({
   name: z.string().min(1, "Name is required"),
@@ -36,13 +36,73 @@ const linkSchema = z.object({
 
 type LinkFormValues = z.infer<typeof linkSchema>;
 
+function formatSlot(slot: Opening): string {
+  const start = new Date(slot.start_utc);
+  const end = new Date(slot.end_utc);
+  const dateStr = start.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  const startTime = start.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const endTime = end.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${dateStr}, ${startTime} \u2013 ${endTime}`;
+}
+
+function OpeningsPanel({ linkId }: { linkId: string }) {
+  const now = new Date();
+  const end = new Date(now);
+  end.setDate(end.getDate() + 7);
+
+  const query = useQuery({
+    queryKey: ["booking-openings", linkId],
+    queryFn: () => getPublicOpenings(linkId, now.toISOString(), end.toISOString(), 10),
+  });
+
+  const openings: Opening[] = Array.isArray(query.data) ? query.data : [];
+
+  if (query.isLoading) {
+    return (
+      <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" />
+        Loading openings...
+      </div>
+    );
+  }
+
+  if (openings.length === 0) {
+    return (
+      <p className="py-2 text-xs text-muted-foreground">
+        No available slots in the next 7 days.
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-2 grid gap-1 sm:grid-cols-2">
+      {openings.map((slot, i) => (
+        <div
+          key={i}
+          className="rounded border px-2 py-1.5 text-xs text-muted-foreground"
+        >
+          {formatSlot(slot)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function BookingLinks() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedCalId, setSelectedCalId] = useState<string>("");
-
-  // We store created links locally since there's no list endpoint
-  const [links, setLinks] = useState<BookingLink[]>([]);
+  const [expandedLink, setExpandedLink] = useState<string | null>(null);
 
   const calendarsQuery = useQuery({
     queryKey: ["calendars"],
@@ -56,6 +116,16 @@ export function BookingLinks() {
     setSelectedCalId(calendars[0]!.calendar_id);
   }
 
+  const calId = selectedCalId || (calendars.length > 0 ? calendars[0]!.calendar_id : "");
+
+  const linksQuery = useQuery({
+    queryKey: ["booking-links", calId],
+    queryFn: () => listBookingLinks(calId),
+    enabled: !!calId,
+  });
+
+  const links: BookingLink[] = Array.isArray(linksQuery.data) ? linksQuery.data : [];
+
   const form = useForm<LinkFormValues>({
     resolver: zodResolver(linkSchema),
     defaultValues: { name: "", duration_minutes: 30 },
@@ -63,15 +133,14 @@ export function BookingLinks() {
 
   const createMutation = useMutation({
     mutationFn: (values: LinkFormValues) =>
-      createBookingLink(selectedCalId, {
+      createBookingLink(calId, {
         name: values.name,
         duration_minutes: values.duration_minutes,
       }),
-    onSuccess: (data) => {
-      setLinks((prev) => [...prev, data]);
+    onSuccess: () => {
       setDialogOpen(false);
       form.reset({ name: "", duration_minutes: 30 });
-      queryClient.invalidateQueries({ queryKey: ["booking-links"] });
+      queryClient.invalidateQueries({ queryKey: ["booking-links", calId] });
       toast.success("Booking link created");
     },
     onError: () => {
@@ -86,7 +155,11 @@ export function BookingLinks() {
     );
   };
 
-  if (calendarsQuery.isLoading) {
+  const toggleOpenings = (linkId: string) => {
+    setExpandedLink((prev) => (prev === linkId ? null : linkId));
+  };
+
+  if (calendarsQuery.isLoading || linksQuery.isLoading) {
     return (
       <div className="space-y-3">
         {Array.from({ length: 2 }).map((_, i) => (
@@ -99,9 +172,25 @@ export function BookingLinks() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          {links.length} booking link{links.length !== 1 ? "s" : ""}
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="text-sm text-muted-foreground">
+            {links.length} booking link{links.length !== 1 ? "s" : ""}
+          </p>
+          {calendars.length > 1 && (
+            <Select value={calId} onValueChange={setSelectedCalId}>
+              <SelectTrigger className="h-8 w-40 text-xs">
+                <SelectValue placeholder="Calendar" />
+              </SelectTrigger>
+              <SelectContent>
+                {calendars.map((c) => (
+                  <SelectItem key={c.calendar_id} value={c.calendar_id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        </div>
         <Button
           variant="outline"
           size="sm"
@@ -124,26 +213,45 @@ export function BookingLinks() {
         <div className="space-y-3">
           {links.map((link) => (
             <Card key={link.link_id}>
-              <CardContent className="flex items-center gap-4 p-4">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold">{link.name}</span>
-                    <Badge variant="outline" className="text-[10px]">
-                      {link.duration_minutes} min
-                    </Badge>
+              <CardContent className="p-4">
+                <div className="flex items-center gap-4">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold">{link.name}</span>
+                      <Badge variant="outline" className="text-[10px]">
+                        {link.duration_minutes} min
+                      </Badge>
+                    </div>
+                    <p className="mt-0.5 truncate text-xs font-mono text-muted-foreground">
+                      {link.public_url}
+                    </p>
                   </div>
-                  <p className="mt-0.5 truncate text-xs font-mono text-muted-foreground">
-                    {link.public_url}
-                  </p>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0"
+                    onClick={() => toggleOpenings(link.link_id)}
+                    title="View openings"
+                  >
+                    {expandedLink === link.link_id ? (
+                      <ChevronUp className="h-3.5 w-3.5" />
+                    ) : (
+                      <Eye className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0"
+                    onClick={() => copyToClipboard(link.public_url)}
+                    title="Copy link"
+                  >
+                    <Copy className="h-3.5 w-3.5" />
+                  </Button>
                 </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 shrink-0"
-                  onClick={() => copyToClipboard(link.public_url)}
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                </Button>
+                {expandedLink === link.link_id && (
+                  <OpeningsPanel linkId={link.link_id} />
+                )}
               </CardContent>
             </Card>
           ))}
@@ -174,7 +282,7 @@ export function BookingLinks() {
             {calendars.length > 1 && (
               <div className="space-y-1.5">
                 <Label>Calendar</Label>
-                <Select value={selectedCalId} onValueChange={setSelectedCalId}>
+                <Select value={calId} onValueChange={setSelectedCalId}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select calendar" />
                   </SelectTrigger>

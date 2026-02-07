@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/shared/PageHeader";
 import { CalendarView } from "./CalendarView";
 import { BookingLinks } from "./BookingLinks";
 import { CalendarSharing } from "./CalendarSharing";
+import { CalendarSettings } from "./CalendarSettings";
 
 export default function CalendarPage() {
   return (
@@ -17,6 +18,7 @@ export default function CalendarPage() {
           <TabsTrigger value="calendar">Calendar</TabsTrigger>
           <TabsTrigger value="booking">Booking Links</TabsTrigger>
           <TabsTrigger value="sharing">Sharing</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
         <TabsContent value="calendar">
           <CalendarView />
@@ -26,6 +28,9 @@ export default function CalendarPage() {
         </TabsContent>
         <TabsContent value="sharing">
           <CalendarSharing />
+        </TabsContent>
+        <TabsContent value="settings">
+          <CalendarSettings />
         </TabsContent>
       </Tabs>
     </div>

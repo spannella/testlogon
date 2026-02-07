@@ -623,6 +623,27 @@ export interface EventCreateIn {
   exdates_utc?: string[];
 }
 
+export interface OccurrenceOverrideIn {
+  name?: string;
+  description?: string;
+  timezone?: string;
+  start_utc?: string;
+  end_utc?: string;
+  all_day?: boolean;
+  all_day_date?: string;
+  status?: string;
+  category?: string;
+}
+
+export interface BookingReserveReq {
+  name?: string;
+  description?: string;
+  start_utc: string;
+  end_utc: string;
+  timezone?: string;
+  notify?: boolean;
+}
+
 export interface CalendarEvent {
   event_id: string;
   calendar_id: string;
@@ -640,6 +661,7 @@ export interface CalendarEvent {
   category?: string;
   recurrence_rule?: RecurrenceRule;
   exdates_utc?: string[];
+  recurrence_overrides?: Record<string, OccurrenceOverrideIn>;
   created_at_utc: string;
 }
 

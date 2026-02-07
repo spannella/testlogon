@@ -15,6 +15,8 @@ import type {
   ConflictResult,
   SlotSuggestionReq,
   AvailabilityReq,
+  OccurrenceOverrideIn,
+  BookingReserveReq,
 } from "@/api/types";
 
 // ─── Calendars ───────────────────────────────────────────────────
@@ -89,3 +91,66 @@ export const suggestSlots = (calendarId: string, body: SlotSuggestionReq) =>
 
 export const getTeamAvailability = (body: AvailabilityReq) =>
   api.post<Opening[]>("/ui/calendars/availability", body);
+
+// ─── Openings & Booking Links (server-side list) ────────────────
+
+export const getOpenings = (calendarId: string, startUtc: string, endUtc: string) =>
+  api.get<Opening[]>(`/ui/calendars/${calendarId}/openings`, {
+    start_utc: startUtc,
+    end_utc: endUtc,
+  });
+
+export const listBookingLinks = (calendarId: string) =>
+  api.get<BookingLink[]>(`/ui/calendars/${calendarId}/booking_links`);
+
+// ─── Recurrence Occurrences ─────────────────────────────────────
+
+export const excludeOccurrence = (
+  calendarId: string,
+  eventId: string,
+  occurrenceStart: string,
+) =>
+  api.post<CalendarEvent>(
+    `/ui/calendars/${calendarId}/events/${eventId}/occurrences/${occurrenceStart}/exclude`,
+    {},
+  );
+
+export const overrideOccurrence = (
+  calendarId: string,
+  eventId: string,
+  occurrenceStart: string,
+  body: OccurrenceOverrideIn,
+) =>
+  api.post<CalendarEvent>(
+    `/ui/calendars/${calendarId}/events/${eventId}/occurrences/${occurrenceStart}/override`,
+    body,
+  );
+
+export const clearOccurrenceOverride = (
+  calendarId: string,
+  eventId: string,
+  occurrenceStart: string,
+) =>
+  api.del<CalendarEvent>(
+    `/ui/calendars/${calendarId}/events/${eventId}/occurrences/${occurrenceStart}`,
+  );
+
+// ─── Public Booking ─────────────────────────────────────────────
+
+export const getPublicBookingLink = (linkId: string) =>
+  api.get<BookingLink>(`/booking/${linkId}`);
+
+export const getPublicOpenings = (
+  linkId: string,
+  startUtc: string,
+  endUtc: string,
+  limit?: number,
+) =>
+  api.get<Opening[]>(`/booking/${linkId}/openings`, {
+    start_utc: startUtc,
+    end_utc: endUtc,
+    ...(limit ? { limit: String(limit) } : {}),
+  });
+
+export const reserveBookingSlot = (linkId: string, body: BookingReserveReq) =>
+  api.post<CalendarEvent>(`/booking/${linkId}/reserve`, body);

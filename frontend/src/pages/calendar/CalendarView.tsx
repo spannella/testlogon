@@ -1,10 +1,12 @@
-import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useMemo, useRef, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
   ChevronRight,
   Plus,
+  Repeat,
 } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -16,7 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { getCalendars, getEvents } from "@/api/endpoints/calendar";
+import { getCalendars, getEvents, excludeOccurrence } from "@/api/endpoints/calendar";
 import { EventDialog } from "./EventDialog";
 import type { CalendarEvent, Calendar } from "@/api/types";
 
@@ -42,16 +44,13 @@ function getMonthDays(year: number, month: number): Date[] {
   const first = new Date(year, month, 1);
   const startDay = first.getDay();
   const days: Date[] = [];
-  // Fill in days from previous month
   for (let i = startDay - 1; i >= 0; i--) {
     days.push(new Date(year, month, -i));
   }
-  // Fill in current month days
   const last = new Date(year, month + 1, 0);
   for (let d = 1; d <= last.getDate(); d++) {
     days.push(new Date(year, month, d));
   }
-  // Fill remaining to complete rows of 7
   while (days.length % 7 !== 0) {
     days.push(new Date(year, month + 1, days.length - last.getDate() - startDay + 1));
   }
@@ -84,13 +83,151 @@ function eventHour(ev: CalendarEvent): number {
   return 0;
 }
 
+function isRecurring(ev: CalendarEvent): boolean {
+  return !!ev.recurrence_rule;
+}
+
+function isOverridden(ev: CalendarEvent): boolean {
+  if (!ev.recurrence_overrides || !ev.start_utc) return false;
+  return Object.keys(ev.recurrence_overrides).some(
+    (key) => key === ev.start_utc,
+  );
+}
+
+// ─── Recurrence Context Menu ────────────────────────────────────
+
+interface RecurrenceMenuProps {
+  ev: CalendarEvent;
+  position: { x: number; y: number };
+  onClose: () => void;
+  onEditAll: () => void;
+  onEditThis: () => void;
+  onSkipThis: () => void;
+}
+
+function RecurrenceMenu({
+  ev,
+  position,
+  onClose,
+  onEditAll,
+  onEditThis,
+  onSkipThis,
+}: RecurrenceMenuProps) {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [onClose]);
+
+  // suppress unused ev warning — we keep it for potential future use
+  void ev;
+
+  return (
+    <div
+      ref={ref}
+      className="fixed z-50 rounded-md border bg-popover p-1 shadow-md"
+      style={{ left: position.x, top: position.y }}
+    >
+      <button
+        className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs hover:bg-accent"
+        onClick={() => { onEditAll(); onClose(); }}
+      >
+        Edit all occurrences
+      </button>
+      <button
+        className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs hover:bg-accent"
+        onClick={() => { onEditThis(); onClose(); }}
+      >
+        Edit this occurrence
+      </button>
+      <button
+        className="flex w-full items-center rounded-sm px-3 py-1.5 text-xs text-destructive hover:bg-accent"
+        onClick={() => { onSkipThis(); onClose(); }}
+      >
+        Skip this occurrence
+      </button>
+    </div>
+  );
+}
+
+// ─── Event Chip ─────────────────────────────────────────────────
+
+interface EventChipProps {
+  ev: CalendarEvent;
+  variant: "compact" | "normal";
+  onEdit: (ev: CalendarEvent) => void;
+  onRecurrenceMenu: (ev: CalendarEvent, pos: { x: number; y: number }) => void;
+}
+
+function EventChip({ ev, variant, onEdit, onRecurrenceMenu }: EventChipProps) {
+  const recurring = isRecurring(ev);
+  const overridden = isOverridden(ev);
+
+  const handleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (recurring) {
+      onRecurrenceMenu(ev, { x: e.clientX, y: e.clientY });
+    } else {
+      onEdit(ev);
+    }
+  };
+
+  if (variant === "compact") {
+    return (
+      <button
+        className={cn(
+          "block w-full truncate rounded px-1 py-0.5 text-left text-[10px] font-medium",
+          overridden
+            ? "border border-dashed border-primary/40 bg-primary/5 text-primary"
+            : "bg-primary/10 text-primary hover:bg-primary/20",
+        )}
+        onClick={handleClick}
+      >
+        {recurring && <Repeat className="mr-0.5 inline h-2.5 w-2.5" />}
+        {ev.name}
+      </button>
+    );
+  }
+
+  return (
+    <button
+      className={cn(
+        "block w-full rounded px-2 py-1 text-left text-sm font-medium hover:bg-primary/20",
+        overridden
+          ? "border border-dashed border-primary/40 bg-primary/5 text-primary"
+          : "bg-primary/15 text-primary",
+      )}
+      onClick={handleClick}
+    >
+      {recurring && <Repeat className="mr-1 inline h-3 w-3" />}
+      {ev.name}
+      {ev.description && (
+        <span className="ml-2 text-xs font-normal text-muted-foreground">
+          {ev.description}
+        </span>
+      )}
+    </button>
+  );
+}
+
+// ─── Calendar View ──────────────────────────────────────────────
+
 export function CalendarView() {
+  const queryClient = useQueryClient();
   const [view, setView] = useState("month");
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedCalendarId, setSelectedCalendarId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEvent, setEditingEvent] = useState<CalendarEvent | null>(null);
   const [defaultDate, setDefaultDate] = useState<string>("");
+  const [recurrenceMenu, setRecurrenceMenu] = useState<{
+    ev: CalendarEvent;
+    pos: { x: number; y: number };
+  } | null>(null);
 
   const calendarsQuery = useQuery({
     queryKey: ["calendars"],
@@ -107,6 +244,18 @@ export function CalendarView() {
   });
 
   const events: CalendarEvent[] = eventsQuery.data?.events ?? [];
+
+  const excludeMutation = useMutation({
+    mutationFn: (ev: CalendarEvent) =>
+      excludeOccurrence(ev.calendar_id, ev.event_id, ev.start_utc ?? ""),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["calendar-events"] });
+      toast.success("Occurrence skipped");
+    },
+    onError: () => {
+      toast.error("Failed to skip occurrence");
+    },
+  });
 
   const today = new Date();
   const year = currentDate.getFullYear();
@@ -135,6 +284,10 @@ export function CalendarView() {
     setEditingEvent(ev);
     setDefaultDate("");
     setDialogOpen(true);
+  };
+
+  const handleRecurrenceMenu = (ev: CalendarEvent, pos: { x: number; y: number }) => {
+    setRecurrenceMenu({ ev, pos });
   };
 
   const title =
@@ -197,7 +350,6 @@ export function CalendarView() {
         {/* ─── Month View ──────────────────────────────────── */}
         <TabsContent value="month">
           <div className="rounded-lg border">
-            {/* Header */}
             <div className="grid grid-cols-7 border-b">
               {DAYS.map((d) => (
                 <div key={d} className="px-2 py-1.5 text-center text-xs font-medium text-muted-foreground">
@@ -205,7 +357,6 @@ export function CalendarView() {
                 </div>
               ))}
             </div>
-            {/* Day cells */}
             <div className="grid grid-cols-7">
               {monthDays.map((day, i) => {
                 const isCurrentMonth = day.getMonth() === month;
@@ -230,16 +381,13 @@ export function CalendarView() {
                     </span>
                     <div className="mt-0.5 space-y-0.5">
                       {dayEvents.slice(0, 3).map((ev) => (
-                        <button
+                        <EventChip
                           key={ev.event_id}
-                          className="block w-full truncate rounded bg-primary/10 px-1 py-0.5 text-left text-[10px] font-medium text-primary hover:bg-primary/20"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openEditEvent(ev);
-                          }}
-                        >
-                          {ev.name}
-                        </button>
+                          ev={ev}
+                          variant="compact"
+                          onEdit={openEditEvent}
+                          onRecurrenceMenu={handleRecurrenceMenu}
+                        />
                       ))}
                       {dayEvents.length > 3 && (
                         <span className="text-[10px] text-muted-foreground">
@@ -258,7 +406,6 @@ export function CalendarView() {
         <TabsContent value="week">
           <div className="overflow-x-auto rounded-lg border">
             <div className="min-w-[700px]">
-              {/* Header */}
               <div className="grid grid-cols-[60px_repeat(7,1fr)] border-b">
                 <div />
                 {weekDays.map((day, i) => (
@@ -274,7 +421,6 @@ export function CalendarView() {
                   </div>
                 ))}
               </div>
-              {/* Time grid */}
               <div className="max-h-[600px] overflow-y-auto">
                 {HOURS.map((h) => (
                   <div key={h} className="grid grid-cols-[60px_repeat(7,1fr)] border-b">
@@ -292,16 +438,13 @@ export function CalendarView() {
                           onClick={() => openNewEvent(day)}
                         >
                           {cellEvents.map((ev) => (
-                            <button
+                            <EventChip
                               key={ev.event_id}
-                              className="block w-full truncate rounded bg-primary/15 px-1 py-0.5 text-left text-[10px] font-medium text-primary"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openEditEvent(ev);
-                              }}
-                            >
-                              {ev.name}
-                            </button>
+                              ev={ev}
+                              variant="compact"
+                              onEdit={openEditEvent}
+                              onRecurrenceMenu={handleRecurrenceMenu}
+                            />
                           ))}
                         </div>
                       );
@@ -332,21 +475,13 @@ export function CalendarView() {
                     </div>
                     <div className="flex-1 border-l p-1 space-y-0.5">
                       {hourEvents.map((ev) => (
-                        <button
+                        <EventChip
                           key={ev.event_id}
-                          className="block w-full rounded bg-primary/15 px-2 py-1 text-left text-sm font-medium text-primary hover:bg-primary/20"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openEditEvent(ev);
-                          }}
-                        >
-                          {ev.name}
-                          {ev.description && (
-                            <span className="ml-2 text-xs font-normal text-muted-foreground">
-                              {ev.description}
-                            </span>
-                          )}
-                        </button>
+                          ev={ev}
+                          variant="normal"
+                          onEdit={openEditEvent}
+                          onRecurrenceMenu={handleRecurrenceMenu}
+                        />
                       ))}
                     </div>
                   </div>
@@ -366,6 +501,18 @@ export function CalendarView() {
         event={editingEvent}
         defaultDate={defaultDate}
       />
+
+      {/* Recurrence context menu */}
+      {recurrenceMenu && (
+        <RecurrenceMenu
+          ev={recurrenceMenu.ev}
+          position={recurrenceMenu.pos}
+          onClose={() => setRecurrenceMenu(null)}
+          onEditAll={() => openEditEvent(recurrenceMenu.ev)}
+          onEditThis={() => openEditEvent(recurrenceMenu.ev)}
+          onSkipThis={() => excludeMutation.mutate(recurrenceMenu.ev)}
+        />
+      )}
     </div>
   );
 }
