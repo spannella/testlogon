@@ -779,6 +779,7 @@ export interface FeedPost {
   unlock_price_cents?: number;
   like_count: number;
   comment_count: number;
+  tip_total_cents?: number;
   liked_by_me?: boolean;
   unlocked?: boolean;
   created_at: string;
@@ -798,6 +799,7 @@ export interface FeedComment {
 
 export interface CreatePostReq {
   body: string;
+  image_url?: string;
   unlock_price_cents?: number;
 }
 
@@ -815,6 +817,27 @@ export interface EditCommentReq {
 
 export interface HidePostReq {
   post_id: string;
+}
+
+export interface PresignUploadReq {
+  filename: string;
+  content_type: string;
+}
+
+export interface PresignUploadResp {
+  attachment: {
+    attachment_id: string;
+    filename: string;
+    content_type: string;
+    s3_key: string;
+    url?: string;
+  };
+  put_url: string;
+  put_headers: Record<string, string>;
+}
+
+export interface TipReq {
+  amount_cents: number;
 }
 
 // ─── Purchase History ────────────────────────────────────────────

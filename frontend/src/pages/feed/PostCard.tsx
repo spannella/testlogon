@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Heart, MessageCircle, Lock } from "lucide-react";
+import { Heart, MessageCircle, Lock, DollarSign, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { CommentsThread } from "./CommentsThread";
 import { PostActions } from "./PostActions";
 import { EditPostDialog } from "./EditPostDialog";
+import { TipDialog } from "./TipDialog";
 import type { FeedPost } from "@/api/types";
 
 function formatRelative(dateStr: string): string {
@@ -38,6 +39,8 @@ export function PostCard({ post }: PostCardProps) {
   const queryClient = useQueryClient();
   const [showComments, setShowComments] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [tipOpen, setTipOpen] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
 
   const isOwn = post.author_id === userId;
 
@@ -64,6 +67,8 @@ export function PostCard({ post }: PostCardProps) {
 
   const isLocked = !!post.unlock_price_cents && !post.unlocked;
   const initials = post.author_id.slice(0, 2).toUpperCase();
+
+  const closeLightbox = useCallback(() => setLightboxOpen(false), []);
 
   return (
     <Card>
@@ -116,11 +121,17 @@ export function PostCard({ post }: PostCardProps) {
 
         {/* Image */}
         {post.image_url && (
-          <img
-            src={post.image_url}
-            alt=""
-            className="mt-3 w-full rounded-lg object-cover"
-          />
+          <button
+            type="button"
+            className="mt-3 block w-full overflow-hidden rounded-lg"
+            onClick={() => setLightboxOpen(true)}
+          >
+            <img
+              src={post.image_url}
+              alt=""
+              className="w-full rounded-lg object-cover transition-transform hover:scale-[1.02]"
+            />
+          </button>
         )}
 
         {/* Action row */}
@@ -150,6 +161,20 @@ export function PostCard({ post }: PostCardProps) {
             <MessageCircle className="h-4 w-4" />
             <span>{post.comment_count}</span>
           </button>
+          {!isOwn && (
+            <button
+              className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-emerald-600"
+              onClick={() => setTipOpen(true)}
+            >
+              <DollarSign className="h-4 w-4" />
+              <span>Tip</span>
+            </button>
+          )}
+          {(post.tip_total_cents ?? 0) > 0 && (
+            <span className="ml-auto text-xs text-emerald-600">
+              ${((post.tip_total_cents ?? 0) / 100).toFixed(2)} tipped
+            </span>
+          )}
         </div>
 
         {/* Comments thread */}
@@ -168,6 +193,37 @@ export function PostCard({ post }: PostCardProps) {
         postId={post.post_id}
         initialBody={post.body}
       />
+
+      {/* Tip dialog */}
+      <TipDialog
+        open={tipOpen}
+        onOpenChange={setTipOpen}
+        postId={post.post_id}
+        authorId={post.author_id}
+      />
+
+      {/* Image lightbox */}
+      {lightboxOpen && post.image_url && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+          onClick={closeLightbox}
+          role="dialog"
+          aria-label="Image preview"
+        >
+          <button
+            className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+            onClick={closeLightbox}
+          >
+            <X className="h-5 w-5" />
+          </button>
+          <img
+            src={post.image_url}
+            alt=""
+            className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </Card>
   );
 }

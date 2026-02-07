@@ -7,6 +7,9 @@ import type {
   EditPostReq,
   EditCommentReq,
   HidePostReq,
+  PresignUploadReq,
+  PresignUploadResp,
+  TipReq,
 } from "@/api/types";
 
 export const getFeed = (cursor?: string) =>
@@ -68,6 +71,16 @@ export const deleteComment = (postId: string, commentId: string) =>
 
 export const hidePost = (body: HidePostReq) =>
   api.post<{ ok: boolean }>("/feed/hide", body);
+
+// ── Presign upload ─────────────────────────────────────────────
+
+export const presignUpload = (body: PresignUploadReq) =>
+  api.post<PresignUploadResp>("/uploads/presign", body);
+
+// ── Tipping ────────────────────────────────────────────────────
+
+export const tipPostDirect = (postId: string, body: TipReq) =>
+  api.post<{ ok: boolean; tip_total_cents: number }>(`/posts/${postId}/tip`, body);
 
 /** SSE stream URL for real-time feed updates */
 export const feedSseUrl = "/newsfeed/sse";
