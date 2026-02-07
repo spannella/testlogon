@@ -95,3 +95,55 @@ export const listSharedFolder = (
 
 export const sharedDownloadUrl = (owner: string, path: string) =>
   `/v1/fs/shared-download?owner=${encodeURIComponent(owner)}&path=${encodeURIComponent(path)}`;
+
+// ── Bulk & Advanced ─────────────────────────────────────────────
+
+export const downloadZip = async (paths: string[]) => {
+  const resp = await fetch("/v1/fs/download-zip", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paths }),
+    credentials: "include",
+  });
+  if (!resp.ok) throw new Error("Failed to download ZIP");
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "files.zip";
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+export const uploadZip = (file: File, destFolder = "/") => {
+  const formData = new FormData();
+  formData.append("zip_file", file);
+  return api.upload<{ ok: boolean; created: string[]; count: number }>(
+    "/v1/fs/upload-zip",
+    formData,
+    { dest_folder: destFolder },
+  );
+};
+
+export const fsPresignUpload = (path: string, contentType?: string) =>
+  api.post<{
+    upload_url: string;
+    bucket: string;
+    key: string;
+    path: string;
+    content_type: string;
+  }>("/v1/fs/presign-upload", {
+    path,
+    content_type: contentType ?? null,
+  });
+
+export const completeUpload = (path: string, key: string, contentType?: string) =>
+  api.post<{ ok: boolean; path: string; size: number | null; content_type: string }>(
+    "/v1/fs/complete-upload",
+    { path, key, content_type: contentType ?? null },
+  );
+
+export const purgeDeleted = () =>
+  api.post<{ ok: boolean; purged: number; skipped: number; errors: number }>(
+    "/v1/fs/purge-deleted",
+  );

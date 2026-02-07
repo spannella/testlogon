@@ -3,10 +3,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Upload,
   FolderPlus,
-  Trash2,
   Search,
   FolderOpen,
   ChevronRight,
+  Archive,
+  ChevronDown,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,12 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
@@ -37,18 +44,27 @@ import {
   deleteFolder,
   renameFile,
   renameFolder,
+  moveFile,
+  uploadZip,
+  fsPresignUpload,
+  completeUpload,
 } from "@/api/endpoints/files";
 import { FileTable } from "./FileTable";
 import { FilePreview } from "./FilePreview";
 import { SharedWithMe } from "./SharedWithMe";
 import { ShareDialog } from "./ShareDialog";
 import { UploadZone } from "./UploadZone";
+import { BulkActions } from "./BulkActions";
+import { MoveDialog } from "./MoveDialog";
 
 type SearchMode = "name" | "content";
+
+const PRESIGN_THRESHOLD = 5 * 1024 * 1024; // 5 MB
 
 export default function FilesPage() {
   const queryClient = useQueryClient();
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const zipInputRef = React.useRef<HTMLInputElement>(null);
 
   // ── State ───────────────────────────────────────────────────────
 
@@ -70,6 +86,10 @@ export default function FilesPage() {
 
   // Preview state
   const [previewFile, setPreviewFile] = React.useState<FileEntry | null>(null);
+
+  // Move dialog state
+  const [moveDialogOpen, setMoveDialogOpen] = React.useState(false);
+  const [moveTarget, setMoveTarget] = React.useState<FileEntry | null>(null);
 
   // ── Queries ─────────────────────────────────────────────────────
 
@@ -145,6 +165,8 @@ export default function FilesPage() {
     onError: () => toast.error("Failed to rename"),
   });
 
+  const [moveLoading, setMoveLoading] = React.useState(false);
+
   // ── Breadcrumbs ─────────────────────────────────────────────────
 
   const pathSegments = React.useMemo(() => {
@@ -192,7 +214,6 @@ export default function FilesPage() {
   };
 
   const handlePreviewShared = (_item: SharedItem) => {
-    // Convert SharedItem to a minimal FileEntry for preview
     const segments = _item.path.split("/").filter(Boolean);
     const name = segments.length > 0 ? (segments[segments.length - 1] ?? _item.path) : _item.path;
     const entry: FileEntry = {
@@ -203,7 +224,7 @@ export default function FilesPage() {
     setPreviewFile(entry);
   };
 
-  // ── Upload (button) ─────────────────────────────────────────────
+  // ── Upload (button) — with presigned path for large files ──────
 
   const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -214,7 +235,18 @@ export default function FilesPage() {
         : currentPath + "/" + file.name;
       const toastId = toast.loading(`Uploading ${file.name}...`);
       try {
-        await uploadFile(file, targetPath);
+        if (file.size > PRESIGN_THRESHOLD) {
+          // Presigned upload for large files
+          const presign = await fsPresignUpload(targetPath, file.type || undefined);
+          await fetch(presign.upload_url, {
+            method: "PUT",
+            headers: { "Content-Type": presign.content_type },
+            body: file,
+          });
+          await completeUpload(presign.path, presign.key, presign.content_type);
+        } else {
+          await uploadFile(file, targetPath);
+        }
         toast.success(`Uploaded ${file.name}`, { id: toastId });
       } catch {
         toast.error(`Failed to upload ${file.name}`, { id: toastId });
@@ -224,28 +256,67 @@ export default function FilesPage() {
     e.target.value = "";
   };
 
+  // ── Upload ZIP ─────────────────────────────────────────────────
+
+  const handleZipInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    const toastId = toast.loading(`Extracting ${file.name}...`);
+    try {
+      const result = await uploadZip(file, currentPath);
+      toast.success(`Extracted ${result.count} file(s)`, { id: toastId });
+      queryClient.invalidateQueries({ queryKey: ["files", currentPath] });
+    } catch {
+      toast.error("Failed to upload ZIP", { id: toastId });
+    }
+  };
+
   const handleUploadComplete = () => {
     queryClient.invalidateQueries({ queryKey: ["files", currentPath] });
   };
 
-  // ── Bulk delete ─────────────────────────────────────────────────
+  // ── Move ──────────────────────────────────────────────────────
 
-  const handleBulkDelete = async () => {
-    const toDelete = displayItems.filter((f) => selectedKeys.has(f.path));
-    for (const entry of toDelete) {
-      try {
-        if (entry.type === "folder") {
-          await deleteFolder(entry.path);
-        } else {
-          await deleteFile(entry.path);
+  const handleMoveOpen = (entry: FileEntry) => {
+    setMoveTarget(entry);
+    setMoveDialogOpen(true);
+  };
+
+  const handleBulkMoveOpen = () => {
+    setMoveTarget(null); // null = bulk move
+    setMoveDialogOpen(true);
+  };
+
+  const handleMove = async (targetFolder: string) => {
+    setMoveLoading(true);
+    try {
+      if (moveTarget) {
+        // Single file/folder move
+        const dst = targetFolder.endsWith("/")
+          ? targetFolder + moveTarget.name
+          : targetFolder + "/" + moveTarget.name;
+        await moveFile(moveTarget.path, dst);
+        toast.success(`Moved "${moveTarget.name}"`);
+      } else {
+        // Bulk move
+        const selected = displayItems.filter((f) => selectedKeys.has(f.path));
+        for (const entry of selected) {
+          const dst = targetFolder.endsWith("/")
+            ? targetFolder + entry.name
+            : targetFolder + "/" + entry.name;
+          await moveFile(entry.path, dst);
         }
-      } catch {
-        toast.error(`Failed to delete ${entry.name}`);
+        toast.success(`Moved ${selectedKeys.size} item(s)`);
+        setSelectedKeys(new Set());
       }
+      queryClient.invalidateQueries({ queryKey: ["files"] });
+      setMoveDialogOpen(false);
+    } catch {
+      toast.error("Failed to move");
+    } finally {
+      setMoveLoading(false);
     }
-    queryClient.invalidateQueries({ queryKey: ["files", currentPath] });
-    setSelectedKeys(new Set());
-    toast.success("Deleted selected items");
   };
 
   // ── Render ──────────────────────────────────────────────────────
@@ -302,10 +373,25 @@ export default function FilesPage() {
 
             <div className="flex-1" />
 
-            <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
-              <Upload className="h-4 w-4" />
-              <span className="hidden sm:inline ml-1">Upload</span>
-            </Button>
+            {/* Upload dropdown */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm">
+                  <Upload className="h-4 w-4" />
+                  <span className="hidden sm:inline ml-1">Upload</span>
+                  <ChevronDown className="ml-1 h-3 w-3" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => fileInputRef.current?.click()}>
+                  <Upload className="mr-2 h-4 w-4" /> Upload Files
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => zipInputRef.current?.click()}>
+                  <Archive className="mr-2 h-4 w-4" /> Upload ZIP
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
             <input
               ref={fileInputRef}
               type="file"
@@ -313,18 +399,30 @@ export default function FilesPage() {
               className="hidden"
               onChange={handleFileInput}
             />
+            <input
+              ref={zipInputRef}
+              type="file"
+              accept=".zip,application/zip"
+              className="hidden"
+              onChange={handleZipInput}
+            />
+
             <Button variant="outline" size="sm" onClick={() => setNewFolderOpen(true)}>
               <FolderPlus className="h-4 w-4" />
               <span className="hidden sm:inline ml-1">New Folder</span>
             </Button>
-
-            {selectedKeys.size > 0 && (
-              <Button variant="destructive" size="sm" onClick={handleBulkDelete}>
-                <Trash2 className="h-4 w-4" />
-                <span className="ml-1">Delete ({selectedKeys.size})</span>
-              </Button>
-            )}
           </div>
+
+          {/* Bulk actions toolbar */}
+          <BulkActions
+            selectedKeys={selectedKeys}
+            items={displayItems}
+            onClearSelection={() => setSelectedKeys(new Set())}
+            onMoveSelected={handleBulkMoveOpen}
+            onDeleted={() => {
+              queryClient.invalidateQueries({ queryKey: ["files", currentPath] });
+            }}
+          />
 
           {/* File table with drag-and-drop upload */}
           <UploadZone currentPath={currentPath} onUploadComplete={handleUploadComplete}>
@@ -345,7 +443,7 @@ export default function FilesPage() {
                 onPreview={handlePreview}
                 onShare={(f) => setShareTarget(f)}
                 onRename={(f) => { setRenameTarget(f); setRenameName(f.name); }}
-                onMove={() => toast.info("Move dialog coming in a future step")}
+                onMove={handleMoveOpen}
                 onDelete={(f) => setDeleteTarget(f)}
                 emptyState={
                   <EmptyState
@@ -445,6 +543,15 @@ export default function FilesPage() {
           filePath={shareTarget.path}
         />
       )}
+
+      {/* Move dialog */}
+      <MoveDialog
+        open={moveDialogOpen}
+        onOpenChange={setMoveDialogOpen}
+        currentFolder={currentPath}
+        onMove={handleMove}
+        loading={moveLoading}
+      />
 
       {/* File preview modal */}
       {previewFile && (
