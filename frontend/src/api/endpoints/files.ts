@@ -1,5 +1,5 @@
 import { api } from "@/api/client";
-import type { FileListResp, FileEntry, ShareFileReq, OkResp } from "@/api/types";
+import type { FileListResp, FileEntry, ShareFileReq, SharedItem, OkResp } from "@/api/types";
 
 export const listFiles = (
   path = "/",
@@ -66,3 +66,32 @@ export const getSharedWith = (path: string) =>
 
 export const downloadUrl = (path: string) =>
   `/v1/fs/download?path=${encodeURIComponent(path)}`;
+
+// ── Preview & Thumbnail URLs ────────────────────────────────────
+
+export const previewUrl = (path: string) =>
+  `/v1/fs/preview?path=${encodeURIComponent(path)}`;
+
+export const thumbnailUrl = (path: string) =>
+  `/v1/fs/thumbnail?path=${encodeURIComponent(path)}`;
+
+// ── Shared With Me ──────────────────────────────────────────────
+
+export const getSharedWithMe = () =>
+  api.get<{ items: SharedItem[] }>("/v1/fs/shared-with-me");
+
+export const listSharedFolder = (
+  owner: string,
+  path = "/",
+  opts?: { limit?: number; cursor?: string; sort_by?: string; sort_dir?: string },
+) => {
+  const params: Record<string, string> = { owner, path };
+  if (opts?.limit) params["limit"] = String(opts.limit);
+  if (opts?.cursor) params["cursor"] = opts.cursor;
+  if (opts?.sort_by) params["sort_by"] = opts.sort_by;
+  if (opts?.sort_dir) params["sort_dir"] = opts.sort_dir;
+  return api.get<{ path: string; items: FileEntry[]; cursor?: string }>("/v1/fs/shared-list", params);
+};
+
+export const sharedDownloadUrl = (owner: string, path: string) =>
+  `/v1/fs/shared-download?owner=${encodeURIComponent(owner)}&path=${encodeURIComponent(path)}`;

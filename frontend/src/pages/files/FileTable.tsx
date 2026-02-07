@@ -1,5 +1,7 @@
-import { File, Folder, MoreHorizontal, Download, Share2, Pencil, Move, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { File, Folder, MoreHorizontal, Download, Share2, Pencil, Move, Trash2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,7 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { DataTable, type ColumnDef, type SortState } from "@/components/shared/DataTable";
 import type { FileEntry } from "@/api/types";
-import { downloadUrl } from "@/api/endpoints/files";
+import { downloadUrl, previewUrl } from "@/api/endpoints/files";
 import { cn } from "@/lib/utils";
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -34,6 +36,33 @@ function formatDate(iso?: string): string {
   });
 }
 
+function isImage(ct?: string): boolean {
+  return !!ct && ct.startsWith("image/");
+}
+
+// ─── Thumbnail ──────────────────────────────────────────────────
+
+function Thumbnail({ path }: { path: string }) {
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return <File className="h-4 w-4 shrink-0 text-muted-foreground" />;
+  }
+
+  return (
+    <div className="relative h-8 w-8 shrink-0 overflow-hidden rounded">
+      <Skeleton className="absolute inset-0" />
+      <img
+        src={previewUrl(path)}
+        alt=""
+        className="relative h-8 w-8 rounded object-cover"
+        loading="lazy"
+        onError={() => setFailed(true)}
+      />
+    </div>
+  );
+}
+
 // ─── Types ───────────────────────────────────────────────────────
 
 interface FileTableProps {
@@ -43,6 +72,7 @@ interface FileTableProps {
   selectedKeys: Set<string>;
   onSelectionChange: (keys: Set<string>) => void;
   onNavigate: (folder: FileEntry) => void;
+  onPreview?: (file: FileEntry) => void;
   onShare: (file: FileEntry) => void;
   onRename: (file: FileEntry) => void;
   onMove: (file: FileEntry) => void;
@@ -62,6 +92,7 @@ export function FileTable({
   selectedKeys,
   onSelectionChange,
   onNavigate,
+  onPreview,
   onShare,
   onRename,
   onMove,
@@ -80,6 +111,8 @@ export function FileTable({
         <div className="flex items-center gap-2">
           {row.type === "folder" ? (
             <Folder className="h-4 w-4 shrink-0 text-primary" />
+          ) : isImage(row.content_type) ? (
+            <Thumbnail path={row.path} />
           ) : (
             <File className="h-4 w-4 shrink-0 text-muted-foreground" />
           )}
@@ -145,6 +178,12 @@ export function FileTable({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
+            {row.type === "file" && onPreview && (
+              <DropdownMenuItem onClick={() => onPreview(row)}>
+                <Eye className="h-4 w-4" />
+                Preview
+              </DropdownMenuItem>
+            )}
             {row.type === "file" && (
               <DropdownMenuItem asChild>
                 <a href={downloadUrl(row.path)} download>
@@ -191,7 +230,11 @@ export function FileTable({
       selectedKeys={selectedKeys}
       onSelectionChange={onSelectionChange}
       onRowClick={(row) => {
-        if (row.type === "folder") onNavigate(row);
+        if (row.type === "folder") {
+          onNavigate(row);
+        } else if (onPreview) {
+          onPreview(row);
+        }
       }}
       hasMore={hasMore}
       onLoadMore={onLoadMore}

@@ -560,6 +560,14 @@ export interface ShareFileReq {
   expires_at?: number;
 }
 
+export interface SharedItem {
+  owner: string;
+  path: string;
+  shared_at: string;
+  permission: "read" | "write";
+  expires_at?: string | null;
+}
+
 // ─── Calendar ────────────────────────────────────────────────────
 
 export interface WorkingHoursWindow {
