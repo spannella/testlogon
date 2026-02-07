@@ -10,13 +10,14 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from "@/components/ui/dialog";
-import { Label } from "@/components/ui/label";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { cn } from "@/lib/utils";
 import { getConversations, startConversation } from "@/api/endpoints/messaging";
 import type { Conversation } from "@/api/types";
+import { PresenceDot } from "./PresenceDot";
+import { UserSearch } from "./UserSearch";
+import { useAuthStore } from "@/stores/authStore";
 
 interface ConversationListProps {
   activeId?: string;
@@ -26,7 +27,7 @@ interface ConversationListProps {
 export function ConversationList({ activeId, onSelect }: ConversationListProps) {
   const [search, setSearch] = React.useState("");
   const [newConvoOpen, setNewConvoOpen] = React.useState(false);
-  const [participantId, setParticipantId] = React.useState("");
+  const userId = useAuthStore((s) => s.userId);
 
   const queryClient = useQueryClient();
 
@@ -41,7 +42,6 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
       onSelect(convo);
       setNewConvoOpen(false);
-      setParticipantId("");
     },
   });
 
@@ -112,9 +112,15 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
                   )}
                   onClick={() => onSelect(convo)}
                 >
-                  <Avatar className="h-10 w-10 shrink-0">
-                    <AvatarFallback className="text-xs">{initials}</AvatarFallback>
-                  </Avatar>
+                  <div className="relative shrink-0">
+                    <Avatar className="h-10 w-10">
+                      <AvatarFallback className="text-xs">{initials}</AvatarFallback>
+                    </Avatar>
+                    {convo.type === "dm" && (() => {
+                      const other = convo.participants.find((p) => p.user_id !== userId);
+                      return other ? <PresenceDot userId={other.user_id} /> : null;
+                    })()}
+                  </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
                       <span className={cn("truncate text-sm", unread ? "font-semibold" : "font-medium")}>
@@ -166,24 +172,14 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
             <DialogTitle>New Conversation</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <Label htmlFor="participant">User ID</Label>
-              <Input
-                id="participant"
-                placeholder="Enter a user ID to start a conversation"
-                value={participantId}
-                onChange={(e) => setParticipantId(e.target.value)}
-              />
-            </div>
+            <UserSearch
+              placeholder="Search for a user..."
+              onSelect={(user) => createConvo.mutate(user.user_id)}
+            />
+            {createConvo.isPending && (
+              <p className="text-sm text-muted-foreground">Starting conversation...</p>
+            )}
           </div>
-          <DialogFooter>
-            <Button
-              onClick={() => createConvo.mutate(participantId)}
-              disabled={!participantId.trim() || createConvo.isPending}
-            >
-              {createConvo.isPending ? "Creating..." : "Start Chat"}
-            </Button>
-          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

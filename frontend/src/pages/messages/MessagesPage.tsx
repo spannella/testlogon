@@ -6,6 +6,7 @@ import { ConversationList } from "./ConversationList";
 import { ConversationView } from "./ConversationView";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { useMessagingStream } from "@/hooks/useMessagingStream";
+import { useHeartbeat } from "@/hooks/usePresence";
 
 export default function MessagesPage() {
   const [activeConvo, setActiveConvo] = React.useState<Conversation | null>(null);
@@ -13,6 +14,9 @@ export default function MessagesPage() {
 
   // Connect to real-time messaging stream
   useMessagingStream(true);
+
+  // Send presence heartbeat every 30s
+  useHeartbeat(true);
 
   const handleSelect = (convo: Conversation) => {
     setActiveConvo(convo);

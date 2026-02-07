@@ -8,9 +8,10 @@ interface ComposeBarProps {
   onSendImage?: (file: File) => void;
   sending?: boolean;
   disabled?: boolean;
+  onKeystroke?: () => void;
 }
 
-export function ComposeBar({ onSendText, onSendImage, sending, disabled }: ComposeBarProps) {
+export function ComposeBar({ onSendText, onSendImage, sending, disabled, onKeystroke }: ComposeBarProps) {
   const [text, setText] = React.useState("");
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -79,7 +80,10 @@ export function ComposeBar({ onSendText, onSendImage, sending, disabled }: Compo
         <textarea
           ref={textareaRef}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            onKeystroke?.();
+          }}
           onKeyDown={handleKeyDown}
           onInput={handleInput}
           placeholder="Type a message..."

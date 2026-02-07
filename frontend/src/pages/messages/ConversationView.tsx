@@ -15,6 +15,8 @@ import { useAuthStore } from "@/stores/authStore";
 import type { Conversation, Message } from "@/api/types";
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
+import { PresenceDot } from "./PresenceDot";
+import { TypingIndicator, useTypingSignal } from "./TypingIndicator";
 
 interface ConversationViewProps {
   conversation: Conversation;
@@ -96,6 +98,14 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
 
   const participantCount = conversation.participants.length;
 
+  // DM partner for presence dot
+  const dmPartner = !isGroup
+    ? conversation.participants.find((p) => p.user_id !== userId)
+    : undefined;
+
+  // Typing signal
+  const onKeystroke = useTypingSignal(convoId);
+
   // ── Render ──────────────────────────────────────────────────────
 
   return (
@@ -107,11 +117,14 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
             <ArrowLeft className="h-4 w-4" />
           </Button>
         )}
-        <Avatar className="h-9 w-9">
-          <AvatarFallback className="text-xs">
-            {title.slice(0, 2).toUpperCase()}
-          </AvatarFallback>
-        </Avatar>
+        <div className="relative">
+          <Avatar className="h-9 w-9">
+            <AvatarFallback className="text-xs">
+              {title.slice(0, 2).toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+          {dmPartner && <PresenceDot userId={dmPartner.user_id} />}
+        </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold">{title}</p>
           {isGroup && (
@@ -163,11 +176,15 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
         )}
       </div>
 
+      {/* Typing indicator */}
+      <TypingIndicator conversationId={convoId} />
+
       {/* Compose */}
       <ComposeBar
         onSendText={(text) => sendText.mutate(text)}
         onSendImage={(file) => sendImage.mutate(file)}
         sending={sendText.isPending || sendImage.isPending}
+        onKeystroke={onKeystroke}
       />
     </div>
   );

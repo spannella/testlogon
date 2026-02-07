@@ -499,6 +499,22 @@ export interface StartGroupConversationReq {
   participant_ids: string[];
 }
 
+export interface PresenceStatus {
+  user_id: string;
+  online: boolean;
+  last_seen_at: number;
+}
+
+export interface TypingUser {
+  user_id: string;
+  updated_at: number;
+}
+
+export interface UserSearchResult {
+  user_id: string;
+  display_name: string;
+}
+
 // ─── Files ───────────────────────────────────────────────────────
 
 export interface FileEntry {
