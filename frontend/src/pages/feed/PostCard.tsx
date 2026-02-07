@@ -8,7 +8,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
 import { likePost, unlikePost, unlockPost } from "@/api/endpoints/newsfeed";
+import { useAuthStore } from "@/stores/authStore";
 import { CommentsThread } from "./CommentsThread";
+import { PostActions } from "./PostActions";
+import { EditPostDialog } from "./EditPostDialog";
 import type { FeedPost } from "@/api/types";
 
 function formatRelative(dateStr: string): string {
@@ -31,8 +34,12 @@ interface PostCardProps {
 }
 
 export function PostCard({ post }: PostCardProps) {
+  const userId = useAuthStore((s) => s.userId);
   const queryClient = useQueryClient();
   const [showComments, setShowComments] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+
+  const isOwn = post.author_id === userId;
 
   const likeMutation = useMutation({
     mutationFn: () => (post.liked_by_me ? unlikePost(post.post_id) : likePost(post.post_id)),
@@ -70,8 +77,16 @@ export function PostCard({ post }: PostCardProps) {
             <p className="text-sm font-medium">{post.author_id}</p>
             <p className="text-[10px] text-muted-foreground">
               {formatRelative(post.created_at)}
+              {post.updated_at && (
+                <span className="ml-1 italic">(edited)</span>
+              )}
             </p>
           </div>
+          <PostActions
+            postId={post.post_id}
+            isOwn={isOwn}
+            onEdit={() => setEditOpen(true)}
+          />
         </div>
 
         {/* Post body */}
@@ -145,6 +160,14 @@ export function PostCard({ post }: PostCardProps) {
           </>
         )}
       </CardContent>
+
+      {/* Edit dialog */}
+      <EditPostDialog
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        postId={post.post_id}
+        initialBody={post.body}
+      />
     </Card>
   );
 }

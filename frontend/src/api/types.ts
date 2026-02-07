@@ -782,6 +782,7 @@ export interface FeedPost {
   liked_by_me?: boolean;
   unlocked?: boolean;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface FeedComment {
@@ -790,6 +791,9 @@ export interface FeedComment {
   author_id: string;
   body: string;
   created_at: string;
+  updated_at?: string;
+  deleted?: boolean;
+  version?: number;
 }
 
 export interface CreatePostReq {
@@ -799,6 +803,18 @@ export interface CreatePostReq {
 
 export interface CreateCommentReq {
   body: string;
+}
+
+export interface EditPostReq {
+  body: string;
+}
+
+export interface EditCommentReq {
+  body: string;
+}
+
+export interface HidePostReq {
+  post_id: string;
 }
 
 // ─── Purchase History ────────────────────────────────────────────
