@@ -61,6 +61,7 @@ import {
   Store,
   ShoppingCart,
   CreditCard,
+  ClipboardList,
   FolderOpen,
   CalendarDays,
   User,
@@ -86,6 +87,7 @@ const MOBILE_NAV_GROUPS = [
       { label: "Shop", path: "/shop", icon: Store },
       { label: "Cart", path: "/cart", icon: ShoppingCart },
       { label: "Billing", path: "/billing", icon: CreditCard },
+      { label: "Orders", path: "/purchases", icon: ClipboardList },
     ],
   },
   {

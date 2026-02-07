@@ -22,6 +22,7 @@ const AlertsPage = lazy(() => import("@/pages/alerts/AlertsPage"));
 const SecurityPage = lazy(() => import("@/pages/security/SecurityPage"));
 const ProfilePage = lazy(() => import("@/pages/settings/ProfilePage"));
 const SettingsPage = lazy(() => import("@/pages/settings/SettingsPage"));
+const PurchasesPage = lazy(() => import("@/pages/purchases/PurchasesPage"));
 
 function PageSpinner() {
   return (
@@ -55,6 +56,8 @@ export default function App() {
           <Route path="security" element={<SecurityPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="purchases" element={<PurchasesPage />} />
+          <Route path="purchases/:txnId" element={<PurchasesPage />} />
         </Route>
       </Routes>
     </Suspense>

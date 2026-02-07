@@ -58,6 +58,7 @@ const SEARCH_PAGES = [
   { label: "Shop", path: "/shop", group: "Pages" },
   { label: "Cart", path: "/cart", group: "Pages" },
   { label: "Billing", path: "/billing", group: "Pages" },
+  { label: "Orders", path: "/purchases", group: "Pages" },
   { label: "Files", path: "/files", group: "Pages" },
   { label: "Calendar", path: "/calendar", group: "Pages" },
   { label: "Profile", path: "/profile", group: "Account" },
