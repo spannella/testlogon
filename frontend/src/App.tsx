@@ -10,7 +10,9 @@ import FilesPage from "@/pages/files/FilesPage";
 import BillingPage from "@/pages/billing/BillingPage";
 import CalendarPage from "@/pages/calendar/CalendarPage";
 import CatalogPage from "@/pages/shop/CatalogPage";
+import ProductDetail from "@/pages/shop/ProductDetail";
 import CartPage from "@/pages/shop/CartPage";
+import Checkout from "@/pages/shop/Checkout";
 import FeedPage from "@/pages/feed/FeedPage";
 import AlertsPage from "@/pages/alerts/AlertsPage";
 import SecurityPage from "@/pages/security/SecurityPage";
@@ -32,7 +34,9 @@ export default function App() {
         <Route path="billing" element={<BillingPage />} />
         <Route path="calendar" element={<CalendarPage />} />
         <Route path="shop" element={<CatalogPage />} />
+        <Route path="shop/:categoryId/:itemId" element={<ProductDetail />} />
         <Route path="cart" element={<CartPage />} />
+        <Route path="cart/checkout" element={<Checkout />} />
         <Route path="feed" element={<FeedPage />} />
         <Route path="alerts" element={<AlertsPage />} />
         <Route path="security" element={<SecurityPage />} />

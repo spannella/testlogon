@@ -1,8 +1,14 @@
+import { PageHeader } from "@/components/shared/PageHeader";
+import { Cart } from "./Cart";
+
 export default function CartPage() {
   return (
-    <div>
-      <h1>Cart</h1>
-      <p>Shopping cart — coming in Step 13</p>
+    <div className="mx-auto w-full max-w-3xl space-y-6 p-4 sm:p-6">
+      <PageHeader
+        title="Shopping Cart"
+        description="Review your items and proceed to checkout"
+      />
+      <Cart />
     </div>
   );
 }
