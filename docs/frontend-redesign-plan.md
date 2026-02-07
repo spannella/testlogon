@@ -569,57 +569,592 @@ Tailwind's default 4px grid: 4, 8, 12, 16, 20, 24, 32, 40, 48, 64
 
 ---
 
-## 6. Implementation Phases
+## 6. Implementation Steps (15 Steps)
 
-### Phase 1 — Foundation (scaffold + auth + layout)
-**Goal:** Working app shell with authentication
+Each step produces a working, testable increment. Steps 1-6 form the foundation, 7-13 build out every feature page, and 14-15 bring it to production quality.
 
-1. Initialize Vite + React + TypeScript project in `frontend/`
-2. Install and configure Tailwind CSS, shadcn/ui
-3. Set up React Router with route definitions
-4. Build API client (`api/client.ts`) with interceptors for auth tokens, CSRF
-5. Implement auth store and login page (session start + MFA challenge flow)
-6. Build AppShell layout: sidebar, header, mobile nav
-7. Add theme toggle (light/dark)
-8. Create shared components: DataTable, EmptyState, ErrorBoundary, StatusBadge
-9. Set up TanStack Query provider with default config
-10. Configure Vite proxy to forward `/ui/*`, `/api/*`, `/v1/*`, `/messaging/*`, `/feed/*`, `/posts/*`, `/social/*` to FastAPI backend
+---
 
-### Phase 2 — Core Features (messages + files + profile)
-**Goal:** The most-used daily features
+### Step 1 — Project Scaffold
+**Goal:** Empty React app builds, runs, and proxies to the FastAPI backend
 
-1. Messages: conversation list, conversation view, compose bar, real-time SSE
-2. File Manager: file table, breadcrumb nav, upload zone, folder creation
-3. Profile: profile editor form, avatar upload, language management
-4. Alerts: notification bell dropdown, alert center page, SSE integration
-5. Dashboard: summary cards with data from multiple endpoints
+**Deliverables:**
+- Initialize `frontend/` with Vite + React 18 + TypeScript (`npm create vite@latest`)
+- Install core dependencies: `react-router-dom`, `@tanstack/react-query`, `zustand`, `react-hook-form`, `zod`, `date-fns`, `lucide-react`, `sonner`
+- Create `vite.config.ts` with proxy rules forwarding `/ui/*`, `/api/*`, `/v1/*`, `/messaging/*`, `/feed/*`, `/posts/*`, `/social/*` to `http://localhost:8000`
+- Create `tsconfig.json` with path aliases (`@/` → `src/`)
+- Create placeholder `src/main.tsx`, `src/App.tsx` with React Router skeleton (empty routes for all pages)
+- Verify: `npm run dev` starts, shows "Hello World", API proxy works
 
-### Phase 3 — Commerce (billing + shop + cart)
-**Goal:** Revenue-generating features
+**Files created:**
+```
+frontend/
+├── package.json
+├── vite.config.ts
+├── tsconfig.json
+├── index.html
+└── src/
+    ├── main.tsx
+    └── App.tsx
+```
 
-1. Billing: overview, payment methods (Stripe Elements integration), ledger table
-2. Shopping Cart: cart view, item management, checkout flow
-3. Catalog: category browser, product grid, product detail, reviews
-4. Subscriptions: active subscriptions, cancel/pause
+---
 
-### Phase 4 — Productivity (calendar + feed + security)
-**Goal:** Remaining feature completeness
+### Step 2 — Design System & UI Primitives
+**Goal:** Tailwind configured with the design tokens, shadcn/ui components installed, dark mode working
 
-1. Calendar: month/week/day views, event creation, booking links
-2. Newsfeed: post feed, post composer, comments, follow/unfollow, tips
-3. Security: MFA device management, sessions, trusted devices, API keys, recovery
-4. Settings: addresses, account status, suspension/closure
+**Deliverables:**
+- Install and configure Tailwind CSS 4 with the color palette, typography (Inter + JetBrains Mono), and spacing defined in Section 5
+- Initialize shadcn/ui (`npx shadcn@latest init`) and install base components: `button`, `input`, `textarea`, `select`, `dialog`, `dropdown-menu`, `tabs`, `table`, `card`, `badge`, `avatar`, `skeleton`, `tooltip`, `separator`, `sheet`, `popover`, `command`
+- Install `sonner` toast integration via shadcn/ui's toaster component
+- Set up CSS custom properties for light/dark themes
+- Create `src/stores/uiStore.ts` (Zustand) with `theme` state (`system` | `light` | `dark`) persisted to `localStorage`
+- Create a `ThemeProvider` component that applies `dark` class to `<html>`
+- Verify: Toggle between light/dark, all shadcn components render correctly in both
 
-### Phase 5 — Polish
-**Goal:** Production-ready quality
+**Files created:**
+```
+src/
+├── components/ui/          # ~16 shadcn/ui component files
+├── stores/uiStore.ts
+├── lib/utils.ts            # cn() helper from shadcn
+└── globals.css             # Tailwind directives + design tokens
+```
 
-1. Responsive testing and fixes across breakpoints
-2. Accessibility audit (keyboard nav, ARIA labels, focus management, screen reader testing)
-3. Performance optimization (code splitting per route, lazy loading, image optimization)
-4. Error handling audit (network failures, 401/403 handling, retry logic)
-5. Loading state polish (skeletons everywhere, optimistic updates)
-6. End-to-end testing with Playwright
-7. PWA support (service worker, offline indicator)
+---
+
+### Step 3 — API Client & TypeScript Types
+**Goal:** Typed API layer that handles auth headers, CSRF, token refresh, and error handling
+
+**Deliverables:**
+- Create `src/api/client.ts`: fetch wrapper that:
+  - Reads `access_token` from the auth store and sets `Authorization: Bearer <token>`
+  - Reads CSRF token from `ui_csrf` cookie and sets `X-CSRF-Token` header
+  - Sends credentials (`credentials: 'include'`) for session cookies
+  - On 401 response: calls `POST /ui/session/refresh`, retries original request once
+  - Throws typed errors for 4xx/5xx responses
+- Create `src/api/types.ts`: TypeScript interfaces mirroring the backend Pydantic models in `app/models.py` (~860 lines). Key types:
+  - Auth: `SessionStartReq`, `SessionStartResp`, `SessionFinalizeReq`, `MfaChallenge`
+  - Messaging: `Conversation`, `Message`, `MessageSendReq`
+  - Billing: `PaymentMethod`, `LedgerEntry`, `BalanceInfo`, `SubscriptionInfo`
+  - Files: `FileEntry`, `FolderEntry`, `UploadResp`
+  - Calendar: `Calendar`, `CalendarEvent`, `RecurrenceRule`, `BookingLink`
+  - Commerce: `CatalogCategory`, `CatalogItem`, `CartItem`, `CartTotal`
+  - Social: `Post`, `Comment`, `FeedItem`
+  - Profile: `UserProfile`, `Address`, `Language`
+  - Alerts: `Alert`, `AlertPreferences`
+  - Account: `ApiKey`, `SessionInfo`, `AccountStatus`
+- Create `src/api/endpoints/` with one file per domain, each exporting typed async functions. Example:
+  ```typescript
+  // src/api/endpoints/auth.ts
+  export const sessionStart = (body: SessionStartReq): Promise<SessionStartResp> => ...
+  export const sessionFinalize = (body: SessionFinalizeReq): Promise<SessionFinalizeResp> => ...
+  ```
+- Create `src/stores/authStore.ts` (Zustand): stores `userId`, `accessToken`, `isAuthenticated`, `login()`, `logout()` actions
+
+**Files created:**
+```
+src/
+├── api/
+│   ├── client.ts
+│   ├── types.ts
+│   └── endpoints/
+│       ├── auth.ts
+│       ├── messaging.ts
+│       ├── billing.ts
+│       ├── files.ts
+│       ├── calendar.ts
+│       ├── cart.ts
+│       ├── profile.ts
+│       ├── alerts.ts
+│       ├── newsfeed.ts
+│       └── account.ts
+└── stores/authStore.ts
+```
+
+---
+
+### Step 4 — Login Page & Authentication Flow
+**Goal:** Users can log in with credentials + MFA, get redirected to the app
+
+**Deliverables:**
+- Create `src/pages/Login.tsx`:
+  - Centered card on a subtle gradient background (Tailwind gradient classes)
+  - Step 1: Username + password form (React Hook Form + Zod validation)
+  - Step 2: MFA challenge UI — conditionally render based on `challenges_required` from `POST /ui/session/start`:
+    - TOTP: 6-digit OTP input (individual digit boxes with auto-advance)
+    - SMS: masked phone display + code input
+    - Email: masked email display + code input
+    - Recovery code: single text input
+  - Step 3: On success (`POST /ui/session/finalize`), update `authStore`, redirect to `/`
+  - "Remember this device" checkbox
+  - Loading states: button spinner, disabled inputs during submission
+  - Error states: inline validation messages, API error display
+- Create protected route wrapper: redirects to `/login` if `!isAuthenticated`
+- Create `src/pages/PasswordRecovery.tsx`: start recovery, enter code + new password (mirrors existing password recovery section)
+
+**Files created:**
+```
+src/pages/
+├── Login.tsx
+└── PasswordRecovery.tsx
+```
+
+---
+
+### Step 5 — App Shell Layout (Sidebar + Header + Routing)
+**Goal:** Full navigation structure — every page is reachable via sidebar, all routes defined
+
+**Deliverables:**
+- Create `src/components/layout/AppShell.tsx`: wraps all authenticated pages
+  - Flex container: sidebar (left) + main content (right)
+- Create `src/components/layout/Sidebar.tsx`:
+  - 240px wide, collapsible to 64px (icon-only) with smooth transition
+  - Logo/brand at top
+  - Nav groups with section labels: **Main** (Dashboard, Messages, Feed), **Commerce** (Shop, Cart, Billing), **Productivity** (Files, Calendar), **Account** (Profile, Security, Settings)
+  - Each item: icon (Lucide) + label, active state with blue left border + blue background tint
+  - Unread count badges on Messages and Alerts (placeholder, wired in Step 11)
+  - Collapse toggle button at bottom
+  - Collapse state stored in `uiStore`
+- Create `src/components/layout/Header.tsx`:
+  - 56px height
+  - Left: hamburger (mobile) or page breadcrumb (desktop)
+  - Center: global search button (Cmd+K visual hint) — opens `Command` dialog (shadcn)
+  - Right: theme toggle (sun/moon icon), alert bell icon (placeholder badge), user avatar dropdown (profile, settings, logout)
+- Create `src/components/layout/MobileNav.tsx`:
+  - Fixed bottom tab bar on screens < 768px
+  - 5 icons: Dashboard, Messages, Files, Shop, More (opens sheet with remaining links)
+- Update `src/App.tsx`:
+  - TanStack Query `QueryClientProvider` with defaults (staleTime: 30s, retry: 1)
+  - `ThemeProvider`
+  - `Toaster` (sonner)
+  - React Router with nested routes under `AppShell` layout
+  - All 12 page routes defined (render placeholder components for now)
+
+**Files created:**
+```
+src/components/layout/
+├── AppShell.tsx
+├── Sidebar.tsx
+├── Header.tsx
+└── MobileNav.tsx
+```
+
+---
+
+### Step 6 — Shared Components
+**Goal:** Reusable building blocks used across all feature pages
+
+**Deliverables:**
+- `DataTable.tsx`: Generic sortable, filterable table built on shadcn `Table`. Props: `columns` definition, `data` array, `onSort`, `onRowClick`, optional checkbox selection, optional pagination footer ("Load more" or page numbers). Used by: Files, Billing Ledger, Cart items, Sessions, API Keys.
+- `EmptyState.tsx`: Centered icon + title + description + optional CTA button. Used when lists are empty.
+- `ErrorBoundary.tsx`: React error boundary with fallback UI ("Something went wrong" + retry button).
+- `LoadingScreen.tsx`: Full-page centered spinner for route-level loading.
+- `StatusBadge.tsx`: Small pill/badge component with variants: `success` (green), `warning` (amber), `danger` (red), `info` (blue), `neutral` (gray). Replaces all `.pill.ok/.warn/.bad` from old CSS.
+- `ConfirmDialog.tsx`: Reusable confirmation modal (shadcn `AlertDialog`) with title, description, confirm/cancel buttons. `danger` variant turns confirm button red. Used for: delete file, revoke session, close account, remove payment method, etc.
+- `PageHeader.tsx`: Consistent page title + description + action buttons layout for top of every page.
+
+**Files created:**
+```
+src/components/shared/
+├── DataTable.tsx
+├── EmptyState.tsx
+├── ErrorBoundary.tsx
+├── LoadingScreen.tsx
+├── StatusBadge.tsx
+├── ConfirmDialog.tsx
+└── PageHeader.tsx
+```
+
+---
+
+### Step 7 — Dashboard Page
+**Goal:** Home page with summary cards pulling data from multiple endpoints
+
+**Deliverables:**
+- Create `src/pages/Dashboard.tsx`:
+  - 3-column responsive grid (`grid-cols-1 md:grid-cols-2 lg:grid-cols-3`)
+  - Summary cards (shadcn `Card`), each with:
+    - **Messages**: unread count, "View messages" link → `/messages`
+    - **Balance**: current balance from `GET /ui/billing/balance`, autopay status
+    - **Files**: file count from `GET /v1/fs/list`, storage used
+    - **Calendar**: next upcoming event from `GET /ui/calendars/{id}/events`
+    - **Alerts**: unread alert count from `GET /ui/alerts`, "View all" link
+    - **Cart**: active cart item count + total from `GET /ui/shoppingcart/carts/{id}/total`
+  - Each card uses `useQuery` with skeleton loading state
+  - Cards are clickable (navigate to relevant page)
+  - Recent Activity section below cards: last 5 alerts rendered as a timeline
+- Verify: Dashboard renders with real or mock data, all links navigate correctly
+
+**Files created:**
+```
+src/pages/Dashboard.tsx
+```
+
+---
+
+### Step 8 — Messages Page
+**Goal:** Full messaging experience with real-time updates
+
+**Deliverables:**
+- Create `src/pages/messages/MessagesLayout.tsx`: master-detail split layout
+  - Left panel (280px, full height): `ConversationList`
+  - Right panel (flex-1): `ConversationView` or empty state
+  - On mobile: show only list OR conversation (back button to switch)
+- Create `src/pages/messages/ConversationList.tsx`:
+  - Search input at top (filters locally + calls `POST /messaging/contacts/search`)
+  - List of conversations from `GET /messaging/conversations`
+  - Each item: avatar, name, last message preview (truncated), timestamp, unread badge
+  - "New conversation" button at bottom → opens dialog (DM or group, participant search)
+  - Selected conversation highlighted
+- Create `src/pages/messages/ConversationView.tsx`:
+  - Header: conversation name/participants, online status indicator
+  - Scrollable message area (auto-scroll to bottom on new messages)
+  - Messages from `GET /messaging/conversations/{id}/messages` with `useInfiniteQuery` for "load older"
+  - Each message: `MessageBubble` component
+- Create `src/pages/messages/MessageBubble.tsx`:
+  - Own messages: right-aligned, blue background
+  - Others: left-aligned, gray background
+  - Shows: sender name (group only), message text, timestamp, delivery status (sent/delivered/read)
+  - Image messages: inline thumbnail, click for lightbox
+  - Hover actions: react (emoji picker popover), edit, forward
+- Create `src/pages/messages/ComposeBar.tsx`:
+  - Text input (auto-growing textarea)
+  - File attachment button (opens file picker, calls `POST /messaging/conversations/{id}/messages/image`)
+  - Send button (calls `POST /messaging/conversations/{id}/messages`)
+  - Optional link preview fields (collapsible)
+- Create `src/hooks/useMessagingStream.ts`:
+  - SSE hook connecting to `GET /messaging/events/stream`
+  - On new message event: invalidate conversation query, append to active chat
+  - Reconnect with exponential backoff on disconnect
+
+**Files created:**
+```
+src/
+├── pages/messages/
+│   ├── MessagesLayout.tsx
+│   ├── ConversationList.tsx
+│   ├── ConversationView.tsx
+│   ├── MessageBubble.tsx
+│   └── ComposeBar.tsx
+└── hooks/useMessagingStream.ts
+```
+
+---
+
+### Step 9 — File Manager Page
+**Goal:** Google Drive-style file browser with upload, download, share, and search
+
+**Deliverables:**
+- Create `src/pages/files/FileManager.tsx`:
+  - Breadcrumb navigation at top (clickable path segments)
+  - Toolbar row: Upload button, New Folder button, Download Selected (ZIP), Move Selected, Delete Selected (danger)
+  - Drag-and-drop upload zone (dashed border overlay on drag-enter)
+  - `FileTable` below toolbar
+  - Search bar with prefix search (`GET /v1/fs/search`) and full-text search
+  - Sort controls: name / updated / size, ascending/descending toggle
+  - Pagination: "Load more" button with page size selector
+  - "Shared with me" section (collapsible) or tab
+- Create `src/pages/files/FileTable.tsx`:
+  - Uses `DataTable` component
+  - Columns: checkbox, file icon (by type), Name, Type, Size (human-readable), Modified date
+  - Folder rows are clickable (navigate into folder)
+  - File rows have action dropdown: Download, Share, Move, Rename, Delete
+  - Double-click file to download
+- Create `src/pages/files/UploadZone.tsx`:
+  - Visual drop target that appears on drag-enter
+  - Calls `POST /v1/fs/upload` with multipart form data
+  - Tracks upload progress with `XMLHttpRequest.upload.onprogress`
+  - Shows upload progress toasts (via Sonner) with file name + progress bar
+  - Supports multiple simultaneous uploads
+- Create `src/pages/files/ShareDialog.tsx`:
+  - Modal: enter user ID, select permission level (read/write)
+  - Calls `POST /v1/fs/share`
+  - Shows current share list for the file
+
+**Files created:**
+```
+src/pages/files/
+├── FileManager.tsx
+├── FileTable.tsx
+├── UploadZone.tsx
+└── ShareDialog.tsx
+```
+
+---
+
+### Step 10 — Profile & Settings Pages
+**Goal:** User can view/edit profile, manage addresses, and control account status
+
+**Deliverables:**
+- Create `src/pages/settings/Profile.tsx`:
+  - Profile photo: circular avatar preview + upload button (calls profile photo upload endpoint)
+  - Cover photo: wide preview + upload button
+  - Form (React Hook Form + Zod): display_name, title, first_name, middle_name, last_name, birthday, gender (select), location, email, phone, description (textarea)
+  - Mailing address sub-form: line1, line2, city, state, postal_code, country
+  - Languages section: list with add/remove, each has name + proficiency level
+  - "Save" button → `PATCH /ui/profile` (optimistic update via TanStack Query mutation)
+  - Audit log section: expandable list from profile audit endpoint
+- Create `src/pages/settings/Addresses.tsx`:
+  - List of saved addresses from `GET /ui/addresses`
+  - Each address card: label, formatted address, "Primary" badge if applicable
+  - "Add address" button → dialog with form
+  - Edit/delete actions per address
+  - "Set as primary" toggle → `POST /ui/addresses/primary`
+- Create `src/pages/settings/Account.tsx`:
+  - Account status badge (`StatusBadge` component)
+  - Suspension section: "Suspend account" (danger button + `ConfirmDialog`)
+  - Reactivation section: "Reactivate" button
+  - Account closure section: two-step flow (start → finalize) with strong confirmation dialogs
+
+**Files created:**
+```
+src/pages/settings/
+├── Profile.tsx
+├── Addresses.tsx
+└── Account.tsx
+```
+
+---
+
+### Step 11 — Alerts & Notifications System
+**Goal:** Real-time alert bell in header, full alert center page, and preference management
+
+**Deliverables:**
+- Create `src/hooks/useAlertStream.ts`:
+  - SSE hook connecting to `GET /ui/alerts/stream`
+  - On new alert: increment unread count in store, show toast notification, invalidate alert query
+  - Reconnect with exponential backoff
+- Update `Header.tsx`:
+  - Alert bell icon shows real unread count (from `useAlertStream` or `GET /ui/alerts` query)
+  - Click bell → popover dropdown with last 10 alerts
+  - Each alert: title, detail snippet, relative timestamp, blue dot if unread
+  - "Mark all read" button → `POST /ui/alerts/mark_read`
+  - "View all" link → `/alerts`
+- Create `src/pages/alerts/AlertCenter.tsx`:
+  - Full page alert list from `GET /ui/alerts` with `useInfiniteQuery`
+  - Filter by alert type (dropdown or tabs)
+  - Bulk selection + "Mark as read" action
+  - Each alert: expandable card with full details
+  - Search by title/details
+- Create `src/pages/alerts/AlertPrefs.tsx`:
+  - Grid of toggles: rows = event types, columns = channels (email, SMS, toast, push, webhook)
+  - Webhook URL configuration field
+  - Calls alert preference update endpoints on toggle
+
+**Files created:**
+```
+src/
+├── hooks/useAlertStream.ts
+└── pages/alerts/
+    ├── AlertCenter.tsx
+    └── AlertPrefs.tsx
+```
+
+---
+
+### Step 12 — Billing Pages
+**Goal:** Full billing management with Stripe Elements, ledger, and subscriptions
+
+**Deliverables:**
+- Create `src/pages/billing/BillingOverview.tsx`:
+  - Large balance display card (green for credit, red for owed)
+  - Autopay toggle → `POST /ui/billing/autopay`
+  - "Pay balance" button → calls `POST /ui/billing/pay-balance`
+  - Billing config summary from `GET /ui/billing/config`
+  - Quick links to other billing tabs
+- Create `src/pages/billing/PaymentMethods.tsx`:
+  - List of saved payment methods from `POST /ui/billing/payment-methods`
+  - Each method: card brand icon (Visa/MC/Amex), masked number, expiry, "Default" badge
+  - "Add card" button → dialog with Stripe Elements (`@stripe/react-stripe-js` `CardElement`)
+    - Calls `POST /ui/billing/setup-intent/card` to create SetupIntent
+    - Confirms with Stripe.js, then stores method
+  - "Add PayPal" button → calls `POST /api/billing/payment-methods/paypal/setup-token`, redirects
+  - Remove method: `ConfirmDialog` → remove endpoint
+  - Set default method action
+- Create `src/pages/billing/Ledger.tsx`:
+  - `DataTable` with columns: Date, Description, Amount, Status
+  - Date range filter (two date inputs)
+  - Amount color-coded: green for credits, red for charges
+  - "Export CSV" button
+  - Pagination via cursor
+- Create `src/pages/billing/Subscriptions.tsx`:
+  - Active subscriptions from subscriptions endpoint
+  - Each: plan name, price, billing cycle, next billing date, status badge
+  - Actions: Cancel, Pause
+  - Subscription history below
+
+**Files created:**
+```
+src/pages/billing/
+├── BillingOverview.tsx
+├── PaymentMethods.tsx
+├── Ledger.tsx
+└── Subscriptions.tsx
+```
+
+---
+
+### Step 13 — Shopping Cart & Catalog Pages
+**Goal:** Browsable product catalog, cart management, and checkout
+
+**Deliverables:**
+- Create `src/pages/shop/Catalog.tsx`:
+  - Left sidebar: category list from `GET /ui/catalog/categories`
+  - Main area: product grid (responsive, 2-4 columns)
+  - Each product card: image placeholder, name, price (formatted from cents), star rating average
+  - Click card → navigate to product detail
+  - Search/filter within category
+- Create `src/pages/shop/ProductDetail.tsx`:
+  - Product info: name, description, price, attributes
+  - Image gallery (if available) or placeholder
+  - Quantity selector + "Add to cart" button → `POST /ui/shoppingcart/carts/{id}/items`
+  - Reviews section: list of reviews with star ratings, author, text
+  - "Write a review" form (star selector + textarea) → `POST /ui/catalog/items/{id}/reviews`
+- Create `src/pages/shop/Cart.tsx`:
+  - Cart selector dropdown (if multiple carts)
+  - Line items table: SKU, name, quantity (adjustable), unit price, line total, remove button
+  - Cart total from `GET /ui/shoppingcart/carts/{id}/total`
+  - "Start new cart" button, "Delete cart" (danger)
+  - "Proceed to checkout" button
+- Create `src/pages/shop/Checkout.tsx`:
+  - Order summary (read-only cart items + total)
+  - Payment method selection (from saved methods)
+  - "Place order" button → `POST /ui/shoppingcart/carts/{id}/purchase`
+  - Success/failure state with order confirmation
+
+**Files created:**
+```
+src/pages/shop/
+├── Catalog.tsx
+├── ProductDetail.tsx
+├── Cart.tsx
+└── Checkout.tsx
+```
+
+---
+
+### Step 14 — Calendar & Newsfeed Pages
+**Goal:** Calendar with month/week/day views, and social newsfeed with posts/comments
+
+**Deliverables:**
+- Create `src/pages/calendar/CalendarView.tsx`:
+  - View toggle: Month / Week / Day (shadcn `Tabs`)
+  - Month view: 7-column grid, days with event dots/titles
+  - Week view: 7-column time grid (hours on Y axis), events as colored blocks
+  - Day view: single column time grid with event blocks
+  - Navigation: previous/next arrows, "Today" button
+  - Click empty slot → create event dialog
+  - Click event → view/edit event dialog
+- Create `src/pages/calendar/EventDialog.tsx`:
+  - Form: title, description, start datetime, end datetime, all-day toggle
+  - Calendar selector (which calendar this event belongs to)
+  - Recurrence rule builder: frequency (daily/weekly/monthly), interval, end condition
+  - Save → `POST /ui/calendars/{id}/events`
+  - Edit → `PUT` equivalent, Delete with confirmation
+- Create `src/pages/calendar/BookingLinks.tsx`:
+  - List of booking links with copy-to-clipboard
+  - "Create booking link" form: title, duration, calendar, availability window
+- Create `src/pages/calendar/Availability.tsx`:
+  - Working hours configuration per day of week
+  - Visual availability grid
+  - Team availability checker
+- Create `src/pages/feed/NewsFeed.tsx`:
+  - `CreatePost` composer at top: textarea + optional unlock price + "Post" button
+  - Feed of posts from `GET /feed` with infinite scroll (`useInfiniteQuery`)
+  - Each post: `PostCard` component
+  - SSE connection for real-time new posts
+- Create `src/pages/feed/PostCard.tsx`:
+  - Author avatar + name + relative timestamp
+  - Post body (pre-wrap text)
+  - Locked posts: blurred content + "Unlock for $X" button
+  - Action row: like (heart icon + count), comment (speech bubble + count), share, tip
+  - Click comment → expand `CommentsThread` inline
+- Create `src/pages/feed/CommentsThread.tsx`:
+  - Nested comment list with author, text, timestamp
+  - "Add comment" textarea + send button
+  - "Load more comments" for pagination
+- Follow/unfollow: button on post cards or user profiles
+
+**Files created:**
+```
+src/pages/
+├── calendar/
+│   ├── CalendarView.tsx
+│   ├── EventDialog.tsx
+│   ├── BookingLinks.tsx
+│   └── Availability.tsx
+└── feed/
+    ├── NewsFeed.tsx
+    ├── PostCard.tsx
+    ├── CreatePost.tsx
+    └── CommentsThread.tsx
+```
+
+---
+
+### Step 15 — Security Pages, Responsive Polish & Testing
+**Goal:** Complete feature coverage, production-quality UI across all breakpoints, and test suite
+
+**Deliverables — Security pages:**
+- Create `src/pages/security/MfaDevices.tsx`:
+  - Three sections: TOTP, SMS, Email devices
+  - Each section: device list (label, enabled badge, last used) + "Add device" button
+  - TOTP enrollment wizard: QR code display → 6-digit confirmation input
+  - SMS enrollment: phone number input → verification code
+  - Email enrollment: email input → verification code
+  - Remove device with re-authentication (`ConfirmDialog`)
+- Create `src/pages/security/Sessions.tsx`:
+  - Active sessions list from `GET /ui/sessions`
+  - Each: browser/OS info, IP address, last active timestamp, "current" badge for this session
+  - "Revoke" button per session → `POST /ui/sessions/revoke`
+  - "Revoke all other sessions" button → `POST /ui/sessions/revoke_others`
+- Create `src/pages/security/TrustedDevices.tsx`:
+  - Device list with trust status
+  - Revoke trust per device
+- Create `src/pages/security/ApiKeys.tsx`:
+  - Key list: label, created date, last 8 characters, expiry date
+  - "Create key" → dialog showing generated key (copy button, "shown once" warning)
+  - Revoke key with confirmation
+  - IP allowlist management per key: add/remove CIDR rules in sub-panel
+- Create `src/pages/security/Recovery.tsx`:
+  - View/regenerate recovery codes
+  - Password recovery flow (start → code → new password)
+
+**Deliverables — Responsive polish:**
+- Test every page at 3 breakpoints: mobile (375px), tablet (768px), desktop (1280px)
+- Messages: conversation list ↔ conversation view toggle on mobile
+- Sidebar: drawer mode on mobile with `Sheet` component
+- File manager: stack toolbar buttons, reduce table columns on mobile
+- Calendar: default to day view on mobile
+- DataTable: horizontal scroll wrapper on narrow screens
+- All modals: full-screen on mobile (`Sheet` with `side="bottom"`)
+
+**Deliverables — Accessibility:**
+- Keyboard navigation: all interactive elements reachable via Tab
+- Focus trapping in all modals/dialogs (Radix handles this)
+- ARIA labels on icon-only buttons (sidebar collapse, theme toggle, alert bell)
+- Skip-to-content link
+- Sufficient color contrast (WCAG AA) in both themes
+- Screen reader announcements for toast notifications
+
+**Deliverables — Performance & testing:**
+- Code splitting: `React.lazy()` + `Suspense` for every page route
+- Image lazy loading for file thumbnails, avatars, catalog images
+- TanStack Query cache tuning: appropriate `staleTime` per endpoint
+- Error handling audit: network error toasts, 401 → redirect to login, 403 → permission denied state
+- Write Playwright E2E tests for critical flows: login, send message, upload file, add to cart, create event
+- Bundle analysis with `vite-plugin-visualizer` to verify tree shaking
+
+**Files created:**
+```
+src/pages/security/
+├── MfaDevices.tsx
+├── Sessions.tsx
+├── TrustedDevices.tsx
+├── ApiKeys.tsx
+└── Recovery.tsx
+```
 
 ---
 
