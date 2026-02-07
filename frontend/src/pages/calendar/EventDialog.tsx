@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -24,7 +24,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { createEvent, updateEvent, deleteEvent } from "@/api/endpoints/calendar";
-import type { CalendarEvent, Calendar } from "@/api/types";
+import { ConflictBanner } from "./ConflictBanner";
+import { SlotSuggestions } from "./SlotSuggestions";
+import type { CalendarEvent, Calendar, ConflictPreviewReq } from "@/api/types";
 
 const eventSchema = z.object({
   name: z.string().min(1, "Title is required"),
@@ -156,11 +158,34 @@ export function EventDialog({
   });
 
   const allDay = form.watch("all_day");
+  const startUtc = form.watch("start_utc");
+  const endUtc = form.watch("end_utc");
+  const watchedName = form.watch("name");
   const recurrenceFreq = form.watch("recurrence_freq");
+
+  const calId = isEditing ? event.calendar_id : selectedCalendarId;
+
+  // Build conflict preview request from current form state
+  const conflictReq: ConflictPreviewReq | null = useMemo(() => {
+    if (allDay || !startUtc || !endUtc) return null;
+    return {
+      name: watchedName || "Untitled",
+      start_utc: startUtc,
+      end_utc: endUtc,
+      all_day: false,
+      ...(isEditing ? { event_id: event.event_id } : {}),
+    };
+  }, [allDay, startUtc, endUtc, watchedName, isEditing, event]);
+
+  const handleSlotSelect = (start: string, end: string) => {
+    form.setValue("start_utc", start.slice(0, 16));
+    form.setValue("end_utc", end.slice(0, 16));
+    form.setValue("all_day", false);
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-h-[90vh] max-w-md overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEditing ? "Edit Event" : "New Event"}</DialogTitle>
         </DialogHeader>
@@ -218,6 +243,11 @@ export function EventDialog({
             </div>
           )}
 
+          {/* Conflict banner */}
+          {calId && (
+            <ConflictBanner calendarId={calId} request={conflictReq} />
+          )}
+
           {/* Recurrence */}
           <div className="space-y-1.5">
             <Label>Repeat</Label>
@@ -259,6 +289,11 @@ export function EventDialog({
                 />
               </div>
             </div>
+          )}
+
+          {/* Slot suggestions (only for new events, non-all-day) */}
+          {!isEditing && !allDay && calId && (
+            <SlotSuggestions calendarId={calId} onSelectSlot={handleSlotSelect} />
           )}
 
           <DialogFooter className="gap-2">

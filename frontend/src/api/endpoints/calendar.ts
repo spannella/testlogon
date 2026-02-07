@@ -9,6 +9,12 @@ import type {
   BookingLinkCreateIn,
   Opening,
   OkResp,
+  CalendarShare,
+  ShareCalendarReq,
+  ConflictPreviewReq,
+  ConflictResult,
+  SlotSuggestionReq,
+  AvailabilityReq,
 } from "@/api/types";
 
 // ─── Calendars ───────────────────────────────────────────────────
@@ -61,3 +67,25 @@ export const createBookingLink = (calendarId: string, body: BookingLinkCreateIn)
 
 export const getBookingLink = (linkId: string) =>
   api.get<BookingLink>(`/booking/links/${linkId}`);
+
+// ─── Calendar Sharing ───────────────────────────────────────────
+
+export const shareCalendar = (calendarId: string, body: ShareCalendarReq) =>
+  api.post<CalendarShare>(`/ui/calendars/${calendarId}/shares`, body);
+
+export const getCalendarShares = (calendarId: string) =>
+  api.get<CalendarShare[]>(`/ui/calendars/${calendarId}/shares`);
+
+export const removeCalendarShare = (calendarId: string, userSub: string) =>
+  api.del<OkResp>(`/ui/calendars/${calendarId}/shares/${userSub}`);
+
+// ─── Conflicts & Suggestions ────────────────────────────────────
+
+export const previewConflicts = (calendarId: string, body: ConflictPreviewReq) =>
+  api.post<ConflictResult>(`/ui/calendars/${calendarId}/events/conflicts`, body);
+
+export const suggestSlots = (calendarId: string, body: SlotSuggestionReq) =>
+  api.post<Opening[]>(`/ui/calendars/${calendarId}/events/suggestions`, body);
+
+export const getTeamAvailability = (body: AvailabilityReq) =>
+  api.post<Opening[]>("/ui/calendars/availability", body);

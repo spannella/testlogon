@@ -669,6 +669,45 @@ export interface Opening {
   end_utc: string;
 }
 
+// ─── Calendar Sharing & Conflicts ────────────────────────────────
+
+export interface CalendarShare {
+  calendar_id: string;
+  user_sub: string;
+  permission: "read" | "write";
+  created_at_utc: string;
+}
+
+export interface ShareCalendarReq {
+  user_sub: string;
+  permission: "read" | "write";
+}
+
+export interface ConflictPreviewReq extends EventCreateIn {
+  event_id?: string;
+}
+
+export interface ConflictResult {
+  requested_start_utc: string;
+  requested_end_utc: string;
+  timezone: string;
+  conflicts: CalendarEvent[];
+}
+
+export interface SlotSuggestionReq {
+  start_utc: string;
+  end_utc: string;
+  duration_minutes?: number;
+  limit?: number;
+  window_days?: number;
+}
+
+export interface AvailabilityReq {
+  calendar_ids: string[];
+  start_utc: string;
+  end_utc: string;
+}
+
 // ─── Shopping Cart ───────────────────────────────────────────────
 
 export interface CartSummary {

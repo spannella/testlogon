@@ -2,6 +2,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { CalendarView } from "./CalendarView";
 import { BookingLinks } from "./BookingLinks";
+import { CalendarSharing } from "./CalendarSharing";
 
 export default function CalendarPage() {
   return (
@@ -15,12 +16,16 @@ export default function CalendarPage() {
         <TabsList>
           <TabsTrigger value="calendar">Calendar</TabsTrigger>
           <TabsTrigger value="booking">Booking Links</TabsTrigger>
+          <TabsTrigger value="sharing">Sharing</TabsTrigger>
         </TabsList>
         <TabsContent value="calendar">
           <CalendarView />
         </TabsContent>
         <TabsContent value="booking">
           <BookingLinks />
+        </TabsContent>
+        <TabsContent value="sharing">
+          <CalendarSharing />
         </TabsContent>
       </Tabs>
     </div>
