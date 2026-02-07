@@ -15,6 +15,14 @@ export default function AppShell() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
+      {/* Skip to content link for keyboard/screen reader users */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-primary-foreground focus:outline-none"
+      >
+        Skip to content
+      </a>
+
       {/* Desktop sidebar */}
       <Sidebar />
 
@@ -32,7 +40,7 @@ export default function AppShell() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header onMobileMenuToggle={() => setMobileMenuOpen(true)} />
 
-        <main className="flex-1 overflow-y-auto pb-16 md:pb-0">
+        <main id="main-content" className="flex-1 overflow-y-auto pb-16 md:pb-0">
           <Outlet />
         </main>
       </div>
