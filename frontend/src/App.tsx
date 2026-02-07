@@ -3,6 +3,7 @@ import { Routes, Route } from "react-router-dom";
 import Login from "@/pages/Login";
 import PasswordRecovery from "@/pages/PasswordRecovery";
 import ProtectedRoute from "@/components/ProtectedRoute";
+import AppShell from "@/components/layout/AppShell";
 import Dashboard from "@/pages/Dashboard";
 import MessagesPage from "@/pages/messages/MessagesPage";
 import FilesPage from "@/pages/files/FilesPage";
@@ -19,23 +20,25 @@ import SettingsPage from "@/pages/settings/SettingsPage";
 export default function App() {
   return (
     <Routes>
-      {/* Public routes */}
+      {/* Public routes (no shell) */}
       <Route path="/login" element={<Login />} />
       <Route path="/password-recovery" element={<PasswordRecovery />} />
 
-      {/* Protected app routes (will be wrapped in AppShell layout in Step 5) */}
-      <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-      <Route path="/messages" element={<ProtectedRoute><MessagesPage /></ProtectedRoute>} />
-      <Route path="/files" element={<ProtectedRoute><FilesPage /></ProtectedRoute>} />
-      <Route path="/billing" element={<ProtectedRoute><BillingPage /></ProtectedRoute>} />
-      <Route path="/calendar" element={<ProtectedRoute><CalendarPage /></ProtectedRoute>} />
-      <Route path="/shop" element={<ProtectedRoute><CatalogPage /></ProtectedRoute>} />
-      <Route path="/cart" element={<ProtectedRoute><CartPage /></ProtectedRoute>} />
-      <Route path="/feed" element={<ProtectedRoute><FeedPage /></ProtectedRoute>} />
-      <Route path="/alerts" element={<ProtectedRoute><AlertsPage /></ProtectedRoute>} />
-      <Route path="/security" element={<ProtectedRoute><SecurityPage /></ProtectedRoute>} />
-      <Route path="/profile" element={<ProtectedRoute><ProfilePage /></ProtectedRoute>} />
-      <Route path="/settings" element={<ProtectedRoute><SettingsPage /></ProtectedRoute>} />
+      {/* Protected routes inside AppShell layout */}
+      <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
+        <Route index element={<Dashboard />} />
+        <Route path="messages" element={<MessagesPage />} />
+        <Route path="files" element={<FilesPage />} />
+        <Route path="billing" element={<BillingPage />} />
+        <Route path="calendar" element={<CalendarPage />} />
+        <Route path="shop" element={<CatalogPage />} />
+        <Route path="cart" element={<CartPage />} />
+        <Route path="feed" element={<FeedPage />} />
+        <Route path="alerts" element={<AlertsPage />} />
+        <Route path="security" element={<SecurityPage />} />
+        <Route path="profile" element={<ProfilePage />} />
+        <Route path="settings" element={<SettingsPage />} />
+      </Route>
     </Routes>
   );
 }
