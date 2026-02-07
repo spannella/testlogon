@@ -1,8 +1,14 @@
+import { PageHeader } from "@/components/shared/PageHeader";
+import { NewsFeed } from "./NewsFeed";
+
 export default function FeedPage() {
   return (
-    <div>
-      <h1>Newsfeed</h1>
-      <p>Social feed — coming in Step 14</p>
+    <div className="mx-auto w-full max-w-2xl space-y-6 p-4 sm:p-6">
+      <PageHeader
+        title="Feed"
+        description="See what's happening in your community"
+      />
+      <NewsFeed />
     </div>
   );
 }
