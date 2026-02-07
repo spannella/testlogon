@@ -1,0 +1,167 @@
+import { useAuthStore } from "@/stores/authStore";
+
+// ─── Helpers ─────────────────────────────────────────────────────
+
+function getCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]!) : null;
+}
+
+// ─── Error class ─────────────────────────────────────────────────
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public detail: string,
+    public body?: unknown,
+  ) {
+    super(detail);
+    this.name = "ApiError";
+  }
+}
+
+// ─── Core request function ───────────────────────────────────────
+
+let refreshPromise: Promise<void> | null = null;
+
+async function refreshSession(): Promise<void> {
+  const res = await fetch("/ui/session/refresh", {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!res.ok) {
+    useAuthStore.getState().logout();
+    throw new ApiError(res.status, "Session refresh failed");
+  }
+}
+
+/**
+ * Typed fetch wrapper that handles:
+ * - Authorization header from auth store
+ * - CSRF token from `ui_csrf` cookie
+ * - Automatic token refresh on 401
+ * - JSON serialization/deserialization
+ * - Typed error handling
+ */
+export async function api<T>(
+  path: string,
+  options: RequestInit & { params?: Record<string, string> } = {},
+): Promise<T> {
+  const { params, ...init } = options;
+
+  // Build URL with query params
+  let url = path;
+  if (params) {
+    const qs = new URLSearchParams(params).toString();
+    url = `${path}?${qs}`;
+  }
+
+  // Build headers
+  const headers = new Headers(init.headers);
+
+  // Auth token
+  const { accessToken } = useAuthStore.getState();
+  if (accessToken && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
+
+  // CSRF token
+  const csrf = getCookie("ui_csrf");
+  if (csrf) {
+    headers.set("X-CSRF-Token", csrf);
+  }
+
+  // Default content type for JSON bodies
+  if (init.body && typeof init.body === "string" && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  const res = await fetch(url, {
+    ...init,
+    headers,
+    credentials: "include",
+  });
+
+  // Handle 401 — try refreshing the session once
+  if (res.status === 401) {
+    if (!refreshPromise) {
+      refreshPromise = refreshSession().finally(() => {
+        refreshPromise = null;
+      });
+    }
+
+    try {
+      await refreshPromise;
+    } catch {
+      throw new ApiError(401, "Authentication required");
+    }
+
+    // Retry original request with fresh session
+    const retryRes = await fetch(url, {
+      ...init,
+      headers,
+      credentials: "include",
+    });
+
+    if (!retryRes.ok) {
+      const body = await retryRes.json().catch(() => null);
+      throw new ApiError(
+        retryRes.status,
+        (body as Record<string, string>)?.detail ?? retryRes.statusText,
+        body,
+      );
+    }
+
+    return retryRes.json() as Promise<T>;
+  }
+
+  // Handle non-2xx responses
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(
+      res.status,
+      (body as Record<string, string>)?.detail ?? res.statusText,
+      body,
+    );
+  }
+
+  // 204 No Content
+  if (res.status === 204) {
+    return undefined as T;
+  }
+
+  return res.json() as Promise<T>;
+}
+
+// ─── Convenience methods ─────────────────────────────────────────
+
+api.get = <T>(path: string, params?: Record<string, string>) =>
+  api<T>(path, { method: "GET", params });
+
+api.post = <T>(path: string, body?: unknown) =>
+  api<T>(path, {
+    method: "POST",
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+
+api.put = <T>(path: string, body?: unknown) =>
+  api<T>(path, {
+    method: "PUT",
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+
+api.patch = <T>(path: string, body?: unknown) =>
+  api<T>(path, {
+    method: "PATCH",
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+
+api.del = <T>(path: string, params?: Record<string, string>) =>
+  api<T>(path, { method: "DELETE", params });
+
+/**
+ * Upload a file via multipart form data.
+ * Does NOT set Content-Type — the browser adds the boundary automatically.
+ */
+api.upload = <T>(path: string, formData: FormData, params?: Record<string, string>) =>
+  api<T>(path, { method: "POST", body: formData, params });
