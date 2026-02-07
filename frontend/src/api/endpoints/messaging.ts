@@ -8,6 +8,10 @@ import type {
   PresenceStatus,
   TypingUser,
   UserSearchResult,
+  MessageViewer,
+  ForwardMessageReq,
+  AddParticipantsReq,
+  UpdateRoleReq,
 } from "@/api/types";
 
 export const getConversations = (cursor?: string) =>
@@ -96,3 +100,56 @@ export const searchUsers = (q: string, limit?: number) => {
   if (limit) qs.limit = String(limit);
   return api.get<UserSearchResult[]>("/messaging/contacts/search", qs);
 };
+
+// ─── File Messages ─────────────────────────────────────────────
+
+export const sendFileMessage = (
+  conversationId: string,
+  body: { path: string; kind?: string; duration_seconds?: number },
+) =>
+  api.post<Message>(
+    `/messaging/conversations/${conversationId}/messages/file`,
+    body,
+  );
+
+// ─── Forward ───────────────────────────────────────────────────
+
+export const forwardMessage = (
+  targetConversationId: string,
+  body: ForwardMessageReq,
+) =>
+  api.post<Message>(
+    `/messaging/conversations/${targetConversationId}/messages/forward`,
+    body,
+  );
+
+// ─── Views / Read Receipts ─────────────────────────────────────
+
+export const markViewed = (conversationId: string, messageId: string) =>
+  api.post<{ ok: boolean; conversation_id: string; message_id: string; viewer_id: string; viewed_at: number }>(
+    `/messaging/conversations/${conversationId}/messages/${messageId}/view`,
+    {},
+  );
+
+export const getViewers = (conversationId: string, messageId: string) =>
+  api.get<MessageViewer[]>(
+    `/messaging/conversations/${conversationId}/messages/${messageId}/views`,
+  );
+
+// ─── Participants ──────────────────────────────────────────────
+
+export const addParticipants = (conversationId: string, body: AddParticipantsReq) =>
+  api.post<{ ok: boolean; added_count: number }>(
+    `/messaging/conversations/${conversationId}/participants`,
+    body,
+  );
+
+export const updateParticipantRole = (
+  conversationId: string,
+  participantId: string,
+  body: UpdateRoleReq,
+) =>
+  api.patch<{ ok: boolean; role: string }>(
+    `/messaging/conversations/${conversationId}/participants/${participantId}`,
+    body,
+  );

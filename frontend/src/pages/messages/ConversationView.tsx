@@ -17,6 +17,7 @@ import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
 import { PresenceDot } from "./PresenceDot";
 import { TypingIndicator, useTypingSignal } from "./TypingIndicator";
+import { ParticipantsPanel } from "./ParticipantsPanel";
 
 interface ConversationViewProps {
   conversation: Conversation;
@@ -31,6 +32,7 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
 
   const convoId = conversation.conversation_id;
   const isGroup = conversation.type === "group";
+  const [participantsOpen, setParticipantsOpen] = React.useState(false);
 
   // ── Messages query ──────────────────────────────────────────────
 
@@ -134,6 +136,17 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
             </p>
           )}
         </div>
+        {isGroup && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            onClick={() => setParticipantsOpen(true)}
+            aria-label="Manage participants"
+          >
+            <Users className="h-4 w-4" />
+          </Button>
+        )}
       </div>
 
       {/* Messages */}
@@ -171,6 +184,7 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
               message={msg}
               isOwn={msg.sender_id === userId}
               showSender={isGroup}
+              conversationId={convoId}
             />
           ))
         )}
@@ -186,6 +200,15 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
         sending={sendText.isPending || sendImage.isPending}
         onKeystroke={onKeystroke}
       />
+
+      {/* Group participants panel */}
+      {isGroup && (
+        <ParticipantsPanel
+          conversationId={convoId}
+          open={participantsOpen}
+          onClose={() => setParticipantsOpen(false)}
+        />
+      )}
     </div>
   );
 }

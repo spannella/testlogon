@@ -515,6 +515,26 @@ export interface UserSearchResult {
   display_name: string;
 }
 
+export interface MessageViewer {
+  user_id: string;
+  last_viewed_at: number;
+  view_count: number;
+}
+
+export interface ForwardMessageReq {
+  source_conversation_id: string;
+  source_message_id: string;
+  note?: string;
+}
+
+export interface AddParticipantsReq {
+  participant_ids: string[];
+}
+
+export interface UpdateRoleReq {
+  role: "admin" | "member";
+}
+
 // ─── Files ───────────────────────────────────────────────────────
 
 export interface FileEntry {
