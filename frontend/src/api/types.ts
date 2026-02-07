@@ -800,6 +800,78 @@ export interface PurchaseTransactionInfo extends PurchaseTransactionSummary {
   receipt_generated_at?: number;
 }
 
+// ─── Subscriptions ──────────────────────────────────────────────
+
+export interface SubscriptionPlan {
+  plan_id: string;
+  creator_id: string;
+  name: string;
+  description?: string;
+  price_cents: number;
+  currency: string;
+  interval: string;
+  annual_price_cents?: number;
+  status: string;
+  metadata?: Record<string, unknown>;
+  assets?: { path: string; name: string; type: string; size: number; content_type: string }[];
+  created_at: number;
+  updated_at: number;
+  creator_profile?: Profile;
+}
+
+export interface SubscriptionOut {
+  subscription_id: string;
+  plan_id: string;
+  creator_id: string;
+  subscriber_id: string;
+  interval: string;
+  provider: string;
+  provider_subscription_id: string;
+  status: string;
+  start_at: number;
+  current_period_end: number;
+  cancel_at_period_end: boolean;
+  price_cents: number;
+  currency: string;
+  auto_renew: boolean;
+  trial_start?: number;
+  trial_end?: number;
+  proration_policy?: string;
+  renewal_policy?: string;
+  created_at: number;
+  updated_at: number;
+  creator_profile?: Profile;
+  subscriber_profile?: Profile;
+  plan?: SubscriptionPlan;
+}
+
+export interface SubscriptionSummary {
+  subscription_id: string;
+  status: string;
+  cancel_at_period_end: boolean;
+  total_paid_cents: number;
+  currency: string;
+  next_amount_cents: number;
+  next_renewal_at?: number;
+  last_invoice_at?: number;
+}
+
+export interface SubscriptionInvoice {
+  invoice_id: string;
+  subscription_id: string;
+  provider_invoice_id: string;
+  amount_cents: number;
+  currency: string;
+  status: string;
+  period_start: number;
+  period_end: number;
+  created_at: number;
+  is_proration?: boolean;
+  proration_amount_cents?: number;
+  proration_period_start?: number;
+  proration_period_end?: number;
+}
+
 // ─── Generic ─────────────────────────────────────────────────────
 
 export interface OkResp {

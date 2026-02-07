@@ -7,6 +7,7 @@ import {
   ShoppingCart,
   CreditCard,
   ClipboardList,
+  Repeat,
   FolderOpen,
   CalendarDays,
   User,
@@ -52,6 +53,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Cart", path: "/cart", icon: <ShoppingCart className="h-5 w-5" /> },
       { label: "Billing", path: "/billing", icon: <CreditCard className="h-5 w-5" /> },
       { label: "Orders", path: "/purchases", icon: <ClipboardList className="h-5 w-5" /> },
+      { label: "Subscriptions", path: "/subscriptions", icon: <Repeat className="h-5 w-5" /> },
     ],
   },
   {
