@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Search,
   Bell,
@@ -10,6 +11,7 @@ import {
   User,
   Settings,
   Menu,
+  CheckCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -30,9 +32,18 @@ import {
   CommandGroup,
   CommandItem,
 } from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 import { useAuthStore } from "@/stores/authStore";
 import { useUiStore, type Theme } from "@/stores/uiStore";
 import { logout as apiLogout } from "@/api/endpoints/auth";
+import { getAlerts, markRead } from "@/api/endpoints/alerts";
+import { useAlertStream } from "@/hooks/useAlertStream";
 
 interface HeaderProps {
   onMobileMenuToggle?: () => void;
@@ -59,12 +70,38 @@ const SEARCH_PAGES = [
 
 export default function Header({ onMobileMenuToggle }: HeaderProps) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const userId = useAuthStore((s) => s.userId);
   const logoutAuth = useAuthStore((s) => s.logout);
   const theme = useUiStore((s) => s.theme);
   const setTheme = useUiStore((s) => s.setTheme);
 
   const [searchOpen, setSearchOpen] = React.useState(false);
+  const [alertsOpen, setAlertsOpen] = React.useState(false);
+
+  // Real-time alert stream
+  const { unreadCount, resetUnread } = useAlertStream(true);
+
+  // Fetch recent alerts for the popover
+  const recentAlerts = useQuery({
+    queryKey: ["alerts", "recent"],
+    queryFn: () => getAlerts({ limit: 10 }),
+    enabled: alertsOpen,
+  });
+
+  const markAllRead = useMutation({
+    mutationFn: () => {
+      const ids = (recentAlerts.data?.alerts ?? [])
+        .filter((a) => !a.read_at)
+        .map((a) => a.alert_id);
+      if (ids.length === 0) return Promise.resolve({ ok: true, updated: 0 });
+      return markRead({ alert_ids: ids });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alerts"] });
+      resetUnread();
+    },
+  });
 
   // Cmd+K / Ctrl+K to open search
   React.useEffect(() => {
@@ -104,6 +141,8 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
   }[theme];
 
   const initials = userId ? userId.slice(0, 2).toUpperCase() : "U";
+
+  const alerts = recentAlerts.data?.alerts ?? [];
 
   return (
     <>
@@ -147,17 +186,99 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
           {themeIcon}
         </Button>
 
-        {/* Alert bell */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="relative"
-          onClick={() => navigate("/alerts")}
-          aria-label="Alerts"
-        >
-          <Bell className="h-5 w-5" />
-          {/* Placeholder unread dot — will be wired to real data in Step 11 */}
-        </Button>
+        {/* Alert bell with popover */}
+        <Popover open={alertsOpen} onOpenChange={setAlertsOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="relative"
+              aria-label="Alerts"
+            >
+              <Bell className="h-5 w-5" />
+              {unreadCount > 0 && (
+                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground">
+                  {unreadCount > 99 ? "99+" : unreadCount}
+                </span>
+              )}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="end" className="w-80 p-0">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <span className="text-sm font-semibold">Notifications</span>
+              {alerts.some((a) => !a.read_at) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => markAllRead.mutate()}
+                  disabled={markAllRead.isPending}
+                >
+                  <CheckCheck className="mr-1 h-3 w-3" />
+                  Mark all read
+                </Button>
+              )}
+            </div>
+
+            {/* Alert list */}
+            <ScrollArea className="max-h-80">
+              {alerts.length === 0 ? (
+                <div className="flex flex-col items-center gap-1 py-8 text-center">
+                  <Bell className="h-6 w-6 text-muted-foreground" />
+                  <p className="text-sm text-muted-foreground">No notifications</p>
+                </div>
+              ) : (
+                <div className="divide-y">
+                  {alerts.map((alert) => (
+                    <div
+                      key={alert.alert_id}
+                      className="flex gap-3 px-4 py-3 transition-colors hover:bg-accent/50"
+                    >
+                      {/* Unread indicator */}
+                      <div className="mt-1.5 shrink-0">
+                        {!alert.read_at ? (
+                          <div className="h-2 w-2 rounded-full bg-primary" />
+                        ) : (
+                          <div className="h-2 w-2" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className={cn("text-sm", !alert.read_at && "font-medium")}>
+                          {alert.title}
+                        </p>
+                        {alert.details && (
+                          <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                            {alert.details}
+                          </p>
+                        )}
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          {formatAlertTime(alert.ts)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </ScrollArea>
+
+            {/* Footer */}
+            <Separator />
+            <div className="p-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="w-full text-xs"
+                onClick={() => {
+                  setAlertsOpen(false);
+                  navigate("/alerts");
+                }}
+              >
+                View all notifications
+              </Button>
+            </div>
+          </PopoverContent>
+        </Popover>
 
         {/* User menu */}
         <DropdownMenu>
@@ -216,4 +337,22 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
       </CommandDialog>
     </>
   );
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────
+
+function formatAlertTime(ts: number): string {
+  const date = new Date(ts * 1000);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMin = Math.floor(diffMs / 60_000);
+
+  if (diffMin < 1) return "Just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHrs = Math.floor(diffMin / 60);
+  if (diffHrs < 24) return `${diffHrs}h ago`;
+  const diffDays = Math.floor(diffHrs / 24);
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }

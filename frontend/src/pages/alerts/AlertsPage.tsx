@@ -1,8 +1,28 @@
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageHeader } from "@/components/shared/PageHeader";
+import { AlertCenter } from "./AlertCenter";
+import { AlertPrefs } from "./AlertPrefs";
+
 export default function AlertsPage() {
   return (
-    <div>
-      <h1>Alerts</h1>
-      <p>Notification center — coming in Step 11</p>
+    <div className="mx-auto w-full max-w-4xl space-y-6 p-4 sm:p-6">
+      <PageHeader
+        title="Alerts"
+        description="View notifications and manage alert preferences"
+      />
+
+      <Tabs defaultValue="alerts">
+        <TabsList>
+          <TabsTrigger value="alerts">Notifications</TabsTrigger>
+          <TabsTrigger value="preferences">Preferences</TabsTrigger>
+        </TabsList>
+        <TabsContent value="alerts">
+          <AlertCenter />
+        </TabsContent>
+        <TabsContent value="preferences">
+          <AlertPrefs />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
