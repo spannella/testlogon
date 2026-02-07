@@ -1,148 +1,342 @@
-import { Sun, Moon, Monitor } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import {
+  MessageSquare,
+  CreditCard,
+  FolderOpen,
+  CalendarDays,
+  Bell,
+  ShoppingCart,
+  ArrowRight,
+  Clock,
+} from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
-import { useUiStore, type Theme } from "@/stores/uiStore";
+import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/shared/PageHeader";
+import { cn } from "@/lib/utils";
 
-const themes: { value: Theme; icon: React.ReactNode; label: string }[] = [
-  { value: "light", icon: <Sun className="h-4 w-4" />, label: "Light" },
-  { value: "dark", icon: <Moon className="h-4 w-4" />, label: "Dark" },
-  { value: "system", icon: <Monitor className="h-4 w-4" />, label: "System" },
-];
+import { getConversations } from "@/api/endpoints/messaging";
+import { getBalance, getSettings as getBillingSettings } from "@/api/endpoints/billing";
+import { listFiles } from "@/api/endpoints/files";
+import { getAlerts } from "@/api/endpoints/alerts";
+import { getCarts } from "@/api/endpoints/cart";
+import { getCalendars, getEvents } from "@/api/endpoints/calendar";
+
+// ─── Helpers ─────────────────────────────────────────────────────
+
+function formatCents(cents: number, currency = "USD"): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency,
+  }).format(cents / 100);
+}
+
+function relativeTime(ts: number): string {
+  const now = Date.now();
+  const diff = now - ts * 1000;
+  const seconds = Math.floor(diff / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+// ─── Dashboard Page ─────────────────────────────────────────────
 
 export default function Dashboard() {
-  const theme = useUiStore((s) => s.theme);
-  const setTheme = useUiStore((s) => s.setTheme);
+  const navigate = useNavigate();
+
+  // ── Data queries ────────────────────────────────────────────────
+
+  const conversations = useQuery({
+    queryKey: ["conversations"],
+    queryFn: () => getConversations(),
+  });
+
+  const balance = useQuery({
+    queryKey: ["billing", "balance"],
+    queryFn: getBalance,
+  });
+
+  const billingSettings = useQuery({
+    queryKey: ["billing", "settings"],
+    queryFn: getBillingSettings,
+  });
+
+  const files = useQuery({
+    queryKey: ["files", "root"],
+    queryFn: () => listFiles("/", { limit: 100 }),
+  });
+
+  const alerts = useQuery({
+    queryKey: ["alerts", "recent"],
+    queryFn: () => getAlerts({ limit: 5 }),
+  });
+
+  const carts = useQuery({
+    queryKey: ["carts"],
+    queryFn: getCarts,
+  });
+
+  const calendars = useQuery({
+    queryKey: ["calendars"],
+    queryFn: () => getCalendars(1),
+  });
+
+  const firstCalendarId = calendars.data?.[0]?.calendar_id;
+
+  const events = useQuery({
+    queryKey: ["events", "upcoming", firstCalendarId],
+    queryFn: () => getEvents(firstCalendarId!),
+    enabled: !!firstCalendarId,
+  });
+
+  // ── Derived values ──────────────────────────────────────────────
+
+  const unreadMessages = conversations.data?.conversations?.reduce(
+    (sum, c) => sum + (c.unread_count ?? 0),
+    0,
+  ) ?? 0;
+
+  const totalConversations = conversations.data?.conversations?.length ?? 0;
+
+  const balanceOwed = (balance.data?.owed_settled_cents ?? 0) + (balance.data?.owed_pending_cents ?? 0);
+  const balanceCurrency = balance.data?.currency ?? "USD";
+
+  const fileCount = files.data?.items?.length ?? 0;
+
+  const unreadAlerts = alerts.data?.alerts?.filter((a) => !a.read_at).length ?? 0;
+  const recentAlerts = alerts.data?.alerts ?? [];
+
+  const activeCarts = carts.data?.filter((c) => c.status === "open") ?? [];
+  const activeCartCount = activeCarts.length;
+
+  const nextEvent = events.data?.events?.[0];
+
+  // ── Render ──────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-background p-6 md:p-10">
-      <div className="mx-auto max-w-5xl space-y-8">
-        {/* Header */}
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">Dashboard</h1>
-          <p className="text-sm text-muted-foreground">
-            Design system preview — full dashboard coming in Step 7
-          </p>
-        </div>
+    <div className="p-4 md:p-6 lg:p-8 space-y-6">
+      <PageHeader
+        title="Dashboard"
+        description="Overview of your account activity"
+      />
 
-        {/* Theme toggle */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Theme</CardTitle>
-            <CardDescription>Switch between light, dark, and system themes</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-2">
-              {themes.map((t) => (
-                <Button
-                  key={t.value}
-                  variant={theme === t.value ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setTheme(t.value)}
-                >
-                  {t.icon}
-                  <span className="ml-1">{t.label}</span>
-                </Button>
+      {/* Summary cards */}
+      <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+        {/* Messages */}
+        <SummaryCard
+          icon={<MessageSquare className="h-5 w-5" />}
+          title="Messages"
+          onClick={() => navigate("/messages")}
+          loading={conversations.isLoading}
+        >
+          <p className="text-2xl font-bold">
+            {unreadMessages > 0 ? (
+              <>
+                {unreadMessages} <span className="text-sm font-normal text-muted-foreground">unread</span>
+              </>
+            ) : (
+              "No unread"
+            )}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {totalConversations} conversation{totalConversations !== 1 && "s"}
+          </p>
+        </SummaryCard>
+
+        {/* Balance */}
+        <SummaryCard
+          icon={<CreditCard className="h-5 w-5" />}
+          title="Balance"
+          onClick={() => navigate("/billing")}
+          loading={balance.isLoading}
+        >
+          <p className={cn("text-2xl font-bold", balanceOwed > 0 ? "text-destructive" : "text-success")}>
+            {formatCents(balanceOwed, balanceCurrency)}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {billingSettings.data?.autopay_enabled !== undefined
+              ? `Autopay: ${billingSettings.data.autopay_enabled ? "ON" : "OFF"}`
+              : "Billing overview"}
+          </p>
+        </SummaryCard>
+
+        {/* Files */}
+        <SummaryCard
+          icon={<FolderOpen className="h-5 w-5" />}
+          title="Files"
+          onClick={() => navigate("/files")}
+          loading={files.isLoading}
+        >
+          <p className="text-2xl font-bold">
+            {fileCount} <span className="text-sm font-normal text-muted-foreground">item{fileCount !== 1 && "s"}</span>
+          </p>
+          <p className="text-xs text-muted-foreground">
+            In root directory
+          </p>
+        </SummaryCard>
+
+        {/* Calendar */}
+        <SummaryCard
+          icon={<CalendarDays className="h-5 w-5" />}
+          title="Calendar"
+          onClick={() => navigate("/calendar")}
+          loading={calendars.isLoading || events.isLoading}
+        >
+          {nextEvent ? (
+            <>
+              <p className="text-sm font-semibold truncate">{nextEvent.name}</p>
+              <p className="text-xs text-muted-foreground">
+                {nextEvent.all_day
+                  ? nextEvent.all_day_date ?? "All day"
+                  : nextEvent.start_utc
+                    ? new Date(nextEvent.start_utc).toLocaleString(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })
+                    : "Upcoming"}
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-semibold">No upcoming events</p>
+              <p className="text-xs text-muted-foreground">Your schedule is clear</p>
+            </>
+          )}
+        </SummaryCard>
+
+        {/* Alerts */}
+        <SummaryCard
+          icon={<Bell className="h-5 w-5" />}
+          title="Alerts"
+          onClick={() => navigate("/alerts")}
+          loading={alerts.isLoading}
+        >
+          <p className="text-2xl font-bold">
+            {unreadAlerts > 0 ? (
+              <>
+                {unreadAlerts} <span className="text-sm font-normal text-muted-foreground">unread</span>
+              </>
+            ) : (
+              "All caught up"
+            )}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            View all alerts
+          </p>
+        </SummaryCard>
+
+        {/* Cart */}
+        <SummaryCard
+          icon={<ShoppingCart className="h-5 w-5" />}
+          title="Cart"
+          onClick={() => navigate("/cart")}
+          loading={carts.isLoading}
+        >
+          <p className="text-2xl font-bold">
+            {activeCartCount} <span className="text-sm font-normal text-muted-foreground">active cart{activeCartCount !== 1 && "s"}</span>
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {activeCartCount > 0 ? "View your carts" : "Start shopping"}
+          </p>
+        </SummaryCard>
+      </div>
+
+      {/* Recent Activity */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <CardTitle className="text-base">Recent Activity</CardTitle>
+          <button
+            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+            onClick={() => navigate("/alerts")}
+          >
+            View all <ArrowRight className="h-3 w-3" />
+          </button>
+        </CardHeader>
+        <CardContent>
+          {alerts.isLoading ? (
+            <div className="space-y-4">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="flex items-start gap-3">
+                  <Skeleton className="h-8 w-8 rounded-full" />
+                  <div className="flex-1 space-y-1.5">
+                    <Skeleton className="h-3.5 w-3/4" />
+                    <Skeleton className="h-3 w-1/2" />
+                  </div>
+                </div>
               ))}
             </div>
-          </CardContent>
-        </Card>
-
-        {/* Component showcase */}
-        <div className="grid gap-6 md:grid-cols-2">
-          {/* Buttons */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Buttons</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-wrap gap-2">
-              <Button>Primary</Button>
-              <Button variant="secondary">Secondary</Button>
-              <Button variant="outline">Outline</Button>
-              <Button variant="ghost">Ghost</Button>
-              <Button variant="destructive">Destructive</Button>
-              <Button variant="link">Link</Button>
-              <Button disabled>Disabled</Button>
-            </CardContent>
-          </Card>
-
-          {/* Badges */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Badges</CardTitle>
-            </CardHeader>
-            <CardContent className="flex flex-wrap gap-2">
-              <Badge>Default</Badge>
-              <Badge variant="secondary">Secondary</Badge>
-              <Badge variant="success">Success</Badge>
-              <Badge variant="warning">Warning</Badge>
-              <Badge variant="destructive">Destructive</Badge>
-              <Badge variant="outline">Outline</Badge>
-            </CardContent>
-          </Card>
-
-          {/* Inputs */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Inputs</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input id="email" type="email" placeholder="you@example.com" />
-              </div>
-              <div className="flex items-center gap-2">
-                <Switch id="toggle" />
-                <Label htmlFor="toggle">Enable notifications</Label>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Skeleton loading */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Loading skeletons</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <Skeleton className="h-4 w-3/4" />
-              <Skeleton className="h-4 w-1/2" />
-              <Skeleton className="h-10 w-full" />
-              <div className="flex items-center gap-3">
-                <Skeleton className="h-10 w-10 rounded-full" />
-                <div className="space-y-2 flex-1">
-                  <Skeleton className="h-3 w-1/3" />
-                  <Skeleton className="h-3 w-2/3" />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        <Separator />
-
-        {/* Typography */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Typography</CardTitle>
-            <CardDescription>Inter for UI text, JetBrains Mono for code</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-2xl font-semibold">Page title (24px semibold)</p>
-            <p className="text-lg font-semibold">Section heading (18px semibold)</p>
-            <p className="text-base font-medium">Card title (16px medium)</p>
-            <p className="text-sm">Body text (14px regular)</p>
-            <p className="text-xs font-medium text-muted-foreground">
-              Caption / label (12px medium, muted)
+          ) : recentAlerts.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              No recent activity
             </p>
-            <p className="font-mono text-sm">Monospace: API_KEY_abc123xyz</p>
-          </CardContent>
-        </Card>
-      </div>
+          ) : (
+            <div className="space-y-4">
+              {recentAlerts.map((alert) => (
+                <div key={alert.alert_id} className="flex items-start gap-3">
+                  <div className={cn(
+                    "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
+                    alert.read_at ? "bg-muted" : "bg-primary/10",
+                  )}>
+                    <Clock className={cn("h-4 w-4", alert.read_at ? "text-muted-foreground" : "text-primary")} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium truncate">{alert.title}</p>
+                      {!alert.read_at && <Badge variant="default" className="h-4 px-1 text-[10px]">New</Badge>}
+                    </div>
+                    {alert.details && (
+                      <p className="text-xs text-muted-foreground truncate">{alert.details}</p>
+                    )}
+                    <p className="text-[11px] text-muted-foreground">{relativeTime(alert.ts)}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
+  );
+}
+
+// ─── Summary Card ───────────────────────────────────────────────
+
+interface SummaryCardProps {
+  icon: React.ReactNode;
+  title: string;
+  children: React.ReactNode;
+  onClick: () => void;
+  loading?: boolean;
+}
+
+function SummaryCard({ icon, title, children, onClick, loading }: SummaryCardProps) {
+  return (
+    <Card
+      className="cursor-pointer transition-shadow hover:shadow-md"
+      onClick={onClick}
+    >
+      <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
+        <div className="text-muted-foreground">{icon}</div>
+      </CardHeader>
+      <CardContent>
+        {loading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-7 w-24" />
+            <Skeleton className="h-3 w-32" />
+          </div>
+        ) : (
+          children
+        )}
+      </CardContent>
+    </Card>
   );
 }
