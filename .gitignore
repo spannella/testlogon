@@ -4,3 +4,7 @@ node_modules/
 dist/
 *.tsbuildinfo
 .env
+.env.local
+logs/
+.backend.pid
+.frontend.pid
