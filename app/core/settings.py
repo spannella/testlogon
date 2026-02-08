@@ -136,6 +136,10 @@ class Settings:
     dev_mode: bool = os.environ.get("DEV_MODE", "1") not in ("0", "false", "False")
     dev_test_user: str = os.environ.get("DEV_TEST_USER", "")
     dev_test_password: str = os.environ.get("DEV_TEST_PASSWORD", "")
+    dev_registration_email: str = os.environ.get("DEV_REGISTRATION_EMAIL", "")
+    dev_registration_password: str = os.environ.get("DEV_REGISTRATION_PASSWORD", "")
+    dev_registration_code: str = os.environ.get("DEV_REGISTRATION_CODE", "")
+    dev_registration_phone: str = os.environ.get("DEV_REGISTRATION_PHONE", "")
 
     # Billing / CCBill
     ccbill_base_url: str = os.environ.get("CCBILL_BASE_URL", "https://api.ccbill.com").rstrip("/")

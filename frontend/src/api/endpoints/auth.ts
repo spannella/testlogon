@@ -19,6 +19,14 @@ import type {
   PasswordRecoveryStartReq,
   PasswordRecoveryStartResp,
   PasswordRecoveryConfirmReq,
+  RegisterStartReq,
+  RegisterStartResp,
+  RegisterConfirmReq,
+  RegisterConfirmResp,
+  RegisterResendReq,
+  RegisterResendResp,
+  RegisterEmailCheckReq,
+  RegisterEmailCheckResp,
   PasswordlessStartReq,
   PasswordlessStartResp,
   PasswordlessVerifyReq,
@@ -50,6 +58,20 @@ export const logout = () =>
 
 export const refreshSession = () =>
   api.post<StatusResp>("/ui/session/refresh");
+
+// ─── Registration ───────────────────────────────────────────────
+
+export const registerStart = (body: RegisterStartReq) =>
+  api.post<RegisterStartResp>("/ui/register/start", body);
+
+export const registerConfirm = (body: RegisterConfirmReq) =>
+  api.post<RegisterConfirmResp>("/ui/register/confirm", body);
+
+export const registerResend = (body: RegisterResendReq) =>
+  api.post<RegisterResendResp>("/ui/register/resend", body);
+
+export const registerEmailCheck = (body: RegisterEmailCheckReq) =>
+  api.post<RegisterEmailCheckResp>("/ui/register/check", body);
 
 // ─── MFA Verification (login flow) ──────────────────────────────
 

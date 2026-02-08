@@ -120,6 +120,8 @@ class RegisterStartReq(BaseModel):
     confirm_password: str
     delivery_method: Literal["email", "sms"] = "email"
     phone: Optional[str] = None
+    enable_sms_mfa: bool = False
+    enable_totp_mfa: bool = False
 
     @field_validator("full_name", "email")
     @classmethod
@@ -163,6 +165,8 @@ class RegisterStartReq(BaseModel):
     def _validate_password_match(self) -> "RegisterStartReq":
         if self.password != self.confirm_password:
             raise ValueError("Passwords don't match")
+        if self.enable_sms_mfa and not self.phone:
+            raise ValueError("Phone required for SMS MFA")
         return self
 
 class RegisterStartResp(BaseModel):
@@ -187,6 +191,65 @@ class RegisterConfirmReq(BaseModel):
 
 class RegisterConfirmResp(BaseModel):
     status: str
+    session_id: Optional[str] = None
+    mfa_setup: List[str] = Field(default_factory=list)
+    sms_phone: Optional[str] = None
+
+class RegisterResendReq(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    email: str = Field(validation_alias=AliasChoices("email", "username"))
+    delivery_method: Literal["email", "sms"] = "email"
+    phone: Optional[str] = None
+    enable_sms_mfa: bool = False
+    enable_totp_mfa: bool = False
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_resend_email(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if "@" not in cleaned:
+            raise ValueError("Invalid email")
+        return cleaned
+
+    @field_validator("phone")
+    @classmethod
+    def _normalize_resend_phone(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            return normalize_phone(cleaned)
+        except Exception as exc:
+            raise ValueError("Invalid phone") from exc
+
+    @model_validator(mode="after")
+    def _validate_sms_phone(self) -> "RegisterResendReq":
+        if self.enable_sms_mfa and not self.phone:
+            raise ValueError("Phone required for SMS MFA")
+        return self
+
+class RegisterResendResp(BaseModel):
+    status: str
+    delivery_medium: Optional[str] = None
+    delivery_destination: Optional[str] = None
+
+class RegisterEmailCheckReq(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    email: str = Field(validation_alias=AliasChoices("email", "username"))
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_check_email(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if "@" not in cleaned:
+            raise ValueError("Invalid email")
+        return cleaned
+
+class RegisterEmailCheckResp(BaseModel):
+    status: str
+    available: bool
 
 class WebAuthnRegisterBeginReq(BaseModel):
     label: Optional[str] = None

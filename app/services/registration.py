@@ -37,6 +37,10 @@ def _user_exists(user_sub: str) -> bool:
     existing = T.users.get_item(Key={"user_sub": user_sub}).get("Item")
     return bool(existing)
 
+def is_email_available(email: str) -> bool:
+    normalized = normalize_email(email)
+    return not _user_exists(normalized)
+
 
 def create_user_record(
     *,
@@ -83,6 +87,8 @@ def create_registration_challenge(
     user_sub: str,
     channel: str,
     send_to: str,
+    mfa_setup: list[str] | None = None,
+    sms_phone: str | None = None,
 ) -> str:
     code = gen_numeric_code(6) if channel == "email" else ""
     ts = now_ts()
@@ -99,6 +105,8 @@ def create_registration_challenge(
         "send_to": send_to,
         "code_hash": sha256_str(code) if code else "",
         "code_attempts": 0,
+        "mfa_setup": mfa_setup or [],
+        "sms_phone": sms_phone or "",
     }
     T.sessions.put_item(Item=with_ttl(payload, ttl_epoch=expires))
     return code
@@ -130,7 +138,11 @@ def verify_registration_code(*, user_sub: str, code: str) -> Dict[str, str]:
         T.sessions.delete_item(Key={"user_sub": user_sub, "session_id": REGISTRATION_CHALLENGE_ID})
     except Exception:
         pass
-    return {"user_sub": user_sub}
+    return {
+        "user_sub": user_sub,
+        "mfa_setup": list(item.get("mfa_setup") or []),
+        "sms_phone": item.get("sms_phone") or "",
+    }
 
 
 def _increment_registration_attempts(user_sub: str, attempts: int) -> None:
