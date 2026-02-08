@@ -234,6 +234,62 @@ export interface WebAuthnAuthFinishResp {
   session_id?: string;
 }
 
+// ─── Register ──────────────────────────────────────────────────
+
+export interface RegisterStartReq {
+  full_name: string;
+  email: string;
+  password: string;
+  confirm_password: string;
+  delivery_method?: "email" | "sms";
+  phone?: string | null;
+  enable_sms_mfa?: boolean;
+  enable_totp_mfa?: boolean;
+}
+
+export interface RegisterStartResp {
+  status: string;
+  verification_required: boolean;
+  delivery_medium?: string | null;
+  delivery_destination?: string | null;
+  session_id?: string | null;
+}
+
+export interface RegisterConfirmReq {
+  email: string;
+  confirmation_code: string;
+}
+
+export interface RegisterConfirmResp {
+  status: string;
+  session_id?: string | null;
+  mfa_setup?: string[];
+  sms_phone?: string | null;
+}
+
+export interface RegisterResendReq {
+  email: string;
+  delivery_method?: "email" | "sms";
+  phone?: string | null;
+  enable_sms_mfa?: boolean;
+  enable_totp_mfa?: boolean;
+}
+
+export interface RegisterResendResp {
+  status: string;
+  delivery_medium?: string | null;
+  delivery_destination?: string | null;
+}
+
+export interface RegisterEmailCheckReq {
+  email: string;
+}
+
+export interface RegisterEmailCheckResp {
+  status: string;
+  available: boolean;
+}
+
 // ─── Passwordless ────────────────────────────────────────────────
 
 export interface PasswordlessStartReq {

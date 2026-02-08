@@ -6,7 +6,17 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.core.normalize import client_ip_from_request
 from app.core.settings import S
-from app.models import RegisterConfirmReq, RegisterConfirmResp, RegisterStartReq, RegisterStartResp
+from app.core.time import now_ts
+from app.models import (
+    RegisterConfirmReq,
+    RegisterConfirmResp,
+    RegisterEmailCheckReq,
+    RegisterEmailCheckResp,
+    RegisterResendReq,
+    RegisterResendResp,
+    RegisterStartReq,
+    RegisterStartResp,
+)
 from app.services.alerts import audit_event
 from app.services.breach_check import check_password_breach
 from app.services.cognito import cognito_admin_confirm_sign_up, cognito_sign_up
@@ -21,6 +31,7 @@ from app.services.rate_limit import (
 from app.services.registration import (
     create_registration_challenge,
     create_user_record,
+    is_email_available,
     mark_user_verified,
     verify_registration_code,
 )
@@ -28,10 +39,35 @@ from app.services.sessions import create_real_session, rotate_session_cookies, s
 
 router = APIRouter(prefix="/ui/register", tags=["register"])
 
+DEFAULT_DEV_REGISTRATION_EMAIL = "demo@example.com"
+DEFAULT_DEV_REGISTRATION_PASSWORD = "Password\\d1"
+DEFAULT_DEV_REGISTRATION_CODE = "000000"
+DEFAULT_DEV_REGISTRATION_PHONE = "+15555550123"
+
 
 def _require_cognito() -> None:
     if not S.cognito_app_client_id:
         raise HTTPException(500, "Cognito app client id not configured")
+
+def _dev_registration_config() -> dict[str, str] | None:
+    if not S.dev_mode:
+        return None
+    return {
+        "email": S.dev_registration_email or DEFAULT_DEV_REGISTRATION_EMAIL,
+        "password": S.dev_registration_password or DEFAULT_DEV_REGISTRATION_PASSWORD,
+        "code": S.dev_registration_code or DEFAULT_DEV_REGISTRATION_CODE,
+        "phone": S.dev_registration_phone or DEFAULT_DEV_REGISTRATION_PHONE,
+    }
+
+def _is_dev_registration(email: str, password: str | None = None) -> bool:
+    config = _dev_registration_config()
+    if not config:
+        return False
+    if email != config["email"]:
+        return False
+    if password is None:
+        return True
+    return password == config["password"]
 
 
 @router.post("/start", response_model=RegisterStartResp)
@@ -42,6 +78,13 @@ async def register_start(
 ) -> Dict[str, object]:
     if response is None:
         response = Response()
+    if _is_dev_registration(body.email, body.password):
+        return {
+            "status": "ok",
+            "verification_required": True,
+            "delivery_medium": "email",
+            "delivery_destination": body.email,
+        }
     _require_cognito()
     username = body.email
     ip = client_ip_from_request(req)
@@ -50,20 +93,23 @@ async def register_start(
 
     breach_count = check_password_breach(body.password)
     if breach_count:
+        audit_event("register_start", username, req, outcome="failure", reason="breach_password")
         record_lockout_failure(username, ip, "register_start")
         raise HTTPException(400, "Password found in breach corpus")
 
     try:
         resp = cognito_sign_up(username, body.password, body.full_name)
     except HTTPException:
+        audit_event("register_start", username, req, outcome="failure", reason="cognito_sign_up")
         record_lockout_failure(username, ip, "register_start")
         raise
     except Exception as exc:
+        audit_event("register_start", username, req, outcome="failure", reason="unexpected_error")
         record_lockout_failure(username, ip, "register_start")
         raise HTTPException(400, "Registration failed") from exc
 
     delivery = resp.get("CodeDeliveryDetails") or {}
-    verification_required = not bool(resp.get("UserConfirmed"))
+    verification_required = True
     create_user_record(
         email=username,
         full_name=body.full_name,
@@ -72,24 +118,23 @@ async def register_start(
     )
     delivery_medium = None
     delivery_destination = None
-    if verification_required:
-        channel = body.delivery_method
-        if channel == "sms":
-            if not body.phone:
-                raise HTTPException(400, "Phone required for SMS verification")
-            if not can_send_verification(username, "sms"):
-                raise HTTPException(429, "Too many verification SMS; try again later")
-            create_registration_challenge(user_sub=username, channel="sms", send_to=body.phone)
-            twilio_start_sms(body.phone)
-            delivery_medium = "sms"
-            delivery_destination = body.phone
-        else:
-            if not can_send_verification(username, "email"):
-                raise HTTPException(429, "Too many verification emails; try again later")
-            code = create_registration_challenge(user_sub=username, channel="email", send_to=username)
-            send_email_code(username, "Registration", code)
-            delivery_medium = "email"
-            delivery_destination = username
+    mfa_setup: list[str] = []
+    if body.enable_sms_mfa:
+        mfa_setup.append("sms")
+    if body.enable_totp_mfa:
+        mfa_setup.append("totp")
+    if not can_send_verification(username, "email"):
+        raise HTTPException(429, "Too many verification emails; try again later")
+    code = create_registration_challenge(
+        user_sub=username,
+        channel="email",
+        send_to=username,
+        mfa_setup=mfa_setup,
+        sms_phone=body.phone,
+    )
+    send_email_code(username, "Registration", code)
+    delivery_medium = "email"
+    delivery_destination = username
     audit_event(
         "register_start",
         username,
@@ -99,28 +144,51 @@ async def register_start(
         delivery_medium=delivery_medium or delivery.get("DeliveryMedium"),
     )
     clear_lockout(username, ip, "register_start")
-    if not verification_required:
-        session = create_real_session(req, username)
-        rotate_session_cookies(req, response, username, session)
-        session_id = session_id_value(session)
-        audit_event("register_session_start", username, req, outcome="success", session_id=session_id)
-        return {
-            "status": "ok",
-            "verification_required": False,
-            "delivery_medium": None,
-            "delivery_destination": None,
-            "session_id": session_id,
-        }
     return {
         "status": "ok",
-        "verification_required": verification_required,
+        "verification_required": True,
         "delivery_medium": delivery_medium or delivery.get("DeliveryMedium"),
         "delivery_destination": delivery_destination or delivery.get("Destination"),
     }
 
 
+@router.post("/check", response_model=RegisterEmailCheckResp)
+async def register_check(req: Request, body: RegisterEmailCheckReq) -> Dict[str, object]:
+    ip = client_ip_from_request(req)
+    enforce_lockout(body.email, ip, "register_check")
+    rate_limit_password_recovery(body.email, ip, "register_check")
+    if _is_dev_registration(body.email):
+        return {"status": "ok", "available": True}
+    try:
+        available = is_email_available(body.email)
+    except HTTPException:
+        record_lockout_failure(body.email, ip, "register_check")
+        raise
+    except Exception as exc:
+        record_lockout_failure(body.email, ip, "register_check")
+        raise HTTPException(400, "Email check failed") from exc
+    clear_lockout(body.email, ip, "register_check")
+    return {"status": "ok", "available": available}
+
+
 @router.post("/confirm", response_model=RegisterConfirmResp)
-async def register_confirm(req: Request, body: RegisterConfirmReq) -> Dict[str, object]:
+async def register_confirm(
+    req: Request,
+    body: RegisterConfirmReq,
+    response: Response = None,
+) -> Dict[str, object]:
+    if response is None:
+        response = Response()
+    config = _dev_registration_config()
+    if config and body.email == config["email"]:
+        if body.confirmation_code != config["code"]:
+            raise HTTPException(400, "Invalid verification code")
+        return {
+            "status": "ok",
+            "session_id": "dev-session",
+            "mfa_setup": [],
+            "sms_phone": config["phone"] or None,
+        }
     _require_cognito()
     username = body.email
     ip = client_ip_from_request(req)
@@ -128,16 +196,94 @@ async def register_confirm(req: Request, body: RegisterConfirmReq) -> Dict[str, 
     rate_limit_password_recovery(username, ip, "register_confirm")
 
     try:
-        verify_registration_code(user_sub=username, code=body.confirmation_code)
+        verification = verify_registration_code(user_sub=username, code=body.confirmation_code)
         cognito_admin_confirm_sign_up(username)
     except HTTPException:
+        audit_event("register_confirm", username, req, outcome="failure", reason="verification_failed")
         record_lockout_failure(username, ip, "register_confirm")
         raise
     except Exception as exc:
+        audit_event("register_confirm", username, req, outcome="failure", reason="unexpected_error")
         record_lockout_failure(username, ip, "register_confirm")
         raise HTTPException(400, "Registration confirmation failed") from exc
 
     clear_lockout(username, ip, "register_confirm")
     mark_user_verified(username)
     audit_event("register_confirm", username, req, outcome="success")
-    return {"status": "ok"}
+
+    session = create_real_session(req, username, mfa_verified_at=now_ts())
+    rotate_session_cookies(req, response, username, session)
+    session_id = session_id_value(session)
+    audit_event("register_session_start", username, req, outcome="success", session_id=session_id)
+    return {
+        "status": "ok",
+        "session_id": session_id,
+        "mfa_setup": verification.get("mfa_setup") or [],
+        "sms_phone": verification.get("sms_phone") or None,
+    }
+
+
+@router.post("/resend", response_model=RegisterResendResp)
+async def register_resend(req: Request, body: RegisterResendReq) -> Dict[str, object]:
+    if _is_dev_registration(body.email):
+        return {
+            "status": "ok",
+            "delivery_medium": "email",
+            "delivery_destination": body.email,
+        }
+    _require_cognito()
+    username = body.email
+    ip = client_ip_from_request(req)
+    enforce_lockout(username, ip, "register_resend")
+    rate_limit_password_recovery(username, ip, "register_resend")
+
+    try:
+        mfa_setup: list[str] = []
+        if body.enable_sms_mfa:
+            mfa_setup.append("sms")
+        if body.enable_totp_mfa:
+            mfa_setup.append("totp")
+        if body.delivery_method == "sms":
+            if not body.phone:
+                raise HTTPException(400, "Phone required for SMS verification")
+            if not can_send_verification(username, "sms"):
+                raise HTTPException(429, "Too many verification SMS; try again later")
+            create_registration_challenge(
+                user_sub=username,
+                channel="sms",
+                send_to=body.phone,
+                mfa_setup=mfa_setup,
+                sms_phone=body.phone,
+            )
+            twilio_start_sms(body.phone)
+            delivery_medium = "sms"
+            delivery_destination = body.phone
+        else:
+            if not can_send_verification(username, "email"):
+                raise HTTPException(429, "Too many verification emails; try again later")
+            code = create_registration_challenge(
+                user_sub=username,
+                channel="email",
+                send_to=username,
+                mfa_setup=mfa_setup,
+                sms_phone=body.phone,
+            )
+            send_email_code(username, "Registration", code)
+            delivery_medium = "email"
+            delivery_destination = username
+    except HTTPException:
+        audit_event("register_resend", username, req, outcome="failure")
+        record_lockout_failure(username, ip, "register_resend")
+        raise
+    except Exception as exc:
+        audit_event("register_resend", username, req, outcome="failure")
+        record_lockout_failure(username, ip, "register_resend")
+        raise HTTPException(400, "Registration resend failed") from exc
+
+    audit_event("register_resend", username, req, outcome="success", delivery_medium=delivery_medium)
+    clear_lockout(username, ip, "register_resend")
+    return {
+        "status": "ok",
+        "delivery_medium": delivery_medium,
+        "delivery_destination": delivery_destination,
+    }

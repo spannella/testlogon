@@ -3,7 +3,7 @@ import { useNavigate, Link } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Loader2, Shield, Smartphone, Mail, KeyRound, ArrowLeft, Fingerprint, Send } from "lucide-react";
+import { Loader2, Shield, Smartphone, Mail, KeyRound, ArrowLeft, Fingerprint, Send, HelpCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -406,6 +406,26 @@ export default function Login() {
               </CardHeader>
 
               <CardContent className="space-y-4">
+                <div className="rounded-lg border border-muted bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="font-medium text-foreground">Security reminder</p>
+                    <span
+                      className="text-muted-foreground"
+                      title="Attackers often impersonate login pages. Always verify the hostname and HTTPS certificate so you don’t enter credentials on a phishing site."
+                    >
+                      <HelpCircle className="h-4 w-4" aria-label="Why this matters" />
+                    </span>
+                  </div>
+                  <p>
+                    Confirm the URL matches
+                    {" "}
+                    <span className="font-semibold">
+                      {(import.meta as any).env?.VITE_PUBLIC_HOSTNAME ?? window.location.hostname}
+                    </span>
+                    {" "}
+                    and you see a valid HTTPS certificate before signing in.
+                  </p>
+                </div>
                 {error && (
                   <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                     {error}
