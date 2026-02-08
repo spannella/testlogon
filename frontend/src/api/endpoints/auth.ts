@@ -74,10 +74,10 @@ export const useRecoveryCode = (factor: string, body: RecoveryReq) =>
 // ─── Password Recovery ───────────────────────────────────────────
 
 export const passwordRecoveryStart = (body: PasswordRecoveryStartReq) =>
-  api.post<PasswordRecoveryStartResp>("/password-recovery/start", body);
+  api.post<PasswordRecoveryStartResp>("/ui/password-recovery/start", body);
 
 export const passwordRecoveryConfirm = (body: PasswordRecoveryConfirmReq) =>
-  api.post<OkResp>("/password-recovery/confirm", body);
+  api.post<OkResp>("/ui/password-recovery/confirm", body);
 
 // ─── Passwordless (Magic Link) ──────────────────────────────────
 

@@ -40,13 +40,13 @@ export const tipPost = (postId: string, commentId: string, amountCents: number) 
   api.post(`/posts/${postId}/comments/${commentId}/tip`, { amount_cents: amountCents });
 
 export const follow = (userId: string) =>
-  api.post<{ ok: boolean }>("/social/follow", { user_id: userId });
+  api.post<{ ok: boolean }>("/social/refollow", { target_user_id: userId });
 
 export const unfollow = (userId: string) =>
-  api.post<{ ok: boolean }>("/social/unfollow", { user_id: userId });
+  api.post<{ ok: boolean }>("/social/unfollow", { target_user_id: userId });
 
 export const unlockPost = (postId: string) =>
-  api.post<{ ok: boolean }>(`/posts/${postId}/unlock`);
+  api.post<{ ok: boolean }>("/posts/unlock", { post_id: postId });
 
 // ── Post CRUD ──────────────────────────────────────────────────
 
@@ -83,4 +83,4 @@ export const tipPostDirect = (postId: string, body: TipReq) =>
   api.post<{ ok: boolean; tip_total_cents: number }>(`/posts/${postId}/tip`, body);
 
 /** SSE stream URL for real-time feed updates */
-export const feedSseUrl = "/newsfeed/sse";
+export const feedSseUrl = "/sse";

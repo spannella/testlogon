@@ -58,17 +58,8 @@ export const deleteEvent = (calendarId: string, eventId: string) =>
 
 // ─── Availability & Booking ──────────────────────────────────────
 
-export const getAvailability = (calendarId: string, startUtc: string, endUtc: string) =>
-  api.get<Opening[]>(`/ui/calendars/${calendarId}/availability`, {
-    start_utc: startUtc,
-    end_utc: endUtc,
-  });
-
 export const createBookingLink = (calendarId: string, body: BookingLinkCreateIn) =>
-  api.post<BookingLink>(`/booking/links`, { ...body, calendar_id: calendarId });
-
-export const getBookingLink = (linkId: string) =>
-  api.get<BookingLink>(`/booking/links/${linkId}`);
+  api.post<BookingLink>(`/ui/calendars/${calendarId}/booking_links`, body);
 
 // ─── Calendar Sharing ───────────────────────────────────────────
 
