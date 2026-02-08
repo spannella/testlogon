@@ -10,6 +10,8 @@ cp .env.example .env          # copy and edit with your values
 
 The app runs in **DEV_MODE** by default — Cognito auth is bypassed and you can
 authenticate with any `Authorization: Bearer <user_id>` header.
+If you want a simple dev login in the UI, set `DEV_TEST_USER` and
+`DEV_TEST_PASSWORD` to allow those credentials to start a session in dev mode.
 
 ---
 
@@ -326,6 +328,10 @@ WS_TOKEN_SECRET=local-ws-secret
 AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=fakeMyKeyId
 AWS_SECRET_ACCESS_KEY=fakeSecretAccessKey
+
+# Optional: allow UI login with dev credentials
+DEV_TEST_USER=test-user-1
+DEV_TEST_PASSWORD=change-me
 ```
 
 > This boots the app in dev mode. Most API calls will fail with DynamoDB
