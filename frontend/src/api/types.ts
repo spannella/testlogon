@@ -197,6 +197,66 @@ export interface PasswordRecoveryConfirmReq {
   challenge_id?: string;
 }
 
+// ─── WebAuthn ────────────────────────────────────────────────────
+
+export interface WebAuthnRegisterBeginReq {
+  label?: string;
+}
+
+export interface WebAuthnRegisterBeginResp {
+  options: Record<string, unknown>;
+}
+
+export interface WebAuthnRegisterFinishReq {
+  credential: Record<string, unknown>;
+  label?: string;
+}
+
+export interface WebAuthnRegisterFinishResp {
+  credential_id: string;
+}
+
+export interface WebAuthnAuthBeginReq {
+  username: string;
+}
+
+export interface WebAuthnAuthBeginResp {
+  options: Record<string, unknown>;
+}
+
+export interface WebAuthnAuthFinishReq {
+  username: string;
+  credential: Record<string, unknown>;
+}
+
+export interface WebAuthnAuthFinishResp {
+  status: string;
+  session_id?: string;
+}
+
+// ─── Passwordless ────────────────────────────────────────────────
+
+export interface PasswordlessStartReq {
+  username: string;
+}
+
+export interface PasswordlessStartResp {
+  status: string;
+  sent_to: string[];
+}
+
+export interface PasswordlessVerifyReq {
+  token: string;
+}
+
+export interface PasswordlessVerifyResp {
+  status: string;
+  session_id?: string;
+  auth_required: boolean;
+  challenge_id?: string;
+  required_factors: string[];
+}
+
 // ─── Device Trust ────────────────────────────────────────────────
 
 export interface DeviceTrust {

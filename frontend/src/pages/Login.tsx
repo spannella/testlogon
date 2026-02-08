@@ -3,7 +3,7 @@ import { useNavigate, Link } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Loader2, Shield, Smartphone, Mail, KeyRound, ArrowLeft } from "lucide-react";
+import { Loader2, Shield, Smartphone, Mail, KeyRound, ArrowLeft, Fingerprint, Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,11 +23,16 @@ import {
   beginEmail,
   verifyEmail,
   useRecoveryCode,
+  passwordlessStart,
 } from "@/api/endpoints/auth";
+import {
+  authenticateBegin,
+  authenticateFinish,
+} from "@/api/endpoints/webauthn";
 
 // ─── Types ───────────────────────────────────────────────────────
 
-type LoginStep = "credentials" | "mfa";
+type LoginStep = "credentials" | "mfa" | "magic-link" | "webauthn";
 type MfaMethod = "totp" | "sms" | "email" | "recovery";
 
 const credentialsSchema = z.object({
@@ -88,6 +93,13 @@ export default function Login() {
   const [recoveryCode, setRecoveryCode] = React.useState("");
   const [smsSent, setSmsSent] = React.useState(false);
   const [emailSent, setEmailSent] = React.useState(false);
+
+  // Magic link state
+  const [magicEmail, setMagicEmail] = React.useState("");
+  const [magicSent, setMagicSent] = React.useState(false);
+
+  // WebAuthn login state
+  const [webauthnUsername, setWebauthnUsername] = React.useState("");
 
   // Loading / error
   const [loading, setLoading] = React.useState(false);
@@ -258,7 +270,95 @@ export default function Login() {
     setRecoveryCode("");
     setSmsSent(false);
     setEmailSent(false);
+    setMagicSent(false);
     setError(null);
+  };
+
+  // ── Magic link ────────────────────────────────────────────────────
+
+  const handleMagicLink = async () => {
+    if (!magicEmail.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await passwordlessStart({ username: magicEmail.trim() });
+      setMagicSent(true);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(err.detail || "Failed to send magic link.");
+      } else {
+        setError("Failed to send magic link.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ── WebAuthn login ────────────────────────────────────────────────
+
+  const handleWebAuthnLogin = async () => {
+    if (!webauthnUsername.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const beginResp = await authenticateBegin({ username: webauthnUsername.trim() });
+      const options = beginResp.options;
+
+      const credential = await navigator.credentials.get({
+        publicKey: options as unknown as PublicKeyCredentialRequestOptions,
+      });
+
+      if (!credential) {
+        setError("Authentication cancelled.");
+        return;
+      }
+
+      const pkCred = credential as PublicKeyCredential;
+      const response = pkCred.response as AuthenticatorAssertionResponse;
+
+      const finishResp = await authenticateFinish({
+        username: webauthnUsername.trim(),
+        credential: {
+          id: pkCred.id,
+          rawId: btoa(String.fromCharCode(...new Uint8Array(pkCred.rawId))),
+          type: pkCred.type,
+          response: {
+            authenticatorData: btoa(
+              String.fromCharCode(...new Uint8Array(response.authenticatorData)),
+            ),
+            clientDataJSON: btoa(
+              String.fromCharCode(...new Uint8Array(response.clientDataJSON)),
+            ),
+            signature: btoa(
+              String.fromCharCode(...new Uint8Array(response.signature)),
+            ),
+            ...(response.userHandle
+              ? {
+                  userHandle: btoa(
+                    String.fromCharCode(...new Uint8Array(response.userHandle)),
+                  ),
+                }
+              : {}),
+          },
+        },
+      });
+
+      if (finishResp.status === "ok" && finishResp.session_id) {
+        login(finishResp.session_id, "");
+        navigate("/", { replace: true });
+      } else {
+        setError("Authentication failed.");
+      }
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setError(err.detail || "Security key authentication failed.");
+      } else {
+        const msg = err instanceof Error ? err.message : "Authentication failed.";
+        setError(msg);
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   // ── Available MFA methods (from required_factors) ───────────────
@@ -355,13 +455,176 @@ export default function Login() {
                 </div>
               </CardContent>
 
-              <CardFooter>
+              <CardFooter className="flex-col gap-3">
                 <Button type="submit" className="w-full" size="lg" disabled={loading}>
                   {loading && <Loader2 className="animate-spin" />}
                   Sign in
                 </Button>
+                <div className="flex w-full items-center gap-2">
+                  <div className="h-px flex-1 bg-border" />
+                  <span className="text-xs text-muted-foreground">or</span>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+                <div className="flex w-full gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => { setStep("magic-link"); setError(null); }}
+                  >
+                    <Send className="mr-1 h-3.5 w-3.5" />
+                    Email link
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => { setStep("webauthn"); setError(null); }}
+                  >
+                    <Fingerprint className="mr-1 h-3.5 w-3.5" />
+                    Security key
+                  </Button>
+                </div>
               </CardFooter>
             </form>
+          ) : step === "magic-link" ? (
+            /* ── Magic Link Step ─────────────────────────────────── */
+            <>
+              <CardHeader className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={handleBack}
+                    disabled={loading}
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                  </Button>
+                  <div>
+                    <CardTitle className="text-xl">Sign in with email</CardTitle>
+                    <CardDescription>
+                      {magicSent
+                        ? "Check your inbox for the sign-in link"
+                        : "We'll send a magic link to your email"}
+                    </CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {error && (
+                  <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                    {error}
+                  </div>
+                )}
+                {magicSent ? (
+                  <div className="space-y-3 text-center py-4">
+                    <Mail className="mx-auto h-10 w-10 text-primary" />
+                    <p className="text-sm font-medium">Check your email</p>
+                    <p className="text-xs text-muted-foreground">
+                      We sent a sign-in link to <span className="font-medium">{magicEmail}</span>.
+                      Click the link to complete sign-in.
+                    </p>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      onClick={() => { setMagicSent(false); setError(null); }}
+                    >
+                      Use a different email
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <Label htmlFor="magic-email">Username or email</Label>
+                    <Input
+                      id="magic-email"
+                      placeholder="Enter your username or email"
+                      value={magicEmail}
+                      onChange={(e) => setMagicEmail(e.target.value)}
+                      disabled={loading}
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { e.preventDefault(); handleMagicLink(); }
+                      }}
+                    />
+                  </div>
+                )}
+              </CardContent>
+              {!magicSent && (
+                <CardFooter>
+                  <Button
+                    className="w-full"
+                    size="lg"
+                    onClick={handleMagicLink}
+                    disabled={loading || !magicEmail.trim()}
+                  >
+                    {loading && <Loader2 className="animate-spin" />}
+                    Send magic link
+                  </Button>
+                </CardFooter>
+              )}
+            </>
+          ) : step === "webauthn" ? (
+            /* ── WebAuthn Step ───────────────────────────────────── */
+            <>
+              <CardHeader className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={handleBack}
+                    disabled={loading}
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                  </Button>
+                  <div>
+                    <CardTitle className="text-xl">Security key</CardTitle>
+                    <CardDescription>
+                      Sign in using your registered security key
+                    </CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {error && (
+                  <div className="rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                    {error}
+                  </div>
+                )}
+                <div className="space-y-2">
+                  <Label htmlFor="webauthn-user">Username</Label>
+                  <Input
+                    id="webauthn-user"
+                    placeholder="Enter your username"
+                    value={webauthnUsername}
+                    onChange={(e) => setWebauthnUsername(e.target.value)}
+                    disabled={loading}
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); handleWebAuthnLogin(); }
+                    }}
+                  />
+                </div>
+              </CardContent>
+              <CardFooter>
+                <Button
+                  className="w-full"
+                  size="lg"
+                  onClick={handleWebAuthnLogin}
+                  disabled={loading || !webauthnUsername.trim()}
+                >
+                  {loading ? (
+                    <Loader2 className="animate-spin" />
+                  ) : (
+                    <Fingerprint className="mr-1 h-4 w-4" />
+                  )}
+                  Authenticate
+                </Button>
+              </CardFooter>
+            </>
           ) : (
             /* ── MFA Challenge Step ─────────────────────────────── */
             <>

@@ -19,6 +19,10 @@ import type {
   PasswordRecoveryStartReq,
   PasswordRecoveryStartResp,
   PasswordRecoveryConfirmReq,
+  PasswordlessStartReq,
+  PasswordlessStartResp,
+  PasswordlessVerifyReq,
+  PasswordlessVerifyResp,
 } from "@/api/types";
 
 // ─── Session ─────────────────────────────────────────────────────
@@ -74,3 +78,11 @@ export const passwordRecoveryStart = (body: PasswordRecoveryStartReq) =>
 
 export const passwordRecoveryConfirm = (body: PasswordRecoveryConfirmReq) =>
   api.post<OkResp>("/password-recovery/confirm", body);
+
+// ─── Passwordless (Magic Link) ──────────────────────────────────
+
+export const passwordlessStart = (body: PasswordlessStartReq) =>
+  api.post<PasswordlessStartResp>("/ui/passwordless/start", body);
+
+export const passwordlessVerify = (body: PasswordlessVerifyReq) =>
+  api.post<PasswordlessVerifyResp>("/ui/passwordless/verify", body);

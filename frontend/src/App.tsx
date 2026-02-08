@@ -8,6 +8,7 @@ import AppShell from "@/components/layout/AppShell";
 // ─── Lazy-loaded pages (code-split per route) ───────────────────
 const Login = lazy(() => import("@/pages/Login"));
 const PasswordRecovery = lazy(() => import("@/pages/PasswordRecovery"));
+const MagicLinkVerify = lazy(() => import("@/pages/MagicLinkVerify"));
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const MessagesPage = lazy(() => import("@/pages/messages/MessagesPage"));
 const FilesPage = lazy(() => import("@/pages/files/FilesPage"));
@@ -40,6 +41,7 @@ export default function App() {
         {/* Public routes (no shell) */}
         <Route path="/login" element={<Login />} />
         <Route path="/password-recovery" element={<PasswordRecovery />} />
+        <Route path="/magic-link-verify" element={<MagicLinkVerify />} />
 
         {/* Protected routes inside AppShell layout */}
         <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>

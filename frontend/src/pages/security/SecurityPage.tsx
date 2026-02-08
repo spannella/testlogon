@@ -5,6 +5,7 @@ import { Sessions } from "./Sessions";
 import { TrustedDevices } from "./TrustedDevices";
 import { ApiKeys } from "./ApiKeys";
 import { Recovery } from "./Recovery";
+import { WebAuthnDevices } from "./WebAuthnDevices";
 
 export default function SecurityPage() {
   return (
@@ -17,6 +18,7 @@ export default function SecurityPage() {
       <Tabs defaultValue="mfa">
         <TabsList className="flex-wrap">
           <TabsTrigger value="mfa">MFA Devices</TabsTrigger>
+          <TabsTrigger value="webauthn">Security Keys</TabsTrigger>
           <TabsTrigger value="sessions">Sessions</TabsTrigger>
           <TabsTrigger value="devices">Trusted Devices</TabsTrigger>
           <TabsTrigger value="apikeys">API Keys</TabsTrigger>
@@ -24,6 +26,9 @@ export default function SecurityPage() {
         </TabsList>
         <TabsContent value="mfa">
           <MfaDevices />
+        </TabsContent>
+        <TabsContent value="webauthn">
+          <WebAuthnDevices />
         </TabsContent>
         <TabsContent value="sessions">
           <Sessions />
