@@ -32,9 +32,20 @@ def _device_token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 def _device_token_from_request(req: Request) -> str:
-    return req.cookies.get(S.ui_device_cookie_name, "")
+    cookies = getattr(req, "cookies", {}) or {}
+    cookie_name = getattr(S, "ui_device_cookie_name", "")
+    return cookies.get(cookie_name, "") if cookie_name else ""
 
 def record_device_login(req: Request, user_sub: str) -> Dict[str, Any]:
+    if not getattr(S, "ddb_sessions_table", ""):
+        return {
+            "device_id": "",
+            "new_device": False,
+            "location_mismatch": False,
+            "trusted": True,
+            "token_mismatch": False,
+            "issue_token": False,
+        }
     ip = client_ip_from_request(req)
     user_agent = (req.headers.get("user-agent", "")[:512])
     device_id = _device_id(user_agent)
@@ -100,6 +111,8 @@ def record_device_login(req: Request, user_sub: str) -> Dict[str, Any]:
     }
 
 def ensure_device_cookie(req: Request, response: Response, user_sub: str) -> Optional[str]:
+    if not getattr(S, "ddb_sessions_table", ""):
+        return None
     user_agent = (req.headers.get("user-agent", "")[:512])
     device_id = _device_id(user_agent)
     sid = f"dev#{device_id}"

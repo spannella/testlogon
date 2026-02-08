@@ -92,9 +92,17 @@ def _anom_window_reset(item: Dict[str, Any], window_seconds: int) -> Dict[str, A
     return {"window_start": window_start, "set": set(item.get("set", []) or [])}
 
 def record_login_anomaly(user_sub: str, ip: str) -> Dict[str, Any]:
-    now = now_ts()
-    window = S.login_anomaly_window_seconds
     ip_prefix = _ip_prefix(ip)
+    if not _sessions_table_enabled():
+        return {
+            "ip_prefix": ip_prefix,
+            "user_ip_count": 0,
+            "ip_user_count": 0,
+            "user_threshold_exceeded": False,
+            "ip_threshold_exceeded": False,
+        }
+    now = now_ts()
+    window = getattr(S, "login_anomaly_window_seconds", 0)
     user_key = {"user_sub": user_sub, "session_id": "anom#login_ips"}
     ip_key = {"user_sub": _ip_user(ip_prefix), "session_id": "anom#login_targets"}
 
@@ -142,8 +150,8 @@ def record_login_anomaly(user_sub: str, ip: str) -> Dict[str, Any]:
         "ip_prefix": ip_prefix,
         "user_ip_count": user_ip_count,
         "ip_user_count": ip_user_count,
-        "user_threshold_exceeded": user_ip_count >= S.login_anomaly_ip_prefix_threshold,
-        "ip_threshold_exceeded": ip_user_count >= S.login_anomaly_user_threshold,
+        "user_threshold_exceeded": user_ip_count >= getattr(S, "login_anomaly_ip_prefix_threshold", 0),
+        "ip_threshold_exceeded": ip_user_count >= getattr(S, "login_anomaly_user_threshold", 0),
     }
 
 def rate_limit_login_attempt(user_sub: str, ip: str) -> None:

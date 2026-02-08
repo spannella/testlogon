@@ -6,12 +6,20 @@ from app.auth.deps import get_authenticated_user_sub
 from app.models import RecoveryReq
 from app.services.alerts import audit_event
 from app.services.mfa import consume_recovery_code
-from app.services.sessions import load_challenge_or_401, mark_factor_passed, maybe_finalize, rotate_session_cookies
+from app.services.sessions import (
+    load_challenge_or_401,
+    mark_factor_passed,
+    maybe_finalize,
+    rotate_session_cookies,
+    session_id_value,
+)
 
 router = APIRouter(prefix="/ui", tags=["recovery"])
 
 
-def _recover(req: Request, user_sub: str, factor: str, body: RecoveryReq, response: Response):
+def _recover(req: Request, user_sub: str, factor: str, body: RecoveryReq, response: Response | None):
+    if response is None:
+        response = Response()
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     if factor not in ("totp", "sms", "email"):
         raise HTTPException(400, "Invalid factor")
@@ -23,7 +31,7 @@ def _recover(req: Request, user_sub: str, factor: str, body: RecoveryReq, respon
     if sid:
         rotate_session_cookies(req, response, user_sub, sid)
     audit_event("mfa_recovery", user_sub, req, outcome="success", challenge_id=body.challenge_id, factor=factor)
-    return {"ok": True, "session_id": sid.session_id if sid else None}
+    return {"ok": True, "session_id": session_id_value(sid) if sid else None}
 
 
 @router.post("/recovery/{factor}")
@@ -31,7 +39,7 @@ async def recovery_factor(
     req: Request,
     factor: str,
     body: RecoveryReq,
-    response: Response,
+    response: Response = None,
     user_sub: str = Depends(get_authenticated_user_sub),
 ):
     return _recover(req, user_sub, factor, body, response)
@@ -41,7 +49,7 @@ async def recovery_factor(
 async def recovery_totp(
     req: Request,
     body: RecoveryReq,
-    response: Response,
+    response: Response = None,
     user_sub: str = Depends(get_authenticated_user_sub),
 ):
     return _recover(req, user_sub, "totp", body, response)
@@ -51,7 +59,7 @@ async def recovery_totp(
 async def recovery_sms(
     req: Request,
     body: RecoveryReq,
-    response: Response,
+    response: Response = None,
     user_sub: str = Depends(get_authenticated_user_sub),
 ):
     return _recover(req, user_sub, "sms", body, response)
@@ -61,7 +69,7 @@ async def recovery_sms(
 async def recovery_email(
     req: Request,
     body: RecoveryReq,
-    response: Response,
+    response: Response = None,
     user_sub: str = Depends(get_authenticated_user_sub),
 ):
     return _recover(req, user_sub, "email", body, response)
