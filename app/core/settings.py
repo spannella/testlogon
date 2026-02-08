@@ -23,6 +23,7 @@ class Settings:
     ddb_email_table: str = os.environ.get("DDB_EMAIL_TABLE", "")
 
     api_keys_table_name: str = os.environ.get("API_KEYS_TABLE_NAME", "api_keys")
+    users_table_name: str = os.environ.get("USERS_TABLE_NAME", "users")
     api_keys_user_index: str = os.environ.get("API_KEYS_USER_INDEX", "user_sub-index")
     api_key_pepper: str = os.environ.get("API_KEY_PEPPER", "")
     api_key_ttl_days: int = int(os.environ.get("API_KEY_TTL_DAYS", "365"))

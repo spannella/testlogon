@@ -2,7 +2,21 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, conint
+import re
+
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    conint,
+    field_validator,
+    model_validator,
+)
+
+from app.core.normalize import normalize_phone
+
+_PASSWORD_COMPLEXITY = re.compile(r"^(?=.*[A-Za-z])(?=.*\\d).+$")
 
 class UiSessionStartReq(BaseModel):
     # You can include client metadata; auth is handled separately.
@@ -97,6 +111,82 @@ class PasswordlessVerifyResp(BaseModel):
     auth_required: bool = False
     challenge_id: Optional[str] = None
     required_factors: List[str] = Field(default_factory=list)
+
+class RegisterStartReq(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    full_name: str
+    email: str = Field(validation_alias=AliasChoices("email", "username"))
+    password: str
+    confirm_password: str
+    delivery_method: Literal["email", "sms"] = "email"
+    phone: Optional[str] = None
+
+    @field_validator("full_name", "email")
+    @classmethod
+    def _strip_value(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Value required")
+        return cleaned
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_email(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if "@" not in cleaned:
+            raise ValueError("Invalid email")
+        return cleaned
+
+    @field_validator("phone")
+    @classmethod
+    def _normalize_phone(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            return normalize_phone(cleaned)
+        except Exception as exc:
+            raise ValueError("Invalid phone") from exc
+
+    @field_validator("password")
+    @classmethod
+    def _validate_password(cls, value: str) -> str:
+        if len(value) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        if not _PASSWORD_COMPLEXITY.match(value):
+            raise ValueError("Password must include letters and numbers")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_password_match(self) -> "RegisterStartReq":
+        if self.password != self.confirm_password:
+            raise ValueError("Passwords don't match")
+        return self
+
+class RegisterStartResp(BaseModel):
+    status: str
+    verification_required: bool = False
+    delivery_medium: Optional[str] = None
+    delivery_destination: Optional[str] = None
+    session_id: Optional[str] = None
+
+class RegisterConfirmReq(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    email: str = Field(validation_alias=AliasChoices("email", "username"))
+    confirmation_code: str = Field(validation_alias=AliasChoices("confirmation_code", "code"))
+
+    @field_validator("email")
+    @classmethod
+    def _normalize_confirm_email(cls, value: str) -> str:
+        cleaned = value.strip().lower()
+        if "@" not in cleaned:
+            raise ValueError("Invalid email")
+        return cleaned
+
+class RegisterConfirmResp(BaseModel):
+    status: str
 
 class WebAuthnRegisterBeginReq(BaseModel):
     label: Optional[str] = None
