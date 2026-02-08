@@ -216,9 +216,34 @@ function EventChip({ ev, variant, onEdit, onRecurrenceMenu }: EventChipProps) {
 
 // ─── Calendar View ──────────────────────────────────────────────
 
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== "undefined" ? window.innerWidth < breakpoint : false,
+  );
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < breakpoint);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 export function CalendarView() {
   const queryClient = useQueryClient();
-  const [view, setView] = useState("month");
+  const isMobile = useIsMobile();
+  const [view, setView] = useState(() =>
+    typeof window !== "undefined" && window.innerWidth < 768 ? "day" : "month",
+  );
+
+  // Switch to day view when going mobile, month when going desktop
+  const prevMobile = useRef(isMobile);
+  useEffect(() => {
+    if (isMobile !== prevMobile.current) {
+      prevMobile.current = isMobile;
+      if (isMobile && view === "month") setView("day");
+      else if (!isMobile && view === "day") setView("month");
+    }
+  }, [isMobile, view]);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedCalendarId, setSelectedCalendarId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);

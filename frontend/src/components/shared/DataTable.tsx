@@ -123,6 +123,7 @@ export function DataTable<T>({
 
   return (
     <div className={cn("space-y-2", className)}>
+      <div className="overflow-x-auto rounded-lg">
       <Table>
         <TableHeader>
           <TableRow>
@@ -194,6 +195,7 @@ export function DataTable<T>({
           )}
         </TableBody>
       </Table>
+      </div>
 
       {hasMore && (
         <div className="flex justify-center pt-2">

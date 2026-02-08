@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { cn } from "@/lib/utils";
+import { OnboardingChecklist } from "@/components/shared/OnboardingChecklist";
 
 import { getConversations } from "@/api/endpoints/messaging";
 import { getBalance, getSettings as getBillingSettings } from "@/api/endpoints/billing";
@@ -125,6 +126,9 @@ export default function Dashboard() {
         title="Dashboard"
         description="Overview of your account activity"
       />
+
+      {/* Onboarding checklist for new users */}
+      <OnboardingChecklist />
 
       {/* Summary cards */}
       <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">

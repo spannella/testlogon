@@ -4,6 +4,7 @@ import Sidebar from "./Sidebar";
 import Header from "./Header";
 import MobileNav from "./MobileNav";
 import { PageTransition } from "@/components/shared/PageTransition";
+import { OfflineBanner } from "@/components/shared/OfflineBanner";
 import {
   Sheet,
   SheetContent,
@@ -39,6 +40,7 @@ export default function AppShell() {
 
       {/* Main area */}
       <div className="flex flex-1 flex-col overflow-hidden">
+        <OfflineBanner />
         <Header onMobileMenuToggle={() => setMobileMenuOpen(true)} />
 
         <main id="main-content" className="flex-1 overflow-y-auto pb-16 md:pb-0">

@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { useAuthStore } from "@/stores/authStore";
 
 // ─── Helpers ─────────────────────────────────────────────────────
@@ -76,11 +77,18 @@ export async function api<T>(
     headers.set("Content-Type", "application/json");
   }
 
-  const res = await fetch(url, {
-    ...init,
-    headers,
-    credentials: "include",
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      headers,
+      credentials: "include",
+    });
+  } catch (err) {
+    // Network error (offline, DNS failure, etc.)
+    toast.error("Network error — check your connection and try again");
+    throw new ApiError(0, "Network error", err);
+  }
 
   // Handle 401 — try refreshing the session once
   if (res.status === 401) {
@@ -113,6 +121,14 @@ export async function api<T>(
     }
 
     return retryRes.json() as Promise<T>;
+  }
+
+  // Handle 403 — permission denied
+  if (res.status === 403) {
+    const body = await res.json().catch(() => null);
+    const detail = (body as Record<string, string>)?.detail ?? "Permission denied";
+    toast.error(detail);
+    throw new ApiError(403, detail, body);
   }
 
   // Handle non-2xx responses

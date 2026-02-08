@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/layout/AppShell";
+import { ErrorPage } from "@/components/shared/ErrorPage";
 
 // ─── Lazy-loaded pages (code-split per route) ───────────────────
 const Login = lazy(() => import("@/pages/Login"));
@@ -62,7 +63,11 @@ export default function App() {
           <Route path="purchases" element={<PurchasesPage />} />
           <Route path="purchases/:txnId" element={<PurchasesPage />} />
           <Route path="subscriptions" element={<SubscriptionsPage />} />
+          <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
+
+        {/* Catch-all 404 for unmatched routes */}
+        <Route path="*" element={<ErrorPage status={404} />} />
       </Routes>
     </Suspense>
   );
