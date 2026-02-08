@@ -101,7 +101,8 @@ async def get_messaging_user_id(
     authorization: Optional[str] = Header(default=None),
     x_session_id: Optional[str] = Header(default=None, alias="X-SESSION-ID"),
 ) -> str:
-    if x_session_id or request.cookies.get(S.ui_session_cookie_name):
+    cookies = getattr(request, "cookies", {}) or {}
+    if x_session_id or cookies.get(S.ui_session_cookie_name):
         user_sub = await get_authenticated_user_sub(request)
         ctx = await require_ui_session(request, user_sub=user_sub, x_session_id=x_session_id)
         return ctx["user_sub"]

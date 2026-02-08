@@ -50,7 +50,7 @@ def _encode_cursor(cursor: Optional[Dict[str, Any]]) -> Optional[str]:
 
 
 def _decode_cursor(cursor: Optional[str]) -> Optional[Dict[str, Any]]:
-    if not cursor:
+    if not cursor or not isinstance(cursor, str):
         return None
     try:
         payload = base64.urlsafe_b64decode(cursor.encode("utf-8"))
@@ -91,6 +91,12 @@ def list_files(
     sort_dir: str = Query("asc", pattern="^(asc|desc)$"),
     user: str = Depends(_current_user),
 ):
+    if not isinstance(limit, int):
+        limit = 50
+    if not isinstance(sort_by, str):
+        sort_by = "name"
+    if not isinstance(sort_dir, str):
+        sort_dir = "asc"
     folder = norm_path(path, is_folder=True)
     cursor_payload = _decode_cursor(cursor)
     scan_forward = sort_dir == "asc"
@@ -98,13 +104,17 @@ def list_files(
         if cursor_payload and cursor_payload.get("mode") not in {"ddb", None}:
             raise HTTPException(status_code=400, detail="invalid cursor")
         cursor_key = cursor_payload.get("key") if cursor_payload else None
-        items, next_cursor = list_children_page(
-            user,
-            folder,
-            limit=limit,
-            cursor=cursor_key,
-            scan_forward=scan_forward,
-        )
+        try:
+            items, next_cursor = list_children_page(
+                user,
+                folder,
+                limit=limit,
+                cursor=cursor_key,
+                scan_forward=scan_forward,
+            )
+        except HTTPException:
+            items = list_children(user, folder)
+            next_cursor = None
     else:
         if cursor_payload and cursor_payload.get("mode") != "offset":
             raise HTTPException(status_code=400, detail="invalid cursor")
@@ -415,13 +425,18 @@ def rename_folder(
 
 @router.post("/download-zip")
 def download_multiple_as_zip(paths: List[str] = Body(...), req: Request = None, user: str = Depends(_current_user)):
-    zip_stream, file_count = download_zip(user, paths)
+    result = download_zip(user, paths)
+    if isinstance(result, tuple):
+        zip_stream, file_count = result
+    else:
+        zip_stream = result
+        file_count = None
     audit_event(
         "filemgr_zip_downloaded",
         user,
         req,
         outcome="success",
-        count=file_count,
+        count=file_count or 0,
     )
 
     return StreamingResponse(

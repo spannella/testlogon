@@ -843,7 +843,6 @@ async def create_calendar(body: CalendarCreateIn, ctx: Dict[str, str] = Depends(
         "created_at_utc": now,
     }
     T.calendar.put_item(Item=item)
-    T.calendar.put_item(Item=_calendar_access_item(ctx["user_sub"], calendar_id, "owner"))
     return CalendarOut(
         calendar_id=calendar_id,
         name=body.name,

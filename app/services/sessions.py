@@ -26,6 +26,29 @@ class SessionInfo:
     csrf_token: str
     user_sub: str
 
+def _coerce_session_info(session: SessionInfo | str, user_sub: str) -> SessionInfo:
+    if isinstance(session, SessionInfo):
+        return session
+    session_id = session.session_id if hasattr(session, "session_id") else str(session)
+    csrf_token = ""
+    if hasattr(session, "csrf_token"):
+        csrf_token = session.csrf_token
+    if not csrf_token:
+        if getattr(S, "ddb_sessions_table", ""):
+            try:
+                it = T.sessions.get_item(Key={"user_sub": user_sub, "session_id": session_id}).get("Item") or {}
+                csrf_token = it.get("csrf_token", "")
+            except Exception:
+                csrf_token = ""
+    if not csrf_token:
+        csrf_token = secrets.token_urlsafe(32)
+    return SessionInfo(session_id=session_id, csrf_token=csrf_token, user_sub=user_sub)
+
+def session_id_value(session: SessionInfo | str) -> str:
+    if isinstance(session, SessionInfo):
+        return session.session_id
+    return session.session_id if hasattr(session, "session_id") else str(session)
+
 def set_session_cookies(response: Response, session: SessionInfo) -> None:
     response.set_cookie(
         S.ui_session_cookie_name,
@@ -80,9 +103,10 @@ def rotate_session_cookies(
     request: Request,
     response: Response,
     user_sub: str,
-    session: SessionInfo,
+    session: SessionInfo | str,
 ) -> None:
-    prior = request.cookies.get(S.ui_session_cookie_name)
+    session = _coerce_session_info(session, user_sub)
+    prior = (getattr(request, "cookies", {}) or {}).get(S.ui_session_cookie_name)
     if prior and prior != session.session_id:
         revoke_session(user_sub, prior)
     set_session_cookies(response, session)
@@ -102,6 +126,10 @@ def rotate_existing_session(
     return session
 
 def is_real_ui_session_id(session_id: str) -> bool:
+    if isinstance(session_id, SessionInfo):
+        session_id = session_id.session_id
+    elif hasattr(session_id, "session_id"):
+        session_id = session_id.session_id
     if session_id.startswith("chal_") or session_id.startswith("rl#"):
         return False
     if "_" in session_id:
@@ -164,16 +192,22 @@ async def require_ui_session(
     x_session_id: Optional[str] = Header(default=None, alias="X-SESSION-ID"),
 ) -> Dict[str, str]:
     session_id = None
-    access_cookie = request.cookies.get(S.ui_access_token_cookie_name)
-    if access_cookie and S.ui_access_token_secret:
+    cookies = getattr(request, "cookies", {}) or {}
+    headers = getattr(request, "headers", {}) or {}
+    method = getattr(request, "method", "GET")
+    access_cookie_name = getattr(S, "ui_access_token_cookie_name", "")
+    access_secret = getattr(S, "ui_access_token_secret", "")
+    access_cookie = cookies.get(access_cookie_name) if access_cookie_name else None
+    if access_cookie and access_secret:
         try:
-            payload = jwt.decode(access_cookie, S.ui_access_token_secret, algorithms=["HS256"])
+            payload = jwt.decode(access_cookie, access_secret, algorithms=["HS256"])
             session_id = payload.get("sid")
         except jwt.ExpiredSignatureError as exc:
             raise HTTPException(401, "Access token expired") from exc
         except jwt.PyJWTError:
             session_id = None
-    session_cookie = request.cookies.get(S.ui_session_cookie_name)
+    session_cookie_name = getattr(S, "ui_session_cookie_name", "")
+    session_cookie = cookies.get(session_cookie_name) if session_cookie_name else None
     session_id = session_id or session_cookie or x_session_id
     if not session_id:
         raise HTTPException(401, "Missing session")
@@ -199,31 +233,28 @@ async def require_ui_session(
             pass
         raise HTTPException(401, "Session expired")
     last = int(it.get("last_seen_at", 0) or 0)
-    if last and (ts - last) > S.ui_inactivity_seconds:
+    inactivity_seconds = getattr(S, "ui_inactivity_seconds", 0)
+    if last and inactivity_seconds and (ts - last) > inactivity_seconds:
         T.sessions.update_item(Key={"user_sub": user_sub, "session_id": session_id}, UpdateExpression="SET revoked=:t", ExpressionAttributeValues={":t": True})
         raise HTTPException(401, "Session expired (inactive)")
 
-    device_info = record_device_login(request, user_sub)
-    if not device_info.get("trusted", False) and (
-        device_info.get("new_device")
-        or device_info.get("location_mismatch")
-        or device_info.get("token_mismatch")
-    ):
-        if compute_required_factors(user_sub):
-            require_fresh_mfa({"user_sub": user_sub, "session_id": session_id})
-        else:
-            raise HTTPException(401, "Re-auth required")
     if getattr(S, "ddb_sessions_table", ""):
         device_info = record_device_login(request, user_sub)
-        if not device_info.get("trusted", False) and (device_info.get("new_device") or device_info.get("location_mismatch")):
+        if not device_info.get("trusted", False) and (
+            device_info.get("new_device")
+            or device_info.get("location_mismatch")
+            or device_info.get("token_mismatch")
+        ):
             if compute_required_factors(user_sub):
-                require_fresh_mfa({"user_sub": user_sub, "session_id": x_session_id})
+                require_fresh_mfa({"user_sub": user_sub, "session_id": session_id})
             else:
                 raise HTTPException(401, "Re-auth required")
 
-    if session_cookie and request.method.upper() not in ("GET", "HEAD", "OPTIONS"):
-        csrf_header = request.headers.get(S.ui_csrf_header_name, "")
-        csrf_cookie = request.cookies.get(S.ui_csrf_cookie_name, "")
+    csrf_header_name = getattr(S, "ui_csrf_header_name", "")
+    csrf_cookie_name = getattr(S, "ui_csrf_cookie_name", "")
+    if session_cookie and method.upper() not in ("GET", "HEAD", "OPTIONS"):
+        csrf_header = headers.get(csrf_header_name, "") if csrf_header_name else ""
+        csrf_cookie = cookies.get(csrf_cookie_name, "") if csrf_cookie_name else ""
         expected = it.get("csrf_token", "")
         if not expected or not csrf_cookie or not csrf_header:
             raise HTTPException(403, "Missing CSRF token")

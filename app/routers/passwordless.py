@@ -15,7 +15,13 @@ from app.services.rate_limit import (
     clear_lockout,
     record_login_anomaly,
 )
-from app.services.sessions import compute_required_factors, create_real_session, create_stepup_challenge, rotate_session_cookies
+from app.services.sessions import (
+    compute_required_factors,
+    create_real_session,
+    create_stepup_challenge,
+    rotate_session_cookies,
+    session_id_value,
+)
 
 router = APIRouter(prefix="/ui/passwordless", tags=["passwordless"])
 
@@ -48,10 +54,16 @@ async def passwordless_start(req: Request, body: PasswordlessStartReq) -> Dict[s
         resp = {"sent_to": []}
     else:
         audit_event("passwordless_start", username, req, outcome="success")
-    return {"status": "sent", "sent_to": []}
+    return {"status": "sent", "sent_to": resp.get("sent_to", [])}
 
 @router.post("/verify", response_model=PasswordlessVerifyResp)
-async def passwordless_verify(req: Request, body: PasswordlessVerifyReq, response: Response) -> Dict[str, object]:
+async def passwordless_verify(
+    req: Request,
+    body: PasswordlessVerifyReq,
+    response: Response = None,
+) -> Dict[str, object]:
+    if response is None:
+        response = Response()
     record = load_magic_link(body.token)
     user_sub = record.get("target_user_sub", "")
     if not user_sub:
@@ -95,5 +107,6 @@ async def passwordless_verify(req: Request, body: PasswordlessVerifyReq, respons
     session = create_real_session(req, user_sub)
     rotate_session_cookies(req, response, user_sub, session)
     clear_lockout(user_sub, client_ip_from_request(req), "passwordless_verify")
-    audit_event("passwordless_verify", user_sub, req, outcome="success", session_id=session.session_id)
-    return {"status": "ok", "session_id": session.session_id, "auth_required": False}
+    session_id = session_id_value(session)
+    audit_event("passwordless_verify", user_sub, req, outcome="success", session_id=session_id)
+    return {"status": "ok", "session_id": session_id, "auth_required": False}

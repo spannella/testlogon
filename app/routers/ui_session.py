@@ -25,6 +25,7 @@ from app.services.sessions import (
     require_ui_session,
     rotate_session_cookies,
     rotate_refresh_token,
+    session_id_value,
 )
 from app.metrics import record_session_revoked
 from app.core.tables import T
@@ -36,9 +37,11 @@ router = APIRouter(prefix="/ui", tags=["ui-session"])
 async def ui_session_start(
     req: Request,
     body: UiSessionStartReq,
-    response: Response,
+    response: Response = None,
     user_sub: str = Depends(get_authenticated_user_sub),
 ):
+    if response is None:
+        response = Response()
     rate_limit_login_attempt(user_sub, client_ip_from_request(req))
     anomaly = record_login_anomaly(user_sub, client_ip_from_request(req))
     if anomaly.get("user_threshold_exceeded") or anomaly.get("ip_threshold_exceeded"):
@@ -77,8 +80,9 @@ async def ui_session_start(
     if not required:
         session = create_real_session(req, user_sub)
         rotate_session_cookies(req, response, user_sub, session)
-        audit_event("ui_session_start", user_sub, req, outcome="success", session_id=session.session_id)
-        return UiSessionStartResp(auth_required=False, session_id=session.session_id, required_factors=[])
+        session_id = session_id_value(session)
+        audit_event("ui_session_start", user_sub, req, outcome="success", session_id=session_id)
+        return UiSessionStartResp(auth_required=False, session_id=session_id, required_factors=[])
     challenge_id = create_stepup_challenge(req, user_sub, required_factors=required)
     audit_event("ui_session_start", user_sub, req, outcome="info", required_factors=required, challenge_id=challenge_id)
     return UiSessionStartResp(auth_required=True, challenge_id=challenge_id, required_factors=required)
@@ -87,9 +91,11 @@ async def ui_session_start(
 async def ui_session_finalize(
     req: Request,
     body: UiSessionFinalizeReq,
-    response: Response,
+    response: Response = None,
     user_sub: str = Depends(get_authenticated_user_sub),
 ):
+    if response is None:
+        response = Response()
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     sid = maybe_finalize(req, user_sub, body.challenge_id)
     if sid:
@@ -97,8 +103,9 @@ async def ui_session_finalize(
         if body.remember_device:
             device_id = trust_current_device(req, user_sub)
             audit_event("device_trust", user_sub, req, outcome="success", device_id=device_id)
-        audit_event("ui_session_finalize", user_sub, req, outcome="success", challenge_id=body.challenge_id, session_id=sid.session_id)
-        return {"status": "ok", "session_id": sid.session_id}
+        session_id = session_id_value(sid)
+        audit_event("ui_session_finalize", user_sub, req, outcome="success", challenge_id=body.challenge_id, session_id=session_id)
+        return {"status": "ok", "session_id": session_id}
     audit_event("ui_session_finalize", user_sub, req, outcome="pending", challenge_id=body.challenge_id, passed=chal.get("passed", {}))
     return {"status": "pending", "required_factors": chal.get("required_factors", []), "passed": chal.get("passed", {})}
 
@@ -133,9 +140,11 @@ async def ui_sessions(ctx: Dict[str, str] = Depends(require_ui_session)):
 async def ui_sessions_revoke(
     req: Request,
     body: Dict[str, Any],
-    response: Response,
+    response: Response = None,
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
+    if response is None:
+        response = Response()
     target = body.get("session_id","")
     if not target:
         return {"status":"error","reason":"missing session_id"}
@@ -150,9 +159,11 @@ async def ui_sessions_revoke(
 @router.post("/session/logout")
 async def ui_session_logout(
     req: Request,
-    response: Response,
+    response: Response = None,
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
+    if response is None:
+        response = Response()
     T.sessions.update_item(
         Key={"user_sub": ctx["user_sub"], "session_id": ctx["session_id"]},
         UpdateExpression="SET revoked=:t, revoked_at=:now",
