@@ -3,6 +3,7 @@ import { Outlet } from "react-router-dom";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
 import MobileNav from "./MobileNav";
+import { PageTransition } from "@/components/shared/PageTransition";
 import {
   Sheet,
   SheetContent,
@@ -41,7 +42,9 @@ export default function AppShell() {
         <Header onMobileMenuToggle={() => setMobileMenuOpen(true)} />
 
         <main id="main-content" className="flex-1 overflow-y-auto pb-16 md:pb-0">
-          <Outlet />
+          <PageTransition>
+            <Outlet />
+          </PageTransition>
         </main>
       </div>
 

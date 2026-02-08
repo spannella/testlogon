@@ -84,6 +84,18 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
   // Real-time alert stream
   const { unreadCount, resetUnread } = useAlertStream(true);
 
+  // Bell shake animation when unread count increases
+  const [bellShake, setBellShake] = React.useState(false);
+  const prevUnreadRef = React.useRef(unreadCount);
+  React.useEffect(() => {
+    if (unreadCount > prevUnreadRef.current) {
+      setBellShake(true);
+      const timer = setTimeout(() => setBellShake(false), 500);
+      return () => clearTimeout(timer);
+    }
+    prevUnreadRef.current = unreadCount;
+  }, [unreadCount]);
+
   // Fetch recent alerts for the popover
   const recentAlerts = useQuery({
     queryKey: ["alerts", "recent"],
@@ -153,7 +165,7 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
         <Button
           variant="ghost"
           size="icon"
-          className="md:hidden"
+          className="md:hidden focus-visible:ring-2 focus-visible:ring-ring"
           onClick={onMobileMenuToggle}
           aria-label="Open menu"
         >
@@ -184,6 +196,7 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
           size="icon"
           onClick={cycleTheme}
           aria-label={`Theme: ${theme}`}
+          className="focus-visible:ring-2 focus-visible:ring-ring"
         >
           {themeIcon}
         </Button>
@@ -194,10 +207,10 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
             <Button
               variant="ghost"
               size="icon"
-              className="relative"
+              className="relative focus-visible:ring-2 focus-visible:ring-ring"
               aria-label="Alerts"
             >
-              <Bell className="h-5 w-5" />
+              <Bell className={cn("h-5 w-5", bellShake && "animate-bell-shake")} />
               {unreadCount > 0 && (
                 <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold text-destructive-foreground">
                   {unreadCount > 99 ? "99+" : unreadCount}
