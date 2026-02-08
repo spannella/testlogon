@@ -21,6 +21,12 @@ def _cognito_client_id() -> str:
     return S.cognito_app_client_id
 
 
+def _cognito_user_pool_id() -> str:
+    if not S.cognito_user_pool_id:
+        raise HTTPException(500, "Cognito user pool id not configured")
+    return S.cognito_user_pool_id
+
+
 def cognito_client():
     return boto3.client("cognito-idp", region_name=_cognito_region())
 
@@ -56,3 +62,54 @@ def cognito_refresh_tokens(refresh_token: str) -> Dict[str, Any]:
     if not result:
         raise HTTPException(401, "Refresh token rejected")
     return result
+
+
+def cognito_sign_up(username: str, password: str, full_name: str) -> Dict[str, Any]:
+    client = cognito_client()
+    try:
+        return client.sign_up(
+            ClientId=_cognito_client_id(),
+            Username=username,
+            Password=password,
+            UserAttributes=[
+                {"Name": "email", "Value": username},
+                {"Name": "name", "Value": full_name},
+            ],
+        )
+    except client.exceptions.UsernameExistsException as exc:  # type: ignore[attr-defined]
+        raise HTTPException(409, "User already exists") from exc
+    except client.exceptions.InvalidPasswordException as exc:  # type: ignore[attr-defined]
+        raise HTTPException(400, "Invalid password") from exc
+    except client.exceptions.InvalidParameterException as exc:  # type: ignore[attr-defined]
+        raise HTTPException(400, "Invalid registration parameters") from exc
+
+
+def cognito_confirm_sign_up(username: str, code: str) -> Dict[str, Any]:
+    client = cognito_client()
+    try:
+        return client.confirm_sign_up(
+            ClientId=_cognito_client_id(),
+            Username=username,
+            ConfirmationCode=code,
+        )
+    except client.exceptions.CodeMismatchException as exc:  # type: ignore[attr-defined]
+        raise HTTPException(400, "Invalid confirmation code") from exc
+    except client.exceptions.ExpiredCodeException as exc:  # type: ignore[attr-defined]
+        raise HTTPException(400, "Confirmation code expired") from exc
+    except client.exceptions.NotAuthorizedException as exc:  # type: ignore[attr-defined]
+        raise HTTPException(400, "User already confirmed") from exc
+    except client.exceptions.UserNotFoundException as exc:  # type: ignore[attr-defined]
+        raise HTTPException(404, "User not found") from exc
+
+
+def cognito_admin_confirm_sign_up(username: str) -> Dict[str, Any]:
+    client = cognito_client()
+    try:
+        return client.admin_confirm_sign_up(
+            UserPoolId=_cognito_user_pool_id(),
+            Username=username,
+        )
+    except client.exceptions.UserNotFoundException as exc:  # type: ignore[attr-defined]
+        raise HTTPException(404, "User not found") from exc
+    except client.exceptions.NotAuthorizedException as exc:  # type: ignore[attr-defined]
+        raise HTTPException(403, "Not authorized to confirm user") from exc

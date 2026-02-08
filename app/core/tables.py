@@ -13,6 +13,7 @@ class Tables:
     sms: Any
     recovery: Any
     email: Any
+    users: Any
     api_keys: Any
     alerts: Any
     alert_prefs: Any
@@ -34,6 +35,7 @@ T = Tables(
     sms=ddb.Table(S.ddb_sms_table),
     recovery=ddb.Table(S.ddb_recovery_table),
     email=ddb.Table(S.ddb_email_table),
+    users=ddb.Table(S.users_table_name),
     api_keys=ddb.Table(S.api_keys_table_name),
     alerts=ddb.Table(S.alerts_table_name),
     alert_prefs=ddb.Table(S.alert_prefs_table_name),

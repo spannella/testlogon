@@ -8,6 +8,7 @@ import { ErrorPage } from "@/components/shared/ErrorPage";
 
 // ─── Lazy-loaded pages (code-split per route) ───────────────────
 const Login = lazy(() => import("@/pages/Login"));
+const Register = lazy(() => import("@/pages/Register"));
 const PasswordRecovery = lazy(() => import("@/pages/PasswordRecovery"));
 const MagicLinkVerify = lazy(() => import("@/pages/MagicLinkVerify"));
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
@@ -41,6 +42,7 @@ export default function App() {
       <Routes>
         {/* Public routes (no shell) */}
         <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
         <Route path="/password-recovery" element={<PasswordRecovery />} />
         <Route path="/magic-link-verify" element={<MagicLinkVerify />} />
 

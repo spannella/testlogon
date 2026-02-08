@@ -487,6 +487,12 @@ export default function Login() {
                     Security key
                   </Button>
                 </div>
+                <div className="text-center text-xs text-muted-foreground">
+                  Don&apos;t have an account?{" "}
+                  <Link to="/register" className="text-primary hover:underline">
+                    Register
+                  </Link>
+                </div>
               </CardFooter>
             </form>
           ) : step === "magic-link" ? (
