@@ -10,6 +10,7 @@ import requests
 from fastapi import HTTPException, Request
 
 from app.core.settings import S
+from app.models import UiSessionStartReq
 
 _JWKS_CACHE: Optional[Dict[str, Any]] = None
 _JWKS_FETCHED_AT: float = 0.0
@@ -134,3 +135,16 @@ async def get_authenticated_user_sub(request: Request) -> str:
     auth = request.headers.get("authorization", "")
     token = extract_bearer_token(auth)
     return _decode_jwt_sub(token) or token
+
+
+async def resolve_dev_or_authenticated_user_sub(
+    request: Request,
+    body: UiSessionStartReq,
+) -> str:
+    if S.dev_mode and S.dev_test_user and S.dev_test_password:
+        context = body.challenge_context or {}
+        username = context.get("username")
+        password = context.get("password")
+        if username == S.dev_test_user and password == S.dev_test_password:
+            return S.dev_test_user
+    return await get_authenticated_user_sub(request)

@@ -133,6 +133,8 @@ class Settings:
 
     audit_log_enabled: bool = os.environ.get("AUDIT_LOG_ENABLED", "1") not in ("0","false","False")
     dev_mode: bool = os.environ.get("DEV_MODE", "1") not in ("0", "false", "False")
+    dev_test_user: str = os.environ.get("DEV_TEST_USER", "")
+    dev_test_password: str = os.environ.get("DEV_TEST_PASSWORD", "")
 
     # Billing / CCBill
     ccbill_base_url: str = os.environ.get("CCBILL_BASE_URL", "https://api.ccbill.com").rstrip("/")

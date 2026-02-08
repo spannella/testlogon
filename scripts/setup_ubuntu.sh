@@ -34,6 +34,11 @@ deactivate
 
 if [[ -f "frontend/package.json" ]]; then
   npm --prefix frontend install
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    chown -R "${SUDO_USER}:${SUDO_USER}" frontend/node_modules frontend/package-lock.json 2>/dev/null || true
+    chown -R "${SUDO_USER}:${SUDO_USER}" frontend 2>/dev/null || true
+  fi
+  chmod -R u+rwX frontend/node_modules 2>/dev/null || true
 fi
 
 echo "Setup complete. Configure env vars (see docs/run-deploy.md) and run scripts/run_dev.sh."

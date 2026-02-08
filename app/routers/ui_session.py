@@ -5,7 +5,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from boto3.dynamodb.conditions import Key
 
-from app.auth.deps import get_authenticated_user_sub
+from app.auth.deps import get_authenticated_user_sub, resolve_dev_or_authenticated_user_sub
 from app.models import UiSessionFinalizeReq, UiSessionStartReq, UiSessionStartResp
 from app.core.normalize import client_ip_from_request
 from app.core.settings import S
@@ -38,7 +38,7 @@ async def ui_session_start(
     req: Request,
     body: UiSessionStartReq,
     response: Response = None,
-    user_sub: str = Depends(get_authenticated_user_sub),
+    user_sub: str = Depends(resolve_dev_or_authenticated_user_sub),
 ):
     if response is None:
         response = Response()
