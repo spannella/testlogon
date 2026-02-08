@@ -1,0 +1,199 @@
+import { NavLink, useLocation } from "react-router-dom";
+import {
+  LayoutDashboard,
+  MessageSquare,
+  Rss,
+  Store,
+  ShoppingCart,
+  CreditCard,
+  ClipboardList,
+  Repeat,
+  FolderOpen,
+  CalendarDays,
+  User,
+  Shield,
+  Settings,
+  Bell,
+  PanelLeftClose,
+  PanelLeft,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Separator } from "@/components/ui/separator";
+import { useUiStore } from "@/stores/uiStore";
+
+// ─── Navigation Config ──────────────────────────────────────────
+
+interface NavItem {
+  label: string;
+  path: string;
+  icon: React.ReactNode;
+  badge?: number;
+}
+
+interface NavGroup {
+  title: string;
+  items: NavItem[];
+}
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    title: "Main",
+    items: [
+      { label: "Dashboard", path: "/", icon: <LayoutDashboard className="h-5 w-5" /> },
+      { label: "Messages", path: "/messages", icon: <MessageSquare className="h-5 w-5" /> },
+      { label: "Feed", path: "/feed", icon: <Rss className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "Commerce",
+    items: [
+      { label: "Shop", path: "/shop", icon: <Store className="h-5 w-5" /> },
+      { label: "Cart", path: "/cart", icon: <ShoppingCart className="h-5 w-5" /> },
+      { label: "Billing", path: "/billing", icon: <CreditCard className="h-5 w-5" /> },
+      { label: "Orders", path: "/purchases", icon: <ClipboardList className="h-5 w-5" /> },
+      { label: "Subscriptions", path: "/subscriptions", icon: <Repeat className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "Productivity",
+    items: [
+      { label: "Files", path: "/files", icon: <FolderOpen className="h-5 w-5" /> },
+      { label: "Calendar", path: "/calendar", icon: <CalendarDays className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "Account",
+    items: [
+      { label: "Profile", path: "/profile", icon: <User className="h-5 w-5" /> },
+      { label: "Security", path: "/security", icon: <Shield className="h-5 w-5" /> },
+      { label: "Alerts", path: "/alerts", icon: <Bell className="h-5 w-5" /> },
+      { label: "Settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
+    ],
+  },
+];
+
+// ─── Sidebar Component ──────────────────────────────────────────
+
+export default function Sidebar() {
+  const collapsed = useUiStore((s) => s.sidebarCollapsed);
+  const toggleSidebar = useUiStore((s) => s.toggleSidebar);
+  const location = useLocation();
+
+  const isActive = (path: string) => {
+    if (path === "/") return location.pathname === "/";
+    return location.pathname.startsWith(path);
+  };
+
+  return (
+    <aside
+      className={cn(
+        "hidden md:flex flex-col border-r border-border bg-card transition-all duration-200 ease-in-out",
+        collapsed ? "w-16" : "w-60",
+      )}
+    >
+      {/* Logo */}
+      <div className={cn("flex h-14 items-center border-b border-border px-4", collapsed && "justify-center px-0")}>
+        {collapsed ? (
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <span className="text-sm font-bold">T</span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <span className="text-sm font-bold">T</span>
+            </div>
+            <span className="text-base font-semibold tracking-tight">TestLogon</span>
+          </div>
+        )}
+      </div>
+
+      {/* Navigation */}
+      <nav className="flex-1 overflow-y-auto px-2 py-3">
+        {NAV_GROUPS.map((group, gi) => (
+          <div key={group.title}>
+            {gi > 0 && <Separator className="my-2" />}
+            {!collapsed && (
+              <span className="mb-1 block px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                {group.title}
+              </span>
+            )}
+            <ul className="space-y-0.5">
+              {group.items.map((item) => {
+                const active = isActive(item.path);
+                const link = (
+                  <NavLink
+                    key={item.path}
+                    to={item.path}
+                    className={cn(
+                      "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+                      active
+                        ? "bg-primary/10 text-primary border-l-2 border-primary -ml-px"
+                        : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                      collapsed && "justify-center px-0 gap-0",
+                    )}
+                  >
+                    <span className={cn("shrink-0", active && "text-primary")}>
+                      {item.icon}
+                    </span>
+                    {!collapsed && (
+                      <span className="truncate">{item.label}</span>
+                    )}
+                    {!collapsed && item.badge != null && item.badge > 0 && (
+                      <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
+                        {item.badge > 99 ? "99+" : item.badge}
+                      </span>
+                    )}
+                  </NavLink>
+                );
+
+                if (collapsed) {
+                  return (
+                    <li key={item.path}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>{link}</TooltipTrigger>
+                        <TooltipContent side="right" sideOffset={8}>
+                          {item.label}
+                        </TooltipContent>
+                      </Tooltip>
+                    </li>
+                  );
+                }
+
+                return <li key={item.path}>{link}</li>;
+              })}
+            </ul>
+          </div>
+        ))}
+      </nav>
+
+      {/* Collapse toggle */}
+      <div className="border-t border-border p-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn("w-full", collapsed ? "justify-center" : "justify-start")}
+              onClick={toggleSidebar}
+              aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              {collapsed ? (
+                <PanelLeft className="h-4 w-4" />
+              ) : (
+                <>
+                  <PanelLeftClose className="h-4 w-4" />
+                  <span className="ml-2">Collapse</span>
+                </>
+              )}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="right" sideOffset={8}>
+            {collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          </TooltipContent>
+        </Tooltip>
+      </div>
+    </aside>
+  );
+}
