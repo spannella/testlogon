@@ -281,6 +281,10 @@ def send_alert_webhook(payload: Dict[str, Any], *, alert_type: str, alert_id: st
             headers=headers,
             timeout=S.alerts_webhook_timeout_seconds,
         )
+    except Exception:
+        pass
+
+
 def _normalize_webhook_urls(values: List[str]) -> List[str]:
     cleaned: List[str] = []
     seen = set()
