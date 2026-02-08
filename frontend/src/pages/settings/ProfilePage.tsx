@@ -2,6 +2,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Profile } from "./Profile";
 import { Addresses } from "./Addresses";
+import { ProfileAudit } from "./ProfileAudit";
 
 export default function ProfilePage() {
   return (
@@ -15,12 +16,16 @@ export default function ProfilePage() {
         <TabsList>
           <TabsTrigger value="profile">Profile</TabsTrigger>
           <TabsTrigger value="addresses">Addresses</TabsTrigger>
+          <TabsTrigger value="activity">Activity</TabsTrigger>
         </TabsList>
         <TabsContent value="profile">
           <Profile />
         </TabsContent>
         <TabsContent value="addresses">
           <Addresses />
+        </TabsContent>
+        <TabsContent value="activity">
+          <ProfileAudit />
         </TabsContent>
       </Tabs>
     </div>

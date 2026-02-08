@@ -85,5 +85,17 @@ export const getItemReviews = (itemId: string, pageSize = 50) =>
     page_size: String(pageSize),
   });
 
+export const deleteCatalogItem = (categoryId: string, itemId: string) =>
+  api.del<OkResp>(`/ui/catalog/categories/${categoryId}/items/${itemId}`);
+
+export const uploadItemImage = (categoryId: string, itemId: string, file: File) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  return api.upload<CatalogItem>(
+    `/ui/catalog/categories/${categoryId}/items/${itemId}/images/upload`,
+    formData,
+  );
+};
+
 export const createReview = (itemId: string, body: CatalogReviewIn) =>
   api.post<CatalogReview>(`/ui/catalog/items/${itemId}/reviews`, body);

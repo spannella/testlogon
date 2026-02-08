@@ -1076,6 +1076,33 @@ export interface SubscriptionInvoice {
   proration_period_end?: number;
 }
 
+// ─── Push Devices ────────────────────────────────────────────────
+
+export interface PushDevice {
+  device_id: string;
+  platform: string;
+  created_at: number;
+  last_seen_at: number;
+}
+
+export interface PushRegisterReq {
+  token: string;
+  platform: string;
+}
+
+export interface PushRevokeReq {
+  device_id: string;
+}
+
+// ─── Profile Audit ──────────────────────────────────────────────
+
+export interface ProfileAuditEntry {
+  event: string;
+  ts: number;
+  outcome?: string;
+  [key: string]: unknown;
+}
+
 // ─── Generic ─────────────────────────────────────────────────────
 
 export interface OkResp {
