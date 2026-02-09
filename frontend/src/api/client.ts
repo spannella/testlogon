@@ -8,6 +8,38 @@ function getCookie(name: string): string | null {
   return match ? decodeURIComponent(match[1]!) : null;
 }
 
+function normalizeErrorDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (typeof item === "string") {
+          return item;
+        }
+        if (item && typeof item === "object" && "msg" in item) {
+          const message = (item as { msg?: unknown }).msg;
+          if (typeof message === "string") {
+            return message;
+          }
+        }
+        return null;
+      })
+      .filter(Boolean);
+    if (messages.length > 0) {
+      return messages.join(", ");
+    }
+  }
+  if (detail && typeof detail === "object" && "msg" in detail) {
+    const message = (detail as { msg?: unknown }).msg;
+    if (typeof message === "string") {
+      return message;
+    }
+  }
+  return fallback;
+}
+
 // ─── Error class ─────────────────────────────────────────────────
 
 export class ApiError extends Error {
@@ -115,7 +147,7 @@ export async function api<T>(
       const body = await retryRes.json().catch(() => null);
       throw new ApiError(
         retryRes.status,
-        (body as Record<string, string>)?.detail ?? retryRes.statusText,
+        normalizeErrorDetail((body as Record<string, unknown>)?.detail, retryRes.statusText),
         body,
       );
     }
@@ -126,7 +158,10 @@ export async function api<T>(
   // Handle 403 — permission denied
   if (res.status === 403) {
     const body = await res.json().catch(() => null);
-    const detail = (body as Record<string, string>)?.detail ?? "Permission denied";
+    const detail = normalizeErrorDetail(
+      (body as Record<string, unknown>)?.detail,
+      "Permission denied",
+    );
     toast.error(detail);
     throw new ApiError(403, detail, body);
   }
@@ -136,7 +171,7 @@ export async function api<T>(
     const body = await res.json().catch(() => null);
     throw new ApiError(
       res.status,
-      (body as Record<string, string>)?.detail ?? res.statusText,
+      normalizeErrorDetail((body as Record<string, unknown>)?.detail, res.statusText),
       body,
     );
   }
