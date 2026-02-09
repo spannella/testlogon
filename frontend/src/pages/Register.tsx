@@ -113,6 +113,7 @@ export default function Register() {
   });
 
   const enableSmsMfa = form.watch("enable_sms_mfa");
+  const fullNameValue = form.watch("full_name");
   const emailValue = form.watch("email");
   const passwordValue = form.watch("password");
   const confirmPasswordValue = form.watch("confirm_password");
@@ -124,6 +125,8 @@ export default function Register() {
   ];
   const passwordsMatch = confirmPasswordValue.length > 0 && passwordValue === confirmPasswordValue;
   const hasPasswordIssues = !passwordRequirements.every((req) => req.met) || !passwordsMatch;
+  const isFullNameValid = fullNameValue.trim().length > 0 && !form.formState.errors.full_name;
+  const isPasswordStrong = passwordRequirements.every((req) => req.met) && passwordsMatch;
   const isEmailChecking = emailStatus === "checking";
   const isEmailTaken = emailStatus === "taken";
   const isSubmitDisabled = startLoading
@@ -507,6 +510,12 @@ export default function Register() {
                       {form.formState.errors.full_name.message}
                     </p>
                   )}
+                  {isFullNameValid && (
+                    <p className="flex items-center gap-1 text-xs text-emerald-600">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      Looks good.
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
@@ -579,6 +588,12 @@ export default function Register() {
                   {form.formState.errors.confirm_password && (
                     <p className="text-xs text-destructive">
                       {form.formState.errors.confirm_password.message}
+                    </p>
+                  )}
+                  {isPasswordStrong && (
+                    <p className="flex items-center gap-1 text-xs text-emerald-600">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      Passwords look good.
                     </p>
                   )}
                 </div>
