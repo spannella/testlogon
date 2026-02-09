@@ -22,13 +22,13 @@ import {
 import { useAuthStore } from "@/stores/authStore";
 
 const registerSchema = z.object({
-  full_name: z.string().min(1, "Full name is required"),
-  email: z.string().email("Enter a valid email"),
+  full_name: z.string().trim().min(1, "Full name is required"),
+  email: z.string().trim().email("Enter a valid email"),
   password: z.string()
     .min(8, "Password must be at least 8 characters")
     .regex(/^(?=.*[A-Za-z])(?=.*\d).+$/, "Password must include letters and numbers"),
   confirm_password: z.string().min(1, "Please confirm your password"),
-  phone: z.string().optional(),
+  phone: z.string().trim().optional(),
   enable_sms_mfa: z.boolean().optional(),
   enable_totp_mfa: z.boolean().optional(),
 }).superRefine((data, ctx) => {
@@ -219,23 +219,26 @@ export default function Register() {
     setMessage(null);
     setError(null);
     setDeliveryInfo(null);
+    const trimmedFullName = data.full_name.trim();
+    const trimmedEmail = data.email.trim();
+    const trimmedPhone = data.phone?.trim();
     try {
       const resp = await registerStart({
-        full_name: data.full_name,
-        email: data.email,
+        full_name: trimmedFullName,
+        email: trimmedEmail,
         password: data.password,
         confirm_password: data.confirm_password,
-        phone: data.enable_sms_mfa ? data.phone : undefined,
+        phone: data.enable_sms_mfa ? trimmedPhone : undefined,
         enable_sms_mfa: !!data.enable_sms_mfa,
         enable_totp_mfa: !!data.enable_totp_mfa,
       });
-      setRegisteredEmail(data.email);
+      setRegisteredEmail(trimmedEmail);
       if (resp.verification_required) {
         const pending: PendingRegistration = {
-          email: data.email,
+          email: trimmedEmail,
           enable_sms_mfa: !!data.enable_sms_mfa,
           enable_totp_mfa: !!data.enable_totp_mfa,
-          phone: data.enable_sms_mfa ? data.phone?.trim() : undefined,
+          phone: data.enable_sms_mfa ? trimmedPhone : undefined,
         };
         localStorage.setItem(REGISTER_STORAGE_KEY, JSON.stringify(pending));
         setPendingPhone(pending.phone);
