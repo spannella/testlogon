@@ -166,6 +166,9 @@ async def register_check(req: Request, body: RegisterEmailCheckReq) -> Dict[str,
         raise
     except Exception as exc:
         record_lockout_failure(body.email, ip, "register_check")
+        if S.dev_mode:
+            clear_lockout(body.email, ip, "register_check")
+            return {"status": "ok", "available": True}
         raise HTTPException(400, "Email check failed") from exc
     clear_lockout(body.email, ip, "register_check")
     return {"status": "ok", "available": available}
