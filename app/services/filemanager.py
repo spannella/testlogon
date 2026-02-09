@@ -12,16 +12,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
-import boto3
 import zipstream
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.exceptions import ClientError
 from fastapi import HTTPException, UploadFile
 
 from app.core.aws import ddb
+from app.core.aws_clients import s3_client
 from app.core.settings import S
 
-_s3 = boto3.client("s3", region_name=S.aws_region or "us-east-1")
+_s3 = s3_client()
 logger = logging.getLogger(__name__)
 
 

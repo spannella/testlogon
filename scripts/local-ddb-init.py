@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import os
+import time
+from dataclasses import dataclass, field
+from typing import Dict, Iterable, List, Optional
+
+from app.core.aws_clients import ddb_resource
+from app.core.settings import S
+
+
+@dataclass(frozen=True)
+class TableDef:
+    name: str
+    partition_key: str
+    sort_key: Optional[str] = None
+    gsi: List[Dict[str, str]] = field(default_factory=list)
+
+
+def _resolve_table_name(name: str, fallback: str) -> str:
+    return name or fallback
+
+
+def _table_defs() -> List[TableDef]:
+    return [
+        TableDef(_resolve_table_name(S.ddb_sessions_table, "sessions"), "user_sub", "session_id"),
+        TableDef(_resolve_table_name(S.ddb_totp_table, "totp_devices"), "user_sub", "device_id"),
+        TableDef(_resolve_table_name(S.ddb_sms_table, "sms_devices"), "user_sub", "sms_device_id"),
+        TableDef(_resolve_table_name(S.ddb_email_table, "email_devices"), "user_sub", "email_device_id"),
+        TableDef(_resolve_table_name(S.ddb_recovery_table, "recovery_codes"), "user_sub", "code_hash"),
+        TableDef(_resolve_table_name(S.users_table_name, "users"), "user_sub"),
+        TableDef(
+            _resolve_table_name(S.api_keys_table_name, "api_keys"),
+            "key_id",
+            gsi=[{"index_name": S.api_keys_user_index, "partition_key": "user_sub"}],
+        ),
+        TableDef(_resolve_table_name(S.alerts_table_name, "alerts"), "user_sub", "alert_id"),
+        TableDef(_resolve_table_name(S.alert_prefs_table_name, "alert_prefs"), "user_sub"),
+        TableDef(_resolve_table_name(S.push_devices_table_name, "push_devices"), "user_sub", "device_id"),
+        TableDef(_resolve_table_name(S.billing_table_name, "billing"), "pk", "sk"),
+        TableDef(_resolve_table_name(S.account_state_table_name, "account_state"), "user_sub"),
+        TableDef(_resolve_table_name(S.profile_table_name, "profiles"), "user_sub"),
+        TableDef(_resolve_table_name(S.addresses_table_name, "addresses"), "user_sub", "address_id"),
+        TableDef(_resolve_table_name(S.calendar_table_name, "calendar"), "calendar_id", "sk"),
+        TableDef(_resolve_table_name(S.purchase_transactions_table_name, "purchase_transactions"), "user_sub", "sk"),
+        TableDef(_resolve_table_name(S.purchase_events_table_name, "purchase_transaction_events"), "pk", "sk"),
+        TableDef(_resolve_table_name(S.shopping_cart_table_name, "shopping_cart"), "PK", "SK"),
+        TableDef(_resolve_table_name(S.catalog_table_name, "shopping_catalog"), "PK", "SK"),
+        TableDef(_resolve_table_name(S.subscriptions_table_name, "subscriptions"), "pk", "sk"),
+        TableDef(_resolve_table_name(S.filemgr_table_name, "file_manager"), "PK", "SK"),
+        TableDef(os.getenv("APP_TABLE", "app_single_table"), "pk", "sk"),
+        TableDef(os.getenv("DDB_CONVERSATIONS", "Conversations"), "conversation_id"),
+        TableDef(
+            os.getenv("DDB_PARTICIPANTS", "Participants"),
+            "user_id",
+            "conversation_id",
+            gsi=[{"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"}],
+        ),
+        TableDef(os.getenv("DDB_MESSAGES", "Messages"), "conversation_id", "message_id"),
+        TableDef(os.getenv("DDB_USER_EVENTS", "UserEvents"), "user_id", "event_id"),
+        TableDef(os.getenv("DDB_USERS", "Users"), "user_id"),
+        TableDef(os.getenv("DDB_USER_SEARCH", "UserSearch"), "token"),
+        TableDef(os.getenv("DDB_MESSAGE_SEARCH", "MessageSearch"), "token", "message_key"),
+        TableDef(os.getenv("DDB_PRESENCE", "UserPresence"), "user_id"),
+        TableDef(os.getenv("DDB_TYPING", "Typing"), "conversation_id", "user_id"),
+        TableDef(os.getenv("DDB_MESSAGE_EDITS", "MessageEdits"), "message_key", "edited_at"),
+        TableDef(os.getenv("DDB_MESSAGE_VIEWS", "MessageViews"), "conversation_id", "message_user"),
+        TableDef(os.getenv("DDB_MESSAGE_RECEIPTS", "MessageReceipts"), "conversation_id", "message_user"),
+    ]
+
+
+def _attribute_definitions(table: TableDef) -> List[Dict[str, str]]:
+    attrs = {table.partition_key: "S"}
+    if table.sort_key:
+        attrs[table.sort_key] = "S"
+    for gsi in table.gsi:
+        attrs[gsi["partition_key"]] = "S"
+        if gsi.get("sort_key"):
+            attrs[gsi["sort_key"]] = "S"
+    return [{"AttributeName": k, "AttributeType": v} for k, v in attrs.items()]
+
+
+def _key_schema(table: TableDef) -> List[Dict[str, str]]:
+    schema = [{"AttributeName": table.partition_key, "KeyType": "HASH"}]
+    if table.sort_key:
+        schema.append({"AttributeName": table.sort_key, "KeyType": "RANGE"})
+    return schema
+
+
+def _global_secondary_indexes(table: TableDef) -> Optional[List[Dict[str, object]]]:
+    if not table.gsi:
+        return None
+    indexes = []
+    for gsi in table.gsi:
+        key_schema = [{"AttributeName": gsi["partition_key"], "KeyType": "HASH"}]
+        if gsi.get("sort_key"):
+            key_schema.append({"AttributeName": gsi["sort_key"], "KeyType": "RANGE"})
+        indexes.append(
+            {
+                "IndexName": gsi["index_name"],
+                "KeySchema": key_schema,
+                "Projection": {"ProjectionType": "ALL"},
+            }
+        )
+    return indexes
+
+
+def _ensure_table(ddb, table: TableDef) -> None:
+    client = ddb.meta.client
+    existing = client.list_tables().get("TableNames", [])
+    if table.name in existing:
+        return
+    kwargs: Dict[str, object] = {
+        "TableName": table.name,
+        "AttributeDefinitions": _attribute_definitions(table),
+        "KeySchema": _key_schema(table),
+        "BillingMode": "PAY_PER_REQUEST",
+    }
+    gsi = _global_secondary_indexes(table)
+    if gsi:
+        kwargs["GlobalSecondaryIndexes"] = gsi
+    client.create_table(**kwargs)
+
+
+def _wait_for_tables(ddb, table_names: Iterable[str]) -> None:
+    client = ddb.meta.client
+    for name in table_names:
+        waiter = client.get_waiter("table_exists")
+        waiter.wait(TableName=name)
+
+
+def main() -> None:
+    ddb = ddb_resource()
+    tables = _table_defs()
+    created = []
+    for table in tables:
+        _ensure_table(ddb, table)
+        created.append(table.name)
+    _wait_for_tables(ddb, created)
+    print(f"Ensured {len(created)} DynamoDB tables exist.")
+
+
+if __name__ == "__main__":
+    main()

@@ -8,13 +8,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional, Set
 
-import boto3
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from starlette.responses import StreamingResponse
 
 from app.core.aws import ddb
+from app.core.aws_clients import s3_client, sqs_client
 from app.core.cursor import decode_cursor, encode_cursor
 from app.core.settings import S
 from app.services.subscription_access import can_access_creator
@@ -29,8 +29,8 @@ EVENTS_SQS_URL = os.environ.get("EVENTS_SQS_URL")
 
 tbl = ddb.Table(APP_TABLE)
 
-s3 = boto3.client("s3", region_name=AWS_REGION) if UPLOAD_BUCKET else None
-sqs = boto3.client("sqs", region_name=AWS_REGION) if EVENTS_SQS_URL else None
+s3 = s3_client() if UPLOAD_BUCKET else None
+sqs = sqs_client() if EVENTS_SQS_URL else None
 
 router = APIRouter(tags=["newsfeed"])
 

@@ -7,11 +7,20 @@ from dataclasses import dataclass
 class Settings:
     # AWS
     aws_region: str = os.environ.get("AWS_REGION", "us-east-1")
+    aws_endpoint_url: str = os.environ.get("AWS_ENDPOINT_URL", "")
+    ddb_endpoint_url: str = os.environ.get("DDB_ENDPOINT_URL", "")
+    s3_endpoint_url: str = os.environ.get("S3_ENDPOINT_URL", "")
+    cognito_endpoint_url: str = os.environ.get("COGNITO_ENDPOINT_URL", "")
+    kms_endpoint_url: str = os.environ.get("KMS_ENDPOINT_URL", "")
+    sqs_endpoint_url: str = os.environ.get("SQS_ENDPOINT_URL", "")
+    s3_use_path_style: bool = os.environ.get("S3_USE_PATH_STYLE", "0") not in ("0", "false", "False")
 
     # Cognito (optional wiring; auth is pluggable)
     cognito_user_pool_id: str = os.environ.get("COGNITO_USER_POOL_ID", "")
     cognito_region: str = os.environ.get("COGNITO_REGION", "")
     cognito_app_client_id: str = os.environ.get("COGNITO_APP_CLIENT_ID", "")
+    cognito_issuer_url: str = os.environ.get("COGNITO_ISSUER_URL", "")
+    cognito_jwks_url: str = os.environ.get("COGNITO_JWKS_URL", "")
     cognito_expected_token_use: str = os.environ.get("COGNITO_EXPECTED_TOKEN_USE", "access")
     cognito_jwks_ttl_seconds: int = int(os.environ.get("COGNITO_JWKS_TTL_SECONDS", "3600"))
 

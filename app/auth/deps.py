@@ -21,12 +21,14 @@ def _cognito_enabled() -> bool:
 
 
 def _cognito_issuer() -> str:
+    if S.cognito_issuer_url:
+        return S.cognito_issuer_url.rstrip("/")
     region = S.cognito_region or S.aws_region
     return f"https://cognito-idp.{region}.amazonaws.com/{S.cognito_user_pool_id}"
 
 
 def _fetch_cognito_jwks() -> Tuple[Dict[str, Any], float]:
-    url = f"{_cognito_issuer()}/.well-known/jwks.json"
+    url = S.cognito_jwks_url or f"{_cognito_issuer()}/.well-known/jwks.json"
     resp = requests.get(url, timeout=10)
     resp.raise_for_status()
     return resp.json(), time.time()
