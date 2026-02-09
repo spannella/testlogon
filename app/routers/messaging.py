@@ -11,7 +11,6 @@ from typing import Annotated, Any, Dict, Iterable, List, Literal, Optional, Sequ
 from urllib.parse import urljoin, urlparse
 
 import anyio
-import boto3
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
@@ -25,7 +24,7 @@ from pydantic import BaseModel, Field
 from app.auth.deps import extract_bearer_token, get_authenticated_user_sub
 from app.core.settings import S
 from app.core.aws import ddb
-from app.core.settings import S
+from app.core.aws_clients import s3_client
 from app.services.alerts import audit_event
 from app.services.filemanager import get_node, norm_path
 from app.services.sessions import require_ui_session
@@ -65,7 +64,7 @@ VIEWS_TTL_SEC = int(os.getenv("VIEWS_TTL_SEC", "2592000"))  # 30d
 EDITS_TTL_SEC = int(os.getenv("EDITS_TTL_SEC", "7776000"))  # 90d
 MESSAGE_REVOKE_WINDOW_SEC = int(os.getenv("MESSAGE_REVOKE_WINDOW_SEC", "300"))
 
-s3 = boto3.client("s3", region_name=AWS_REGION)
+s3 = s3_client()
 
 
 tbl_convos = ddb.Table(DDB_CONVERSATIONS)

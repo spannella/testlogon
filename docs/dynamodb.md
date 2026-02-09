@@ -50,3 +50,4 @@ API keys are stored by user and often rely on a secondary index for user lookup 
 ## Local development tips
 - For local testing, you can use DynamoDB Local and point your AWS SDK config at the local endpoint.
 - Keep table name env vars in the same `.env` used for other secrets.
+- Use `DDB_ENDPOINT_URL` (or `AWS_ENDPOINT_URL`) to force all DynamoDB calls to the local emulator.

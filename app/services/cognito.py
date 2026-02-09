@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-import boto3
 from fastapi import HTTPException
 
+from app.core.aws_clients import cognito_client as shared_cognito_client
 from app.core.settings import S
 
 
@@ -28,7 +28,7 @@ def _cognito_user_pool_id() -> str:
 
 
 def cognito_client():
-    return boto3.client("cognito-idp", region_name=_cognito_region())
+    return shared_cognito_client()
 
 
 def cognito_forgot_password(username: str) -> Dict[str, Any]:

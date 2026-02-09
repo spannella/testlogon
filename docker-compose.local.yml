@@ -1,0 +1,42 @@
+version: "3.9"
+
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    command: "-jar DynamoDBLocal.jar -sharedDb -dbPath /home/dynamodblocal/data"
+    ports:
+      - "8001:8000"
+    volumes:
+      - dynamodb_data:/home/dynamodblocal/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+
+  localstack:
+    image: localstack/localstack:latest
+    environment:
+      - SERVICES=s3,cognito-idp
+      - AWS_DEFAULT_REGION=${AWS_REGION:-us-east-1}
+      - LOCALSTACK_HOST=localstack
+      - EDGE_PORT=4566
+    ports:
+      - "4566:4566"
+    volumes:
+      - localstack_data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+
+  stripe-mock:
+    image: stripe/stripe-mock:latest
+    ports:
+      - "12111:12111"
+      - "12112:12112"
+
+volumes:
+  dynamodb_data:
+  localstack_data:
