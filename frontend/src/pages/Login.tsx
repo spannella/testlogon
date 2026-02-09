@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { OtpInput } from "@/components/ui/otp-input";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { useAuthStore } from "@/stores/authStore";
 import { ApiError } from "@/api/client";
@@ -409,12 +410,21 @@ export default function Login() {
                 <div className="rounded-lg border border-muted bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
                   <div className="flex items-start justify-between gap-3">
                     <p className="font-medium text-foreground">Security reminder</p>
-                    <span
-                      className="text-muted-foreground"
-                      title="Attackers often impersonate login pages. Always verify the hostname and HTTPS certificate so you don’t enter credentials on a phishing site."
-                    >
-                      <HelpCircle className="h-4 w-4" aria-label="Why this matters" />
-                    </span>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className="text-muted-foreground transition-colors hover:text-foreground"
+                          aria-label="Why this matters"
+                        >
+                          <HelpCircle className="h-4 w-4" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent className="max-w-xs text-pretty">
+                        Attackers often impersonate login pages. Always verify the hostname and HTTPS certificate so you
+                        don’t enter credentials on a phishing site.
+                      </TooltipContent>
+                    </Tooltip>
                   </div>
                   <p>
                     Confirm the URL matches
