@@ -30,7 +30,8 @@ uvicorn app.main:app --reload
 
 ### Local provider mock mode (fast path)
 ```bash
-scripts/run_local_mock_backend.sh
+scripts/run_dev.sh
+# optional: scripts/run_dev.sh --real-backend
 # in another terminal
 scripts/test_mock_mode.sh
 ```
