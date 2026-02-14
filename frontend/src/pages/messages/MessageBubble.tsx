@@ -39,12 +39,12 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
     onError: () => toast.error("Failed to delete message"),
   });
 
-  const time = new Date(message.created_at).toLocaleTimeString(undefined, {
+  const time = new Date(message.created_at * 1000).toLocaleTimeString(undefined, {
     hour: "numeric",
     minute: "2-digit",
   });
 
-  if (message.revoked) {
+  if (message.revoked_at || message.revoked) {
     return (
       <div className={cn("flex", isOwn ? "justify-end" : "justify-start")}>
         <div className="max-w-[75%] rounded-2xl px-4 py-2 text-sm italic text-muted-foreground bg-muted/50">
@@ -102,38 +102,38 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
           )}
 
           {/* Text content */}
-          {message.body && (
-            <p className="whitespace-pre-wrap break-words text-sm">{message.body}</p>
+          {message.text && (
+            <p className="whitespace-pre-wrap break-words text-sm">{message.text}</p>
           )}
 
           {/* Image content */}
-          {message.kind === "image" && message.image_url && (
+          {message.kind === "image" && typeof message.image?.url === "string" && (
             <img
-              src={message.image_url}
+              src={message.image.url}
               alt="Shared image"
               className="mt-1 max-h-64 rounded-lg object-cover"
             />
           )}
 
           {/* File / audio / video attachment */}
-          {isFileKind && message.file_name && (
+          {isFileKind && typeof message.file?.name === "string" && (
             <FileMessageCard
-              fileName={message.file_name}
-              fileUrl={message.file_url}
+              fileName={message.file.name}
+              fileUrl={typeof message.file?.url === "string" ? message.file.url : undefined}
               kind={message.kind}
               isOwn={isOwn}
             />
           )}
 
           {/* Reactions */}
-          {message.reactions && Object.keys(message.reactions).length > 0 && (
+          {message.reactions_counts && Object.keys(message.reactions_counts).length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1">
-              {Object.entries(message.reactions).map(([emoji, users]) => (
+              {Object.entries(message.reactions_counts).map(([emoji, count]) => (
                 <span
                   key={emoji}
                   className="inline-flex items-center rounded-full bg-background/80 px-1.5 py-0.5 text-xs"
                 >
-                  {emoji} {users.length > 1 && users.length}
+                  {emoji} {count > 1 && count}
                 </span>
               ))}
             </div>
@@ -144,7 +144,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
             "mt-1 flex items-center gap-1 text-[10px]",
             isOwn ? "text-primary-foreground/60 justify-end" : "text-muted-foreground",
           )}>
-            {message.edited && <span>edited</span>}
+            {(message.edited_at || message.edited) && <span>edited</span>}
             <span>{time}</span>
           </div>
         </div>

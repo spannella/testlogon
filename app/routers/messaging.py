@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import time
@@ -11,6 +12,7 @@ from typing import Annotated, Any, Dict, Iterable, List, Literal, Optional, Sequ
 from urllib.parse import urljoin, urlparse
 
 import anyio
+import boto3
 from boto3.dynamodb.conditions import Attr, Key
 from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
@@ -19,7 +21,7 @@ import requests
 import snowballstemmer
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.auth.deps import extract_bearer_token, get_authenticated_user_sub
 from app.core.settings import S
@@ -82,6 +84,7 @@ tbl_views = ddb.Table(DDB_MESSAGE_VIEWS)
 tbl_receipts = ddb.Table(DDB_MESSAGE_RECEIPTS)
 
 router = APIRouter(prefix="/messaging", tags=["messaging"])
+logger = logging.getLogger(__name__)
 
 
 # -------------------------
@@ -118,12 +121,24 @@ class Contact(BaseModel):
 
 class StartConversationIn(BaseModel):
     participant_ids: List[str] = Field(min_length=1)
+    participant_id: Optional[str] = None
     type: Literal["dm", "group"] = "dm"
     title: Optional[str] = None
     description: Optional[str] = Field(default=None, max_length=500)
     icon: Optional[str] = Field(default=None, max_length=500)
     topic: Optional[str] = Field(default=None, max_length=200)
     retention_days: Optional[int] = Field(default=None, ge=1, le=3650)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, data: Any):
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        if not payload.get("participant_ids") and payload.get("participant_id"):
+            payload["participant_ids"] = [payload["participant_id"]]
+            logger.warning("messaging.start_conversation legacy payload used: participant_id")
+        return payload
 
 
 class StartGroupConversationIn(BaseModel):
@@ -164,8 +179,20 @@ class LinkPreviewIn(BaseModel):
 
 class SendTextMessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
+    body: Optional[str] = None
     reply_to_message_id: Optional[str] = None
     preview: Optional[LinkPreviewIn] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, data: Any):
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        if not payload.get("text") and payload.get("body"):
+            payload["text"] = payload["body"]
+            logger.warning("messaging.send_text legacy payload used: body")
+        return payload
 
 
 class SendImagePresignIn(BaseModel):
@@ -190,11 +217,29 @@ class CreateImageMessageIn(BaseModel):
 
 
 class MarkReadIn(BaseModel):
-    last_read_at: int
+    last_read_at: Optional[int] = None
+    last_read_message_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_shape(self):
+        if self.last_read_at is None and not self.last_read_message_id:
+            raise ValueError("Either last_read_at or last_read_message_id is required")
+        if self.last_read_message_id:
+            logger.warning("messaging.mark_read legacy payload used: last_read_message_id")
+        return self
 
 
 class MuteIn(BaseModel):
-    muted_until: int
+    muted_until: Optional[int] = None
+    muted: Optional[bool] = None
+
+    @model_validator(mode="after")
+    def _validate_shape(self):
+        if self.muted_until is None and self.muted is None:
+            raise ValueError("Either muted_until or muted is required")
+        if self.muted is not None:
+            logger.warning("messaging.mute legacy payload used: muted")
+        return self
 
 
 class UpsertUserIn(BaseModel):
@@ -264,6 +309,18 @@ class CreateFileMessageIn(BaseModel):
 
 class EditMessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
+    body: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, data: Any):
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        if not payload.get("text") and payload.get("body"):
+            payload["text"] = payload["body"]
+            logger.warning("messaging.edit legacy payload used: body")
+        return payload
 
 
 class ForwardMessageIn(BaseModel):
@@ -1311,10 +1368,27 @@ def mute_conversation(conversation_id: str, inp: MuteIn, req: Request = None, us
     part = get_participant_any(user_id, conversation_id)
     if not part:
         raise HTTPException(404, "Conversation not found for user")
+
+    mute_until = inp.muted_until
+    if mute_until is None:
+        if inp.muted is True:
+            default_window = int(os.getenv("LEGACY_MUTE_DEFAULT_WINDOW_SEC", "3600"))
+            mute_until = now_ts() + default_window
+            logger.warning(
+                "messaging.mute converting legacy muted=true to muted_until",
+                extra={"conversation_id": conversation_id, "user_id": user_id, "muted_until": mute_until},
+            )
+        else:
+            mute_until = 0
+            logger.warning(
+                "messaging.mute converting legacy muted=false to muted_until=0",
+                extra={"conversation_id": conversation_id, "user_id": user_id},
+            )
+
     tbl_parts.update_item(
         Key={"user_id": user_id, "conversation_id": conversation_id},
         UpdateExpression="SET muted_until = :mu",
-        ExpressionAttributeValues={":mu": int(inp.muted_until)},
+        ExpressionAttributeValues={":mu": int(mute_until)},
     )
     audit_event(
         "messaging_conversation_muted",
@@ -1322,9 +1396,9 @@ def mute_conversation(conversation_id: str, inp: MuteIn, req: Request = None, us
         req,
         outcome="success",
         conversation_id=conversation_id,
-        muted_until=int(inp.muted_until),
+        muted_until=int(mute_until),
     )
-    return {"ok": True, "muted_until": int(inp.muted_until)}
+    return {"ok": True, "muted_until": int(mute_until)}
 
 
 @router.patch("/conversations/{conversation_id}", response_model=ConversationOut)
@@ -2094,9 +2168,33 @@ def create_file_message(
 def mark_read(conversation_id: str, inp: MarkReadIn, req: Request = None, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
 
+    resolved_last_read_at = inp.last_read_at
+    if resolved_last_read_at is None and inp.last_read_message_id:
+        msg = tbl_msgs.get_item(Key={"conversation_id": conversation_id, "message_id": inp.last_read_message_id}).get("Item")
+        if not msg:
+            raise HTTPException(
+                status_code=422,
+                detail="last_read_message_id could not be resolved for this conversation",
+            )
+        resolved_last_read_at = int(msg.get("created_at", 0) or 0)
+        if not resolved_last_read_at:
+            raise HTTPException(
+                status_code=422,
+                detail="Resolved message is missing created_at timestamp",
+            )
+        logger.warning(
+            "messaging.mark_read converted legacy last_read_message_id to last_read_at",
+            extra={
+                "conversation_id": conversation_id,
+                "user_id": user_id,
+                "message_id": inp.last_read_message_id,
+                "last_read_at": resolved_last_read_at,
+            },
+        )
+
     part = get_participant_any(user_id, conversation_id) or {}
     current = int(part.get("last_read_at", 0) or 0)
-    newv = max(current, int(inp.last_read_at))
+    newv = max(current, int(resolved_last_read_at or 0))
 
     tbl_parts.update_item(
         Key={"user_id": user_id, "conversation_id": conversation_id},
