@@ -63,6 +63,7 @@ type PendingRegistration = {
 };
 
 const REGISTER_STORAGE_KEY = "register-pending";
+const EMAIL_CHECK_TIMEOUT_MS = 8000;
 
 export default function Register() {
   const navigate = useNavigate();
@@ -126,6 +127,28 @@ export default function Register() {
     { id: "max", label: "No more than 128 characters", met: passwordValue.length <= 128 },
     { id: "variety", label: "Use a varied passphrase", met: new Set(passwordValue).size >= 4 },
   ];
+  const passwordClassesUsed = [
+    /[a-z]/.test(passwordValue),
+    /[A-Z]/.test(passwordValue),
+    /\d/.test(passwordValue),
+    /[^A-Za-z0-9]/.test(passwordValue),
+  ].filter(Boolean).length;
+  const passwordStrengthScore = Math.min(
+    5,
+    (passwordValue.length >= 8 ? 1 : 0)
+      + (passwordValue.length >= 12 ? 1 : 0)
+      + (passwordValue.length >= 16 ? 1 : 0)
+      + (passwordClassesUsed >= 2 ? 1 : 0)
+      + (passwordClassesUsed >= 3 ? 1 : 0),
+  );
+  const passwordStrengthLevels = [
+    { label: "Very weak", colorClass: "bg-red-500" },
+    { label: "Weak", colorClass: "bg-orange-500" },
+    { label: "Fair", colorClass: "bg-yellow-400" },
+    { label: "Good", colorClass: "bg-lime-500" },
+    { label: "Strong", colorClass: "bg-green-600" },
+  ];
+  const activePasswordStrength = passwordStrengthLevels[Math.max(passwordStrengthScore - 1, 0)];
   const passwordsMatch = confirmPasswordValue.length > 0 && passwordValue === confirmPasswordValue;
   const hasPasswordIssues = !passwordRequirements.every((req) => req.met) || !passwordsMatch;
   const isFullNameValid = fullNameValue.trim().length > 0 && !form.formState.errors.full_name;
@@ -186,17 +209,28 @@ export default function Register() {
       return;
     }
     let isActive = true;
+    let didTimeout = false;
     setEmailStatus("checking");
     const timer = window.setTimeout(() => {
+      const timeoutTimer = window.setTimeout(() => {
+        didTimeout = true;
+        if (!isActive) {
+          return;
+        }
+        setEmailStatus("error");
+      }, EMAIL_CHECK_TIMEOUT_MS);
+
       registerEmailCheck({ email: trimmed })
         .then(() => {
-          if (!isActive) {
+          window.clearTimeout(timeoutTimer);
+          if (!isActive || didTimeout) {
             return;
           }
           setEmailStatus("available");
         })
         .catch((err) => {
-          if (!isActive) {
+          window.clearTimeout(timeoutTimer);
+          if (!isActive || didTimeout) {
             return;
           }
           if (err instanceof ApiError && err.status === 429) {
@@ -628,6 +662,16 @@ export default function Register() {
                 </div>
 
                 <div className="space-y-2 rounded-lg border border-muted bg-muted/20 p-3">
+                  <div className="flex items-center justify-between gap-2 text-sm font-medium">
+                    <span>Password strength</span>
+                    <span className="text-xs text-muted-foreground">{activePasswordStrength.label}</span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      className={`h-full transition-all ${activePasswordStrength.colorClass}`}
+                      style={{ width: passwordValue.length === 0 ? "0%" : `${Math.max(passwordStrengthScore, 1) * 20}%` }}
+                    />
+                  </div>
                   <div className="text-sm font-medium">Password requirements</div>
                   <ul className="space-y-1 text-xs">
                     {passwordRequirements.map((req) => (

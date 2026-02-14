@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -312,6 +313,24 @@ class TestRegisterRoutes(unittest.TestCase):
             unavailable = run_async(register.register_check(req, RegisterEmailCheckReq(email="jane@example.com")))
         self.assertEqual(available, unavailable)
         self.assertEqual(available, {"status": "ok", "available": True})
+
+    def test_register_check_times_out_without_hanging(self):
+        req = build_request()
+
+        async def slow_run_in_threadpool(*_args, **_kwargs):
+            await asyncio.sleep(0.02)
+            return True
+
+        with patch.object(register, "run_in_threadpool", new=slow_run_in_threadpool), \
+             patch.object(register, "REGISTER_CHECK_TIMEOUT_SECONDS", 0.001), \
+             patch.object(register, "record_lockout_failure") as record_lockout_failure, \
+             patch.object(register, "audit_event") as audit_event:
+            result = run_async(register.register_check(req, RegisterEmailCheckReq(email="jane@example.com")))
+
+        self.assertEqual(result, {"status": "ok", "available": True})
+        record_lockout_failure.assert_called_once()
+        self.assertTrue(any(call.kwargs.get("reason") == "check_timeout" for call in audit_event.mock_calls))
+
 
     def test_register_start_is_generic_on_signup_failure(self):
         req = build_request()

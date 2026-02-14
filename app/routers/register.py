@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Dict
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from starlette.concurrency import run_in_threadpool
 
 from app.core.normalize import client_ip_from_request
 from app.core.settings import S
@@ -43,6 +45,7 @@ DEFAULT_DEV_REGISTRATION_EMAIL = "demo@example.com"
 DEFAULT_DEV_REGISTRATION_PASSWORD = "CloudRiver789!"
 DEFAULT_DEV_REGISTRATION_CODE = "000000"
 DEFAULT_DEV_REGISTRATION_PHONE = "+15555550123"
+REGISTER_CHECK_TIMEOUT_SECONDS = 5
 
 
 def _require_cognito() -> None:
@@ -160,7 +163,14 @@ async def register_check(req: Request, body: RegisterEmailCheckReq) -> Dict[str,
         audit_event("register_check", body.email, req, outcome="success", mode="dev")
         return generic_response
     try:
-        available = is_email_available(body.email)
+        available = await asyncio.wait_for(
+            run_in_threadpool(is_email_available, body.email),
+            timeout=REGISTER_CHECK_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        audit_event("register_check", body.email, req, outcome="failure", reason="check_timeout")
+        record_lockout_failure(body.email, ip, "register_check")
+        return generic_response
     except HTTPException:
         audit_event("register_check", body.email, req, outcome="failure", reason="check_error")
         record_lockout_failure(body.email, ip, "register_check")
