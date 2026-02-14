@@ -41,6 +41,7 @@ from app.services.billing_ccbill import (
     subscribe_monthly,
     update_payment_status,
     upsert_subscription,
+    ccbill_webhook_verify_mode,
     verify_ccbill_webhook_signature,
     webhook_remote_ip_allowed,
     put_payment_record,
@@ -516,7 +517,9 @@ async def ccbill_webhook(req: Request):
         form = await req.form()
         payload = dict(form)
 
-    if not webhook_remote_ip_allowed(remote_ip):
+    verify_mode = ccbill_webhook_verify_mode()
+
+    if verify_mode == "ip+sig" and not webhook_remote_ip_allowed(remote_ip, enforce=True):
         _log_ccbill_webhook_rejection(
             reason="ip_not_allowed",
             remote_ip=remote_ip,
@@ -525,6 +528,7 @@ async def ccbill_webhook(req: Request):
             payload=payload,
             req=req,
             raw_body=raw_body,
+            verify_mode=verify_mode,
         )
         raise HTTPException(403, "Forbidden")
 
@@ -538,6 +542,7 @@ async def ccbill_webhook(req: Request):
             payload=payload,
             req=req,
             raw_body=raw_body,
+            verify_mode=verify_mode,
         )
         raise HTTPException(403, "Invalid webhook signature")
 
@@ -843,6 +848,7 @@ def _log_ccbill_webhook_rejection(
     req: Request,
     raw_body: bytes,
     dedupe_key: Optional[str] = None,
+    verify_mode: Optional[str] = None,
 ) -> None:
     safe_headers = {}
     for key in ("content-type", "user-agent", S.ccbill_webhook_signature_header):
@@ -859,6 +865,7 @@ def _log_ccbill_webhook_rejection(
         "payload": sanitize_ccbill_payload(payload),
         "headers": safe_headers,
         "body_sha256": hashlib.sha256(raw_body).hexdigest(),
+        "verify_mode": verify_mode,
         "created_at": now_ts(),
     })
 

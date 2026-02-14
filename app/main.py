@@ -22,6 +22,7 @@ from app.routers.register import router as register_router
 from app.routers.webauthn import router as webauthn_router
 from app.routers.misc import router as misc_router
 from app.routers.billing_ccbill import router as billing_ccbill_router
+from app.routers.ccbill_mock import router as ccbill_mock_router
 from app.routers.paypal import router as paypal_router
 from app.routers.billing import router as billing_router
 from app.routers.account_state import router as account_state_router
@@ -37,6 +38,7 @@ from app.routers.purchase_history import router as purchase_history_router
 from app.routers.shoppingcart import router as shoppingcart_router
 from app.routers.catalog import router as catalog_router
 from app.routers.subscription_server import router as subscription_server_router
+from app.routers.ups import router as ups_router
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
@@ -77,6 +79,7 @@ def create_app() -> FastAPI:
     app.include_router(webauthn_router)
     app.include_router(misc_router)
     app.include_router(billing_ccbill_router)
+    app.include_router(ccbill_mock_router)
     app.include_router(paypal_router)
     app.include_router(billing_router)
     app.include_router(account_state_router)
@@ -95,6 +98,7 @@ def create_app() -> FastAPI:
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)
     app.include_router(subscription_server_router)
+    app.include_router(ups_router)
     app.add_event_handler("startup", start_billing_reconcile_task)
 
     return app
