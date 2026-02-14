@@ -39,7 +39,7 @@ class TestRegisterRoutes(unittest.TestCase):
             ))
             self.assertEqual(result["status"], "ok")
             self.assertTrue(result["verification_required"])
-            self.assertEqual(result["delivery_medium"], "email")
+            self.assertIsNone(result["delivery_medium"])
             require_cognito.assert_not_called()
             create_user_record.assert_not_called()
 
@@ -89,14 +89,14 @@ class TestRegisterRoutes(unittest.TestCase):
                 RegisterStartReq(
                     full_name="Jane Doe",
                     email="jane@example.com",
-                    password="Password\\d1",
-                    confirm_password="Password\\d1",
+                    password="StrongPassphrase42!",
+                    confirm_password="StrongPassphrase42!",
                 ),
             ))
             self.assertEqual(result["status"], "ok")
             self.assertTrue(result["verification_required"])
-            self.assertEqual(result["delivery_medium"], "email")
-            self.assertEqual(result["delivery_destination"], "jane@example.com")
+            self.assertIsNone(result["delivery_medium"])
+            self.assertIsNone(result["delivery_destination"])
             send_email_code.assert_called_once()
             clear_lockout.assert_called_once()
             enforce_lockout.assert_called_once()
@@ -127,13 +127,13 @@ class TestRegisterRoutes(unittest.TestCase):
                 RegisterStartReq(
                     full_name="Jane Doe",
                     email="jane@example.com",
-                    password="Password\\d1",
-                    confirm_password="Password\\d1",
+                    password="StrongPassphrase42!",
+                    confirm_password="StrongPassphrase42!",
                 ),
             ))
             self.assertTrue(result["verification_required"])
-            self.assertEqual(result["delivery_medium"], "email")
-            self.assertEqual(result["delivery_destination"], "jane@example.com")
+            self.assertIsNone(result["delivery_medium"])
+            self.assertIsNone(result["delivery_destination"])
             send_email_code.assert_called_once()
             clear_lockout.assert_called_once()
             enforce_lockout.assert_called_once()
@@ -142,23 +142,19 @@ class TestRegisterRoutes(unittest.TestCase):
 
     def test_register_start_duplicate_user(self):
         req = build_request()
-        with patch.object(register, "_require_cognito"), \
-             patch.object(register, "check_password_breach", return_value=0), \
-             patch.object(register, "cognito_sign_up", side_effect=HTTPException(400, "Exists")), \
-             patch.object(register, "record_lockout_failure") as record_lockout_failure, \
-             patch.object(register, "enforce_lockout") as enforce_lockout, \
-             patch.object(register, "rate_limit_password_recovery") as rate_limit_password_recovery, \
-             patch.object(register, "audit_event") as audit_event:
-            with self.assertRaises(HTTPException):
-                run_async(register.register_start(
-                    req,
-                    RegisterStartReq(
-                        full_name="Jane Doe",
-                        email="jane@example.com",
-                        password="Password\\d1",
-                        confirm_password="Password\\d1",
-                    ),
-                ))
+        with patch.object(register, "_require_cognito"),              patch.object(register, "check_password_breach", return_value=0),              patch.object(register, "cognito_sign_up", side_effect=HTTPException(400, "Exists")),              patch.object(register, "record_lockout_failure") as record_lockout_failure,              patch.object(register, "enforce_lockout") as enforce_lockout,              patch.object(register, "rate_limit_password_recovery") as rate_limit_password_recovery,              patch.object(register, "audit_event") as audit_event:
+            result = run_async(register.register_start(
+                req,
+                RegisterStartReq(
+                    full_name="Jane Doe",
+                    email="jane@example.com",
+                    password="StrongPassphrase42!",
+                    confirm_password="StrongPassphrase42!",
+                ),
+            ))
+            self.assertEqual(result["status"], "ok")
+            self.assertIsNone(result["delivery_medium"])
+            self.assertIsNone(result["delivery_destination"])
             record_lockout_failure.assert_called_once()
             enforce_lockout.assert_called_once()
             rate_limit_password_recovery.assert_called_once()
@@ -178,8 +174,8 @@ class TestRegisterRoutes(unittest.TestCase):
                     RegisterStartReq(
                         full_name="Jane Doe",
                         email="jane@example.com",
-                        password="Password\\d1",
-                        confirm_password="Password\\d1",
+                        password="StrongPassphrase42!",
+                        confirm_password="StrongPassphrase42!",
                     ),
                 ))
             record_lockout_failure.assert_called_once()
@@ -260,8 +256,8 @@ class TestRegisterRoutes(unittest.TestCase):
                 RegisterResendReq(email="jane@example.com", delivery_method="email"),
             ))
             self.assertEqual(result["status"], "ok")
-            self.assertEqual(result["delivery_medium"], "email")
-            self.assertEqual(result["delivery_destination"], "jane@example.com")
+            self.assertIsNone(result["delivery_medium"])
+            self.assertIsNone(result["delivery_destination"])
             send_email_code.assert_called_once()
             clear_lockout.assert_called_once()
             enforce_lockout.assert_called_once()
@@ -276,12 +272,62 @@ class TestRegisterRoutes(unittest.TestCase):
              patch.object(register, "enforce_lockout") as enforce_lockout, \
              patch.object(register, "rate_limit_password_recovery") as rate_limit_password_recovery, \
              patch.object(register, "audit_event") as audit_event:
-            with self.assertRaises(HTTPException):
-                run_async(register.register_resend(
-                    req,
-                    RegisterResendReq(email="jane@example.com", delivery_method="email"),
-                ))
+            result = run_async(register.register_resend(
+                req,
+                RegisterResendReq(email="jane@example.com", delivery_method="email"),
+            ))
+            self.assertEqual(result["status"], "ok")
+            self.assertIsNone(result["delivery_medium"])
+            self.assertIsNone(result["delivery_destination"])
             record_lockout_failure.assert_called_once()
             enforce_lockout.assert_called_once()
             rate_limit_password_recovery.assert_called_once()
             audit_event.assert_called_once()
+
+
+    def test_register_start_rejects_contextual_password(self):
+        with self.assertRaises(Exception):
+            RegisterStartReq(
+                full_name="Jane Doe",
+                email="jane@example.com",
+                password="jane-secure-passphrase",
+                confirm_password="jane-secure-passphrase",
+            )
+
+    def test_register_start_rejects_short_password(self):
+        with self.assertRaises(Exception):
+            RegisterStartReq(
+                full_name="Jane Doe",
+                email="jane@example.com",
+                password="short123",
+                confirm_password="short123",
+            )
+
+
+    def test_register_check_is_generic_for_available_and_unavailable(self):
+        req = build_request()
+        with patch.object(register, "is_email_available", return_value=True):
+            available = run_async(register.register_check(req, RegisterEmailCheckReq(email="jane@example.com")))
+        with patch.object(register, "is_email_available", return_value=False):
+            unavailable = run_async(register.register_check(req, RegisterEmailCheckReq(email="jane@example.com")))
+        self.assertEqual(available, unavailable)
+        self.assertEqual(available, {"status": "ok", "available": True})
+
+    def test_register_start_is_generic_on_signup_failure(self):
+        req = build_request()
+        with patch.object(register, "_require_cognito"),              patch.object(register, "check_password_breach", return_value=0),              patch.object(register, "cognito_sign_up", side_effect=HTTPException(400, "Exists")),              patch.object(register, "record_lockout_failure"):
+            result = run_async(register.register_start(
+                req,
+                RegisterStartReq(
+                    full_name="Jane Doe",
+                    email="jane@example.com",
+                    password="StrongPassphrase42!",
+                    confirm_password="StrongPassphrase42!",
+                ),
+            ))
+        self.assertEqual(result, {
+            "status": "ok",
+            "verification_required": True,
+            "delivery_medium": None,
+            "delivery_destination": None,
+        })

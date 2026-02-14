@@ -40,7 +40,7 @@ from app.services.sessions import create_real_session, rotate_session_cookies, s
 router = APIRouter(prefix="/ui/register", tags=["register"])
 
 DEFAULT_DEV_REGISTRATION_EMAIL = "demo@example.com"
-DEFAULT_DEV_REGISTRATION_PASSWORD = "Password\\d1"
+DEFAULT_DEV_REGISTRATION_PASSWORD = "CloudRiver789!"
 DEFAULT_DEV_REGISTRATION_CODE = "000000"
 DEFAULT_DEV_REGISTRATION_PHONE = "+15555550123"
 
@@ -78,13 +78,15 @@ async def register_start(
 ) -> Dict[str, object]:
     if response is None:
         response = Response()
+    generic_response = {
+        "status": "ok",
+        "verification_required": True,
+        "delivery_medium": None,
+        "delivery_destination": None,
+    }
     if _is_dev_registration(body.email, body.password):
-        return {
-            "status": "ok",
-            "verification_required": True,
-            "delivery_medium": "email",
-            "delivery_destination": body.email,
-        }
+        audit_event("register_start", body.email, req, outcome="success", mode="dev")
+        return generic_response
     _require_cognito()
     username = body.email
     ip = client_ip_from_request(req)
@@ -98,58 +100,54 @@ async def register_start(
         raise HTTPException(400, "Password found in breach corpus")
 
     try:
-        resp = cognito_sign_up(username, body.password, body.full_name)
+        cognito_sign_up(username, body.password, body.full_name)
     except HTTPException:
         audit_event("register_start", username, req, outcome="failure", reason="cognito_sign_up")
         record_lockout_failure(username, ip, "register_start")
-        raise
-    except Exception as exc:
+        return generic_response
+    except Exception:
         audit_event("register_start", username, req, outcome="failure", reason="unexpected_error")
         record_lockout_failure(username, ip, "register_start")
-        raise HTTPException(400, "Registration failed") from exc
+        return generic_response
 
-    delivery = resp.get("CodeDeliveryDetails") or {}
     verification_required = True
-    create_user_record(
-        email=username,
-        full_name=body.full_name,
-        password=body.password,
-        verification_required=verification_required,
-    )
-    delivery_medium = None
-    delivery_destination = None
+    try:
+        create_user_record(
+            email=username,
+            full_name=body.full_name,
+            password=body.password,
+            verification_required=verification_required,
+        )
+    except HTTPException:
+        audit_event("register_start", username, req, outcome="failure", reason="duplicate_or_invalid")
+        clear_lockout(username, ip, "register_start")
+        return generic_response
     mfa_setup: list[str] = []
     if body.enable_sms_mfa:
         mfa_setup.append("sms")
     if body.enable_totp_mfa:
         mfa_setup.append("totp")
-    if not can_send_verification(username, "email"):
-        raise HTTPException(429, "Too many verification emails; try again later")
-    code = create_registration_challenge(
-        user_sub=username,
-        channel="email",
-        send_to=username,
-        mfa_setup=mfa_setup,
-        sms_phone=body.phone,
-    )
-    send_email_code(username, "Registration", code)
-    delivery_medium = "email"
-    delivery_destination = username
+    if can_send_verification(username, "email"):
+        code = create_registration_challenge(
+            user_sub=username,
+            channel="email",
+            send_to=username,
+            mfa_setup=mfa_setup,
+            sms_phone=body.phone,
+        )
+        send_email_code(username, "Registration", code)
+    else:
+        audit_event("register_start", username, req, outcome="warning", reason="verification_send_rate_limited")
     audit_event(
         "register_start",
         username,
         req,
         outcome="success",
         verification_required=verification_required,
-        delivery_medium=delivery_medium or delivery.get("DeliveryMedium"),
+        delivery_medium="suppressed",
     )
     clear_lockout(username, ip, "register_start")
-    return {
-        "status": "ok",
-        "verification_required": True,
-        "delivery_medium": delivery_medium or delivery.get("DeliveryMedium"),
-        "delivery_destination": delivery_destination or delivery.get("Destination"),
-    }
+    return generic_response
 
 
 @router.post("/check", response_model=RegisterEmailCheckResp)
@@ -157,21 +155,23 @@ async def register_check(req: Request, body: RegisterEmailCheckReq) -> Dict[str,
     ip = client_ip_from_request(req)
     enforce_lockout(body.email, ip, "register_check")
     rate_limit_password_recovery(body.email, ip, "register_check")
+    generic_response = {"status": "ok", "available": True}
     if _is_dev_registration(body.email):
-        return {"status": "ok", "available": True}
+        audit_event("register_check", body.email, req, outcome="success", mode="dev")
+        return generic_response
     try:
         available = is_email_available(body.email)
     except HTTPException:
+        audit_event("register_check", body.email, req, outcome="failure", reason="check_error")
         record_lockout_failure(body.email, ip, "register_check")
-        raise
-    except Exception as exc:
+        return generic_response
+    except Exception:
+        audit_event("register_check", body.email, req, outcome="failure", reason="unexpected_error")
         record_lockout_failure(body.email, ip, "register_check")
-        if S.dev_mode:
-            clear_lockout(body.email, ip, "register_check")
-            return {"status": "ok", "available": True}
-        raise HTTPException(400, "Email check failed") from exc
+        return generic_response
     clear_lockout(body.email, ip, "register_check")
-    return {"status": "ok", "available": available}
+    audit_event("register_check", body.email, req, outcome="success", available=available)
+    return generic_response
 
 
 @router.post("/confirm", response_model=RegisterConfirmResp)
@@ -228,12 +228,14 @@ async def register_confirm(
 
 @router.post("/resend", response_model=RegisterResendResp)
 async def register_resend(req: Request, body: RegisterResendReq) -> Dict[str, object]:
+    generic_response = {
+        "status": "ok",
+        "delivery_medium": None,
+        "delivery_destination": None,
+    }
     if _is_dev_registration(body.email):
-        return {
-            "status": "ok",
-            "delivery_medium": "email",
-            "delivery_destination": body.email,
-        }
+        audit_event("register_resend", body.email, req, outcome="success", mode="dev")
+        return generic_response
     _require_cognito()
     username = body.email
     ip = client_ip_from_request(req)
@@ -275,18 +277,21 @@ async def register_resend(req: Request, body: RegisterResendReq) -> Dict[str, ob
             delivery_medium = "email"
             delivery_destination = username
     except HTTPException:
-        audit_event("register_resend", username, req, outcome="failure")
+        audit_event("register_resend", username, req, outcome="failure", reason="resend_failed")
         record_lockout_failure(username, ip, "register_resend")
-        raise
-    except Exception as exc:
-        audit_event("register_resend", username, req, outcome="failure")
+        return generic_response
+    except Exception:
+        audit_event("register_resend", username, req, outcome="failure", reason="unexpected_error")
         record_lockout_failure(username, ip, "register_resend")
-        raise HTTPException(400, "Registration resend failed") from exc
+        return generic_response
 
-    audit_event("register_resend", username, req, outcome="success", delivery_medium=delivery_medium)
+    audit_event(
+        "register_resend",
+        username,
+        req,
+        outcome="success",
+        delivery_medium=delivery_medium,
+        delivery_destination=delivery_destination,
+    )
     clear_lockout(username, ip, "register_resend")
-    return {
-        "status": "ok",
-        "delivery_medium": delivery_medium,
-        "delivery_destination": delivery_destination,
-    }
+    return generic_response

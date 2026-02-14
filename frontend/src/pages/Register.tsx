@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { ArrowLeft, CheckCircle2, Circle, HelpCircle, Loader2, Shield, XCircle } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Circle, Eye, EyeOff, HelpCircle, Loader2, Shield, XCircle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,8 +25,8 @@ const registerSchema = z.object({
   full_name: z.string().trim().min(1, "Full name is required"),
   email: z.string().trim().email("Enter a valid email"),
   password: z.string()
-    .min(8, "Password must be at least 8 characters")
-    .regex(/^(?=.*[A-Za-z])(?=.*\d).+$/, "Password must include letters and numbers"),
+    .min(12, "Password must be at least 12 characters")
+    .max(128, "Password must be 128 characters or fewer"),
   confirm_password: z.string().min(1, "Please confirm your password"),
   phone: z.string().trim().optional(),
   enable_sms_mfa: z.boolean().optional(),
@@ -81,7 +81,7 @@ export default function Register() {
   const [resendLoading, setResendLoading] = React.useState(false);
   const [mfaLoading, setMfaLoading] = React.useState(false);
   const [emailStatus, setEmailStatus] = React.useState<
-    "idle" | "checking" | "available" | "taken" | "invalid" | "error" | "rate_limited"
+    "idle" | "checking" | "available" | "invalid" | "error" | "rate_limited"
   >("idle");
   const [mfaError, setMfaError] = React.useState<string | null>(null);
   const [smsChallengeId, setSmsChallengeId] = React.useState<string | null>(null);
@@ -91,6 +91,8 @@ export default function Register() {
   const [totpEnrollData, setTotpEnrollData] = React.useState<{ device_id: string; secret: string; qr_code_uri: string } | null>(null);
   const [totpCode, setTotpCode] = React.useState("");
   const [totpVerified, setTotpVerified] = React.useState(false);
+  const [showPassword, setShowPassword] = React.useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = React.useState(false);
 
   const form = useForm<RegisterForm>({
     resolver: zodResolver(registerSchema),
@@ -120,19 +122,17 @@ export default function Register() {
   const confirmPasswordValue = form.watch("confirm_password");
 
   const passwordRequirements = [
-    { id: "length", label: "At least 8 characters", met: passwordValue.length >= 8 },
-    { id: "letter", label: "Contains a letter", met: /[A-Za-z]/.test(passwordValue) },
-    { id: "number", label: "Contains a number", met: /\d/.test(passwordValue) },
+    { id: "length", label: "At least 12 characters", met: passwordValue.length >= 12 },
+    { id: "max", label: "No more than 128 characters", met: passwordValue.length <= 128 },
+    { id: "variety", label: "Use a varied passphrase", met: new Set(passwordValue).size >= 4 },
   ];
   const passwordsMatch = confirmPasswordValue.length > 0 && passwordValue === confirmPasswordValue;
   const hasPasswordIssues = !passwordRequirements.every((req) => req.met) || !passwordsMatch;
   const isFullNameValid = fullNameValue.trim().length > 0 && !form.formState.errors.full_name;
   const isPasswordStrong = passwordRequirements.every((req) => req.met) && passwordsMatch;
   const isEmailChecking = emailStatus === "checking";
-  const isEmailTaken = emailStatus === "taken";
   const isSubmitDisabled = startLoading
     || isEmailChecking
-    || isEmailTaken
     || hasPasswordIssues
     || emailStatus === "invalid"
     || emailStatus === "rate_limited";
@@ -189,11 +189,11 @@ export default function Register() {
     setEmailStatus("checking");
     const timer = window.setTimeout(() => {
       registerEmailCheck({ email: trimmed })
-        .then((resp) => {
+        .then(() => {
           if (!isActive) {
             return;
           }
-          setEmailStatus(resp.available ? "available" : "taken");
+          setEmailStatus("available");
         })
         .catch((err) => {
           if (!isActive) {
@@ -551,13 +551,7 @@ export default function Register() {
                   {!form.formState.errors.email && emailStatus === "available" && (
                     <p className="flex items-center gap-1 text-xs text-emerald-600">
                       <CheckCircle2 className="h-3.5 w-3.5" />
-                      Email is available.
-                    </p>
-                  )}
-                  {!form.formState.errors.email && emailStatus === "taken" && (
-                    <p className="flex items-center gap-1 text-xs text-destructive">
-                      <XCircle className="h-3.5 w-3.5" />
-                      Email is already in use.
+                      Email looks valid.
                     </p>
                   )}
                   {!form.formState.errors.email && emailStatus === "rate_limited" && (
@@ -575,13 +569,24 @@ export default function Register() {
 
                 <div className="space-y-2">
                   <Label htmlFor="password">Password</Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder="Create a password"
-                    autoComplete="new-password"
-                    {...form.register("password")}
-                  />
+                  <div className="relative">
+                    <Input
+                      id="password"
+                      type={showPassword ? "text" : "password"}
+                      placeholder="Create a password"
+                      autoComplete="new-password"
+                      className="pr-10"
+                      {...form.register("password")}
+                    />
+                    <button
+                      type="button"
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                   {form.formState.errors.password && (
                     <p className="text-xs text-destructive">
                       {form.formState.errors.password.message}
@@ -591,13 +596,24 @@ export default function Register() {
 
                 <div className="space-y-2">
                   <Label htmlFor="confirm_password">Confirm password</Label>
-                  <Input
-                    id="confirm_password"
-                    type="password"
-                    placeholder="Re-enter your password"
-                    autoComplete="new-password"
-                    {...form.register("confirm_password")}
-                  />
+                  <div className="relative">
+                    <Input
+                      id="confirm_password"
+                      type={showConfirmPassword ? "text" : "password"}
+                      placeholder="Re-enter your password"
+                      autoComplete="new-password"
+                      className="pr-10"
+                      {...form.register("confirm_password")}
+                    />
+                    <button
+                      type="button"
+                      aria-label={showConfirmPassword ? "Hide confirm password" : "Show confirm password"}
+                      className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
+                      onClick={() => setShowConfirmPassword((prev) => !prev)}
+                    >
+                      {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                   {form.formState.errors.confirm_password && (
                     <p className="text-xs text-destructive">
                       {form.formState.errors.confirm_password.message}

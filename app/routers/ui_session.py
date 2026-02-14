@@ -33,6 +33,32 @@ from app.core.time import now_ts
 
 router = APIRouter(prefix="/ui", tags=["ui-session"])
 
+
+def _adaptive_login_policy(user_sub: str, base_required: list[str], anomaly: dict[str, object]) -> tuple[list[str], int, int | None]:
+    required = list(base_required)
+    risk_score = int(bool(anomaly.get("user_threshold_exceeded"))) + int(bool(anomaly.get("ip_threshold_exceeded")))
+    if risk_score <= 0:
+        return required, 0, None
+
+    available = set(compute_required_factors(user_sub))
+    stronger_order = ["totp", "email", "sms"]
+    for factor in stronger_order:
+        if factor in available and factor not in required:
+            required.append(factor)
+
+    # If anomaly risk is high and we have multiple factors, require at least 2 factors.
+    if risk_score >= getattr(S, "login_anomaly_risk_score_threshold", 1):
+        stronger = [f for f in stronger_order if f in required]
+        if len(stronger) >= 2:
+            required = stronger[:2]
+        refresh_ttl = max(300, int(getattr(S, "login_high_risk_refresh_ttl_seconds", 3600)))
+    else:
+        refresh_ttl = None
+
+    # Preserve deterministic order.
+    ordered = [f for f in stronger_order if f in required]
+    return ordered, risk_score, refresh_ttl
+
 @router.post("/session/start", response_model=UiSessionStartResp)
 async def ui_session_start(
     req: Request,
@@ -55,6 +81,7 @@ async def ui_session_start(
             ip_user_count=anomaly.get("ip_user_count"),
         )
     required = compute_required_factors(user_sub)
+    required, anomaly_risk_score, high_risk_refresh_ttl = _adaptive_login_policy(user_sub, required, anomaly)
     device_info = record_device_login(req, user_sub)
     suspicious = device_info.get("new_device") or device_info.get("location_mismatch")
     if suspicious and "email" not in required:
@@ -77,14 +104,51 @@ async def ui_session_start(
                 reason="device_mismatch_no_email",
                 device_id=device_info.get("device_id"),
             )
+    if anomaly_risk_score > 0:
+        audit_event(
+            "login_unusual_signin",
+            user_sub,
+            req,
+            outcome="warning",
+            risk_score=anomaly_risk_score,
+            required_factors=required,
+            short_refresh_ttl=high_risk_refresh_ttl or 0,
+        )
+
     if not required:
-        session = create_real_session(req, user_sub)
-        rotate_session_cookies(req, response, user_sub, session)
+        session = create_real_session(
+            req,
+            user_sub,
+            risk_score=anomaly_risk_score,
+            refresh_ttl_seconds=high_risk_refresh_ttl,
+        )
+        rotate_session_cookies(req, response, user_sub, session, refresh_ttl_seconds=high_risk_refresh_ttl)
         session_id = session_id_value(session)
-        audit_event("ui_session_start", user_sub, req, outcome="success", session_id=session_id)
+        audit_event(
+            "ui_session_start",
+            user_sub,
+            req,
+            outcome="success",
+            session_id=session_id,
+            risk_score=anomaly_risk_score,
+        )
         return UiSessionStartResp(auth_required=False, session_id=session_id, required_factors=[])
-    challenge_id = create_stepup_challenge(req, user_sub, required_factors=required)
-    audit_event("ui_session_start", user_sub, req, outcome="info", required_factors=required, challenge_id=challenge_id)
+    challenge_id = create_stepup_challenge(
+        req,
+        user_sub,
+        required_factors=required,
+        risk_score=anomaly_risk_score,
+        refresh_ttl_seconds=high_risk_refresh_ttl,
+    )
+    audit_event(
+        "ui_session_start",
+        user_sub,
+        req,
+        outcome="info",
+        required_factors=required,
+        challenge_id=challenge_id,
+        risk_score=anomaly_risk_score,
+    )
     return UiSessionStartResp(auth_required=True, challenge_id=challenge_id, required_factors=required)
 
 @router.post("/session/finalize")
@@ -99,7 +163,7 @@ async def ui_session_finalize(
     chal = load_challenge_or_401(user_sub, body.challenge_id)
     sid = maybe_finalize(req, user_sub, body.challenge_id)
     if sid:
-        rotate_session_cookies(req, response, user_sub, sid)
+        rotate_session_cookies(req, response, user_sub, sid, refresh_ttl_seconds=int(chal.get("refresh_ttl_seconds") or 0) or None)
         if body.remember_device:
             device_id = trust_current_device(req, user_sub)
             audit_event("device_trust", user_sub, req, outcome="success", device_id=device_id)

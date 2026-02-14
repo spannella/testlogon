@@ -3,6 +3,7 @@ import base64
 import json
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi import HTTPException
 
@@ -38,3 +39,17 @@ class TestAuthDeps(unittest.TestCase):
         req = SimpleNamespace(headers={"authorization": f"Bearer {token}"})
         user_sub = run_async(deps.get_authenticated_user_sub(req))
         self.assertEqual(user_sub, "jwt-user")
+
+
+    def test_get_authenticated_user_sub_blocks_dev_fallback_when_dev_mode_off(self):
+        req = SimpleNamespace(headers={"authorization": "Bearer user-1", "x-user-sub": "user-override"})
+        fake_settings = SimpleNamespace(
+            cognito_user_pool_id="",
+            cognito_app_client_id="",
+            dev_mode=False,
+        )
+        with patch.object(deps, "S", fake_settings):
+            with self.assertRaises(HTTPException) as ctx:
+                run_async(deps.get_authenticated_user_sub(req))
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertIn("Authentication not configured", str(ctx.exception.detail))
