@@ -71,15 +71,15 @@ class FakeBillingTable:
         return {"Items": items}
 
 
-def build_request(path: str, *, method: str = "POST", query_string: str = "", json_body: bytes | None = None) -> Request:
-    headers = [
-        (b"content-type", b"application/json"),
-    ]
+def build_request(path: str, *, method: str = "POST", query_string: str = "", json_body: bytes | None = None, headers: dict[str, str] | None = None) -> Request:
+    encoded_headers = [(b"content-type", b"application/json")]
+    for key, value in (headers or {}).items():
+        encoded_headers.append((key.lower().encode(), value.encode()))
     scope = {
         "type": "http",
         "method": method,
         "path": path,
-        "headers": headers,
+        "headers": encoded_headers,
         "query_string": query_string.encode(),
         "client": ("127.0.0.1", 1234),
     }
@@ -98,11 +98,14 @@ class BillingRoutesTests(unittest.TestCase):
         self.services_tables_patcher = patch("app.services.billing_ccbill.T", tables_stub)
         self.tables_patcher.start()
         self.services_tables_patcher.start()
+        self.dunning_patcher = patch("app.routers.billing_ccbill.bump_dunning_after_payment_method_update", return_value=None)
+        self.dunning_patcher.start()
         self.ctx = {"user_sub": "user_123", "session_id": "sess_123"}
 
     def tearDown(self) -> None:
         self.tables_patcher.stop()
         self.services_tables_patcher.stop()
+        self.dunning_patcher.stop()
 
     def test_config_endpoint(self) -> None:
         body = routes.billing_config()
@@ -209,7 +212,8 @@ class BillingRoutesTests(unittest.TestCase):
         self.assertEqual(len(resp["items"]), 1)
 
     def test_webhook_unmatched_payload(self) -> None:
-        with patch("app.services.billing_ccbill.mark_webhook_processed", return_value=True):
+        with patch("app.services.billing_ccbill.mark_webhook_processed", return_value=True), \
+             patch("app.routers.billing_ccbill.verify_ccbill_webhook_signature", return_value=True):
             req = build_request("/api/ccbill/webhook", query_string="eventType=NewSaleSuccess", json_body=b"{}")
             resp = asyncio.run(routes.ccbill_webhook(req))
         self.assertTrue(resp["unmatched"])
@@ -250,7 +254,8 @@ class BillingRoutesTests(unittest.TestCase):
         })
 
         payload = b'{"X-app_user_id":"user_123","transactionId":"txn_1","subscriptionId":"sub_1"}'
-        with patch("app.services.billing_ccbill.mark_webhook_processed", return_value=True):
+        with patch("app.services.billing_ccbill.mark_webhook_processed", return_value=True), \
+             patch("app.routers.billing_ccbill.verify_ccbill_webhook_signature", return_value=True):
             req = build_request("/api/ccbill/webhook", query_string="eventType=NewSaleSuccess", json_body=payload)
             resp = asyncio.run(routes.ccbill_webhook(req))
         self.assertTrue(resp["received"])
@@ -277,13 +282,32 @@ class BillingRoutesTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 404)
 
     def test_webhook_deduped_returns_flag(self) -> None:
-        with patch("app.routers.billing_ccbill.mark_webhook_processed", return_value=False):
+        with patch("app.routers.billing_ccbill.mark_webhook_processed", return_value=False), \
+             patch("app.routers.billing_ccbill.verify_ccbill_webhook_signature", return_value=True):
             req = build_request("/api/ccbill/webhook", query_string="eventType=NewSaleSuccess", json_body=b"{}")
             resp = asyncio.run(routes.ccbill_webhook(req))
         self.assertTrue(resp["deduped"])
 
+
+    def test_webhook_local_mode_skips_ip_check_with_valid_signature(self) -> None:
+        payload = b'{"X-app_user_id":"user_123","transactionId":"txn_1"}'
+        with patch("app.routers.billing_ccbill.ccbill_webhook_verify_mode", return_value="local"), \
+             patch("app.routers.billing_ccbill.mark_webhook_processed", return_value=True), \
+             patch("app.routers.billing_ccbill.verify_ccbill_webhook_signature", return_value=True):
+            sig = "unused"
+            req = build_request(
+                "/api/ccbill/webhook",
+                query_string="eventType=NewSaleSuccess",
+                json_body=payload,
+                headers={"x-ccbill-signature": sig},
+            )
+            resp = asyncio.run(routes.ccbill_webhook(req))
+        self.assertTrue(resp["received"])
+
     def test_webhook_rejects_disallowed_ip(self) -> None:
-        with patch("app.routers.billing_ccbill.webhook_remote_ip_allowed", return_value=False):
+        with patch("app.routers.billing_ccbill.ccbill_webhook_verify_mode", return_value="ip+sig"), \
+             patch("app.routers.billing_ccbill.webhook_remote_ip_allowed", return_value=False), \
+             patch("app.routers.billing_ccbill.verify_ccbill_webhook_signature", return_value=True):
             req = build_request("/api/ccbill/webhook", query_string="eventType=NewSaleSuccess", json_body=b"{}")
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(routes.ccbill_webhook(req))
