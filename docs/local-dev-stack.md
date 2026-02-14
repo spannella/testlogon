@@ -7,7 +7,9 @@ This document is the **single source of truth** for running and validating the l
 For a quick local mock run + validation:
 
 ```bash
-scripts/run_local_mock_backend.sh
+scripts/run_dev.sh
+# optional real backend mode:
+# scripts/run_dev.sh --real-backend
 ```
 
 In another terminal:
