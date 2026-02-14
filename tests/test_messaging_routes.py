@@ -695,3 +695,64 @@ class TestMessagingRoutes(unittest.TestCase):
         with patch.object(messaging, "now_ts", return_value=10):
             resp = messaging.healthz()
         self.assertEqual(resp["ts"], 10)
+
+    def test_mark_read_legacy_message_id_resolves_timestamp(self):
+        tbl_parts = Mock()
+        tbl_msgs = Mock()
+        tbl_msgs.get_item.return_value = {
+            "Item": {
+                "conversation_id": "c1",
+                "message_id": "m1",
+                "created_at": 77,
+            }
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "get_participant_any", return_value={"last_read_at": 5}),
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+        ):
+            resp = messaging.mark_read(
+                "c1",
+                messaging.MarkReadIn(last_read_message_id="m1"),
+                user_id="u1",
+            )
+        self.assertEqual(resp["last_read_at"], 77)
+        tbl_parts.update_item.assert_called_once()
+
+    def test_mark_read_legacy_message_id_not_found_returns_422(self):
+        tbl_msgs = Mock()
+        tbl_msgs.get_item.return_value = {}
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.mark_read(
+                    "c1",
+                    messaging.MarkReadIn(last_read_message_id="missing"),
+                    user_id="u1",
+                )
+        self.assertEqual(ctx.exception.status_code, 422)
+
+    def test_mute_conversation_legacy_true_converts_to_window(self):
+        tbl_parts = Mock()
+        with (
+            patch.object(messaging, "get_participant_any", return_value={"status": "active"}),
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "now_ts", return_value=100),
+            patch.dict("os.environ", {"LEGACY_MUTE_DEFAULT_WINDOW_SEC": "3600"}, clear=False),
+        ):
+            resp = messaging.mute_conversation("c1", messaging.MuteIn(muted=True), user_id="u1")
+        self.assertEqual(resp["muted_until"], 3700)
+        tbl_parts.update_item.assert_called_once()
+
+    def test_mute_conversation_legacy_false_converts_to_zero(self):
+        tbl_parts = Mock()
+        with (
+            patch.object(messaging, "get_participant_any", return_value={"status": "active"}),
+            patch.object(messaging, "tbl_parts", tbl_parts),
+        ):
+            resp = messaging.mute_conversation("c1", messaging.MuteIn(muted=False), user_id="u1")
+        self.assertEqual(resp["muted_until"], 0)
+        tbl_parts.update_item.assert_called_once()

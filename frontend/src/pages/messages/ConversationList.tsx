@@ -37,7 +37,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
   });
 
   const createConvo = useMutation({
-    mutationFn: (pid: string) => startConversation({ participant_id: pid }),
+    mutationFn: (pid: string) => startConversation({ participant_ids: [pid], type: "dm" }),
     onSuccess: (convo) => {
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
       onSelect(convo);
@@ -51,7 +51,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
     ? conversations.filter((c) => {
         const q = search.toLowerCase();
         const title = conversationName(c).toLowerCase();
-        const lastMsg = c.last_message?.body?.toLowerCase() ?? "";
+        const lastMsg = (c.last_message?.text ?? c.last_message_preview ?? "").toLowerCase();
         return title.includes(q) || lastMsg.includes(q);
       })
     : conversations;
@@ -137,7 +137,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
                         "truncate text-xs",
                         unread ? "font-medium text-foreground" : "text-muted-foreground",
                       )}>
-                        {lastMsg?.body ?? "No messages yet"}
+                        {lastMsg?.text ?? convo.last_message_preview ?? "No messages yet"}
                       </span>
                       {unread && (
                         <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
@@ -199,8 +199,8 @@ function conversationName(c: Conversation): string {
   return "Conversation";
 }
 
-function formatTimestamp(iso: string): string {
-  const date = new Date(iso);
+function formatTimestamp(ts: number): string {
+  const date = new Date(ts * 1000);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));

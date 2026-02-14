@@ -82,8 +82,8 @@ export function ForwardDialog({
         <div className="rounded-lg bg-muted p-3">
           <p className="text-xs text-muted-foreground">From: {message.sender_id}</p>
           <p className="mt-1 text-sm">
-            {message.body
-              ? (message.body.length > 100 ? message.body.slice(0, 100) + "..." : message.body)
+            {message.text
+              ? (message.text.length > 100 ? message.text.slice(0, 100) + "..." : message.text)
               : `[${message.kind}]`}
           </p>
         </div>

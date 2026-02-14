@@ -560,19 +560,52 @@ export interface Conversation {
   conversation_id: string;
   type: "dm" | "group";
   title?: string;
+  description?: string;
+  icon?: string;
+  topic?: string;
+  retention_days?: number;
+  created_at: number;
+  created_by: string;
+  participant_count: number;
+  last_message_at?: number;
+  last_message_preview?: string;
+  status: string;
+  muted_until: number;
+  last_read_at: number;
+  unread_count: number;
+  // UI convenience fields (derived client-side)
   participants: Participant[];
-  created_at: string;
-  updated_at: string;
   last_message?: Message;
-  unread_count?: number;
-  muted?: boolean;
 }
 
 export interface Participant {
   user_id: string;
-  role?: string;
+  status?: string;
+  role?: "admin" | "member";
   display_name?: string;
-  joined_at?: string;
+  muted_until?: number;
+  last_read_at?: number;
+  joined_at?: number;
+  left_at?: number;
+}
+
+export interface MessageImage {
+  bucket?: string;
+  key?: string;
+  content_type?: string;
+  width?: number;
+  height?: number;
+  url?: string;
+}
+
+export interface MessageFile {
+  path?: string;
+  name?: string;
+  size?: number;
+  content_type?: string;
+  duration_seconds?: number;
+  thumbnail?: string;
+  url?: string;
 }
 
 export interface Message {
@@ -580,39 +613,55 @@ export interface Message {
   conversation_id: string;
   sender_id: string;
   kind: "text" | "image" | "file" | "audio" | "video";
-  body?: string;
-  image_url?: string;
-  file_url?: string;
-  file_name?: string;
-  duration_seconds?: number;
-  link_preview?: LinkPreview;
-  reactions?: Record<string, string[]>;
+  created_at: number;
+  text?: string;
+  image?: MessageImage;
+  file?: MessageFile;
+  preview?: LinkPreview;
+  reply_to_message_id?: string;
+  forwarded_from?: Record<string, unknown>;
+  forward_note?: string;
+  edited_at?: number;
+  edited_by?: string;
+  revoked_at?: number;
+  revoked_by?: string;
+  delivered_to_count?: number;
+  delivered_to_user_ids?: string[];
+  read_by_count?: number;
+  read_by_user_ids?: string[];
+  reactions_counts?: Record<string, number>;
+  my_reactions?: string[];
+  // UI convenience fields (derived client-side)
   edited?: boolean;
   revoked?: boolean;
-  created_at: string;
-  updated_at?: string;
 }
 
 export interface LinkPreview {
   url?: string;
   title?: string;
   description?: string;
-  image?: string;
+  image_url?: string;
   site_name?: string;
 }
 
 export interface SendTextMessageReq {
-  body: string;
-  link_preview?: LinkPreview;
+  text: string;
+  reply_to_message_id?: string;
+  preview?: LinkPreview;
 }
 
 export interface StartConversationReq {
-  participant_id: string;
+  participant_ids: string[];
+  type?: "dm" | "group";
 }
 
 export interface StartGroupConversationReq {
   title?: string;
   participant_ids: string[];
+  description?: string;
+  icon?: string;
+  topic?: string;
+  retention_days?: number;
 }
 
 export interface PresenceStatus {
