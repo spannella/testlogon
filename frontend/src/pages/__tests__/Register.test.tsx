@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { ApiError } from "@/api/client";
@@ -123,6 +123,22 @@ describe("Register page", () => {
     ).toBeInTheDocument();
   });
 
+
+  it("shows password strength meter progression", async () => {
+    const user = userEvent.setup();
+    renderRegister();
+
+    expect(screen.getByText(/password strength/i)).toBeInTheDocument();
+    expect(screen.getByText(/^very weak$/i)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/^password/i), "short");
+    expect(screen.getByText(/^very weak$/i)).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText(/^password/i));
+    await user.type(screen.getByLabelText(/^password/i), "StrongPassphrase42!");
+    expect(screen.getByText(/^strong$/i)).toBeInTheDocument();
+  });
+
   it("shows password requirement checklist feedback", async () => {
     const user = userEvent.setup();
     renderRegister();
@@ -214,5 +230,29 @@ describe("Register page", () => {
     expect(
       await screen.findByText(/too many checks\. please wait before trying again\./i),
     ).toBeInTheDocument();
+  });
+
+  it("recovers when email check never resolves", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.registerEmailCheck.mockImplementationOnce(() => new Promise(() => {}));
+      renderRegister();
+
+      fireEvent.change(screen.getByLabelText(/email/i, { selector: "input[type='email']" }), {
+        target: { value: "stuck@example.com" },
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(400);
+      });
+      expect(screen.getByText(/checking email availability/i)).toBeInTheDocument();
+
+      await act(async () => {
+        vi.advanceTimersByTime(8000);
+      });
+      expect(screen.getByText(/unable to check email availability\. please try again\./i)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
