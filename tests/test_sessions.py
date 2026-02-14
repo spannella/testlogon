@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 
 from app.services import sessions as sessions_service
 
@@ -248,3 +248,22 @@ class TestFinalize(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRefreshTokenRotation(unittest.TestCase):
+    def test_rotate_refresh_token_uses_session_refresh_ttl(self):
+        sessions_table = Mock()
+        token = "refresh"
+        hashed = sessions_service.sha256_str(token)
+        sessions_table.get_item.return_value = {"Item": {"refresh_token_hash": hashed, "refresh_ttl_seconds": 1234}}
+        with patch.object(sessions_service, "T", SimpleNamespace(sessions=sessions_table)),              patch.object(sessions_service, "_issue_refresh_token") as issue,              patch.object(sessions_service, "mint_access_token", return_value="access"):
+            resp = Response()
+            sessions_service.rotate_refresh_token(resp, "user", "sid", token)
+        issue.assert_called_once_with(resp, "sid", "user", refresh_ttl_seconds=1234)
+
+    def test_rotate_refresh_token_rejects_invalid_hash(self):
+        sessions_table = Mock()
+        sessions_table.get_item.return_value = {"Item": {"refresh_token_hash": "other"}}
+        with patch.object(sessions_service, "T", SimpleNamespace(sessions=sessions_table)):
+            with self.assertRaises(HTTPException):
+                sessions_service.rotate_refresh_token(Response(), "user", "sid", "bad")

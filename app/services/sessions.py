@@ -49,7 +49,7 @@ def session_id_value(session: SessionInfo | str) -> str:
         return session.session_id
     return session.session_id if hasattr(session, "session_id") else str(session)
 
-def set_session_cookies(response: Response, session: SessionInfo) -> None:
+def set_session_cookies(response: Response, session: SessionInfo, *, refresh_ttl_seconds: Optional[int] = None) -> None:
     response.set_cookie(
         S.ui_session_cookie_name,
         session.session_id,
@@ -58,7 +58,7 @@ def set_session_cookies(response: Response, session: SessionInfo) -> None:
         secure=S.ui_cookie_secure,
         samesite=S.ui_cookie_samesite,
     )
-    _issue_refresh_token(response, session.session_id, session.user_sub)
+    _issue_refresh_token(response, session.session_id, session.user_sub, refresh_ttl_seconds=refresh_ttl_seconds)
     access = mint_access_token(session.user_sub, session.session_id)
     if access:
         response.set_cookie(
@@ -104,12 +104,14 @@ def rotate_session_cookies(
     response: Response,
     user_sub: str,
     session: SessionInfo | str,
+    *,
+    refresh_ttl_seconds: Optional[int] = None,
 ) -> None:
     session = _coerce_session_info(session, user_sub)
     prior = (getattr(request, "cookies", {}) or {}).get(S.ui_session_cookie_name)
     if prior and prior != session.session_id:
         revoke_session(user_sub, prior)
-    set_session_cookies(response, session)
+    set_session_cookies(response, session, refresh_ttl_seconds=refresh_ttl_seconds)
     ensure_device_cookie(request, response, user_sub)
 
 def rotate_existing_session(
@@ -118,10 +120,11 @@ def rotate_existing_session(
     ctx: Dict[str, str],
     *,
     mfa_verified_at: Optional[int] = None,
+    refresh_ttl_seconds: Optional[int] = None,
 ) -> SessionInfo:
     session = create_real_session(request, ctx["user_sub"], mfa_verified_at=mfa_verified_at)
     revoke_session(ctx["user_sub"], ctx["session_id"])
-    set_session_cookies(response, session)
+    set_session_cookies(response, session, refresh_ttl_seconds=refresh_ttl_seconds)
     ensure_device_cookie(request, response, ctx["user_sub"])
     return session
 
@@ -147,7 +150,7 @@ def mint_access_token(user_sub: str, session_id: str) -> str:
     }
     return jwt.encode(payload, S.ui_access_token_secret, algorithm="HS256")
 
-def _issue_refresh_token(response: Response, session_id: str, user_sub: str) -> None:
+def _issue_refresh_token(response: Response, session_id: str, user_sub: str, *, refresh_ttl_seconds: Optional[int] = None) -> None:
     token = secrets.token_urlsafe(48)
     token_hash = sha256_str(token)
     try:
@@ -161,7 +164,7 @@ def _issue_refresh_token(response: Response, session_id: str, user_sub: str) -> 
     response.set_cookie(
         S.ui_refresh_token_cookie_name,
         token,
-        max_age=S.ui_refresh_token_ttl_seconds,
+        max_age=refresh_ttl_seconds or S.ui_refresh_token_ttl_seconds,
         httponly=True,
         secure=S.ui_cookie_secure,
         samesite=S.ui_cookie_samesite,
@@ -174,7 +177,8 @@ def rotate_refresh_token(response: Response, user_sub: str, session_id: str, ref
     stored = it.get("refresh_token_hash", "")
     if not stored or not hmac.compare_digest(stored, sha256_str(refresh_token)):
         raise HTTPException(401, "Invalid refresh token")
-    _issue_refresh_token(response, session_id, user_sub)
+    refresh_ttl = int(it.get("refresh_ttl_seconds") or 0)
+    _issue_refresh_token(response, session_id, user_sub, refresh_ttl_seconds=refresh_ttl or None)
     access = mint_access_token(user_sub, session_id)
     if access:
         response.set_cookie(
@@ -270,7 +274,7 @@ async def require_ui_session(
     request.state.user_sub = user_sub
     return {"user_sub": user_sub, "session_id": session_id}
 
-def create_real_session(req: Request, user_sub: str, *, mfa_verified_at: Optional[int] = None) -> SessionInfo:
+def create_real_session(req: Request, user_sub: str, *, mfa_verified_at: Optional[int] = None, risk_score: int = 0, refresh_ttl_seconds: Optional[int] = None) -> SessionInfo:
     session_id = str(uuid.uuid4())
     csrf_token = secrets.token_urlsafe(32)
     ts = now_ts()
@@ -289,6 +293,11 @@ def create_real_session(req: Request, user_sub: str, *, mfa_verified_at: Optiona
     }
     if mfa_verified_at:
         item["mfa_verified_at"] = mfa_verified_at
+    if risk_score > 0:
+        item["risk_score"] = risk_score
+        item["risk_level"] = "high" if risk_score >= getattr(S, "login_anomaly_risk_score_threshold", 1) else "elevated"
+    if refresh_ttl_seconds and refresh_ttl_seconds > 0:
+        item["refresh_ttl_seconds"] = int(refresh_ttl_seconds)
     T.sessions.put_item(Item=with_ttl(item, ttl_epoch=ttl))
     try:
         record_device_login(req, user_sub)
@@ -374,6 +383,8 @@ def create_stepup_challenge(
     required_factors: List[str],
     *,
     purpose: Optional[str] = None,
+    risk_score: int = 0,
+    refresh_ttl_seconds: Optional[int] = None,
 ) -> str:
     challenge_id = "chal_" + uuid.uuid4().hex
     ts = now_ts()
@@ -393,6 +404,10 @@ def create_stepup_challenge(
     }
     if purpose:
         item["purpose"] = purpose
+    if risk_score > 0:
+        item["risk_score"] = risk_score
+    if refresh_ttl_seconds and refresh_ttl_seconds > 0:
+        item["refresh_ttl_seconds"] = int(refresh_ttl_seconds)
     T.sessions.put_item(Item=with_ttl(item, ttl_epoch=expires))
     return challenge_id
 
@@ -429,7 +444,13 @@ def maybe_finalize(req: Request, user_sub: str, challenge_id: str) -> Optional[S
         return None
     if chal.get("purpose"):
         return None
-    sid = create_real_session(req, user_sub, mfa_verified_at=now_ts())
+    sid = create_real_session(
+        req,
+        user_sub,
+        mfa_verified_at=now_ts(),
+        risk_score=int(chal.get("risk_score") or 0),
+        refresh_ttl_seconds=int(chal.get("refresh_ttl_seconds") or 0) or None,
+    )
     revoke_challenge(user_sub, challenge_id)
     return sid
 
