@@ -18,6 +18,7 @@ $SUDO apt-get install -y --no-install-recommends \
   python3-venv \
   python3-pip \
   python3-dev \
+  openjdk-17-jre-headless \
   nodejs \
   npm
 
@@ -28,7 +29,9 @@ fi
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+pip uninstall -y multipart >/dev/null 2>&1 || true
 pip install gunicorn
+pip install "moto[server]>=5,<6"
 
 deactivate
 

@@ -28,6 +28,8 @@ python3 scripts/local-s3-init.py
 python3 scripts/local-cognito-init.py
 ```
 
+`local-stack-up.sh` now supports **Docker mode** (when Docker is installed) and **host mode** (no Docker). In host mode it starts moto (S3/Cognito mock), DynamoDB Local, and stripe-mock as local processes and stores logs under `.local/logs/`.
+
 If `.env.local` does not exist, copy from `.env.local.example` and adjust as needed.
 
 ## 2) Start app
