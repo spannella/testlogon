@@ -10,8 +10,12 @@ else
   SUDO=""
 fi
 
-git fetch --all --prune
-git pull --ff-only
+if git rev-parse --abbrev-ref --symbolic-full-name "@{u}" >/dev/null 2>&1; then
+  git fetch --all --prune
+  git pull --ff-only
+else
+  echo "Warning: current branch has no upstream; skipping git fetch/pull." >&2
+fi
 
 $SUDO apt-get update
 $SUDO apt-get install -y --no-install-recommends \
@@ -21,6 +25,7 @@ $SUDO apt-get install -y --no-install-recommends \
   python3-venv \
   python3-pip \
   python3-dev \
+  openjdk-17-jre-headless \
   nodejs \
   npm
 
@@ -31,7 +36,9 @@ fi
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+pip uninstall -y multipart >/dev/null 2>&1 || true
 pip install gunicorn
+pip install "moto[server]>=5,<6"
 deactivate
 
 if [[ -f "frontend/package.json" ]]; then

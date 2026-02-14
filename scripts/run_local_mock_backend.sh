@@ -35,5 +35,31 @@ if [[ -d .venv ]]; then
   source .venv/bin/activate
 fi
 
+ensure_fastapi_multipart_dependency() {
+  if ! command -v python >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if python - <<'PYCODE' >/dev/null 2>&1
+import importlib.metadata as md
+md.distribution("multipart")
+PYCODE
+  then
+    echo "Removing incompatible 'multipart' package from active Python environment..."
+    python -m pip uninstall -y multipart >/dev/null 2>&1 || true
+  fi
+
+  if ! python - <<'PYCODE' >/dev/null 2>&1
+import importlib.metadata as md
+md.distribution("python-multipart")
+PYCODE
+  then
+    echo "Installing required 'python-multipart' package..."
+    python -m pip install -q python-multipart==0.0.9
+  fi
+}
+
+ensure_fastapi_multipart_dependency
+
 echo "Starting backend in local mock mode on http://localhost:8000"
 exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

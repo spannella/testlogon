@@ -57,7 +57,7 @@ set +a
 probe_http() {
   local url="$1"
   local code
-  code="$(curl -sS -o /dev/null -w "%{http_code}" --max-time 2 "$url" || true)"
+  code="$(curl -q -s -o /dev/null -w "%{http_code}" --max-time 2 "$url" 2>/dev/null || true)"
   [[ "$code" != "000" ]]
 }
 
@@ -116,6 +116,11 @@ wait_for_mock_components() {
   return 1
 }
 
+ensure_local_mock_infra() {
+  echo "Starting local mock infrastructure (LocalStack, DynamoDB, Stripe mock)..."
+  scripts/local-stack-up.sh
+}
+
 cleanup() {
   if [[ -n "${BACKEND_PID:-}" ]]; then
     kill "$BACKEND_PID" >/dev/null 2>&1 || true
@@ -124,6 +129,7 @@ cleanup() {
 trap cleanup EXIT
 
 if [[ "$backend_mode" == "mock" ]]; then
+  ensure_local_mock_infra
   scripts/run_local_mock_backend.sh &
   echo "Backend running in mock mode on http://localhost:8000"
 else
