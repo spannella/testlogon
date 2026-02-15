@@ -24,6 +24,34 @@ run_as_target() {
   fi
 }
 
+ensure_venv_writable() {
+  if run_as_target "cd '$REPO_ROOT' && touch .venv/.codex_write_test && rm -f .venv/.codex_write_test"; then
+    return 0
+  fi
+
+  echo "Detected a permissions issue in .venv; attempting to repair ownership..."
+
+  if [[ -n "$SUDO" ]]; then
+    $SUDO chown -R "$TARGET_USER:$TARGET_USER" .venv
+  else
+    chown -R "$TARGET_USER:$TARGET_USER" .venv
+  fi
+
+  if run_as_target "cd '$REPO_ROOT' && touch .venv/.codex_write_test && rm -f .venv/.codex_write_test"; then
+    return 0
+  fi
+
+  echo "Warning: ownership repair did not resolve .venv permissions; recreating .venv..."
+
+  if [[ -n "$SUDO" ]]; then
+    $SUDO rm -rf .venv
+  else
+    rm -rf .venv
+  fi
+
+  run_as_target "cd '$REPO_ROOT' && python3 -m venv .venv"
+}
+
 if git rev-parse --abbrev-ref --symbolic-full-name "@{u}" >/dev/null 2>&1; then
   git fetch --all --prune
   git pull --ff-only
@@ -45,9 +73,9 @@ $SUDO apt-get install -y --no-install-recommends \
 
 if [[ ! -d ".venv" ]]; then
   run_as_target "cd '$REPO_ROOT' && python3 -m venv .venv"
-elif [[ "$(id -un)" == "root" ]]; then
-  chown -R "$TARGET_USER:$TARGET_USER" .venv
 fi
+
+ensure_venv_writable
 
 run_as_target "
   cd '$REPO_ROOT'
