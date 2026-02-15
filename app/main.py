@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -43,6 +44,32 @@ from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
 
+
+def _to_bool(value: str, *, default: bool) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _build_cors_options() -> dict[str, object]:
+    raw_origins = os.environ.get("CORS_ALLOW_ORIGINS", "*")
+    allow_origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+    allow_origin_regex = os.environ.get("CORS_ALLOW_ORIGIN_REGEX")
+
+    # Browsers reject `Access-Control-Allow-Origin: *` when credentials are included.
+    # If wildcard access is desired, use a regex so Starlette echoes the request origin.
+    if "*" in allow_origins:
+        allow_origins = [origin for origin in allow_origins if origin != "*"]
+        allow_origin_regex = allow_origin_regex or ".*"
+
+    return {
+        "allow_origins": allow_origins,
+        "allow_origin_regex": allow_origin_regex,
+        "allow_credentials": _to_bool(os.environ.get("CORS_ALLOW_CREDENTIALS"), default=True),
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+    }
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Security Backend (refactored)", version="0.1.0")
     static_dir = Path(__file__).resolve().parent / "static"
@@ -53,13 +80,7 @@ def create_app() -> FastAPI:
     async def index():
         return FileResponse(static_dir / "index.html")
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    app.add_middleware(CORSMiddleware, **_build_cors_options())
     if METRICS_ENABLED:
         app.middleware("http")(metrics_middleware)
         set_app_info(app.title, app.version)
