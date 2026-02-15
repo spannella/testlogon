@@ -122,6 +122,38 @@ def _upsert_env_lines(path: Path, key_values: Dict[str, str], seed_from: Path | 
     path.write_text("\n".join(updated).rstrip() + "\n")
 
 
+def _read_env_value(path: Path, key: str) -> Optional[str]:
+    if not path.exists():
+        return None
+
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        candidate_key, candidate_value = stripped.split("=", 1)
+        if candidate_key.strip() == key:
+            value = candidate_value.strip()
+            return value or None
+
+    return None
+
+
+def _frontend_api_base_url() -> str:
+    explicit_value = os.getenv("VITE_API_BASE_URL")
+    if explicit_value:
+        return explicit_value
+
+    existing_frontend_value = _read_env_value(FRONTEND_ENV_FILE, "VITE_API_BASE_URL")
+    if existing_frontend_value:
+        return existing_frontend_value
+
+    backend_public_base = _read_env_value(ENV_FILE, "PUBLIC_BASE_URL")
+    if backend_public_base:
+        return backend_public_base
+
+    return "http://localhost:8000"
+
+
 def main() -> None:
     client = _cognito_client()
     pool_id = _ensure_user_pool(client, DEFAULT_POOL_NAME)
@@ -147,7 +179,7 @@ def main() -> None:
             "VITE_COGNITO_REGION": _region(),
             "VITE_COGNITO_ISSUER_URL": issuer_url,
             "VITE_COGNITO_JWKS_URL": jwks_url,
-            "VITE_API_BASE_URL": os.getenv("VITE_API_BASE_URL", "http://localhost:8000"),
+            "VITE_API_BASE_URL": _frontend_api_base_url(),
         },
     )
 
