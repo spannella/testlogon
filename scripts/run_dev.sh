@@ -6,6 +6,9 @@ cd "$REPO_ROOT"
 
 backend_mode="mock"
 MOCK_WAIT_TIMEOUT_SECONDS=60
+DEV_LOG_DIR="${DEV_LOG_DIR:-$REPO_ROOT/.logs/dev}"
+BACKEND_LOG_PATH="${DEV_BACKEND_LOG_PATH:-$DEV_LOG_DIR/backend.log}"
+FRONTEND_LOG_PATH="${DEV_FRONTEND_LOG_PATH:-$DEV_LOG_DIR/frontend.log}"
 
 usage() {
   cat <<'USAGE'
@@ -38,6 +41,13 @@ while (($#)); do
   esac
   shift
 done
+
+mkdir -p "$(dirname "$BACKEND_LOG_PATH")" "$(dirname "$FRONTEND_LOG_PATH")"
+touch "$BACKEND_LOG_PATH" "$FRONTEND_LOG_PATH"
+
+echo "Dev logs will be written to:"
+echo "  backend : $BACKEND_LOG_PATH"
+echo "  frontend: $FRONTEND_LOG_PATH"
 
 if [[ -d ".venv" ]]; then
   # shellcheck disable=SC1091
@@ -185,10 +195,10 @@ trap cleanup EXIT
 
 if [[ "$backend_mode" == "mock" ]]; then
   ensure_local_mock_infra
-  scripts/run_local_mock_backend.sh &
+  scripts/run_local_mock_backend.sh >>"$BACKEND_LOG_PATH" 2>&1 &
   echo "Backend running in mock mode on http://localhost:8000"
 else
-  uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 &
+  uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 >>"$BACKEND_LOG_PATH" 2>&1 &
   echo "Backend running in real mode on http://localhost:8000"
 fi
 BACKEND_PID=$!
@@ -212,7 +222,7 @@ if [[ "$backend_mode" == "mock" ]]; then
 fi
 
 if [[ -f "frontend/package.json" ]]; then
-  npm --prefix frontend run dev -- --host 0.0.0.0 --port 5173
+  npm --prefix frontend run dev -- --host 0.0.0.0 --port 5173 >>"$FRONTEND_LOG_PATH" 2>&1
 else
   wait "$BACKEND_PID"
 fi
