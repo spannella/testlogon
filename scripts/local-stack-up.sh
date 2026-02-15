@@ -140,6 +140,7 @@ else
 fi
 
 PYTHONPATH="${REPO_ROOT}" python3 scripts/local-s3-init.py
+PYTHONPATH="${REPO_ROOT}" python3 scripts/local-cognito-init.py
 
 echo ""
 echo "Local stack is starting."

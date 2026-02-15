@@ -11,6 +11,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 ENV_FILE = Path(".env.local")
 ENV_EXAMPLE_FILE = Path(".env.local.example")
+FRONTEND_ENV_FILE = Path("frontend/.env.local")
 DEFAULT_POOL_NAME = os.getenv("LOCAL_COGNITO_POOL_NAME", "local-user-pool")
 DEFAULT_CLIENT_NAME = os.getenv("LOCAL_COGNITO_APP_CLIENT_NAME", "local-app-client")
 
@@ -90,9 +91,9 @@ def _ensure_app_client(client, pool_id: str, client_name: str) -> str:
     return response["UserPoolClient"]["ClientId"]
 
 
-def _upsert_env_lines(path: Path, key_values: Dict[str, str]) -> None:
-    if not path.exists() and ENV_EXAMPLE_FILE.exists():
-        path.write_text(ENV_EXAMPLE_FILE.read_text())
+def _upsert_env_lines(path: Path, key_values: Dict[str, str], seed_from: Path | None = None) -> None:
+    if not path.exists() and seed_from and seed_from.exists():
+        path.write_text(seed_from.read_text())
 
     lines: List[str] = path.read_text().splitlines() if path.exists() else []
     pending = dict(key_values)
@@ -129,21 +130,32 @@ def main() -> None:
     issuer_url = f"{_endpoint_base()}/{pool_id}"
     jwks_url = f"{issuer_url}/.well-known/jwks.json"
 
+    cognito_values = {
+        "COGNITO_USER_POOL_ID": pool_id,
+        "COGNITO_APP_CLIENT_ID": app_client_id,
+        "COGNITO_REGION": _region(),
+        "COGNITO_ISSUER_URL": issuer_url,
+        "COGNITO_JWKS_URL": jwks_url,
+    }
+
+    _upsert_env_lines(ENV_FILE, cognito_values, seed_from=ENV_EXAMPLE_FILE)
     _upsert_env_lines(
-        ENV_FILE,
+        FRONTEND_ENV_FILE,
         {
-            "COGNITO_USER_POOL_ID": pool_id,
-            "COGNITO_APP_CLIENT_ID": app_client_id,
-            "COGNITO_REGION": _region(),
-            "COGNITO_ISSUER_URL": issuer_url,
-            "COGNITO_JWKS_URL": jwks_url,
+            "VITE_COGNITO_USER_POOL_ID": pool_id,
+            "VITE_COGNITO_APP_CLIENT_ID": app_client_id,
+            "VITE_COGNITO_REGION": _region(),
+            "VITE_COGNITO_ISSUER_URL": issuer_url,
+            "VITE_COGNITO_JWKS_URL": jwks_url,
+            "VITE_API_BASE_URL": os.getenv("VITE_API_BASE_URL", "http://localhost:8000"),
         },
     )
 
     print("Ensured local Cognito resources exist.")
     print(f"User pool id: {pool_id}")
     print(f"App client id: {app_client_id}")
-    print(f"Wrote config to {ENV_FILE}")
+    print(f"Wrote backend config to {ENV_FILE}")
+    print(f"Wrote frontend config to {FRONTEND_ENV_FILE}")
 
 
 if __name__ == "__main__":

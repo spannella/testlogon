@@ -147,8 +147,8 @@ export default function Register() {
     { label: "Fair", colorClass: "bg-yellow-400" },
     { label: "Good", colorClass: "bg-lime-500" },
     { label: "Strong", colorClass: "bg-green-600" },
-  ];
-  const activePasswordStrength = passwordStrengthLevels[Math.max(passwordStrengthScore - 1, 0)];
+  ] as const;
+  const activePasswordStrength = passwordStrengthLevels[Math.max(passwordStrengthScore - 1, 0)] ?? passwordStrengthLevels[0];
   const passwordsMatch = confirmPasswordValue.length > 0 && passwordValue === confirmPasswordValue;
   const hasPasswordIssues = !passwordRequirements.every((req) => req.met) || !passwordsMatch;
   const isFullNameValid = fullNameValue.trim().length > 0 && !form.formState.errors.full_name;

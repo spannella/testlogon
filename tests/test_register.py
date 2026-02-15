@@ -104,6 +104,29 @@ class TestRegisterRoutes(unittest.TestCase):
             rate_limit_password_recovery.assert_called_once()
             audit_event.assert_called()
 
+    def test_register_start_allows_dev_mode_without_cognito_config(self):
+        req = build_request()
+        with patch.object(register, "S", SimpleNamespace(cognito_app_client_id="", dev_mode=True, dev_registration_email="", dev_registration_password="", dev_registration_code="", dev_registration_phone="")), \
+             patch.object(register, "check_password_breach", return_value=0), \
+             patch.object(register, "cognito_sign_up") as cognito_sign_up, \
+             patch.object(register, "create_user_record") as create_user_record, \
+             patch.object(register, "can_send_verification", return_value=True), \
+             patch.object(register, "create_registration_challenge", return_value="code"), \
+             patch.object(register, "send_email_code") as send_email_code:
+            result = run_async(register.register_start(
+                req,
+                RegisterStartReq(
+                    full_name="Jane Doe",
+                    email="jane@example.com",
+                    password="StrongPassphrase42!",
+                    confirm_password="StrongPassphrase42!",
+                ),
+            ))
+            self.assertEqual(result["status"], "ok")
+            create_user_record.assert_called_once()
+            send_email_code.assert_called_once()
+            cognito_sign_up.assert_not_called()
+
     def test_register_start_verification_workflow(self):
         req = build_request()
         with patch.object(register, "_require_cognito"), \
@@ -143,7 +166,7 @@ class TestRegisterRoutes(unittest.TestCase):
 
     def test_register_start_duplicate_user(self):
         req = build_request()
-        with patch.object(register, "_require_cognito"),              patch.object(register, "check_password_breach", return_value=0),              patch.object(register, "cognito_sign_up", side_effect=HTTPException(400, "Exists")),              patch.object(register, "record_lockout_failure") as record_lockout_failure,              patch.object(register, "enforce_lockout") as enforce_lockout,              patch.object(register, "rate_limit_password_recovery") as rate_limit_password_recovery,              patch.object(register, "audit_event") as audit_event:
+        with patch.object(register, "_cognito_available", return_value=True),              patch.object(register, "_require_cognito"),              patch.object(register, "check_password_breach", return_value=0),              patch.object(register, "cognito_sign_up", side_effect=HTTPException(400, "Exists")),              patch.object(register, "record_lockout_failure") as record_lockout_failure,              patch.object(register, "enforce_lockout") as enforce_lockout,              patch.object(register, "rate_limit_password_recovery") as rate_limit_password_recovery,              patch.object(register, "audit_event") as audit_event:
             result = run_async(register.register_start(
                 req,
                 RegisterStartReq(
@@ -223,6 +246,24 @@ class TestRegisterRoutes(unittest.TestCase):
                 outcome="success",
                 session_id="session-id",
             )
+
+    def test_register_confirm_allows_dev_mode_without_cognito_config(self):
+        req = build_request()
+        response = Response()
+        with patch.object(register, "S", SimpleNamespace(cognito_app_client_id="", dev_mode=True, dev_registration_email="", dev_registration_password="", dev_registration_code="", dev_registration_phone="")), \
+             patch.object(register, "verify_registration_code", return_value={"user_sub": "jane@example.com"}), \
+             patch.object(register, "cognito_admin_confirm_sign_up") as cognito_admin_confirm_sign_up, \
+             patch.object(register, "mark_user_verified"), \
+             patch.object(register, "create_real_session", return_value={"id": "session"}), \
+             patch.object(register, "rotate_session_cookies"), \
+             patch.object(register, "session_id_value", return_value="session-id"):
+            result = run_async(register.register_confirm(
+                req,
+                RegisterConfirmReq(email="jane@example.com", confirmation_code="1234"),
+                response=response,
+            ))
+            self.assertEqual(result["status"], "ok")
+            cognito_admin_confirm_sign_up.assert_not_called()
 
     def test_register_confirm_invalid_code(self):
         req = build_request()
@@ -334,7 +375,7 @@ class TestRegisterRoutes(unittest.TestCase):
 
     def test_register_start_is_generic_on_signup_failure(self):
         req = build_request()
-        with patch.object(register, "_require_cognito"),              patch.object(register, "check_password_breach", return_value=0),              patch.object(register, "cognito_sign_up", side_effect=HTTPException(400, "Exists")),              patch.object(register, "record_lockout_failure"):
+        with patch.object(register, "_cognito_available", return_value=True),              patch.object(register, "_require_cognito"),              patch.object(register, "check_password_breach", return_value=0),              patch.object(register, "cognito_sign_up", side_effect=HTTPException(400, "Exists")),              patch.object(register, "record_lockout_failure"):
             result = run_async(register.register_start(
                 req,
                 RegisterStartReq(

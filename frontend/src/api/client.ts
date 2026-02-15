@@ -3,6 +3,15 @@ import { useAuthStore } from "@/stores/authStore";
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
+const API_BASE_URL = ((import.meta as any).env?.VITE_API_BASE_URL ?? "").toString().replace(/\/$/, "");
+
+function withApiBase(path: string): string {
+  if (!API_BASE_URL || /^https?:\/\//.test(path)) {
+    return path;
+  }
+  return `${API_BASE_URL}${path.startsWith("/") ? "" : "/"}${path}`;
+}
+
 function getCookie(name: string): string | null {
   const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
   return match ? decodeURIComponent(match[1]!) : null;
@@ -58,7 +67,7 @@ export class ApiError extends Error {
 let refreshPromise: Promise<void> | null = null;
 
 async function refreshSession(): Promise<void> {
-  const res = await fetch("/ui/session/refresh", {
+  const res = await fetch(withApiBase("/ui/session/refresh"), {
     method: "POST",
     credentials: "include",
   });
@@ -83,10 +92,10 @@ export async function api<T>(
   const { params, ...init } = options;
 
   // Build URL with query params
-  let url = path;
+  let url = withApiBase(path);
   if (params) {
     const qs = new URLSearchParams(params).toString();
-    url = `${path}?${qs}`;
+    url = `${withApiBase(path)}?${qs}`;
   }
 
   // Build headers
