@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Dict
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -42,6 +43,7 @@ from app.services.sessions import create_real_session, rotate_session_cookies, s
 router = APIRouter(prefix="/ui/register", tags=["register"])
 
 REGISTER_CHECK_TIMEOUT_SECONDS = 5
+logger = logging.getLogger(__name__)
 
 
 def _require_cognito() -> None:
@@ -84,11 +86,16 @@ async def register_start(
     if use_cognito:
         try:
             cognito_sign_up(username, body.password, body.full_name)
-        except HTTPException:
+        except HTTPException as exc:
+            logger.warning(
+                "register_start cognito_sign_up rejected",
+                extra={"email": username, "status_code": exc.status_code, "detail": exc.detail},
+            )
             audit_event("register_start", username, req, outcome="failure", reason="cognito_sign_up")
             record_lockout_failure(username, ip, "register_start")
             return generic_response
         except Exception:
+            logger.exception("register_start unexpected error during cognito_sign_up", extra={"email": username})
             audit_event("register_start", username, req, outcome="failure", reason="unexpected_error")
             record_lockout_failure(username, ip, "register_start")
             return generic_response
@@ -145,14 +152,20 @@ async def register_check(req: Request, body: RegisterEmailCheckReq) -> Dict[str,
             timeout=REGISTER_CHECK_TIMEOUT_SECONDS,
         )
     except asyncio.TimeoutError:
+        logger.warning("register_check timed out", extra={"email": body.email, "timeout_seconds": REGISTER_CHECK_TIMEOUT_SECONDS})
         audit_event("register_check", body.email, req, outcome="failure", reason="check_timeout")
         record_lockout_failure(body.email, ip, "register_check")
         return generic_response
-    except HTTPException:
+    except HTTPException as exc:
+        logger.warning(
+            "register_check failed with HTTP exception",
+            extra={"email": body.email, "status_code": exc.status_code, "detail": exc.detail},
+        )
         audit_event("register_check", body.email, req, outcome="failure", reason="check_error")
         record_lockout_failure(body.email, ip, "register_check")
         return generic_response
     except Exception:
+        logger.exception("register_check unexpected error", extra={"email": body.email})
         audit_event("register_check", body.email, req, outcome="failure", reason="unexpected_error")
         record_lockout_failure(body.email, ip, "register_check")
         return generic_response
