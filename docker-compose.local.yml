@@ -17,7 +17,7 @@ services:
   localstack:
     image: localstack/localstack:latest
     environment:
-      - SERVICES=s3,cognito-idp
+      - SERVICES=s3,cognito-idp,ses
       - AWS_DEFAULT_REGION=${AWS_REGION:-us-east-1}
       - LOCALSTACK_HOST=localstack
       - EDGE_PORT=4566

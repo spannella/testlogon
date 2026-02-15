@@ -41,10 +41,6 @@ from app.services.sessions import create_real_session, rotate_session_cookies, s
 
 router = APIRouter(prefix="/ui/register", tags=["register"])
 
-DEFAULT_DEV_REGISTRATION_EMAIL = "demo@example.com"
-DEFAULT_DEV_REGISTRATION_PASSWORD = "CloudRiver789!"
-DEFAULT_DEV_REGISTRATION_CODE = "000000"
-DEFAULT_DEV_REGISTRATION_PHONE = "+15555550123"
 REGISTER_CHECK_TIMEOUT_SECONDS = 5
 
 
@@ -55,26 +51,6 @@ def _require_cognito() -> None:
 
 def _cognito_available() -> bool:
     return bool(S.cognito_app_client_id)
-
-def _dev_registration_config() -> dict[str, str] | None:
-    if not S.dev_mode:
-        return None
-    return {
-        "email": S.dev_registration_email or DEFAULT_DEV_REGISTRATION_EMAIL,
-        "password": S.dev_registration_password or DEFAULT_DEV_REGISTRATION_PASSWORD,
-        "code": S.dev_registration_code or DEFAULT_DEV_REGISTRATION_CODE,
-        "phone": S.dev_registration_phone or DEFAULT_DEV_REGISTRATION_PHONE,
-    }
-
-def _is_dev_registration(email: str, password: str | None = None) -> bool:
-    config = _dev_registration_config()
-    if not config:
-        return False
-    if email != config["email"]:
-        return False
-    if password is None:
-        return True
-    return password == config["password"]
 
 
 @router.post("/start", response_model=RegisterStartResp)
@@ -91,9 +67,6 @@ async def register_start(
         "delivery_medium": None,
         "delivery_destination": None,
     }
-    if _is_dev_registration(body.email, body.password):
-        audit_event("register_start", body.email, req, outcome="success", mode="dev")
-        return generic_response
     use_cognito = _cognito_available()
     if not use_cognito and not S.dev_mode:
         _require_cognito()
@@ -166,9 +139,6 @@ async def register_check(req: Request, body: RegisterEmailCheckReq) -> Dict[str,
     enforce_lockout(body.email, ip, "register_check")
     rate_limit_password_recovery(body.email, ip, "register_check")
     generic_response = {"status": "ok", "available": True}
-    if _is_dev_registration(body.email):
-        audit_event("register_check", body.email, req, outcome="success", mode="dev")
-        return generic_response
     try:
         available = await asyncio.wait_for(
             run_in_threadpool(is_email_available, body.email),
@@ -199,16 +169,6 @@ async def register_confirm(
 ) -> Dict[str, object]:
     if response is None:
         response = Response()
-    config = _dev_registration_config()
-    if config and body.email == config["email"]:
-        if body.confirmation_code != config["code"]:
-            raise HTTPException(400, "Invalid verification code")
-        return {
-            "status": "ok",
-            "session_id": "dev-session",
-            "mfa_setup": [],
-            "sms_phone": config["phone"] or None,
-        }
     use_cognito = _cognito_available()
     if not use_cognito and not S.dev_mode:
         _require_cognito()
@@ -253,9 +213,6 @@ async def register_resend(req: Request, body: RegisterResendReq) -> Dict[str, ob
         "delivery_medium": None,
         "delivery_destination": None,
     }
-    if _is_dev_registration(body.email):
-        audit_event("register_resend", body.email, req, outcome="success", mode="dev")
-        return generic_response
     if not _cognito_available() and not S.dev_mode:
         _require_cognito()
     username = body.email

@@ -1,6 +1,6 @@
 # Local Dev Stack Playbook
 
-This document is the **single source of truth** for running and validating the local provider stack (DynamoDB, LocalStack/Cognito/S3, Stripe mock, CCBill mock, PayPal mock wiring, Twilio local testing, and UPS mock).
+This document is the **single source of truth** for running and validating the local provider stack (DynamoDB, LocalStack/Cognito/S3/SES, Stripe mock, CCBill mock, PayPal mock wiring, Twilio local testing, and UPS mock).
 
 ## 0) Fast path (mock mode)
 
@@ -29,11 +29,11 @@ python3 scripts/local-s3-init.py
 python3 scripts/local-cognito-init.py
 ```
 
-`local-stack-up.sh` now supports **Docker mode** (when Docker is installed) and **host mode** (no Docker). In host mode it starts moto (S3/Cognito mock), DynamoDB Local, and stripe-mock as local processes and stores logs under `.local/logs/`.
+`local-stack-up.sh` now supports **Docker mode** (when Docker is installed) and **host mode** (no Docker). In host mode it starts moto (AWS mock including S3/Cognito/SES), DynamoDB Local, and stripe-mock as local processes and stores logs under `.local/logs/`.
 
 If `.env.local` does not exist, copy from `.env.local.example` and adjust as needed.
 
-`local-stack-up.sh` now automatically runs `scripts/local-cognito-init.py`, which writes Cognito settings to both backend `.env.local` and frontend `frontend/.env.local` (`VITE_COGNITO_*`).
+`local-stack-up.sh` now automatically runs `scripts/local-cognito-init.py`, which writes Cognito settings to both backend `.env.local` and frontend `frontend/.env.local` (`VITE_COGNITO_*`). It also runs `scripts/local-ses-init.py` to pre-verify `SES_FROM_EMAIL` for local email testing in both Docker (LocalStack) and host mode (moto) by reading values from `.env.local` when shell env vars are not exported.
 
 ## 2) Start app
 
@@ -54,6 +54,7 @@ Use these in `.env.local`:
 - `UPS_CLIENT_ID=local_ups_client`
 - `UPS_CLIENT_SECRET=local_ups_secret`
 - `UPS_WEBHOOK_SECRET=local-ups-webhook-secret`
+- `SES_FROM_EMAIL=dev-no-reply@example.com`
 
 ## 4) QA checklist
 
