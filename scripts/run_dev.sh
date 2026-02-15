@@ -53,6 +53,53 @@ if [[ -f ".env" ]]; then
 fi
 set +a
 
+detect_external_ip() {
+  if command -v ip >/dev/null 2>&1; then
+    local detected
+    detected="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+    if [[ -n "${detected}" ]]; then
+      echo "${detected}"
+      return 0
+    fi
+  fi
+
+  if command -v hostname >/dev/null 2>&1; then
+    local detected
+    detected="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if [[ -n "${detected}" ]]; then
+      echo "${detected}"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+ensure_external_base_urls() {
+  local dev_host="${LOCAL_DEV_HOST:-}"
+  if [[ -z "${dev_host}" ]]; then
+    dev_host="$(detect_external_ip || true)"
+  fi
+
+  if [[ -z "${dev_host}" ]]; then
+    echo "Warning: Could not detect external IP; leaving API/public base URLs unchanged." >&2
+    return
+  fi
+
+  local backend_url="http://${dev_host}:8000"
+
+  if [[ -z "${PUBLIC_BASE_URL:-}" || "${PUBLIC_BASE_URL}" == *"localhost"* || "${PUBLIC_BASE_URL}" == *"127.0.0.1"* ]]; then
+    export PUBLIC_BASE_URL="${backend_url}"
+  fi
+
+  if [[ -z "${VITE_API_BASE_URL:-}" || "${VITE_API_BASE_URL}" == *"localhost"* || "${VITE_API_BASE_URL}" == *"127.0.0.1"* ]]; then
+    export VITE_API_BASE_URL="${backend_url}"
+  fi
+
+  echo "Using local dev host ${dev_host}"
+  echo "PUBLIC_BASE_URL=${PUBLIC_BASE_URL}"
+  echo "VITE_API_BASE_URL=${VITE_API_BASE_URL}"
+}
 
 probe_http() {
   local url="$1"
@@ -120,6 +167,8 @@ ensure_local_mock_infra() {
   echo "Starting local mock infrastructure (LocalStack, DynamoDB, Stripe mock)..."
   scripts/local-stack-up.sh
 }
+
+ensure_external_base_urls
 
 cleanup() {
   if [[ -n "${BACKEND_PID:-}" ]]; then
