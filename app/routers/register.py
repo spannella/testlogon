@@ -52,6 +52,10 @@ def _require_cognito() -> None:
     if not S.cognito_app_client_id:
         raise HTTPException(500, "Cognito app client id not configured")
 
+
+def _cognito_available() -> bool:
+    return bool(S.cognito_app_client_id)
+
 def _dev_registration_config() -> dict[str, str] | None:
     if not S.dev_mode:
         return None
@@ -90,7 +94,9 @@ async def register_start(
     if _is_dev_registration(body.email, body.password):
         audit_event("register_start", body.email, req, outcome="success", mode="dev")
         return generic_response
-    _require_cognito()
+    use_cognito = _cognito_available()
+    if not use_cognito and not S.dev_mode:
+        _require_cognito()
     username = body.email
     ip = client_ip_from_request(req)
     enforce_lockout(username, ip, "register_start")
@@ -102,16 +108,17 @@ async def register_start(
         record_lockout_failure(username, ip, "register_start")
         raise HTTPException(400, "Password found in breach corpus")
 
-    try:
-        cognito_sign_up(username, body.password, body.full_name)
-    except HTTPException:
-        audit_event("register_start", username, req, outcome="failure", reason="cognito_sign_up")
-        record_lockout_failure(username, ip, "register_start")
-        return generic_response
-    except Exception:
-        audit_event("register_start", username, req, outcome="failure", reason="unexpected_error")
-        record_lockout_failure(username, ip, "register_start")
-        return generic_response
+    if use_cognito:
+        try:
+            cognito_sign_up(username, body.password, body.full_name)
+        except HTTPException:
+            audit_event("register_start", username, req, outcome="failure", reason="cognito_sign_up")
+            record_lockout_failure(username, ip, "register_start")
+            return generic_response
+        except Exception:
+            audit_event("register_start", username, req, outcome="failure", reason="unexpected_error")
+            record_lockout_failure(username, ip, "register_start")
+            return generic_response
 
     verification_required = True
     try:
@@ -202,7 +209,9 @@ async def register_confirm(
             "mfa_setup": [],
             "sms_phone": config["phone"] or None,
         }
-    _require_cognito()
+    use_cognito = _cognito_available()
+    if not use_cognito and not S.dev_mode:
+        _require_cognito()
     username = body.email
     ip = client_ip_from_request(req)
     enforce_lockout(username, ip, "register_confirm")
@@ -210,7 +219,8 @@ async def register_confirm(
 
     try:
         verification = verify_registration_code(user_sub=username, code=body.confirmation_code)
-        cognito_admin_confirm_sign_up(username)
+        if use_cognito:
+            cognito_admin_confirm_sign_up(username)
     except HTTPException:
         audit_event("register_confirm", username, req, outcome="failure", reason="verification_failed")
         record_lockout_failure(username, ip, "register_confirm")
@@ -246,7 +256,8 @@ async def register_resend(req: Request, body: RegisterResendReq) -> Dict[str, ob
     if _is_dev_registration(body.email):
         audit_event("register_resend", body.email, req, outcome="success", mode="dev")
         return generic_response
-    _require_cognito()
+    if not _cognito_available() and not S.dev_mode:
+        _require_cognito()
     username = body.email
     ip = client_ip_from_request(req)
     enforce_lockout(username, ip, "register_resend")

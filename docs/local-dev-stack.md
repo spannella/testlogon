@@ -25,12 +25,15 @@ scripts/local-stack-up.sh
 python3 scripts/local-ddb-init.py
 python3 scripts/local-ddb-seed.py
 python3 scripts/local-s3-init.py
+# optional: run manually if you want to re-generate Cognito ids
 python3 scripts/local-cognito-init.py
 ```
 
 `local-stack-up.sh` now supports **Docker mode** (when Docker is installed) and **host mode** (no Docker). In host mode it starts moto (S3/Cognito mock), DynamoDB Local, and stripe-mock as local processes and stores logs under `.local/logs/`.
 
 If `.env.local` does not exist, copy from `.env.local.example` and adjust as needed.
+
+`local-stack-up.sh` now automatically runs `scripts/local-cognito-init.py`, which writes Cognito settings to both backend `.env.local` and frontend `frontend/.env.local` (`VITE_COGNITO_*`).
 
 ## 2) Start app
 
