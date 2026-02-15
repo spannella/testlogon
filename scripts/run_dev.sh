@@ -71,8 +71,8 @@ mock_component_ready() {
     "dynamodb") probe_http "http://localhost:8001/" ;;
     "cognito") probe_http "http://localhost:4566/health" ;;
     "stripe") probe_http "http://localhost:12111/" ;;
-    "ccbill") probe_http "http://localhost:8000/mock/ccbill/subscriptions/mock-subscription" ;;
-    "ups") probe_http "http://localhost:8000/mock/ups/label" ;;
+    "ccbill") probe_http "http://localhost:8000/openapi.json" ;;
+    "ups") probe_http "http://localhost:8000/openapi.json" ;;
     *) return 1 ;;
   esac
 }
