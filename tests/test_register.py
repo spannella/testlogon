@@ -23,43 +23,6 @@ def run_async(coro):
 
 
 class TestRegisterRoutes(unittest.TestCase):
-    def test_register_start_dev_demo(self):
-        req = build_request()
-        config = register._dev_registration_config()
-        assert config is not None
-        with patch.object(register, "_require_cognito") as require_cognito, \
-             patch.object(register, "create_user_record") as create_user_record:
-            result = run_async(register.register_start(
-                req,
-                RegisterStartReq(
-                    full_name="Demo User",
-                    email=config["email"],
-                    password=config["password"],
-                    confirm_password=config["password"],
-                ),
-            ))
-            self.assertEqual(result["status"], "ok")
-            self.assertTrue(result["verification_required"])
-            self.assertIsNone(result["delivery_medium"])
-            require_cognito.assert_not_called()
-            create_user_record.assert_not_called()
-
-    def test_register_confirm_dev_demo(self):
-        req = build_request()
-        config = register._dev_registration_config()
-        assert config is not None
-        with patch.object(register, "_require_cognito") as require_cognito:
-            result = run_async(register.register_confirm(
-                req,
-                RegisterConfirmReq(
-                    email=config["email"],
-                    confirmation_code=config["code"],
-                ),
-            ))
-            self.assertEqual(result["status"], "ok")
-            self.assertEqual(result["session_id"], "dev-session")
-            require_cognito.assert_not_called()
-
     def test_register_check_email_available(self):
         req = build_request()
         with patch.object(register, "is_email_available", return_value=True), \

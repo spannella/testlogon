@@ -31,7 +31,7 @@ def gen_numeric_code(n_digits: int = 6) -> str:
 
 def send_email_code(to_email: str, purpose: str, code: str) -> None:
     if S.dev_mode:
-        logger.info("DEV MODE email verification code for %s (%s): %s", to_email, purpose, code)
+        logger.warning("DEV MODE email verification code for %s (%s): %s", to_email, purpose, code)
     if not ses:
         raise HTTPException(500, "SES not configured")
     subject = f"Your verification code ({purpose})"

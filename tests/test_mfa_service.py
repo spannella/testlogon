@@ -13,7 +13,7 @@ def test_send_email_code_logs_code_in_dev_mode(monkeypatch):
 
     mfa.send_email_code("user@example.com", "Registration", "123456")
 
-    logger_mock.info.assert_called_once_with(
+    logger_mock.warning.assert_called_once_with(
         "DEV MODE email verification code for %s (%s): %s",
         "user@example.com",
         "Registration",
