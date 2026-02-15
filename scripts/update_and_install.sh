@@ -73,6 +73,23 @@ ensure_node_runtime() {
   $SUDO apt-get install -y --no-install-recommends nodejs
 }
 
+ensure_npm_cli() {
+  if command -v npm >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v corepack >/dev/null 2>&1; then
+    corepack enable npm >/dev/null 2>&1 || corepack enable >/dev/null 2>&1 || true
+  fi
+
+  if command -v npm >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "Error: npm is not available after installing Node.js. Verify your Node.js installation and rerun this script." >&2
+  exit 1
+}
+
 if git rev-parse --abbrev-ref --symbolic-full-name "@{u}" >/dev/null 2>&1; then
   git fetch --all --prune
   git pull --ff-only
@@ -90,10 +107,10 @@ $SUDO apt-get install -y --no-install-recommends \
   python3-dev \
   openjdk-17-jre-headless \
   nodejs \
-  npm \
   gnupg
 
 ensure_node_runtime
+ensure_npm_cli
 
 if [[ ! -d ".venv" ]]; then
   run_as_target "cd '$REPO_ROOT' && python3 -m venv .venv"
