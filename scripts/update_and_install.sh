@@ -25,7 +25,7 @@ run_as_target() {
 }
 
 ensure_venv_writable() {
-  if run_as_target "cd '$REPO_ROOT' && touch .venv/.codex_write_test && rm -f .venv/.codex_write_test"; then
+  if run_as_target "cd '$REPO_ROOT' && touch .venv/.codex_write_test >/dev/null 2>&1 && rm -f .venv/.codex_write_test"; then
     return 0
   fi
 
@@ -37,7 +37,7 @@ ensure_venv_writable() {
     chown -R "$TARGET_USER:$TARGET_USER" .venv
   fi
 
-  if run_as_target "cd '$REPO_ROOT' && touch .venv/.codex_write_test && rm -f .venv/.codex_write_test"; then
+  if run_as_target "cd '$REPO_ROOT' && touch .venv/.codex_write_test >/dev/null 2>&1 && rm -f .venv/.codex_write_test"; then
     return 0
   fi
 
@@ -50,6 +50,27 @@ ensure_venv_writable() {
   fi
 
   run_as_target "cd '$REPO_ROOT' && python3 -m venv .venv"
+}
+
+ensure_node_runtime() {
+  if ! command -v node >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local node_major
+  node_major="$(node -p "Number(process.versions.node.split('.')[0])" 2>/dev/null || echo 0)"
+  if [[ "$node_major" =~ ^[0-9]+$ ]] && (( node_major >= 20 )); then
+    return 0
+  fi
+
+  echo "Detected Node.js ${node_major}; upgrading to Node.js 20.x for frontend compatibility..."
+  $SUDO install -d -m 0755 /etc/apt/keyrings
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | $SUDO gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+    | $SUDO tee /etc/apt/sources.list.d/nodesource.list >/dev/null
+  $SUDO apt-get update
+  $SUDO apt-get install -y --no-install-recommends nodejs
 }
 
 if git rev-parse --abbrev-ref --symbolic-full-name "@{u}" >/dev/null 2>&1; then
@@ -69,7 +90,10 @@ $SUDO apt-get install -y --no-install-recommends \
   python3-dev \
   openjdk-17-jre-headless \
   nodejs \
-  npm
+  npm \
+  gnupg
+
+ensure_node_runtime
 
 if [[ ! -d ".venv" ]]; then
   run_as_target "cd '$REPO_ROOT' && python3 -m venv .venv"
