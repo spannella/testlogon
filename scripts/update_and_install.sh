@@ -10,6 +10,20 @@ else
   SUDO=""
 fi
 
+if [[ -n "${SUDO_USER:-}" ]]; then
+  TARGET_USER="$SUDO_USER"
+else
+  TARGET_USER="$(id -un)"
+fi
+
+run_as_target() {
+  if [[ "$(id -un)" == "$TARGET_USER" ]]; then
+    bash -lc "$*"
+  else
+    sudo -u "$TARGET_USER" -H bash -lc "$*"
+  fi
+}
+
 if git rev-parse --abbrev-ref --symbolic-full-name "@{u}" >/dev/null 2>&1; then
   git fetch --all --prune
   git pull --ff-only
@@ -30,16 +44,20 @@ $SUDO apt-get install -y --no-install-recommends \
   npm
 
 if [[ ! -d ".venv" ]]; then
-  python3 -m venv .venv
+  run_as_target "cd '$REPO_ROOT' && python3 -m venv .venv"
+elif [[ "$(id -un)" == "root" ]]; then
+  chown -R "$TARGET_USER:$TARGET_USER" .venv
 fi
 
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-pip uninstall -y multipart >/dev/null 2>&1 || true
-pip install gunicorn
-pip install "moto[server]>=5,<6"
-deactivate
+run_as_target "
+  cd '$REPO_ROOT'
+  source .venv/bin/activate
+  python -m pip install --upgrade pip
+  pip install -r requirements.txt
+  pip uninstall -y multipart >/dev/null 2>&1 || true
+  pip install gunicorn
+  pip install 'moto[server]>=5,<6'
+"
 
 if [[ -f "frontend/package.json" ]]; then
   npm --prefix frontend install
