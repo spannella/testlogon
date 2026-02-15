@@ -54,8 +54,15 @@ fi
 set +a
 
 detect_external_ip() {
+  local detected
+
+  detected="$(curl -q -s --max-time 3 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]')"
+  if [[ "${detected}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    echo "${detected}"
+    return 0
+  fi
+
   if command -v ip >/dev/null 2>&1; then
-    local detected
     detected="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
     if [[ -n "${detected}" ]]; then
       echo "${detected}"
@@ -64,7 +71,6 @@ detect_external_ip() {
   fi
 
   if command -v hostname >/dev/null 2>&1; then
-    local detected
     detected="$(hostname -I 2>/dev/null | awk '{print $1}')"
     if [[ -n "${detected}" ]]; then
       echo "${detected}"
