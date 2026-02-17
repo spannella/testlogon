@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import secrets
 import uuid
 from typing import Dict
 
+from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
 from app.core.normalize import normalize_email
@@ -22,6 +24,7 @@ PASSWORD_HASH_ITERATIONS = 260_000
 PASSWORD_HASH_ALGO = "pbkdf2_sha256"
 REGISTRATION_CHALLENGE_PREFIX = "register_verify#"
 REGISTRATION_LATEST_POINTER_ID = "register_verify_latest"
+logger = logging.getLogger(__name__)
 
 
 def _hash_password(password: str) -> Dict[str, str]:
@@ -36,7 +39,14 @@ def _hash_password(password: str) -> Dict[str, str]:
 
 
 def _user_exists(user_sub: str) -> bool:
-    existing = T.users.get_item(Key={"user_sub": user_sub}).get("Item")
+    try:
+        existing = T.users.get_item(Key={"user_sub": user_sub}).get("Item")
+    except ClientError as exc:
+        code = (exc.response or {}).get("Error", {}).get("Code")
+        if code == "ResourceNotFoundException":
+            logger.warning("users table not found during registration lookup", extra={"user_sub": user_sub})
+            return False
+        raise
     return bool(existing)
 
 

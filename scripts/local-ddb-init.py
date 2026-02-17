@@ -46,10 +46,32 @@ def _table_defs() -> List[TableDef]:
         TableDef(_resolve_table_name(S.purchase_transactions_table_name, "purchase_transactions"), "user_sub", "sk"),
         TableDef(_resolve_table_name(S.purchase_events_table_name, "purchase_transaction_events"), "pk", "sk"),
         TableDef(_resolve_table_name(S.shopping_cart_table_name, "shopping_cart"), "PK", "SK"),
-        TableDef(_resolve_table_name(S.catalog_table_name, "shopping_catalog"), "PK", "SK"),
+        TableDef(
+            _resolve_table_name(S.catalog_table_name, "shopping_catalog"),
+            "PK",
+            "SK",
+            gsi=[{"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"}],
+        ),
         TableDef(_resolve_table_name(S.subscriptions_table_name, "subscriptions"), "pk", "sk"),
-        TableDef(_resolve_table_name(S.filemgr_table_name, "file_manager"), "PK", "SK"),
-        TableDef(os.getenv("APP_TABLE", "app_single_table"), "pk", "sk"),
+        TableDef(
+            _resolve_table_name(S.filemgr_table_name, "file_manager"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+        ),
+        TableDef(
+            os.getenv("APP_TABLE", "app_single_table"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+            ],
+        ),
         TableDef(os.getenv("DDB_CONVERSATIONS", "Conversations"), "conversation_id"),
         TableDef(
             os.getenv("DDB_PARTICIPANTS", "Participants"),
@@ -110,6 +132,45 @@ def _ensure_table(ddb, table: TableDef) -> None:
     client = ddb.meta.client
     existing = client.list_tables().get("TableNames", [])
     if table.name in existing:
+        if table.gsi:
+            desc = client.describe_table(TableName=table.name).get("Table", {})
+            existing_indexes = {idx.get("IndexName") for idx in desc.get("GlobalSecondaryIndexes", [])}
+            existing_attributes = {attr.get("AttributeName") for attr in desc.get("AttributeDefinitions", [])}
+            missing = [g for g in table.gsi if g["index_name"] not in existing_indexes]
+            for gsi in missing:
+                attr_defs = []
+                if gsi["partition_key"] not in existing_attributes:
+                    attr_defs.append({"AttributeName": gsi["partition_key"], "AttributeType": "S"})
+                if gsi.get("sort_key") and gsi["sort_key"] not in existing_attributes:
+                    attr_defs.append({"AttributeName": gsi["sort_key"], "AttributeType": "S"})
+
+                update_kwargs: Dict[str, object] = {
+                    "TableName": table.name,
+                    "GlobalSecondaryIndexUpdates": [
+                        {
+                            "Create": {
+                                "IndexName": gsi["index_name"],
+                                "KeySchema": [
+                                    {"AttributeName": gsi["partition_key"], "KeyType": "HASH"},
+                                    *(
+                                        [{"AttributeName": gsi["sort_key"], "KeyType": "RANGE"}]
+                                        if gsi.get("sort_key")
+                                        else []
+                                    ),
+                                ],
+                                "Projection": {"ProjectionType": "ALL"},
+                            }
+                        }
+                    ],
+                }
+                if attr_defs:
+                    update_kwargs["AttributeDefinitions"] = attr_defs
+
+                client.update_table(**update_kwargs)
+                waiter = client.get_waiter("table_exists")
+                waiter.wait(TableName=table.name)
+                desc = client.describe_table(TableName=table.name).get("Table", {})
+                existing_attributes = {attr.get("AttributeName") for attr in desc.get("AttributeDefinitions", [])}
         return
     kwargs: Dict[str, object] = {
         "TableName": table.name,
@@ -128,6 +189,13 @@ def _wait_for_tables(ddb, table_names: Iterable[str]) -> None:
     for name in table_names:
         waiter = client.get_waiter("table_exists")
         waiter.wait(TableName=name)
+        table = client.describe_table(TableName=name).get("Table", {})
+        for _ in range(120):
+            indexes = table.get("GlobalSecondaryIndexes", [])
+            if all(idx.get("IndexStatus") == "ACTIVE" for idx in indexes):
+                break
+            time.sleep(1)
+            table = client.describe_table(TableName=name).get("Table", {})
 
 
 def main() -> None:

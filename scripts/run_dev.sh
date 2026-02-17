@@ -9,6 +9,11 @@ MOCK_WAIT_TIMEOUT_SECONDS=60
 DEV_LOG_DIR="${DEV_LOG_DIR:-$REPO_ROOT/.logs/dev}"
 BACKEND_LOG_PATH="${DEV_BACKEND_LOG_PATH:-$DEV_LOG_DIR/backend.log}"
 FRONTEND_LOG_PATH="${DEV_FRONTEND_LOG_PATH:-$DEV_LOG_DIR/frontend.log}"
+LOCAL_RUN_DIR="${REPO_ROOT}/.local/run"
+DDB_BOOTSTRAP_MARKER_PATH="${LOCAL_RUN_DIR}/ddb-bootstrap.done"
+DEV_DDB_BOOTSTRAP="${DEV_DDB_BOOTSTRAP:-1}"
+DEV_DDB_SEED="${DEV_DDB_SEED:-0}"
+DEV_FORCE_DDB_BOOTSTRAP="${DEV_FORCE_DDB_BOOTSTRAP:-0}"
 
 usage() {
   cat <<'USAGE'
@@ -184,6 +189,43 @@ ensure_local_mock_infra() {
   scripts/local-stack-up.sh
 }
 
+ensure_dynamodb_tables_initialized() {
+  mkdir -p "${LOCAL_RUN_DIR}"
+
+  if [[ "${DEV_DDB_BOOTSTRAP}" == "0" ]]; then
+    echo "Skipping DynamoDB bootstrap because DEV_DDB_BOOTSTRAP=0."
+    return 0
+  fi
+
+  if [[ "${DEV_FORCE_DDB_BOOTSTRAP}" != "1" ]] && [[ -f "${DDB_BOOTSTRAP_MARKER_PATH}" ]]; then
+    echo "DynamoDB table bootstrap already completed; skipping (marker: ${DDB_BOOTSTRAP_MARKER_PATH})."
+    return 0
+  fi
+
+  if [[ "${DEV_FORCE_DDB_BOOTSTRAP}" == "1" ]]; then
+    echo "Forcing DynamoDB bootstrap because DEV_FORCE_DDB_BOOTSTRAP=1."
+  fi
+
+  echo "Initializing local DynamoDB tables..."
+  if ! PYTHONPATH="${REPO_ROOT}" python3 scripts/local-ddb-init.py; then
+    echo "ERROR: DynamoDB bootstrap failed while running scripts/local-ddb-init.py. Backend startup aborted." >&2
+    echo "Hint: fix the bootstrap error, then retry; to re-run init after success use DEV_FORCE_DDB_BOOTSTRAP=1 or remove ${DDB_BOOTSTRAP_MARKER_PATH}." >&2
+    return 1
+  fi
+
+  if [[ "${DEV_DDB_SEED}" == "1" ]]; then
+    echo "Seeding local DynamoDB records because DEV_DDB_SEED=1..."
+    if ! PYTHONPATH="${REPO_ROOT}" python3 scripts/local-ddb-seed.py; then
+      echo "ERROR: DynamoDB seed failed while running scripts/local-ddb-seed.py. Backend startup aborted." >&2
+      echo "Hint: disable seeding with DEV_DDB_SEED=0 or fix the seed script/data and retry." >&2
+      return 1
+    fi
+  fi
+
+  date -u +"%Y-%m-%dT%H:%M:%SZ" > "${DDB_BOOTSTRAP_MARKER_PATH}"
+  echo "DynamoDB table bootstrap complete. Marker written to ${DDB_BOOTSTRAP_MARKER_PATH}."
+}
+
 ensure_external_base_urls
 
 cleanup() {
@@ -195,6 +237,7 @@ trap cleanup EXIT
 
 if [[ "$backend_mode" == "mock" ]]; then
   ensure_local_mock_infra
+  ensure_dynamodb_tables_initialized
   scripts/run_local_mock_backend.sh >>"$BACKEND_LOG_PATH" 2>&1 &
   echo "Backend running in mock mode on http://localhost:8000"
 else
