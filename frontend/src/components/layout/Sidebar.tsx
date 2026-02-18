@@ -23,6 +23,8 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Separator } from "@/components/ui/separator";
 import { useUiStore } from "@/stores/uiStore";
+import { useAuthStore } from "@/stores/authStore";
+import { canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 
 // ─── Navigation Config ──────────────────────────────────────────
 
@@ -82,6 +84,8 @@ export default function Sidebar() {
   const collapsed = useUiStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const location = useLocation();
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const showRootRoleManagement = canSeeRootRoleManagement(accessToken);
 
   const isActive = (path: string) => {
     if (path === "/") return location.pathname === "/";
@@ -113,7 +117,10 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-2 py-3">
-        {NAV_GROUPS.map((group, gi) => (
+        {NAV_GROUPS.map((group, gi) => {
+          const items = group.items.filter((item) => item.path !== "/root/roles" || showRootRoleManagement);
+          if (items.length === 0) return null;
+          return (
           <div key={group.title}>
             {gi > 0 && <Separator className="my-2" />}
             {!collapsed && (
@@ -122,7 +129,7 @@ export default function Sidebar() {
               </span>
             )}
             <ul className="space-y-0.5">
-              {group.items.map((item) => {
+              {items.map((item) => {
                 const active = isActive(item.path);
                 const link = (
                   <NavLink
@@ -167,7 +174,8 @@ export default function Sidebar() {
               })}
             </ul>
           </div>
-        ))}
+          );
+        })}
       </nav>
 
       {/* Collapse toggle */}

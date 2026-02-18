@@ -1,4 +1,8 @@
+import base64
 import json
+
+import pytest
+from pydantic import ValidationError
 from pathlib import Path
 
 from app.routers.messaging import (
@@ -75,3 +79,79 @@ def test_canonical_mute_shape_is_valid():
 def test_canonical_edit_shape_is_valid():
     model = EditMessageIn(text="edited")
     assert model.text == "edited"
+
+
+def test_encrypted_send_text_shape_is_valid():
+    model = SendTextMessageIn(
+        encryption={
+            "version": 1,
+            "alg": "AES-256-GCM",
+            "kdf": "PBKDF2-SHA256",
+            "iterations": 600000,
+            "salt_b64": base64.b64encode(b"1234567890abcdef").decode(),
+            "iv_b64": base64.b64encode(b"123456789012").decode(),
+            "ciphertext_b64": base64.b64encode(b"payload-bytes-123456").decode(),
+        }
+    )
+    assert model.encryption is not None
+    assert model.text is None
+
+
+def test_encrypted_send_text_rejects_bad_salt_with_deterministic_code():
+    with pytest.raises(ValidationError) as exc:
+        SendTextMessageIn(
+            encryption={
+                "version": 1,
+                "alg": "AES-256-GCM",
+                "kdf": "PBKDF2-SHA256",
+                "iterations": 600000,
+                "salt_b64": "%%%%",
+                "iv_b64": base64.b64encode(b"123456789012").decode(),
+                "ciphertext_b64": base64.b64encode(b"payload-bytes-123456").decode(),
+            }
+        )
+    errors = exc.value.errors()
+    assert errors[0]["type"] == "enc_salt_invalid"
+
+
+def test_encrypted_send_text_rejects_plaintext_and_encryption_mix():
+    with pytest.raises(ValidationError) as exc:
+        SendTextMessageIn(
+            text="hello",
+            encryption={
+                "version": 1,
+                "alg": "AES-256-GCM",
+                "kdf": "PBKDF2-SHA256",
+                "iterations": 600000,
+                "salt_b64": base64.b64encode(b"1234567890abcdef").decode(),
+                "iv_b64": base64.b64encode(b"123456789012").decode(),
+                "ciphertext_b64": base64.b64encode(b"payload-bytes-123456").decode(),
+            },
+        )
+    errors = exc.value.errors()
+    assert errors[0]["type"] == "message_text_encryption_conflict"
+
+
+def test_encrypted_send_text_rejects_oversized_ciphertext_with_stable_code():
+    oversized_ciphertext = base64.b64encode(b"x" * 8193).decode()
+    with pytest.raises(ValidationError) as exc:
+        SendTextMessageIn(
+            encryption={
+                "version": 1,
+                "alg": "AES-256-GCM",
+                "kdf": "PBKDF2-SHA256",
+                "iterations": 600000,
+                "salt_b64": base64.b64encode(b"1234567890abcdef").decode(),
+                "iv_b64": base64.b64encode(b"123456789012").decode(),
+                "ciphertext_b64": oversized_ciphertext,
+            }
+        )
+    errors = exc.value.errors()
+    assert errors[0]["type"] == "enc_ciphertext_too_large"
+
+
+def test_send_text_rejects_empty_payload_without_text_or_encryption():
+    with pytest.raises(ValidationError) as exc:
+        SendTextMessageIn()
+    errors = exc.value.errors()
+    assert errors[0]["type"] == "message_text_required"

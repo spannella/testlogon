@@ -12,7 +12,7 @@ import {
   markRead,
 } from "@/api/endpoints/messaging";
 import { useAuthStore } from "@/stores/authStore";
-import type { Conversation, Message } from "@/api/types";
+import type { Conversation, Message, SendTextMessageReq } from "@/api/types";
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
 import { PresenceDot } from "./PresenceDot";
@@ -71,7 +71,7 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
   // ── Send mutations ─────────────────────────────────────────────
 
   const sendText = useMutation({
-    mutationFn: (text: string) => sendTextMessage(convoId, { text }),
+    mutationFn: (payload: SendTextMessageReq) => sendTextMessage(convoId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
@@ -195,7 +195,7 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
 
       {/* Compose */}
       <ComposeBar
-        onSendText={(text) => sendText.mutate(text)}
+        onSendText={(payload) => sendText.mutate(payload)}
         onSendImage={(file) => sendImage.mutate(file)}
         sending={sendText.isPending || sendImage.isPending}
         onKeystroke={onKeystroke}

@@ -10,7 +10,7 @@ import jwt
 import requests
 from fastapi import HTTPException, Request
 
-from app.auth.roles import Role, normalize_role
+from app.auth.roles import AdminProfile, Role, normalize_admin_profile, normalize_role
 from app.auth.root_invariant import enforce_root_role_invariant
 from app.core.settings import S
 from app.models import UiSessionStartReq
@@ -123,6 +123,7 @@ def _extract_role_from_claims(claims: Dict[str, Any]) -> Role:
 class AuthenticatedUser:
     sub: str
     role: Role = Role.USER
+    admin_profile: AdminProfile = AdminProfile()
 
 
 def extract_bearer_token(auth_header: Optional[str]) -> str:
@@ -144,6 +145,10 @@ async def get_authenticated_user_role(request: Request) -> Role:
     return user.role
 
 
+def _extract_admin_profile_from_claims(claims: Dict[str, Any]) -> AdminProfile:
+    return normalize_admin_profile(claims.get("admin_profile"))
+
+
 async def get_authenticated_user(request: Request) -> AuthenticatedUser:
     """
     Wire this into your real authentication (Cognito JWT validation, cookies, etc.)
@@ -161,7 +166,8 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
             raise HTTPException(401, "Token missing subject")
         role = _extract_role_from_claims(payload)
         role = enforce_root_role_invariant(user_sub=str(user_sub), role=role)
-        return AuthenticatedUser(sub=str(user_sub), role=role)
+        admin_profile = _extract_admin_profile_from_claims(payload)
+        return AuthenticatedUser(sub=str(user_sub), role=role, admin_profile=admin_profile)
 
     if not S.dev_mode:
         raise HTTPException(401, "Authentication not configured")
@@ -170,7 +176,8 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
     if fallback_user:
         fallback_role = normalize_role(request.headers.get("x-user-role"))
         fallback_role = enforce_root_role_invariant(user_sub=fallback_user, role=fallback_role)
-        return AuthenticatedUser(sub=fallback_user, role=fallback_role)
+        fallback_admin_profile = normalize_admin_profile(request.headers.get("x-user-admin-profile"))
+        return AuthenticatedUser(sub=fallback_user, role=fallback_role, admin_profile=fallback_admin_profile)
 
     auth = request.headers.get("authorization", "")
     token = extract_bearer_token(auth)
@@ -178,7 +185,8 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
     sub = payload.get("sub") if isinstance(payload.get("sub"), str) and payload.get("sub").strip() else token
     role = _extract_role_from_claims(payload)
     role = enforce_root_role_invariant(user_sub=sub, role=role)
-    return AuthenticatedUser(sub=sub, role=role)
+    admin_profile = _extract_admin_profile_from_claims(payload)
+    return AuthenticatedUser(sub=sub, role=role, admin_profile=admin_profile)
 
 
 async def resolve_dev_or_authenticated_user_sub(

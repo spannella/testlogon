@@ -5,10 +5,11 @@ from unittest.mock import Mock, patch
 
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import APIRoute
 
 from app.auth.deps import AuthenticatedUser
 from app.auth.policy import require_admin_or_root, require_root, require_self_or_admin
-from app.auth.roles import Role
+from app.auth.roles import AdminProfile, AdminProfileType, AdminScope, Role
 from app.routers import admin_impersonation, billing, filemanager, root_auth
 
 
@@ -64,39 +65,79 @@ def test_policy_matrix_root_vs_admin_guards(role: Role, requires_root_ok: bool, 
 
 
 @pytest.mark.parametrize(
-    "ctx,target,allowed",
+    "ctx,actor,target,allowed",
     [
-        ({"user_sub": "u1", "role": "user"}, None, True),
-        ({"user_sub": "u1", "role": "user"}, "u1", True),
-        ({"user_sub": "u1", "role": "user"}, "u2", False),
-        ({"user_sub": "a1", "role": "admin"}, "u2", True),
-        ({"user_sub": "r1", "role": "root"}, "u2", True),
+        ({"user_sub": "u1", "role": "user"}, AuthenticatedUser(sub="u1", role=Role.USER), None, True),
+        ({"user_sub": "u1", "role": "user"}, AuthenticatedUser(sub="u1", role=Role.USER), "u1", True),
+        ({"user_sub": "u1", "role": "user"}, AuthenticatedUser(sub="u1", role=Role.USER), "u2", False),
+        (
+            {"user_sub": "a1", "role": "admin"},
+            AuthenticatedUser(
+                sub="a1",
+                role=Role.ADMIN,
+                admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(AdminScope.BILLING_SUPPORT,)),
+            ),
+            "u2",
+            True,
+        ),
+        (
+            {"user_sub": "a1", "role": "admin"},
+            AuthenticatedUser(
+                sub="a1",
+                role=Role.ADMIN,
+                admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(AdminScope.AUTH_SUPPORT,)),
+            ),
+            "u2",
+            False,
+        ),
+        ({"user_sub": "r1", "role": "root"}, AuthenticatedUser(sub="r1", role=Role.ROOT), "u2", True),
     ],
 )
-def test_policy_matrix_billing_read_scope(ctx: dict, target: str | None, allowed: bool) -> None:
+def test_policy_matrix_billing_read_scope(ctx: dict, actor: AuthenticatedUser, target: str | None, allowed: bool) -> None:
     if allowed:
-        out = billing._billing_read_user_sub(ctx, target)
+        out = billing._billing_read_user_sub(ctx, target, actor)
         assert out == (target or ctx["user_sub"])
     else:
         with pytest.raises(HTTPException) as exc:
-            billing._billing_read_user_sub(ctx, target)
+            billing._billing_read_user_sub(ctx, target, actor)
         assert exc.value.status_code == 403
-        assert exc.value.detail["code"] == "role_required"
+        assert exc.value.detail["code"] in {"role_required", "role_required_scope"}
 
 
 @pytest.mark.parametrize(
-    "ctx,target,allowed,expected_target",
+    "ctx,actor,target,allowed,expected_target",
     [
-        ({"user_sub": "u1", "role": "user"}, None, True, "u1"),
-        ({"user_sub": "u1", "role": "user"}, "u1", True, "u1"),
-        ({"user_sub": "u1", "role": "user"}, "u2", False, None),
-        ({"user_sub": "a1", "role": "admin"}, "u2", True, "u2"),
-        ({"user_sub": "r1", "role": "root"}, "u2", True, "u2"),
+        ({"user_sub": "u1", "role": "user"}, AuthenticatedUser(sub="u1", role=Role.USER), None, True, "u1"),
+        ({"user_sub": "u1", "role": "user"}, AuthenticatedUser(sub="u1", role=Role.USER), "u1", True, "u1"),
+        ({"user_sub": "u1", "role": "user"}, AuthenticatedUser(sub="u1", role=Role.USER), "u2", False, None),
+        (
+            {"user_sub": "a1", "role": "admin"},
+            AuthenticatedUser(
+                sub="a1",
+                role=Role.ADMIN,
+                admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(AdminScope.BILLING_SUPPORT,)),
+            ),
+            "u2",
+            True,
+            "u2",
+        ),
+        (
+            {"user_sub": "a1", "role": "admin"},
+            AuthenticatedUser(
+                sub="a1",
+                role=Role.ADMIN,
+                admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(AdminScope.CONTENT_MODERATION,)),
+            ),
+            "u2",
+            False,
+            None,
+        ),
+        ({"user_sub": "r1", "role": "root"}, AuthenticatedUser(sub="r1", role=Role.ROOT), "u2", True, "u2"),
     ],
 )
-def test_policy_matrix_billing_write_scope(ctx: dict, target: str | None, allowed: bool, expected_target: str | None) -> None:
+def test_policy_matrix_billing_write_scope(ctx: dict, actor: AuthenticatedUser, target: str | None, allowed: bool, expected_target: str | None) -> None:
     if allowed:
-        user_sub, tags = billing._billing_write_user_context(ctx, target)
+        user_sub, tags = billing._billing_write_user_context(ctx, target, actor)
         assert user_sub == expected_target
         if target and target != ctx["user_sub"]:
             assert tags["viewed_as_admin"] is True
@@ -105,14 +146,31 @@ def test_policy_matrix_billing_write_scope(ctx: dict, target: str | None, allowe
             assert tags == {}
     else:
         with pytest.raises(HTTPException):
-            billing._billing_write_user_context(ctx, target)
+            billing._billing_write_user_context(ctx, target, actor)
 
 
 def test_policy_matrix_file_admin_ctx_guard() -> None:
-    assert filemanager._admin_or_root_ctx({"user_sub": "a1", "role": "admin"})["role"] == "admin"
-    assert filemanager._admin_or_root_ctx({"user_sub": "r1", "role": "root"})["role"] == "root"
+    moderation_admin = AuthenticatedUser(
+        sub="a1",
+        role=Role.ADMIN,
+        admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(AdminScope.CONTENT_MODERATION,)),
+    )
+    non_moderation_admin = AuthenticatedUser(
+        sub="a2",
+        role=Role.ADMIN,
+        admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(AdminScope.AUTH_SUPPORT,)),
+    )
+
+    assert filemanager._admin_or_root_ctx({"user_sub": "a1", "role": "admin"}, moderation_admin)["role"] == "admin"
+    assert filemanager._admin_or_root_ctx({"user_sub": "r1", "role": "root"}, AuthenticatedUser(sub="r1", role=Role.ROOT))["role"] == "root"
+    with pytest.raises(HTTPException) as exc:
+        filemanager._admin_or_root_ctx({"user_sub": "a2", "role": "admin"}, non_moderation_admin)
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "role_required_scope"
+    assert exc.value.detail["required_scope"] == "content_moderation"
+
     with pytest.raises(HTTPException):
-        filemanager._admin_or_root_ctx({"user_sub": "u1", "role": "user"})
+        filemanager._admin_or_root_ctx({"user_sub": "u1", "role": "user"}, AuthenticatedUser(sub="u1", role=Role.USER))
 
 
 @pytest.mark.parametrize(
@@ -194,3 +252,154 @@ def test_policy_matrix_impersonation_restrictions(target_role: str, actor_role: 
                 )
             assert exc.value.status_code == 403
             assert exc.value.detail == "impersonation_not_allowed"
+
+
+def test_policy_matrix_billing_dev_add_charge_route_uses_billing_scope_dependency() -> None:
+    route = next(
+        r for r in billing.router.routes
+        if isinstance(r, APIRoute) and r.path == "/api/billing/_dev/add-charge" and "POST" in r.methods
+    )
+    deps = {dep.call for dep in route.dependant.dependencies}
+    assert billing.require_billing_admin_operator in deps
+
+
+@pytest.mark.parametrize("scope", [AdminScope.AUTH_SUPPORT, AdminScope.CONTENT_MODERATION])
+def test_policy_matrix_billing_scope_dependency_denies_non_billing_scoped_admin(scope: AdminScope) -> None:
+    import asyncio
+
+    actor = AuthenticatedUser(
+        sub="a1",
+        role=Role.ADMIN,
+        admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(scope,)),
+    )
+    req = SimpleNamespace(headers={"user-agent": "pytest"}, client=SimpleNamespace(host="127.0.0.1"), state=SimpleNamespace())
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(billing.require_billing_support_admin(request=req, user=actor))
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "role_required_scope"
+    assert exc.value.detail["required_scope"] == "billing_support"
+
+
+def test_policy_matrix_billing_scope_dependency_allows_billing_scoped_admin() -> None:
+    import asyncio
+
+    actor = AuthenticatedUser(
+        sub="a1",
+        role=Role.ADMIN,
+        admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(AdminScope.BILLING_SUPPORT,)),
+    )
+    req = SimpleNamespace(headers={"user-agent": "pytest"}, client=SimpleNamespace(host="127.0.0.1"), state=SimpleNamespace())
+
+    out = asyncio.run(billing.require_billing_support_admin(request=req, user=actor))
+    assert out is actor
+
+
+
+def test_policy_matrix_file_admin_route_uses_content_moderation_scope_dependency() -> None:
+    route = next(
+        r for r in filemanager.router.routes
+        if isinstance(r, APIRoute) and r.path == "/v1/fs/admin/read" and "GET" in r.methods
+    )
+    deps = {dep.call for dep in route.dependant.dependencies}
+    assert filemanager._admin_or_root_ctx in deps
+
+
+@pytest.mark.parametrize("scope", [AdminScope.AUTH_SUPPORT, AdminScope.BILLING_SUPPORT])
+def test_policy_matrix_content_moderation_scope_dependency_denies_non_moderation_scoped_admin(scope: AdminScope) -> None:
+    import asyncio
+
+    actor = AuthenticatedUser(
+        sub="a1",
+        role=Role.ADMIN,
+        admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(scope,)),
+    )
+    req = SimpleNamespace(headers={"user-agent": "pytest"}, client=SimpleNamespace(host="127.0.0.1"), state=SimpleNamespace())
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(filemanager.require_content_moderation_admin(request=req, user=actor))
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "role_required_scope"
+    assert exc.value.detail["required_scope"] == "content_moderation"
+
+
+def test_policy_matrix_content_moderation_scope_dependency_allows_moderation_scoped_admin() -> None:
+    import asyncio
+
+    actor = AuthenticatedUser(
+        sub="a1",
+        role=Role.ADMIN,
+        admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(AdminScope.CONTENT_MODERATION,)),
+    )
+    req = SimpleNamespace(headers={"user-agent": "pytest"}, client=SimpleNamespace(host="127.0.0.1"), state=SimpleNamespace())
+
+    out = asyncio.run(filemanager.require_content_moderation_admin(request=req, user=actor))
+    assert out is actor
+
+
+def test_policy_matrix_billing_operator_falls_back_to_admin_or_root_when_flag_disabled() -> None:
+    import asyncio
+
+    actor = AuthenticatedUser(
+        sub="a1",
+        role=Role.ADMIN,
+        admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(AdminScope.AUTH_SUPPORT,)),
+    )
+    with patch.object(billing, "S", SimpleNamespace(admin_scope_enforce_billing_support=False)):
+        out = asyncio.run(billing.require_billing_admin_operator(user=actor, request=SimpleNamespace()))
+
+    assert out is actor
+
+
+def test_policy_matrix_billing_operator_enforces_scope_when_flag_enabled() -> None:
+    import asyncio
+
+    actor = AuthenticatedUser(
+        sub="a1",
+        role=Role.ADMIN,
+        admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(AdminScope.AUTH_SUPPORT,)),
+    )
+    req = SimpleNamespace(headers={"user-agent": "pytest"}, client=SimpleNamespace(host="127.0.0.1"), state=SimpleNamespace())
+
+    with patch.object(billing, "S", SimpleNamespace(admin_scope_enforce_billing_support=True)):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(billing.require_billing_admin_operator(user=actor, request=req))
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "role_required_scope"
+    assert exc.value.detail["required_scope"] == "billing_support"
+
+
+def test_policy_matrix_content_moderation_operator_falls_back_to_admin_or_root_when_flag_disabled() -> None:
+    import asyncio
+
+    actor = AuthenticatedUser(
+        sub="a1",
+        role=Role.ADMIN,
+        admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(AdminScope.BILLING_SUPPORT,)),
+    )
+    with patch.object(filemanager, "S", SimpleNamespace(admin_scope_enforce_content_moderation=False)):
+        out = asyncio.run(filemanager.require_content_moderation_operator(user=actor, request=SimpleNamespace()))
+
+    assert out is actor
+
+
+def test_policy_matrix_content_moderation_operator_enforces_scope_when_flag_enabled() -> None:
+    import asyncio
+
+    actor = AuthenticatedUser(
+        sub="a1",
+        role=Role.ADMIN,
+        admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(AdminScope.BILLING_SUPPORT,)),
+    )
+    req = SimpleNamespace(headers={"user-agent": "pytest"}, client=SimpleNamespace(host="127.0.0.1"), state=SimpleNamespace())
+
+    with patch.object(filemanager, "S", SimpleNamespace(admin_scope_enforce_content_moderation=True)):
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(filemanager.require_content_moderation_operator(user=actor, request=req))
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "role_required_scope"
+    assert exc.value.detail["required_scope"] == "content_moderation"

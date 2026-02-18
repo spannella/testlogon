@@ -22,12 +22,33 @@ class TestFileManagerService(unittest.TestCase):
             patch.object(filemanager, "S") as settings,
         ):
             settings.filemgr_usage_default_plan = "default"
-            settings.filemgr_usage_plan_limits = '{"pro":{"upload_limit_bytes":300,"download_limit_bytes":400,"storage_limit_bytes":500}}'
+            settings.filemgr_usage_plan_limits = '{"pro":{"upload_limit_bytes":300,"download_limit_bytes":400,"storage_limit_bytes":500,"message_send_limit_count":30,"post_publish_limit_count":12}}'
             settings.filemgr_usage_user_plan_overrides = ""
             out = filemanager.resolve_user_usage_plan("u1")
         self.assertEqual(out["plan_id"], "pro")
         self.assertEqual(out["upload_limit_bytes"], 300)
         self.assertEqual(out["source"], "db")
+        self.assertEqual(out["message_send_limit_count"], 30)
+        self.assertEqual(out["post_publish_limit_count"], 12)
+
+    def test_resolve_user_usage_plan_missing_unit_limits_are_unlimited(self):
+        table = Mock()
+        table.get_item.return_value = {"Item": {"plan_id": "starter"}}
+        with (
+            patch.object(filemanager, "_table", return_value=table),
+            patch.object(filemanager, "S") as settings,
+        ):
+            settings.filemgr_usage_default_plan = "default"
+            settings.filemgr_usage_plan_limits = '{"starter":{"upload_limit_bytes":10}}'
+            settings.filemgr_usage_user_plan_overrides = ""
+            settings.filemgr_usage_message_send_limit_count = 0
+            settings.filemgr_usage_post_publish_limit_count = 0
+            out = filemanager.resolve_user_usage_plan("u1")
+
+        self.assertEqual(out["plan_id"], "starter")
+        self.assertEqual(out["message_send_limit_count"], 0)
+        self.assertEqual(out["post_publish_limit_count"], 0)
+
 
     def test_upload_file_hard_quota_enforcement_returns_machine_readable_detail(self):
         upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"))
@@ -936,6 +957,12 @@ class TestFileManagerService(unittest.TestCase):
                 "upload_bytes_total": 50,
                 "download_bytes_total": 100,
                 "storage_bytes_current": 25,
+                "message_send_count_total": 3,
+                "post_publish_count_total": 2,
+                "messaging_upload_bytes_total": 11,
+                "messaging_download_bytes_total": 12,
+                "newsfeed_upload_bytes_total": 13,
+                "newsfeed_download_bytes_total": 14,
                 "updated_at": "2026-02-01T00:00:00+00:00",
             }
         }
@@ -946,12 +973,56 @@ class TestFileManagerService(unittest.TestCase):
             settings.filemgr_usage_upload_limit_bytes = 100
             settings.filemgr_usage_download_limit_bytes = 200
             settings.filemgr_usage_storage_limit_bytes = 50
+            settings.filemgr_usage_message_send_limit_count = 6
+            settings.filemgr_usage_post_publish_limit_count = 4
             out = filemanager.get_usage_summary("user", period_id="2026-02")
 
         self.assertEqual(out["upload"]["used_bytes"], 50)
         self.assertEqual(out["upload"]["percent_used"], 50.0)
         self.assertEqual(out["download"]["percent_used"], 50.0)
         self.assertEqual(out["storage"]["percent_used"], 50.0)
+        self.assertEqual(out["message_send"]["used_count"], 3)
+        self.assertEqual(out["message_send"]["limit_count"], 6)
+        self.assertEqual(out["message_send"]["percent_used"], 50.0)
+        self.assertEqual(out["post_publish"]["used_count"], 2)
+        self.assertEqual(out["post_publish"]["limit_count"], 4)
+        self.assertEqual(out["post_publish"]["percent_used"], 50.0)
+        self.assertEqual(out["messaging_transfer"]["upload_bytes_total"], 11)
+        self.assertEqual(out["messaging_transfer"]["download_bytes_total"], 12)
+        self.assertEqual(out["newsfeed_transfer"]["upload_bytes_total"], 13)
+        self.assertEqual(out["newsfeed_transfer"]["download_bytes_total"], 14)
+        self.assertEqual(out["messaging_upload_bytes_total"], 11)
+        self.assertEqual(out["messaging_download_bytes_total"], 12)
+        self.assertEqual(out["newsfeed_upload_bytes_total"], 13)
+        self.assertEqual(out["newsfeed_download_bytes_total"], 14)
+
+    def test_get_usage_summary_defaults_new_transfer_fields_for_legacy_rows(self):
+        table = Mock()
+        table.get_item.return_value = {
+            "Item": {
+                "upload_bytes_total": 1,
+                "download_bytes_total": 2,
+                "storage_bytes_current": 3,
+            }
+        }
+        with (
+            patch.object(filemanager, "_table", return_value=table),
+            patch.object(filemanager, "S") as settings,
+        ):
+            settings.filemgr_usage_upload_limit_bytes = 0
+            settings.filemgr_usage_download_limit_bytes = 0
+            settings.filemgr_usage_storage_limit_bytes = 0
+            settings.filemgr_usage_message_send_limit_count = 0
+            settings.filemgr_usage_post_publish_limit_count = 0
+            out = filemanager.get_usage_summary("user", period_id="2026-02")
+
+        self.assertEqual(out["messaging_upload_bytes_total"], 0)
+        self.assertEqual(out["messaging_download_bytes_total"], 0)
+        self.assertEqual(out["newsfeed_upload_bytes_total"], 0)
+        self.assertEqual(out["newsfeed_download_bytes_total"], 0)
+        self.assertEqual(out["messaging_transfer"]["upload_bytes_total"], 0)
+        self.assertEqual(out["newsfeed_transfer"]["download_bytes_total"], 0)
+
 
     def test_get_usage_daily_range_filter(self):
         table = Mock()
@@ -1003,12 +1074,33 @@ class TestFileManagerService(unittest.TestCase):
         table.scan.side_effect = [
             {"Items": [{"PK": "USER#u1", "SK": "USAGE#PERIOD#2026-02", "user_id": "u1"}]}
         ]
-        table.get_item.return_value = {"Item": {"upload_bytes_total": 10, "download_bytes_total": 20, "storage_bytes_peak": 30, "storage_byte_seconds": 40}}
+        table.get_item.return_value = {
+            "Item": {
+                "upload_bytes_total": 10,
+                "download_bytes_total": 20,
+                "storage_bytes_peak": 30,
+                "storage_byte_seconds": 40,
+                "message_send_count_total": 5,
+                "post_publish_count_total": 2,
+                "messaging_upload_bytes_total": 100,
+                "messaging_download_bytes_total": 75,
+                "newsfeed_upload_bytes_total": 50,
+                "newsfeed_download_bytes_total": 25,
+            }
+        }
         table.query.return_value = {"Items": []}
         with patch.object(filemanager, "_table", return_value=table):
             out = filemanager.finalize_billing_period_admin(period_id="2026-02")
         self.assertEqual(out["finalized_count"], 1)
         table.put_item.assert_called()
+        saved = table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(saved["schema_version"], 2)
+        self.assertEqual(saved["message_send_count_total"], 5)
+        self.assertEqual(saved["post_publish_count_total"], 2)
+        self.assertEqual(saved["messaging_upload_bytes_total"], 100)
+        self.assertEqual(saved["messaging_download_bytes_total"], 75)
+        self.assertEqual(saved["newsfeed_upload_bytes_total"], 50)
+        self.assertEqual(saved["newsfeed_download_bytes_total"], 25)
 
 
     def test_admin_user_usage_detail_redacts_paths_by_default(self):
@@ -1026,7 +1118,29 @@ class TestFileManagerService(unittest.TestCase):
 
     def test_get_admin_user_usage_detail(self):
         table = Mock()
-        table.query.return_value = {"Items": [{"period_id": "2026-02", "version": 1, "status": "finalized", "upload_bytes_total": 1, "download_bytes_total": 2, "storage_bytes_peak": 3}]}
+        table.query.return_value = {
+            "Items": [
+                {
+                    "period_id": "2026-02",
+                    "version": 1,
+                    "status": "finalized",
+                    "upload_bytes_total": 1,
+                    "download_bytes_total": 2,
+                    "storage_bytes_peak": 3,
+                },
+                {
+                    "period_id": "2026-03",
+                    "version": 2,
+                    "status": "finalized",
+                    "schema_version": 2,
+                    "upload_bytes_total": 10,
+                    "download_bytes_total": 20,
+                    "storage_bytes_peak": 30,
+                    "message_send_count_total": 7,
+                    "post_publish_count_total": 4,
+                },
+            ]
+        }
         with (
             patch.object(filemanager, "get_usage_summary", return_value={"period_id": "2026-02"}),
             patch.object(filemanager, "get_usage_daily", return_value={"items": []}),
@@ -1036,7 +1150,13 @@ class TestFileManagerService(unittest.TestCase):
             out = filemanager.get_admin_user_usage_detail("u1", period_id="2026-02", top_n=5)
         self.assertEqual(out["user_id"], "u1")
         self.assertEqual(out["summary"]["period_id"], "2026-02")
-        self.assertEqual(len(out["snapshots"]), 1)
+        self.assertEqual(len(out["snapshots"]), 2)
+        # v2 snapshot fields are surfaced
+        self.assertEqual(out["snapshots"][0]["schema_version"], 2)
+        self.assertEqual(out["snapshots"][0]["message_send_count_total"], 7)
+        # older v1-like snapshots remain readable with defaulted zero new counters
+        self.assertEqual(out["snapshots"][1]["schema_version"], 1)
+        self.assertEqual(out["snapshots"][1]["message_send_count_total"], 0)
 
 
     def test_generate_invoice_line_items_for_snapshot_admin(self):
@@ -1046,13 +1166,19 @@ class TestFileManagerService(unittest.TestCase):
                 "upload_bytes_total": 20,
                 "download_bytes_total": 10,
                 "storage_bytes_peak": 5,
+                "message_send_count_total": 8,
+                "post_publish_count_total": 4,
+                "messaging_upload_bytes_total": 2147483648,
+                "messaging_download_bytes_total": 0,
+                "newsfeed_upload_bytes_total": 2147483648,
+                "newsfeed_download_bytes_total": 1,
             }
         }
         with (
             patch.object(filemanager, "_table", return_value=table),
             patch.object(filemanager, "S") as settings,
         ):
-            settings.filemgr_usage_pricing_catalog = '{"v2":{"upload_included_bytes":0,"download_included_bytes":0,"storage_included_bytes":0,"upload_overage_cents_per_gb":100,"download_overage_cents_per_gb":100,"storage_overage_cents_per_gb":100}}'
+            settings.filemgr_usage_pricing_catalog = '{"v2":{"upload_included_bytes":0,"download_included_bytes":0,"storage_included_bytes":0,"upload_overage_cents_per_gb":100,"download_overage_cents_per_gb":100,"storage_overage_cents_per_gb":100,"message_send_included_units":5,"post_publish_included_units":1,"message_send_overage_cents_per_unit":2,"post_publish_overage_cents_per_unit":10,"messaging_upload_included_bytes":1073741824,"messaging_download_included_bytes":0,"newsfeed_upload_included_bytes":0,"newsfeed_download_included_bytes":10,"messaging_upload_overage_cents_per_gb":50,"messaging_download_overage_cents_per_gb":25,"newsfeed_upload_overage_cents_per_gb":75,"newsfeed_download_overage_cents_per_gb":100}}'
             settings.filemgr_usage_default_pricing_catalog_version = "v2"
             out = filemanager.generate_invoice_line_items_for_snapshot_admin(
                 user_id="u1",
@@ -1060,8 +1186,131 @@ class TestFileManagerService(unittest.TestCase):
                 snapshot_version=1,
             )
         self.assertEqual(out["pricing_catalog_version"], "v2")
-        self.assertEqual(len(out["line_items"]), 3)
+        self.assertEqual(len(out["line_items"]), 9)
+        msg_line = next(x for x in out["line_items"] if x["line_type"] == "message_send_usage")
+        post_line = next(x for x in out["line_items"] if x["line_type"] == "post_publish_usage")
+        self.assertEqual(msg_line["included_units"], 5)
+        self.assertEqual(msg_line["overage_units"], 3)
+        self.assertEqual(msg_line["amount_cents"], 6)
+        self.assertEqual(post_line["included_units"], 1)
+        self.assertEqual(post_line["overage_units"], 3)
+        self.assertEqual(post_line["amount_cents"], 30)
+        msg_up_line = next(x for x in out["line_items"] if x["line_type"] == "messaging_upload_usage")
+        nf_up_line = next(x for x in out["line_items"] if x["line_type"] == "newsfeed_upload_usage")
+        nf_down_line = next(x for x in out["line_items"] if x["line_type"] == "newsfeed_download_usage")
+        self.assertEqual(msg_up_line["overage_bytes"], 1073741824)
+        self.assertEqual(msg_up_line["amount_cents"], 50)
+        self.assertEqual(nf_up_line["overage_bytes"], 2147483648)
+        self.assertEqual(nf_up_line["amount_cents"], 150)
+        self.assertEqual(nf_down_line["overage_bytes"], 0)
+        self.assertEqual(nf_down_line["amount_cents"], 0)
+        self.assertEqual(out["total_amount_cents"], 236)
+        self.assertEqual(out["total_amount_cents"], sum(int(x["amount_cents"]) for x in out["line_items"]))
         table.put_item.assert_called_once()
+
+    def test_generate_invoice_line_items_reconcile_zero_at_limit_and_overage(self):
+        scenarios = [
+            {
+                "name": "zero_usage",
+                "snapshot": {
+                    "upload_bytes_total": 0,
+                    "download_bytes_total": 0,
+                    "storage_bytes_peak": 0,
+                    "message_send_count_total": 0,
+                    "post_publish_count_total": 0,
+                    "messaging_upload_bytes_total": 0,
+                    "messaging_download_bytes_total": 0,
+                    "newsfeed_upload_bytes_total": 0,
+                    "newsfeed_download_bytes_total": 0,
+                },
+                "expected_message_over": 0,
+                "expected_post_over": 0,
+                "expected_message_cents": 0,
+                "expected_post_cents": 0,
+                "expected_total": 0,
+            },
+            {
+                "name": "just_at_limit",
+                "snapshot": {
+                    "upload_bytes_total": 0,
+                    "download_bytes_total": 0,
+                    "storage_bytes_peak": 0,
+                    "message_send_count_total": 10,
+                    "post_publish_count_total": 7,
+                    "messaging_upload_bytes_total": 0,
+                    "messaging_download_bytes_total": 0,
+                    "newsfeed_upload_bytes_total": 0,
+                    "newsfeed_download_bytes_total": 0,
+                },
+                "expected_message_over": 0,
+                "expected_post_over": 0,
+                "expected_message_cents": 0,
+                "expected_post_cents": 0,
+                "expected_total": 0,
+            },
+            {
+                "name": "overage",
+                "snapshot": {
+                    "upload_bytes_total": 0,
+                    "download_bytes_total": 0,
+                    "storage_bytes_peak": 0,
+                    "message_send_count_total": 12,
+                    "post_publish_count_total": 9,
+                    "messaging_upload_bytes_total": 0,
+                    "messaging_download_bytes_total": 0,
+                    "newsfeed_upload_bytes_total": 0,
+                    "newsfeed_download_bytes_total": 0,
+                },
+                "expected_message_over": 2,
+                "expected_post_over": 2,
+                "expected_message_cents": 6,
+                "expected_post_cents": 10,
+                "expected_total": 16,
+            },
+        ]
+
+        for scenario in scenarios:
+            with self.subTest(scenario=scenario["name"]):
+                table = Mock()
+                table.get_item.return_value = {"Item": scenario["snapshot"]}
+                with (
+                    patch.object(filemanager, "_table", return_value=table),
+                    patch.object(filemanager, "S") as settings,
+                ):
+                    settings.filemgr_usage_pricing_catalog = '{"v2":{"upload_included_bytes":0,"download_included_bytes":0,"storage_included_bytes":0,"upload_overage_cents_per_gb":0,"download_overage_cents_per_gb":0,"storage_overage_cents_per_gb":0,"message_send_included_units":10,"post_publish_included_units":7,"message_send_overage_cents_per_unit":3,"post_publish_overage_cents_per_unit":5,"messaging_upload_included_bytes":0,"messaging_download_included_bytes":0,"newsfeed_upload_included_bytes":0,"newsfeed_download_included_bytes":0,"messaging_upload_overage_cents_per_gb":0,"messaging_download_overage_cents_per_gb":0,"newsfeed_upload_overage_cents_per_gb":0,"newsfeed_download_overage_cents_per_gb":0}}'
+                    settings.filemgr_usage_default_pricing_catalog_version = "v2"
+                    out = filemanager.generate_invoice_line_items_for_snapshot_admin(
+                        user_id="u1",
+                        period_id="2026-02",
+                        snapshot_version=1,
+                    )
+
+                msg_line = next(x for x in out["line_items"] if x["line_type"] == "message_send_usage")
+                post_line = next(x for x in out["line_items"] if x["line_type"] == "post_publish_usage")
+
+                self.assertEqual(msg_line["quantity_units"], scenario["snapshot"]["message_send_count_total"])
+                self.assertEqual(post_line["quantity_units"], scenario["snapshot"]["post_publish_count_total"])
+                self.assertEqual(msg_line["overage_units"], scenario["expected_message_over"])
+                self.assertEqual(post_line["overage_units"], scenario["expected_post_over"])
+                self.assertEqual(msg_line["amount_cents"], scenario["expected_message_cents"])
+                self.assertEqual(post_line["amount_cents"], scenario["expected_post_cents"])
+                self.assertEqual(out["total_amount_cents"], scenario["expected_total"])
+                self.assertEqual(out["total_amount_cents"], sum(int(x["amount_cents"]) for x in out["line_items"]))
+                table.put_item.assert_called_once()
+
+    def test_parse_pricing_catalog_config_normalizes_new_unit_fields(self):
+        with patch.object(filemanager, "S") as settings:
+            settings.filemgr_usage_pricing_catalog = '{"v3":{"message_send_included_units":"7","post_publish_included_units":-5,"message_send_overage_cents_per_unit":"3","post_publish_overage_cents_per_unit":"bad","messaging_upload_included_bytes":"12","messaging_download_overage_cents_per_gb":"-2"}}'
+            settings.filemgr_usage_default_pricing_catalog_version = "v3"
+            catalog = filemanager._parse_pricing_catalog_config()
+
+        self.assertEqual(catalog["v3"]["message_send_included_units"], 7)
+        self.assertEqual(catalog["v3"]["post_publish_included_units"], 0)
+        self.assertEqual(catalog["v3"]["message_send_overage_cents_per_unit"], 3)
+        self.assertEqual(catalog["v3"]["post_publish_overage_cents_per_unit"], 0)
+        self.assertEqual(catalog["v3"]["messaging_upload_included_bytes"], 12)
+        self.assertEqual(catalog["v3"]["messaging_download_overage_cents_per_gb"], 0)
+
 
     def test_create_billing_adjustment_admin_credit(self):
         table = Mock()

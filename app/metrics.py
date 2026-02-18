@@ -192,6 +192,26 @@ USAGE_METERING_BYTES = Counter(
     "Usage bytes observed by metering pipeline",
     ["event_type", "source"],
 )
+USAGE_METERING_EVENTS_BY_PERIOD = Counter(
+    "usage_metering_events_by_period_total",
+    "Usage metering event outcomes split by source and billing period",
+    ["event_type", "source", "outcome", "period_id"],
+)
+USAGE_METERING_BYTES_BY_PERIOD = Counter(
+    "usage_metering_bytes_by_period_total",
+    "Usage bytes observed by metering pipeline split by source and billing period",
+    ["event_type", "source", "period_id"],
+)
+USAGE_SURFACE_UNITS = Counter(
+    "usage_surface_units_total",
+    "Usage unit counters by source family, dimension and billing period",
+    ["source_family", "dimension", "period_id"],
+)
+USAGE_SURFACE_TRANSFER_BYTES = Counter(
+    "usage_surface_transfer_bytes_total",
+    "Usage transfer bytes by source family, direction and billing period",
+    ["source_family", "direction", "period_id"],
+)
 USAGE_METERING_PIPELINE_ERRORS = Counter(
     "usage_metering_pipeline_errors_total",
     "Usage metering pipeline errors",
@@ -228,6 +248,11 @@ USAGE_METERING_PIPELINE_LATENCY = Histogram(
     "Usage metering pipeline latency in seconds",
     ["stage"],
     buckets=(0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5),
+)
+ADMIN_SCOPE_DENIED = Counter(
+    "admin_scope_denied_total",
+    "Denied admin scope authorization checks by route, required scope, and profile type",
+    ["route", "required_scope", "admin_profile_type"],
 )
 
 _START_TIME = time.monotonic()
@@ -312,14 +337,36 @@ async def metrics_middleware(request: Request, call_next: Callable[[Request], Re
 
 
 
-def record_usage_metering_event(event_type: str, source: str, outcome: str) -> None:
+def record_usage_metering_event(event_type: str, source: str, outcome: str, *, period_id: Optional[str] = None) -> None:
     USAGE_METERING_EVENTS.labels(event_type=event_type, source=source, outcome=outcome).inc()
+    if period_id:
+        USAGE_METERING_EVENTS_BY_PERIOD.labels(
+            event_type=event_type,
+            source=source,
+            outcome=outcome,
+            period_id=period_id,
+        ).inc()
 
 
-def record_usage_metering_bytes(event_type: str, source: str, nbytes: int) -> None:
+def record_usage_metering_bytes(event_type: str, source: str, nbytes: int, *, period_id: Optional[str] = None) -> None:
     if nbytes == 0:
         return
-    USAGE_METERING_BYTES.labels(event_type=event_type, source=source).inc(float(abs(int(nbytes))))
+    value = float(abs(int(nbytes)))
+    USAGE_METERING_BYTES.labels(event_type=event_type, source=source).inc(value)
+    if period_id:
+        USAGE_METERING_BYTES_BY_PERIOD.labels(event_type=event_type, source=source, period_id=period_id).inc(value)
+
+
+def record_usage_surface_units(source_family: str, dimension: str, count: int, *, period_id: Optional[str] = None) -> None:
+    if count <= 0 or not period_id:
+        return
+    USAGE_SURFACE_UNITS.labels(source_family=source_family, dimension=dimension, period_id=period_id).inc(float(count))
+
+
+def record_usage_surface_transfer_bytes(source_family: str, direction: str, nbytes: int, *, period_id: Optional[str] = None) -> None:
+    if nbytes <= 0 or not period_id:
+        return
+    USAGE_SURFACE_TRANSFER_BYTES.labels(source_family=source_family, direction=direction, period_id=period_id).inc(float(nbytes))
 
 
 def record_usage_metering_pipeline_error(stage: str) -> None:
@@ -352,6 +399,13 @@ def record_api_usage_snapshot_finalize(outcome: str) -> None:
 def record_api_usage_reconciliation_drift(*, area: str, rows: int) -> None:
     API_USAGE_RECONCILIATION_DRIFT.labels(area=(area or "unknown").lower()).set(float(max(0, int(rows))))
 
+
+def record_admin_scope_denied(*, route: str, required_scope: str, admin_profile_type: str) -> None:
+    ADMIN_SCOPE_DENIED.labels(
+        route=route or "unknown",
+        required_scope=required_scope or "unknown",
+        admin_profile_type=admin_profile_type or "unknown",
+    ).inc()
 
 def set_app_info(name: str, version: str) -> None:
     APP_INFO.info({"name": name, "version": version})

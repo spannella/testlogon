@@ -1,4 +1,5 @@
 import asyncio
+import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -97,6 +98,59 @@ class TestMessagingRoutes(unittest.TestCase):
         self.assertEqual(msg.reactions_counts, {"👍": 2})
         self.assertEqual(msg.my_reactions, ["👍"])
 
+    def test_send_text_message_success_records_usage_once(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        with (
+            patch.object(messaging, "S") as settings,
+            patch.object(messaging, "ddb") as ddb,
+            patch.object(messaging, "record_usage_event_and_aggregates") as record_usage,
+            patch.object(messaging, "now_ts", return_value=55),
+            patch.object(messaging, "new_id", return_value="xyz"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+        ):
+            settings.filemgr_table_name = "FileManager"
+            ddb.Table.return_value = Mock()
+            messaging.send_text_message(
+                "c1",
+                messaging.SendTextMessageIn(text="Hello world"),
+                user_id="user-1",
+            )
+
+        record_usage.assert_called_once()
+        event = record_usage.call_args.args[1]
+        self.assertEqual(event["source"], "messaging_send")
+        self.assertEqual(event["idempotency_key"], "user-1|messaging_send|c1|m_xyz")
+
+    def test_send_text_message_failed_persist_does_not_record_usage(self):
+        tbl_msgs = Mock()
+        tbl_msgs.put_item.side_effect = RuntimeError("ddb down")
+        tbl_convos = Mock()
+        with (
+            patch.object(messaging, "S") as settings,
+            patch.object(messaging, "ddb") as ddb,
+            patch.object(messaging, "record_usage_event_and_aggregates") as record_usage,
+            patch.object(messaging, "now_ts", return_value=55),
+            patch.object(messaging, "new_id", return_value="xyz"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+        ):
+            settings.filemgr_table_name = "FileManager"
+            ddb.Table.return_value = Mock()
+            with self.assertRaises(RuntimeError):
+                messaging.send_text_message(
+                    "c1",
+                    messaging.SendTextMessageIn(text="Hello world"),
+                    user_id="user-1",
+                )
+
+        record_usage.assert_not_called()
+
     def test_send_text_message_updates_conversation_preview(self):
         tbl_msgs = Mock()
         tbl_convos = Mock()
@@ -104,8 +158,11 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "now_ts", return_value=55),
             patch.object(messaging, "new_id", return_value="xyz"),
             patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
             patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "_meter_message_send") as meter_send,
+            patch.object(messaging, "fanout_event_to_conversation") as fanout,
         ):
             resp = messaging.send_text_message(
                 "c1",
@@ -115,8 +172,423 @@ class TestMessagingRoutes(unittest.TestCase):
 
         tbl_msgs.put_item.assert_called_once()
         tbl_convos.update_item.assert_called_once()
+        meter_send.assert_called_once_with(user_id="user-1", conversation_id="c1", message_id="m_xyz")
         self.assertEqual(resp.message_id, "m_xyz")
         self.assertEqual(resp.text, "Hello world")
+        fanout.assert_called_once()
+        self.assertEqual(fanout.call_args.kwargs["event_type"], "message:new")
+        payload = fanout.call_args.kwargs["payload"]
+        self.assertEqual(payload["message"]["message_id"], "m_xyz")
+        self.assertEqual(payload["message"]["text"], "Hello world")
+        self.assertNotIn("encryption", payload["message"])
+
+
+
+    def test_send_encrypted_message_rejected_when_feature_flag_off(self):
+        with (
+            patch.dict(os.environ, {"MESSAGING_ENCRYPTED_MESSAGES_ENABLED": "0"}, clear=False),
+            patch.object(messaging, "require_participant_active"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.send_text_message(
+                    "c1",
+                    messaging.SendTextMessageIn(
+                        encryption={
+                            "version": 1,
+                            "alg": "AES-256-GCM",
+                            "kdf": "PBKDF2-SHA256",
+                            "iterations": 600000,
+                            "salt_b64": "MTIzNDU2Nzg5MGFiY2RlZg==",
+                            "iv_b64": "MTIzNDU2Nzg5MDEy",
+                            "ciphertext_b64": "cGF5bG9hZC1ieXRlcy0xMjM0NTY=",
+                        }
+                    ),
+                    user_id="user-1",
+                )
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_messaging_config_reflects_kill_switch(self):
+        with patch.dict(
+            os.environ,
+            {
+                "MESSAGING_ENCRYPTED_MESSAGES_ENABLED": "1",
+                "MESSAGING_ENCRYPTED_MESSAGES_KILL_SWITCH": "1",
+            },
+            clear=False,
+        ):
+            resp = messaging.messaging_config(user_id="user-1")
+        self.assertFalse(resp.messaging_encrypted_messages_enabled)
+
+
+    def test_plaintext_send_works_when_encryption_feature_flag_off(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        with (
+            patch.dict(os.environ, {"MESSAGING_ENCRYPTED_MESSAGES_ENABLED": "0"}, clear=False),
+            patch.object(messaging, "now_ts", return_value=55),
+            patch.object(messaging, "new_id", return_value="xyz"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "fanout_event_to_conversation"),
+        ):
+            resp = messaging.send_text_message(
+                "c1",
+                messaging.SendTextMessageIn(text="Hello world"),
+                user_id="user-1",
+            )
+
+        self.assertEqual(resp.text, "Hello world")
+        self.assertFalse(resp.is_encrypted)
+        tbl_msgs.put_item.assert_called_once()
+
+    def test_send_encrypted_text_message_skips_search_index(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        with (
+            patch.dict(os.environ, {"MESSAGING_ENCRYPTED_MESSAGES_ENABLED": "1"}, clear=False),
+            patch.object(messaging, "now_ts", return_value=55),
+            patch.object(messaging, "new_id", return_value="xyz"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "index_message_search") as index_message_search,
+            patch.object(messaging, "fanout_event_to_conversation") as fanout,
+        ):
+            resp = messaging.send_text_message(
+                "c1",
+                messaging.SendTextMessageIn(
+                    encryption={
+                        "version": 1,
+                        "alg": "AES-256-GCM",
+                        "kdf": "PBKDF2-SHA256",
+                        "iterations": 600000,
+                        "salt_b64": "MTIzNDU2Nzg5MGFiY2RlZg==",
+                        "iv_b64": "MTIzNDU2Nzg5MDEy",
+                        "ciphertext_b64": "cGF5bG9hZC1ieXRlcy0xMjM0NTY=",
+                    }
+                ),
+                user_id="user-1",
+            )
+
+        index_message_search.assert_not_called()
+        self.assertTrue(resp.is_encrypted)
+        self.assertIsNotNone(resp.encryption)
+        stored_item = tbl_msgs.put_item.call_args.kwargs["Item"]
+        self.assertTrue(stored_item["is_encrypted"])
+        self.assertIsNone(stored_item["text"])
+        self.assertEqual(stored_item["encryption"]["alg"], "AES-256-GCM")
+        fanout.assert_called_once()
+        self.assertEqual(fanout.call_args.kwargs["event_type"], "message:new")
+        payload = fanout.call_args.kwargs["payload"]
+        self.assertEqual(payload["message"]["message_id"], "m_xyz")
+        self.assertTrue(payload["message"]["is_encrypted"])
+        self.assertEqual(payload["message"]["encryption"]["ciphertext_b64"], "cGF5bG9hZC1ieXRlcy0xMjM0NTY=")
+        self.assertNotIn("text", payload["message"])
+
+    def test_meter_message_send_builds_deterministic_idempotency_key(self):
+        table = Mock()
+        with (
+            patch.object(messaging, "ddb") as ddb,
+            patch.object(messaging, "S") as settings,
+            patch.object(messaging, "record_usage_event_and_aggregates") as record_usage,
+        ):
+            settings.filemgr_table_name = "FileManager"
+            ddb.Table.return_value = table
+            messaging._meter_message_send(user_id="u1", conversation_id="c1", message_id="m1")
+
+        ddb.Table.assert_called_once_with("FileManager")
+        record_usage.assert_called_once()
+        event = record_usage.call_args.args[1]
+        self.assertEqual(event["source"], "messaging_send")
+        self.assertEqual(event["idempotency_key"], "u1|messaging_send|c1|m1")
+
+    def test_send_text_message_failed_persist_does_not_meter(self):
+        tbl_msgs = Mock()
+        tbl_msgs.put_item.side_effect = RuntimeError("ddb down")
+        tbl_convos = Mock()
+        with (
+            patch.object(messaging, "now_ts", return_value=55),
+            patch.object(messaging, "new_id", return_value="xyz"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "_meter_message_send") as meter_send,
+        ):
+            with self.assertRaises(RuntimeError):
+                messaging.send_text_message(
+                    "c1",
+                    messaging.SendTextMessageIn(text="Hello world"),
+                    user_id="user-1",
+                )
+
+        meter_send.assert_not_called()
+
+    def test_create_image_message_meters_send_unit(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "new_id", return_value="img"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "_meter_message_send") as meter_send,
+            patch.object(messaging, "_meter_messaging_attachment_upload") as meter_upload,
+        ):
+            messaging.create_image_message(
+                "c1",
+                messaging.CreateImageMessageIn(bucket="b", key="k"),
+                user_id="u1",
+            )
+
+        meter_send.assert_called_once_with(user_id="u1", conversation_id="c1", message_id="m_img")
+        meter_upload.assert_called_once_with(
+            user_id="u1",
+            bucket="b",
+            key="k",
+            conversation_id="c1",
+            message_id="m_img",
+        )
+
+    def test_create_file_message_meters_send_unit(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        tbl_parts = Mock()
+        tbl_parts.query.return_value = {"Items": [{"user_id": "u1"}, {"user_id": "u2"}]}
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "new_id", return_value="file"),
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "get_node", return_value={"type": "file", "path": "/a.mp3", "name": "a.mp3", "size": 1, "content_type": "audio/mp3"}),
+            patch.object(messaging, "_meter_message_send") as meter_send,
+        ):
+            messaging.create_file_message(
+                "c1",
+                messaging.CreateFileMessageIn(path="/a.mp3", kind="audio"),
+                user_id="u1",
+            )
+
+        meter_send.assert_called_once_with(user_id="u1", conversation_id="c1", message_id="m_file")
+
+    def test_create_image_message_failed_persist_does_not_meter(self):
+        tbl_msgs = Mock()
+        tbl_msgs.put_item.side_effect = RuntimeError("ddb down")
+        tbl_convos = Mock()
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "new_id", return_value="img"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "_meter_message_send") as meter_send,
+            patch.object(messaging, "_meter_messaging_attachment_upload") as meter_upload,
+        ):
+            with self.assertRaises(RuntimeError):
+                messaging.create_image_message(
+                    "c1",
+                    messaging.CreateImageMessageIn(bucket="b", key="k"),
+                    user_id="u1",
+                )
+
+        meter_send.assert_not_called()
+        meter_upload.assert_not_called()
+
+    def test_messaging_send_quota_precheck_raises_machine_readable_error(self):
+        with (
+            patch.object(
+                messaging,
+                "get_usage_summary",
+                return_value={
+                    "period_id": "2026-03",
+                    "message_send": {"used_count": 10, "limit_count": 10},
+                },
+            ),
+            patch.object(messaging, "S") as settings,
+        ):
+            settings.filemgr_table_name = "FileManager"
+            with self.assertRaises(HTTPException) as ctx:
+                messaging._enforce_message_send_quota_precheck(user_id="u1", conversation_id="c1", req=None)
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail["code"], "messaging_send_quota_exceeded")
+        self.assertEqual(ctx.exception.detail["quota_type"], "messaging_send")
+        self.assertEqual(ctx.exception.detail["limit_count"], 10)
+        self.assertEqual(ctx.exception.detail["used_count"], 10)
+        self.assertEqual(ctx.exception.detail["remaining_count"], 0)
+
+    def test_messaging_send_quota_soft_warnings_trigger_at_80_and_95(self):
+        with (
+            patch.object(
+                messaging,
+                "get_usage_summary",
+                return_value={
+                    "period_id": "2026-03",
+                    "message_send": {"used_count": 0, "limit_count": 1},
+                },
+            ),
+            patch.object(messaging, "S") as settings,
+            patch.object(messaging, "_emit_messaging_quota_warning") as warn,
+        ):
+            settings.filemgr_table_name = "FileManager"
+            settings.messaging_send_quota_soft_warnings_enabled = True
+            messaging._enforce_message_send_quota_precheck(user_id="u1", conversation_id="c1", req=None)
+
+        self.assertEqual(warn.call_count, 2)
+        first_threshold = warn.call_args_list[0].kwargs["threshold_percent"]
+        second_threshold = warn.call_args_list[1].kwargs["threshold_percent"]
+        self.assertEqual(first_threshold, 80)
+        self.assertEqual(second_threshold, 95)
+
+    def test_messaging_send_quota_soft_warnings_disabled(self):
+        with (
+            patch.object(
+                messaging,
+                "get_usage_summary",
+                return_value={
+                    "period_id": "2026-03",
+                    "message_send": {"used_count": 79, "limit_count": 99},
+                },
+            ),
+            patch.object(messaging, "S") as settings,
+            patch.object(messaging, "_emit_messaging_quota_warning") as warn,
+        ):
+            settings.filemgr_table_name = "FileManager"
+            settings.messaging_send_quota_soft_warnings_enabled = False
+            messaging._enforce_message_send_quota_precheck(user_id="u1", conversation_id="c1", req=None)
+
+        warn.assert_not_called()
+
+    def test_meter_messaging_attachment_upload_uses_head_object_content_length(self):
+        table = Mock()
+        with (
+            patch.object(messaging, "S") as settings,
+            patch.object(messaging, "ddb") as ddb,
+            patch.object(messaging, "s3") as s3,
+            patch.object(messaging, "record_usage_event_and_aggregates") as record_usage,
+        ):
+            settings.filemgr_table_name = "FileManager"
+            ddb.Table.return_value = table
+            s3.head_object.return_value = {"ContentLength": 321}
+
+            messaging._meter_messaging_attachment_upload(
+                user_id="u1",
+                bucket="b",
+                key="attachments/a.png",
+                conversation_id="c1",
+                message_id="m1",
+            )
+
+        s3.head_object.assert_called_once_with(Bucket="b", Key="attachments/a.png")
+        record_usage.assert_called_once()
+        event = record_usage.call_args.args[1]
+        self.assertEqual(event["source"], "messaging_attachment_upload")
+        self.assertEqual(event["bytes"], 321)
+        self.assertEqual(event["idempotency_key"], "u1|messaging_attachment_upload|b/attachments/a.png|m1")
+
+    def test_record_messaging_attachment_download_builds_deterministic_key(self):
+        table = Mock()
+        with (
+            patch.object(messaging, "S") as settings,
+            patch.object(messaging, "ddb") as ddb,
+            patch.object(messaging, "record_usage_event_and_aggregates") as record_usage,
+        ):
+            settings.filemgr_table_name = "FileManager"
+            ddb.Table.return_value = table
+            messaging._record_messaging_attachment_download(
+                user_id="u1",
+                conversation_id="c1",
+                message_id="m1",
+                attachment_key="b/k.png",
+                bytes_count=77,
+                idempotency_operation_id="req-1",
+            )
+
+        record_usage.assert_called_once()
+        event = record_usage.call_args.args[1]
+        self.assertEqual(event["source"], "messaging_attachment_download")
+        self.assertEqual(event["bytes"], 77)
+        self.assertEqual(event["idempotency_key"], "u1|messaging_attachment_download|b/k.png|req-1")
+
+    def test_download_message_attachment_streams_and_records_download_bytes(self):
+        class _Body:
+            def iter_chunks(self, chunk_size=65536):
+                yield b"ab"
+                yield b"cde"
+
+        async def _collect_chunks(resp):
+            out = []
+            async for chunk in resp.body_iterator:
+                out.append(chunk)
+            return out
+
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(
+                messaging,
+                "_get_message_or_404",
+                return_value={
+                    "kind": "image",
+                    "image": {"bucket": "b", "key": "img/k.png", "content_type": "image/png"},
+                },
+            ),
+            patch.object(messaging, "s3") as s3,
+            patch.object(messaging, "_record_messaging_attachment_download") as meter_download,
+            patch.object(messaging, "audit_event"),
+        ):
+            s3.get_object.return_value = {"Body": _Body(), "ContentLength": 5}
+            req = SimpleNamespace(headers={})
+            resp = messaging.download_message_attachment("c1", "m1", req, x_request_id=None, user_id="u1")
+
+            self.assertIsInstance(resp, StreamingResponse)
+            chunks = asyncio.run(_collect_chunks(resp))
+            self.assertEqual(chunks, [b"ab", b"cde"])
+
+        meter_download.assert_called_once_with(
+            user_id="u1",
+            conversation_id="c1",
+            message_id="m1",
+            attachment_key="b/img/k.png",
+            bytes_count=5,
+            idempotency_operation_id=None,
+        )
+
+    def test_download_message_attachment_uses_request_id_for_idempotency_operation(self):
+        class _Body:
+            def iter_chunks(self, chunk_size=65536):
+                yield b"data"
+
+        async def _drain(resp):
+            async for _ in resp.body_iterator:
+                pass
+
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(
+                messaging,
+                "_get_message_or_404",
+                return_value={
+                    "kind": "image",
+                    "image": {"bucket": "b", "key": "img/k.png", "content_type": "image/png"},
+                },
+            ),
+            patch.object(messaging, "s3") as s3,
+            patch.object(messaging, "_record_messaging_attachment_download") as meter_download,
+            patch.object(messaging, "audit_event"),
+        ):
+            s3.get_object.return_value = {"Body": _Body(), "ContentLength": 4}
+            req = SimpleNamespace(headers={})
+            resp = messaging.download_message_attachment("c1", "m1", req, x_request_id="req-xyz", user_id="u1")
+            asyncio.run(_drain(resp))
+
+        self.assertEqual(meter_download.call_args.kwargs["idempotency_operation_id"], "req-xyz")
 
     def test_admin_upsert_user_writes_search_tokens(self):
         tbl_users = Mock()
@@ -249,6 +721,93 @@ class TestMessagingRoutes(unittest.TestCase):
         ):
             resp = messaging.search_messages_all_conversations(q="fallback", limit=50, user_id="u1")
         self.assertEqual(resp[0].message_id, "m3")
+
+
+
+    def test_fallback_search_messages_skips_encrypted_messages(self):
+        tbl_msgs = Mock()
+        tbl_msgs.query.return_value = {
+            "Items": [
+                {
+                    "conversation_id": "c1",
+                    "message_id": "m1",
+                    "sender_id": "u1",
+                    "created_at": 20,
+                    "kind": "text",
+                    "text": None,
+                    "is_encrypted": True,
+                    "encryption": {
+                        "version": 1,
+                        "alg": "AES-256-GCM",
+                        "kdf": "PBKDF2-SHA256",
+                        "iterations": 600000,
+                        "salt_b64": "MTIzNDU2Nzg5MGFiY2RlZg==",
+                        "iv_b64": "MTIzNDU2Nzg5MDEy",
+                        "ciphertext_b64": "cGF5bG9hZC1ieXRlcy0xMjM0NTY=",
+                    },
+                }
+            ]
+        }
+        with patch.object(messaging, "tbl_msgs", tbl_msgs):
+            resp = messaging._fallback_search_messages("c1", "payload", limit=10, user_id="u1")
+        self.assertEqual(resp, [])
+
+    def test_search_messages_in_conversation_filters_encrypted_opensearch_hits(self):
+        encrypted_item = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u1",
+            "created_at": 10,
+            "kind": "text",
+            "text": None,
+            "is_encrypted": True,
+            "encryption": {
+                "version": 1,
+                "alg": "AES-256-GCM",
+                "kdf": "PBKDF2-SHA256",
+                "iterations": 600000,
+                "salt_b64": "MTIzNDU2Nzg5MGFiY2RlZg==",
+                "iv_b64": "MTIzNDU2Nzg5MDEy",
+                "ciphertext_b64": "cGF5bG9hZC1ieXRlcy0xMjM0NTY=",
+            },
+            "deleted_for": [],
+            "reactions": {},
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_opensearch_search_messages", return_value=["c1#m1"]),
+            patch.object(messaging, "_fetch_message_items", return_value=[encrypted_item]),
+            patch.object(messaging, "tbl_parts", Mock(query=Mock(return_value={"Items": []}))),
+        ):
+            resp = messaging.search_messages_in_conversation("c1", q="hello", limit=50, user_id="u1")
+        self.assertEqual(resp, [])
+
+    def test_edit_encrypted_message_is_rejected(self):
+        encrypted_msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u1",
+            "created_at": 1,
+            "kind": "text",
+            "is_encrypted": True,
+            "encryption": {
+                "version": 1,
+                "alg": "AES-256-GCM",
+                "kdf": "PBKDF2-SHA256",
+                "iterations": 600000,
+                "salt_b64": "MTIzNDU2Nzg5MGFiY2RlZg==",
+                "iv_b64": "MTIzNDU2Nzg5MDEy",
+                "ciphertext_b64": "cGF5bG9hZC1ieXRlcy0xMjM0NTY=",
+            },
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_message_or_404", return_value=encrypted_msg),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.edit_message("c1", "m1", messaging.EditMessageIn(text="new"), user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], messaging.ENCRYPTED_EDIT_ERROR_CODE)
 
     def test_opensearch_search_builds_filters(self):
         captured = {}
@@ -501,6 +1060,45 @@ class TestMessagingRoutes(unittest.TestCase):
         self.assertTrue(resp["ok"])
         tbl_msgs.update_item.assert_called_once()
 
+    def test_revoke_encrypted_message_for_all_supported(self):
+        tbl_msgs = Mock()
+        encrypted_msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u1",
+            "created_at": 1,
+            "kind": "text",
+            "is_encrypted": True,
+            "encryption": {
+                "version": 1,
+                "alg": "AES-256-GCM",
+                "kdf": "PBKDF2-SHA256",
+                "iterations": 600000,
+                "salt_b64": "MTIzNDU2Nzg5MGFiY2RlZg==",
+                "iv_b64": "MTIzNDU2Nzg5MDEy",
+                "ciphertext_b64": "cGF5bG9hZC1ieXRlcy0xMjM0NTY=",
+            },
+        }
+        revoked_msg = {**encrypted_msg, "revoked_at": 10, "revoked_by": "u1"}
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_ensure_can_revoke_message"),
+            patch.object(messaging, "_get_message_or_404", side_effect=[encrypted_msg, revoked_msg]),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "fanout_event_to_conversation") as fanout,
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "remove_message_search") as remove_search,
+            patch.object(messaging, "_reaction_summaries", return_value=({}, [])),
+        ):
+            resp = messaging.revoke_message_for_all("c1", "m1", user_id="u1")
+
+        tbl_msgs.update_item.assert_called_once()
+        fanout.assert_called_once()
+        self.assertEqual(fanout.call_args.kwargs["event_type"], "message:revoked")
+        remove_search.assert_called_once_with("c1", "m1", "")
+        self.assertTrue(resp.is_encrypted)
+        self.assertEqual(resp.revoked_by, "u1")
+
     def test_react_to_message(self):
         tbl_msgs = Mock()
         with (
@@ -588,7 +1186,7 @@ class TestMessagingRoutes(unittest.TestCase):
             ),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
             patch.object(messaging, "tbl_convos", tbl_convos),
-            patch.object(messaging, "fanout_event_to_conversation"),
+            patch.object(messaging, "fanout_event_to_conversation") as fanout,
         ):
             resp = messaging.forward_message(
                 "c2",
@@ -596,7 +1194,59 @@ class TestMessagingRoutes(unittest.TestCase):
                 user_id="u1",
             )
         self.assertEqual(resp.message_id, "m_fwd")
+        self.assertEqual(resp.text, "hello")
+        self.assertFalse(resp.is_encrypted)
         tbl_msgs.put_item.assert_called_once()
+        fanout.assert_called_once()
+        payload = fanout.call_args.kwargs["payload"]
+        self.assertEqual(payload["message"]["message_id"], "m_fwd")
+
+    def test_forward_encrypted_message_preserves_encryption_fields(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        source = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "created_at": 1,
+            "kind": "text",
+            "text": None,
+            "is_encrypted": True,
+            "encryption": {
+                "version": 1,
+                "alg": "AES-256-GCM",
+                "kdf": "PBKDF2-SHA256",
+                "iterations": 600000,
+                "salt_b64": "MTIzNDU2Nzg5MGFiY2RlZg==",
+                "iv_b64": "MTIzNDU2Nzg5MDEy",
+                "ciphertext_b64": "cGF5bG9hZC1ieXRlcy0xMjM0NTY=",
+            },
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "new_id", return_value="fwd"),
+            patch.object(messaging, "_get_message_or_404", return_value=source),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "index_message_search") as index_search,
+            patch.object(messaging, "fanout_event_to_conversation") as fanout,
+        ):
+            resp = messaging.forward_message(
+                "c2",
+                messaging.ForwardMessageIn(source_conversation_id="c1", source_message_id="m1"),
+                user_id="u1",
+            )
+
+        self.assertTrue(resp.is_encrypted)
+        self.assertIsNotNone(resp.encryption)
+        self.assertIsNone(resp.text)
+        index_search.assert_not_called()
+        item = tbl_msgs.put_item.call_args.kwargs["Item"]
+        self.assertTrue(item["is_encrypted"])
+        self.assertIn("encryption", item)
+        payload = fanout.call_args.kwargs["payload"]
+        self.assertTrue(payload["message"]["is_encrypted"])
 
     def test_mark_message_viewed(self):
         tbl_views = Mock()

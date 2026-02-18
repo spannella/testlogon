@@ -13,10 +13,91 @@ from app.metrics import (
     record_usage_metering_event,
     record_usage_metering_pipeline_error,
     record_usage_metering_pipeline_latency,
+    record_usage_surface_transfer_bytes,
+    record_usage_surface_units,
 )
 import time
 
 UsageEventType = Literal["upload", "download", "storage_delta"]
+
+# Canonical usage sources. Keep this list additive/backward compatible so
+# existing metering sources used by file manager continue to work.
+USAGE_EVENT_SOURCES: frozenset[str] = frozenset(
+    {
+        # File manager/upload flows
+        "api_upload",
+        "presign_complete",
+        "upload_archive_entry",
+        "upload_archive_total",
+        "upload_zip_total",
+        # File manager/download flows
+        "download",
+        "download_file",
+        "download_zip",
+        "shared_download",
+        "shared_download_zip",
+        # File manager/storage delta flows
+        "upload_create",
+        "complete_upload_create",
+        "delete_soft",
+        "move_folder",
+        "move_file",
+        "purge_finalize",
+        # Messaging/newsfeed taxonomy (MTR-001)
+        "messaging_send",
+        "newsfeed_post",
+        "messaging_attachment_upload",
+        "messaging_attachment_download",
+        "newsfeed_attachment_upload",
+        "newsfeed_attachment_download",
+    }
+)
+
+
+def build_usage_source_idempotency_key(source: str, **parts: str) -> str:
+    """Build a deterministic idempotency key for a known usage source.
+
+    This helper is intentionally narrow for taxonomy-defined sources and leaves
+    `build_usage_event(..., idempotency_key=...)` as the compatibility escape hatch
+    for legacy/custom sources.
+    """
+
+    source_name = source.strip()
+    if source_name not in USAGE_EVENT_SOURCES:
+        raise ValueError(f"Unknown usage source '{source_name}'")
+
+    if source_name == "messaging_send":
+        return "|".join(
+            [
+                parts["user_id"],
+                source_name,
+                parts["conversation_id"],
+                parts["message_id"],
+            ]
+        )
+
+    if source_name == "newsfeed_post":
+        return "|".join([parts["user_id"], source_name, parts["post_id"]])
+
+    if source_name in {
+        "messaging_attachment_upload",
+        "messaging_attachment_download",
+        "newsfeed_attachment_upload",
+        "newsfeed_attachment_download",
+    }:
+        return "|".join(
+            [
+                parts["user_id"],
+                source_name,
+                parts["attachment_key"],
+                parts.get("operation_id", ""),
+            ]
+        )
+
+    raise ValueError(
+        f"Source '{source_name}' does not have a dedicated idempotency-key pattern; "
+        "pass idempotency_key directly to build_usage_event for compatibility flows"
+    )
 
 
 class UsageEvent(TypedDict):
@@ -42,6 +123,8 @@ class UsagePeriodTotals(TypedDict):
     storage_bytes_current: int
     storage_bytes_peak: int
     storage_byte_seconds: int
+    message_send_count_total: int
+    post_publish_count_total: int
     updated_at: str
 
 
@@ -55,6 +138,8 @@ class UsageDaily(TypedDict):
     upload_bytes_total: int
     download_bytes_total: int
     storage_bytes_end_of_day: int
+    message_send_count_total: int
+    post_publish_count_total: int
     updated_at: str
 
 
@@ -66,10 +151,17 @@ class BillingUsageSnapshot(TypedDict):
     period_id: str
     version: int
     status: Literal["draft", "finalized", "invoiced"]
+    schema_version: int
     upload_bytes_total: int
     download_bytes_total: int
     storage_bytes_peak: int
     storage_byte_seconds: int
+    message_send_count_total: int
+    post_publish_count_total: int
+    messaging_upload_bytes_total: int
+    messaging_download_bytes_total: int
+    newsfeed_upload_bytes_total: int
+    newsfeed_download_bytes_total: int
     finalized_at: Optional[str]
     created_at: str
 
@@ -176,6 +268,8 @@ def build_usage_period_totals_item(*, user_id: str, period_id: str, now: Optiona
         "storage_bytes_current": 0,
         "storage_bytes_peak": 0,
         "storage_byte_seconds": 0,
+        "message_send_count_total": 0,
+        "post_publish_count_total": 0,
         "updated_at": now or iso_utc(),
     }
 
@@ -192,6 +286,8 @@ def build_usage_daily_item(*, user_id: str, day_utc: str, now: Optional[str] = N
         "upload_bytes_total": 0,
         "download_bytes_total": 0,
         "storage_bytes_end_of_day": 0,
+        "message_send_count_total": 0,
+        "post_publish_count_total": 0,
         "updated_at": now or iso_utc(),
     }
 
@@ -201,11 +297,14 @@ def build_billing_usage_snapshot_item(
     user_id: str,
     period_id: str,
     version: int = 1,
+    schema_version: int = 2,
     status: Literal["draft", "finalized", "invoiced"] = "draft",
     now: Optional[str] = None,
 ) -> BillingUsageSnapshot:
     if version < 1:
         raise ValueError("version must be >= 1")
+    if schema_version < 1:
+        raise ValueError("schema_version must be >= 1")
     _parse_period_id(period_id)
     created = now or iso_utc()
     return {
@@ -216,10 +315,17 @@ def build_billing_usage_snapshot_item(
         "period_id": period_id,
         "version": version,
         "status": status,
+        "schema_version": schema_version,
         "upload_bytes_total": 0,
         "download_bytes_total": 0,
         "storage_bytes_peak": 0,
         "storage_byte_seconds": 0,
+        "message_send_count_total": 0,
+        "post_publish_count_total": 0,
+        "messaging_upload_bytes_total": 0,
+        "messaging_download_bytes_total": 0,
+        "newsfeed_upload_bytes_total": 0,
+        "newsfeed_download_bytes_total": 0,
         "finalized_at": None,
         "created_at": created,
     }
@@ -247,6 +353,14 @@ def record_usage_event_and_aggregates(table: Any, event: UsageEvent, *, apply_ag
     day_utc = event["timestamp"][:10]
     user_id = event["user_id"]
 
+    source = str(event.get("source") or "")
+    if source.startswith("messaging_") or source == "messaging_send":
+        source_family = "messaging"
+    elif source.startswith("newsfeed_") or source == "newsfeed_post":
+        source_family = "newsfeed"
+    else:
+        source_family = "filemanager"
+
     try:
         table.put_item(
             Item={
@@ -263,15 +377,15 @@ def record_usage_event_and_aggregates(table: Any, event: UsageEvent, *, apply_ag
         )
     except Exception as exc:
         if _is_conditional_check_failed(exc):
-            record_usage_metering_event(event["event_type"], event["source"], "duplicate")
+            record_usage_metering_event(event["event_type"], event["source"], "duplicate", period_id=event_period)
             return False
         record_usage_metering_pipeline_error("event_put")
-        record_usage_metering_event(event["event_type"], event["source"], "error")
+        record_usage_metering_event(event["event_type"], event["source"], "error", period_id=event_period)
         raise
 
     if not apply_aggregates:
-        record_usage_metering_event(event["event_type"], event["source"], "event_only")
-        record_usage_metering_bytes(event["event_type"], event["source"], int(event["bytes"]))
+        record_usage_metering_event(event["event_type"], event["source"], "event_only", period_id=event_period)
+        record_usage_metering_bytes(event["event_type"], event["source"], int(event["bytes"]), period_id=event_period)
         record_usage_metering_pipeline_latency("record_usage_event_and_aggregates", time.perf_counter() - started)
         return True
 
@@ -279,6 +393,8 @@ def record_usage_event_and_aggregates(table: Any, event: UsageEvent, *, apply_ag
     upload_inc = bytes_delta if event["event_type"] == "upload" else 0
     download_inc = bytes_delta if event["event_type"] == "download" else 0
     storage_delta = bytes_delta if event["event_type"] == "storage_delta" else 0
+    message_send_inc = 1 if event.get("source") == "messaging_send" else 0
+    post_publish_inc = 1 if event.get("source") == "newsfeed_post" else 0
     now = iso_utc()
 
     try:
@@ -293,6 +409,8 @@ def record_usage_event_and_aggregates(table: Any, event: UsageEvent, *, apply_ag
                 "storage_bytes_current = if_not_exists(storage_bytes_current, :z) + :storage_delta, "
                 "storage_bytes_peak = if_not_exists(storage_bytes_peak, :z), "
                 "storage_byte_seconds = if_not_exists(storage_byte_seconds, :z), "
+                "message_send_count_total = if_not_exists(message_send_count_total, :z) + :message_send_inc, "
+                "post_publish_count_total = if_not_exists(post_publish_count_total, :z) + :post_publish_inc, "
                 "updated_at = :updated_at, "
                 "ttl_epoch = :ttl_epoch"
             ),
@@ -304,13 +422,15 @@ def record_usage_event_and_aggregates(table: Any, event: UsageEvent, *, apply_ag
                 ":upload_inc": upload_inc,
                 ":download_inc": download_inc,
                 ":storage_delta": storage_delta,
+                ":message_send_inc": message_send_inc,
+                ":post_publish_inc": post_publish_inc,
                 ":updated_at": now,
                 ":ttl_epoch": _ttl_epoch_for_days(getattr(S, "filemgr_usage_aggregate_retention_days", 1095)),
             },
         )
     except Exception:
         record_usage_metering_pipeline_error("period_aggregate_update")
-        record_usage_metering_event(event["event_type"], event["source"], "error")
+        record_usage_metering_event(event["event_type"], event["source"], "error", period_id=event_period)
         raise
 
     try:
@@ -324,6 +444,8 @@ def record_usage_event_and_aggregates(table: Any, event: UsageEvent, *, apply_ag
                 "upload_bytes_total = if_not_exists(upload_bytes_total, :z) + :upload_inc, "
                 "download_bytes_total = if_not_exists(download_bytes_total, :z) + :download_inc, "
                 "storage_bytes_end_of_day = if_not_exists(storage_bytes_end_of_day, :z) + :storage_delta, "
+                "message_send_count_total = if_not_exists(message_send_count_total, :z) + :message_send_inc, "
+                "post_publish_count_total = if_not_exists(post_publish_count_total, :z) + :post_publish_inc, "
                 "updated_at = :updated_at, "
                 "ttl_epoch = :ttl_epoch"
             ),
@@ -336,17 +458,27 @@ def record_usage_event_and_aggregates(table: Any, event: UsageEvent, *, apply_ag
                 ":upload_inc": upload_inc,
                 ":download_inc": download_inc,
                 ":storage_delta": storage_delta,
+                ":message_send_inc": message_send_inc,
+                ":post_publish_inc": post_publish_inc,
                 ":updated_at": now,
                 ":ttl_epoch": _ttl_epoch_for_days(getattr(S, "filemgr_usage_aggregate_retention_days", 1095)),
             },
         )
     except Exception:
         record_usage_metering_pipeline_error("daily_aggregate_update")
-        record_usage_metering_event(event["event_type"], event["source"], "error")
+        record_usage_metering_event(event["event_type"], event["source"], "error", period_id=event_period)
         raise
 
-    record_usage_metering_event(event["event_type"], event["source"], "applied")
-    record_usage_metering_bytes(event["event_type"], event["source"], int(event["bytes"]))
+    record_usage_metering_event(event["event_type"], event["source"], "applied", period_id=event_period)
+    record_usage_metering_bytes(event["event_type"], event["source"], int(event["bytes"]), period_id=event_period)
+    if message_send_inc:
+        record_usage_surface_units(source_family, "message_send", message_send_inc, period_id=event_period)
+    if post_publish_inc:
+        record_usage_surface_units(source_family, "post_publish", post_publish_inc, period_id=event_period)
+    if event["event_type"] == "upload" and int(event["bytes"]) > 0:
+        record_usage_surface_transfer_bytes(source_family, "upload", int(event["bytes"]), period_id=event_period)
+    if event["event_type"] == "download" and int(event["bytes"]) > 0:
+        record_usage_surface_transfer_bytes(source_family, "download", int(event["bytes"]), period_id=event_period)
     record_usage_metering_pipeline_latency("record_usage_event_and_aggregates", time.perf_counter() - started)
     return True
 
