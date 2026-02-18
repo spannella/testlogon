@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -23,6 +24,7 @@ from app.routers.register import router as register_router
 from app.routers.webauthn import router as webauthn_router
 from app.routers.misc import router as misc_router
 from app.routers.billing_ccbill import router as billing_ccbill_router
+from app.routers.ccbill_mock import router as ccbill_mock_router
 from app.routers.paypal import router as paypal_router
 from app.routers.billing import router as billing_router
 from app.routers.account_state import router as account_state_router
@@ -39,6 +41,7 @@ from app.routers.shoppingcart import router as shoppingcart_router
 from app.routers.catalog import router as catalog_router
 from app.routers.subscription_server import router as subscription_server_router
 from app.routers.admin_usage import router as admin_usage_router
+from app.routers.ups import router as ups_router
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
@@ -52,8 +55,32 @@ def _security_headers_middleware(default_csp: str):
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         return response
-
     return _middleware
+  
+def _to_bool(value: str, *, default: bool) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _build_cors_options() -> dict[str, object]:
+    raw_origins = os.environ.get("CORS_ALLOW_ORIGINS", "*")
+    allow_origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+    allow_origin_regex = os.environ.get("CORS_ALLOW_ORIGIN_REGEX")
+
+    # Browsers reject `Access-Control-Allow-Origin: *` when credentials are included.
+    # If wildcard access is desired, use a regex so Starlette echoes the request origin.
+    if "*" in allow_origins:
+        allow_origins = [origin for origin in allow_origins if origin != "*"]
+        allow_origin_regex = allow_origin_regex or ".*"
+
+    return {
+        "allow_origins": allow_origins,
+        "allow_origin_regex": allow_origin_regex,
+        "allow_credentials": _to_bool(os.environ.get("CORS_ALLOW_CREDENTIALS"), default=True),
+        "allow_methods": ["*"],
+        "allow_headers": ["*"],
+    }
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Security Backend (refactored)", version="0.1.0")
@@ -66,15 +93,7 @@ def create_app() -> FastAPI:
     async def index():
         return FileResponse(static_dir / "index.html")
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    app.middleware("http")(_security_headers_middleware(settings.security_csp_header))
-
+    app.add_middleware(CORSMiddleware, **_build_cors_options())
     if METRICS_ENABLED:
         app.middleware("http")(metrics_middleware)
         set_app_info(app.title, app.version)
@@ -94,6 +113,7 @@ def create_app() -> FastAPI:
     app.include_router(webauthn_router)
     app.include_router(misc_router)
     app.include_router(billing_ccbill_router)
+    app.include_router(ccbill_mock_router)
     app.include_router(paypal_router)
     app.include_router(billing_router)
     app.include_router(account_state_router)
@@ -113,6 +133,7 @@ def create_app() -> FastAPI:
     app.include_router(catalog_router)
     app.include_router(subscription_server_router)
     app.include_router(admin_usage_router)
+    app.include_router(ups_router)
     app.add_event_handler("startup", start_billing_reconcile_task)
 
     return app

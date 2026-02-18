@@ -16,7 +16,7 @@ from pydantic import (
 
 from app.core.normalize import normalize_phone
 
-_PASSWORD_COMPLEXITY = re.compile(r"^(?=.*[A-Za-z])(?=.*\\d).+$")
+_NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
 class UiSessionStartReq(BaseModel):
     # You can include client metadata; auth is handled separately.
@@ -155,10 +155,13 @@ class RegisterStartReq(BaseModel):
     @field_validator("password")
     @classmethod
     def _validate_password(cls, value: str) -> str:
-        if len(value) < 8:
-            raise ValueError("Password must be at least 8 characters")
-        if not _PASSWORD_COMPLEXITY.match(value):
-            raise ValueError("Password must include letters and numbers")
+        if len(value) < 12:
+            raise ValueError("Password must be at least 12 characters")
+        if len(value) > 128:
+            raise ValueError("Password must be 128 characters or fewer")
+        # Basic low-entropy guardrail.
+        if len(set(value)) < 4:
+            raise ValueError("Password is too weak")
         return value
 
     @model_validator(mode="after")
@@ -167,7 +170,17 @@ class RegisterStartReq(BaseModel):
             raise ValueError("Passwords don't match")
         if self.enable_sms_mfa and not self.phone:
             raise ValueError("Phone required for SMS MFA")
+        self._validate_password_context()
         return self
+
+    def _validate_password_context(self) -> None:
+        password = self.password.lower()
+        local_part = self.email.split("@", 1)[0].lower()
+        local_tokens = [t for t in _NON_ALNUM.split(local_part) if len(t) >= 3]
+        name_tokens = [t for t in _NON_ALNUM.split(self.full_name.lower()) if len(t) >= 3]
+        for token in local_tokens + name_tokens:
+            if token and token in password:
+                raise ValueError("Password is too similar to personal information")
 
 class RegisterStartResp(BaseModel):
     status: str

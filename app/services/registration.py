@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import secrets
+import uuid
 from typing import Dict
 
+from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
 from app.core.normalize import normalize_email
@@ -19,7 +22,9 @@ from app.core.crypto import sha256_str
 
 PASSWORD_HASH_ITERATIONS = 260_000
 PASSWORD_HASH_ALGO = "pbkdf2_sha256"
-REGISTRATION_CHALLENGE_ID = "register_verify"
+REGISTRATION_CHALLENGE_PREFIX = "register_verify#"
+REGISTRATION_LATEST_POINTER_ID = "register_verify_latest"
+logger = logging.getLogger(__name__)
 
 
 def _hash_password(password: str) -> Dict[str, str]:
@@ -34,8 +39,16 @@ def _hash_password(password: str) -> Dict[str, str]:
 
 
 def _user_exists(user_sub: str) -> bool:
-    existing = T.users.get_item(Key={"user_sub": user_sub}).get("Item")
+    try:
+        existing = T.users.get_item(Key={"user_sub": user_sub}).get("Item")
+    except ClientError as exc:
+        code = (exc.response or {}).get("Error", {}).get("Code")
+        if code == "ResourceNotFoundException":
+            logger.warning("users table not found during registration lookup", extra={"user_sub": user_sub})
+            return False
+        raise
     return bool(existing)
+
 
 def is_email_available(email: str) -> bool:
     normalized = normalize_email(email)
@@ -82,6 +95,18 @@ def create_user_record(
     return {"user_sub": user_sub}
 
 
+def _challenge_session_id() -> str:
+    return f"{REGISTRATION_CHALLENGE_PREFIX}{uuid.uuid4()}"
+
+
+def _load_latest_challenge_id(user_sub: str) -> str:
+    latest = T.sessions.get_item(
+        Key={"user_sub": user_sub, "session_id": REGISTRATION_LATEST_POINTER_ID},
+    ).get("Item") or {}
+    challenge_id = latest.get("challenge_id") or ""
+    return challenge_id if isinstance(challenge_id, str) else ""
+
+
 def create_registration_challenge(
     *,
     user_sub: str,
@@ -93,9 +118,10 @@ def create_registration_challenge(
     code = gen_numeric_code(6) if channel == "email" else ""
     ts = now_ts()
     expires = ts + S.session_challenge_ttl_seconds
+    challenge_id = _challenge_session_id()
     payload = {
         "user_sub": user_sub,
-        "session_id": REGISTRATION_CHALLENGE_ID,
+        "session_id": challenge_id,
         "created_at": ts,
         "expires_at": expires,
         "revoked": False,
@@ -109,17 +135,31 @@ def create_registration_challenge(
         "sms_phone": sms_phone or "",
     }
     T.sessions.put_item(Item=with_ttl(payload, ttl_epoch=expires))
+    pointer_payload = {
+        "user_sub": user_sub,
+        "session_id": REGISTRATION_LATEST_POINTER_ID,
+        "challenge_id": challenge_id,
+        "created_at": ts,
+        "expires_at": expires,
+        "purpose": "register_verify_pointer",
+    }
+    T.sessions.put_item(Item=with_ttl(pointer_payload, ttl_epoch=expires))
     return code
 
 
 def verify_registration_code(*, user_sub: str, code: str) -> Dict[str, str]:
+    challenge_id = _load_latest_challenge_id(user_sub)
+    if not challenge_id:
+        raise HTTPException(400, "Registration verification not found")
     item = T.sessions.get_item(
-        Key={"user_sub": user_sub, "session_id": REGISTRATION_CHALLENGE_ID},
+        Key={"user_sub": user_sub, "session_id": challenge_id},
     ).get("Item")
     if not item:
         raise HTTPException(400, "Registration verification not found")
     if int(item.get("expires_at") or 0) < now_ts():
         raise HTTPException(400, "Verification code expired")
+    if item.get("purpose") != "register_verify":
+        raise HTTPException(400, "Registration verification not found")
     channel = item.get("channel") or "email"
     attempts = int(item.get("code_attempts") or 0)
     max_attempts = S.sms_code_max_attempts if channel == "sms" else S.email_code_max_attempts
@@ -128,14 +168,15 @@ def verify_registration_code(*, user_sub: str, code: str) -> Dict[str, str]:
     if channel == "sms":
         phone = item.get("send_to", "")
         if not twilio_check_sms(phone, code.strip()):
-            _increment_registration_attempts(user_sub, attempts)
+            _increment_registration_attempts(user_sub, challenge_id, attempts)
             raise HTTPException(401, "Invalid verification code")
     else:
         if sha256_str(code.strip()) != item.get("code_hash"):
-            _increment_registration_attempts(user_sub, attempts)
+            _increment_registration_attempts(user_sub, challenge_id, attempts)
             raise HTTPException(401, "Invalid verification code")
     try:
-        T.sessions.delete_item(Key={"user_sub": user_sub, "session_id": REGISTRATION_CHALLENGE_ID})
+        T.sessions.delete_item(Key={"user_sub": user_sub, "session_id": challenge_id})
+        T.sessions.delete_item(Key={"user_sub": user_sub, "session_id": REGISTRATION_LATEST_POINTER_ID})
     except Exception:
         pass
     return {
@@ -145,10 +186,10 @@ def verify_registration_code(*, user_sub: str, code: str) -> Dict[str, str]:
     }
 
 
-def _increment_registration_attempts(user_sub: str, attempts: int) -> None:
+def _increment_registration_attempts(user_sub: str, challenge_id: str, attempts: int) -> None:
     try:
         T.sessions.update_item(
-            Key={"user_sub": user_sub, "session_id": REGISTRATION_CHALLENGE_ID},
+            Key={"user_sub": user_sub, "session_id": challenge_id},
             UpdateExpression="SET code_attempts = :c, last_failed_at = :t",
             ExpressionAttributeValues={":c": attempts + 1, ":t": now_ts()},
         )

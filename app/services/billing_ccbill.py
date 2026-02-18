@@ -143,9 +143,9 @@ def _ccbill_ip_ranges() -> List[Tuple[ipaddress._BaseAddress, ipaddress._BaseAdd
 
 
 def verify_ccbill_webhook_signature(raw_body: bytes, signature_header: str) -> bool:
-    secret = S.ccbill_webhook_signature_secret
+    secret = _webhook_signature_secret_for_mode(ccbill_webhook_verify_mode())
     if not secret:
-        return True
+        return False
     if not signature_header:
         return False
     sig = signature_header.strip()
@@ -154,6 +154,22 @@ def verify_ccbill_webhook_signature(raw_body: bytes, signature_header: str) -> b
         sig = sig.strip()
     digest = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(digest, sig)
+
+
+def ccbill_webhook_verify_mode() -> str:
+    raw_mode = (S.ccbill_webhook_verify_mode or "").strip().lower()
+    if raw_mode in {"ip+sig", "sig_only", "local"}:
+        return raw_mode
+    return "local" if S.dev_mode else "ip+sig"
+
+
+def _webhook_signature_secret_for_mode(mode: str) -> str:
+    secret = (S.ccbill_webhook_signature_secret or "").strip()
+    if secret:
+        return secret
+    if mode == "local":
+        return "local-ccbill-webhook-secret"
+    return ""
 
 
 def _billing_sk(kind: str, identifier: str) -> str:
@@ -494,8 +510,8 @@ def mark_webhook_processed(dedupe_key: str) -> bool:
         raise
 
 
-def webhook_remote_ip_allowed(ip_str: str) -> bool:
-    if not S.ccbill_webhook_ip_enforce:
+def webhook_remote_ip_allowed(ip_str: str, *, enforce: bool = False) -> bool:
+    if not (enforce or S.ccbill_webhook_ip_enforce):
         return True
     try:
         ip = ipaddress.ip_address(ip_str)

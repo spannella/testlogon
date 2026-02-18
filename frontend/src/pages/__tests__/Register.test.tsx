@@ -1,11 +1,12 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 
 import { ApiError } from "@/api/client";
 import Register from "@/pages/Register";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 const mocks = vi.hoisted(() => ({
   registerStart: vi.fn(),
@@ -39,9 +40,11 @@ const REGISTER_STORAGE_KEY = "register-pending";
 
 const renderRegister = (initialEntries: string[] = ["/register"]) =>
   render(
-    <MemoryRouter initialEntries={initialEntries}>
-      <Register />
-    </MemoryRouter>,
+    <TooltipProvider>
+      <MemoryRouter initialEntries={initialEntries}>
+        <Register />
+      </MemoryRouter>
+    </TooltipProvider>,
   );
 
 beforeEach(() => {
@@ -55,7 +58,62 @@ beforeEach(() => {
 });
 
 describe("Register page", () => {
-  it("shows password policy validation when missing letters or numbers", async () => {
+
+  it("toggles password visibility from the eye button", async () => {
+    const user = userEvent.setup();
+    renderRegister();
+
+    const passwordInput = screen.getByLabelText(/^password/i);
+    expect(passwordInput).toHaveAttribute("type", "password");
+
+    await user.click(screen.getByRole("button", { name: /^show password$/i }));
+    expect(passwordInput).toHaveAttribute("type", "text");
+
+    await user.click(screen.getByRole("button", { name: /^hide password$/i }));
+    expect(passwordInput).toHaveAttribute("type", "password");
+  });
+
+  it("toggles confirm-password visibility from the eye button", async () => {
+    const user = userEvent.setup();
+    renderRegister();
+
+    const confirmInput = screen.getByLabelText(/confirm password/i, { selector: "input" });
+    expect(confirmInput).toHaveAttribute("type", "password");
+
+    await user.click(screen.getByRole("button", { name: /show confirm password/i }));
+    expect(confirmInput).toHaveAttribute("type", "text");
+
+    await user.click(screen.getByRole("button", { name: /hide confirm password/i }));
+    expect(confirmInput).toHaveAttribute("type", "password");
+  });
+
+  it("enforces basic email conformance in UI", async () => {
+    const user = userEvent.setup();
+    renderRegister();
+
+    await user.type(
+      screen.getByLabelText(/email/i, { selector: "input[type='email']" }),
+      "not-an-email",
+    );
+
+    expect(await screen.findByText(/enter a valid email/i)).toBeInTheDocument();
+    expect(mocks.registerEmailCheck).not.toHaveBeenCalled();
+  });
+
+  it("normalizes basic email input before availability check", async () => {
+    const user = userEvent.setup();
+    renderRegister();
+
+    await user.type(
+      screen.getByLabelText(/email/i, { selector: "input[type='email']" }),
+      " user@example.com ",
+    );
+
+    await waitFor(() => {
+      expect(mocks.registerEmailCheck).toHaveBeenCalledWith({ email: "user@example.com" });
+    });
+  });
+  it("shows password policy validation when too short", async () => {
     const user = userEvent.setup();
     renderRegister();
 
@@ -64,25 +122,41 @@ describe("Register page", () => {
       screen.getByLabelText(/email/i, { selector: "input[type='email']" }),
       "test@example.com",
     );
-    await user.type(screen.getByLabelText(/^password/i), "passwordonly");
-    await user.type(screen.getByLabelText(/confirm password/i), "passwordonly");
+    await user.type(screen.getByLabelText(/^password/i), "short123");
+    await user.type(screen.getByLabelText(/confirm password/i, { selector: "input" }), "short123");
     await user.click(screen.getByRole("button", { name: /request access/i }));
 
     expect(
-      await screen.findByText(/password must include letters and numbers/i),
+      await screen.findByText(/password must be at least 12 characters/i),
     ).toBeInTheDocument();
+  });
+
+
+  it("shows password strength meter progression", async () => {
+    const user = userEvent.setup();
+    renderRegister();
+
+    expect(screen.getByText(/password strength/i)).toBeInTheDocument();
+    expect(screen.getByText(/^very weak$/i)).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText(/^password/i), "short");
+    expect(screen.getByText(/^very weak$/i)).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText(/^password/i));
+    await user.type(screen.getByLabelText(/^password/i), "StrongPassphrase42!");
+    expect(screen.getByText(/^strong$/i)).toBeInTheDocument();
   });
 
   it("shows password requirement checklist feedback", async () => {
     const user = userEvent.setup();
     renderRegister();
 
-    await user.type(screen.getByLabelText(/^password/i), "Password1");
-    await user.type(screen.getByLabelText(/confirm password/i), "Password1");
+    await user.type(screen.getByLabelText(/^password/i), "StrongPassphrase42!");
+    await user.type(screen.getByLabelText(/confirm password/i, { selector: "input" }), "StrongPassphrase42!");
 
-    expect(screen.getByText(/at least 8 characters/i)).toBeInTheDocument();
-    expect(screen.getByText(/contains a letter/i)).toBeInTheDocument();
-    expect(screen.getByText(/contains a number/i)).toBeInTheDocument();
+    expect(screen.getByText(/at least 12 characters/i)).toBeInTheDocument();
+    expect(screen.getByText(/no more than 128 characters/i)).toBeInTheDocument();
+    expect(screen.getByText(/use a varied passphrase/i)).toBeInTheDocument();
     expect(screen.getByText(/passwords match/i)).toBeInTheDocument();
   });
 
@@ -135,7 +209,7 @@ describe("Register page", () => {
     expect(codeInput).toHaveValue("777888");
   });
 
-  it("disables submit when email is already used", async () => {
+  it("shows generic email validation success without enumeration detail", async () => {
     const user = userEvent.setup();
     mocks.registerEmailCheck.mockResolvedValueOnce({ status: "ok", available: false });
     renderRegister();
@@ -145,8 +219,8 @@ describe("Register page", () => {
       "taken@example.com",
     );
 
-    expect(await screen.findByText(/email is already in use/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /request access/i })).toBeDisabled();
+    expect(await screen.findByText(/email looks valid/i)).toBeInTheDocument();
+    expect(screen.queryByText(/already in use/i)).not.toBeInTheDocument();
   });
 
   it("shows rate limit message when email checks are throttled", async () => {
@@ -164,5 +238,29 @@ describe("Register page", () => {
     expect(
       await screen.findByText(/too many checks\. please wait before trying again\./i),
     ).toBeInTheDocument();
+  });
+
+  it("recovers when email check never resolves", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.registerEmailCheck.mockImplementationOnce(() => new Promise(() => {}));
+      renderRegister();
+
+      fireEvent.change(screen.getByLabelText(/email/i, { selector: "input[type='email']" }), {
+        target: { value: "stuck@example.com" },
+      });
+
+      await act(async () => {
+        vi.advanceTimersByTime(400);
+      });
+      expect(screen.getByText(/checking email availability/i)).toBeInTheDocument();
+
+      await act(async () => {
+        vi.advanceTimersByTime(8000);
+      });
+      expect(screen.getByText(/unable to check email availability\. please try again\./i)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

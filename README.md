@@ -4,6 +4,7 @@ session management, MFA, billing, notifications, and a lightweight control panel
 ## Documentation
 - [File reference](docs/file-reference.md)
 - [Run and deploy](docs/run-deploy.md)
+- [Local dev stack](docs/local-dev-stack.md)
 - [Architecture](docs/architecture.md)
 - [DynamoDB setup](docs/dynamodb.md)
 - [AWS services](docs/aws-services.md)
@@ -25,6 +26,14 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
+```
+
+### Local provider mock mode (fast path)
+```bash
+scripts/run_dev.sh
+# optional: scripts/run_dev.sh --real-backend
+# in another terminal
+scripts/test_mock_mode.sh
 ```
 
 ## Required environment variables (minimum)

@@ -64,14 +64,14 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
   React.useEffect(() => {
     const lastMsg = allMessages[allMessages.length - 1];
     if (lastMsg && (conversation.unread_count ?? 0) > 0) {
-      markRead(convoId, lastMsg.message_id).catch(() => {});
+      markRead(convoId, lastMsg.created_at).catch(() => {});
     }
   }, [convoId, allMessages, conversation.unread_count]);
 
   // ── Send mutations ─────────────────────────────────────────────
 
   const sendText = useMutation({
-    mutationFn: (body: string) => sendTextMessage(convoId, { body }),
+    mutationFn: (text: string) => sendTextMessage(convoId, { text }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
       queryClient.invalidateQueries({ queryKey: ["conversations"] });

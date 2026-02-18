@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import secrets
+import logging
+import sys
 from typing import Any, Dict, List, Optional, Sequence
 
 from boto3.dynamodb.conditions import Key
@@ -18,6 +20,9 @@ try:
 except Exception:  # pragma: no cover
     pyotp = None  # type: ignore
 
+
+logger = logging.getLogger(__name__)
+
 def _need_pyotp():
     if pyotp is None:
         raise HTTPException(500, "pyotp not installed (required for TOTP features)")
@@ -26,6 +31,9 @@ def gen_numeric_code(n_digits: int = 6) -> str:
     return str(secrets.randbelow(10**n_digits)).zfill(n_digits)
 
 def send_email_code(to_email: str, purpose: str, code: str) -> None:
+    if S.dev_mode:
+        logger.warning("DEV MODE email verification code for %s (%s): %s", to_email, purpose, code)
+        print(f"DEV MODE email verification code for {to_email} ({purpose}): {code}", file=sys.stderr, flush=True)
     if not ses:
         raise HTTPException(500, "SES not configured")
     subject = f"Your verification code ({purpose})"

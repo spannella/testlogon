@@ -116,6 +116,76 @@ class TestUiSessionRoutes(unittest.TestCase):
             self.assertTrue(resp.auth_required)
             self.assertEqual(resp.challenge_id, "chal")
 
+
+    def test_ui_session_start_adaptive_anomaly_policy(self):
+        req = build_request()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(ui_session, "compute_required_factors", return_value=["totp", "email", "sms"]))
+            create_stepup = stack.enter_context(patch.object(ui_session, "create_stepup_challenge", return_value="chal"))
+            stack.enter_context(patch.object(ui_session, "record_login_anomaly", return_value={
+                "ip_prefix": "203.0.113",
+                "user_ip_count": 7,
+                "ip_user_count": 11,
+                "user_threshold_exceeded": True,
+                "ip_threshold_exceeded": True,
+            }))
+            stack.enter_context(patch.object(ui_session, "record_device_login", return_value={"new_device": False, "location_mismatch": False}))
+            stack.enter_context(patch.object(ui_session, "rate_limit_login_attempt"))
+            audit = stack.enter_context(patch.object(ui_session, "audit_event"))
+
+            resp = run_async(ui_session.ui_session_start(req, UiSessionStartReq(), user_sub="user"))
+            self.assertTrue(resp.auth_required)
+            self.assertEqual(resp.challenge_id, "chal")
+            kwargs = create_stepup.call_args.kwargs
+            self.assertEqual(kwargs["required_factors"], ["totp", "email"])
+            self.assertEqual(kwargs["risk_score"], 2)
+            self.assertEqual(kwargs["refresh_ttl_seconds"], ui_session.S.login_high_risk_refresh_ttl_seconds)
+            audit.assert_any_call(
+                "login_unusual_signin",
+                "user",
+                req,
+                outcome="warning",
+                risk_score=2,
+                required_factors=["totp", "email"],
+                short_refresh_ttl=ui_session.S.login_high_risk_refresh_ttl_seconds,
+            )
+
+
+    def test_ui_session_start_no_anomaly_keeps_base_stepup(self):
+        req = build_request()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(ui_session, "compute_required_factors", return_value=["totp"]))
+            create_stepup = stack.enter_context(patch.object(ui_session, "create_stepup_challenge", return_value="chal"))
+            stack.enter_context(patch.object(ui_session, "record_login_anomaly", return_value={
+                "ip_prefix": "203.0.113",
+                "user_ip_count": 1,
+                "ip_user_count": 1,
+                "user_threshold_exceeded": False,
+                "ip_threshold_exceeded": False,
+            }))
+            stack.enter_context(patch.object(ui_session, "record_device_login", return_value={"new_device": False, "location_mismatch": False}))
+            stack.enter_context(patch.object(ui_session, "rate_limit_login_attempt"))
+            stack.enter_context(patch.object(ui_session, "audit_event"))
+
+            resp = run_async(ui_session.ui_session_start(req, UiSessionStartReq(), user_sub="user"))
+            self.assertTrue(resp.auth_required)
+            kwargs = create_stepup.call_args.kwargs
+            self.assertEqual(kwargs["required_factors"], ["totp"])
+            self.assertEqual(kwargs["risk_score"], 0)
+            self.assertIsNone(kwargs["refresh_ttl_seconds"])
+
+    def test_ui_session_finalize_applies_challenge_refresh_ttl(self):
+        req = build_request()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(ui_session, "load_challenge_or_401", return_value={"passed": {}, "refresh_ttl_seconds": 1234}))
+            stack.enter_context(patch.object(ui_session, "maybe_finalize", return_value="sid"))
+            rotate = stack.enter_context(patch.object(ui_session, "rotate_session_cookies"))
+            stack.enter_context(patch.object(ui_session, "audit_event"))
+
+            resp = run_async(ui_session.ui_session_finalize(req, UiSessionFinalizeReq(challenge_id="chal"), user_sub="user"))
+            self.assertEqual(resp["status"], "ok")
+            rotate.assert_called_once_with(req, unittest.mock.ANY, "user", "sid", refresh_ttl_seconds=1234)
+
     def test_ui_session_finalize_pending(self):
         req = build_request()
         chal = {"required_factors": ["totp"], "passed": {"totp": False}}

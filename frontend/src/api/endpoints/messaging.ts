@@ -13,45 +13,98 @@ import type {
   AddParticipantsReq,
   UpdateRoleReq,
 } from "@/api/types";
+import { adaptConversation, adaptMessage } from "./messagingAdapter";
 
-export const getConversations = (cursor?: string) =>
-  api.get<{ conversations: Conversation[]; next_cursor?: string }>(
+export const getConversations = async (cursor?: string) => {
+  const res = await api.get<{ conversations: Conversation[]; next_cursor?: string }>(
     "/messaging/conversations",
     cursor ? { cursor } : undefined,
   );
+  return {
+    conversations: (res.conversations ?? []).map(adaptConversation),
+    next_cursor: res.next_cursor,
+  };
+};
 
-export const getConversation = (id: string) =>
-  api.get<Conversation>(`/messaging/conversations/${id}`);
+export const getConversation = async (id: string) => {
+  const res = await api.get<Conversation>(`/messaging/conversations/${id}`);
+  return adaptConversation(res);
+};
 
-export const startConversation = (body: StartConversationReq) =>
-  api.post<Conversation>("/messaging/conversations/start", body);
+export const startConversation = async (body: StartConversationReq) => {
+  const res = await api.post<Conversation>("/messaging/conversations/start", body);
+  return adaptConversation(res);
+};
 
-export const startGroupConversation = (body: StartGroupConversationReq) =>
-  api.post<Conversation>("/messaging/conversations/group", body);
+export const startGroupConversation = async (body: StartGroupConversationReq) => {
+  const res = await api.post<Conversation>("/messaging/conversations/group", body);
+  return adaptConversation(res);
+};
 
-export const getMessages = (conversationId: string, cursor?: string) =>
-  api.get<{ messages: Message[]; next_cursor?: string }>(
+export const getMessages = async (conversationId: string, cursor?: string) => {
+  const res = await api.get<{ messages: Message[]; next_cursor?: string }>(
     `/messaging/conversations/${conversationId}/messages`,
     cursor ? { cursor } : undefined,
   );
+  return {
+    messages: (res.messages ?? []).map(adaptMessage),
+    next_cursor: res.next_cursor,
+  };
+};
 
-export const sendTextMessage = (conversationId: string, body: SendTextMessageReq) =>
-  api.post<Message>(
+export const sendTextMessage = async (conversationId: string, body: SendTextMessageReq) => {
+  const res = await api.post<Message>(
     `/messaging/conversations/${conversationId}/messages/text`,
     body,
   );
+  return adaptMessage(res);
+};
 
-export const sendImageMessage = (conversationId: string, formData: FormData) =>
-  api.upload<Message>(
-    `/messaging/conversations/${conversationId}/messages/image`,
-    formData,
+const uploadToPresignedUrl = async (uploadUrl: string, file: File, contentType: string) => {
+  const resp = await fetch(uploadUrl, {
+    method: "PUT",
+    body: file,
+    headers: {
+      "Content-Type": contentType,
+    },
+  });
+  if (!resp.ok) {
+    throw new Error("Failed to upload image");
+  }
+};
+
+export const sendImageMessage = async (conversationId: string, formData: FormData) => {
+  const file = formData.get("file");
+  if (!(file instanceof File)) {
+    throw new Error("sendImageMessage requires FormData with a file field");
+  }
+
+  const contentType = file.type || "image/jpeg";
+  const presign = await api.post<{ upload_url: string; bucket: string; key: string; content_type: string }>(
+    `/messaging/conversations/${conversationId}/messages/image/presign`,
+    {
+      content_type: contentType,
+      filename: file.name || "image.jpg",
+    },
   );
 
-export const editMessage = (conversationId: string, messageId: string, body: { body: string }) =>
-  api.post<Message>(
+  await uploadToPresignedUrl(presign.upload_url, file, presign.content_type || contentType);
+
+  const res = await api.post<Message>(`/messaging/conversations/${conversationId}/messages/image`, {
+    bucket: presign.bucket,
+    key: presign.key,
+    content_type: presign.content_type || contentType,
+  });
+  return adaptMessage(res);
+};
+
+export const editMessage = async (conversationId: string, messageId: string, body: { text: string }) => {
+  const res = await api.post<Message>(
     `/messaging/conversations/${conversationId}/messages/${messageId}/edit`,
     body,
   );
+  return adaptMessage(res);
+};
 
 export const reactToMessage = (conversationId: string, messageId: string, emoji: string) =>
   api.post(`/messaging/conversations/${conversationId}/messages/${messageId}/react`, { emoji });
@@ -59,14 +112,16 @@ export const reactToMessage = (conversationId: string, messageId: string, emoji:
 export const deleteMessage = (conversationId: string, messageId: string) =>
   api.del(`/messaging/conversations/${conversationId}/messages/${messageId}`);
 
-export const markRead = (conversationId: string, messageId: string) =>
-  api.post(`/messaging/conversations/${conversationId}/mark-read`, { last_read_message_id: messageId });
+export const markRead = (conversationId: string, lastReadAt: number) =>
+  api.post(`/messaging/conversations/${conversationId}/read`, { last_read_at: lastReadAt });
 
-export const muteConversation = (conversationId: string, muted: boolean) =>
-  api.put(`/messaging/conversations/${conversationId}/mute`, { muted });
+export const muteConversation = (conversationId: string, mutedUntil: number) =>
+  api.post(`/messaging/conversations/${conversationId}/mute`, { muted_until: mutedUntil });
 
-export const updateConversation = (conversationId: string, body: { title?: string }) =>
-  api.patch<Conversation>(`/messaging/conversations/${conversationId}`, body);
+export const updateConversation = async (conversationId: string, body: { title?: string }) => {
+  const res = await api.patch<Conversation>(`/messaging/conversations/${conversationId}`, body);
+  return adaptConversation(res);
+};
 
 // ─── Presence ──────────────────────────────────────────────────
 
@@ -103,25 +158,29 @@ export const searchUsers = (q: string, limit?: number) => {
 
 // ─── File Messages ─────────────────────────────────────────────
 
-export const sendFileMessage = (
+export const sendFileMessage = async (
   conversationId: string,
   body: { path: string; kind?: string; duration_seconds?: number },
-) =>
-  api.post<Message>(
+) => {
+  const res = await api.post<Message>(
     `/messaging/conversations/${conversationId}/messages/file`,
     body,
   );
+  return adaptMessage(res);
+};
 
 // ─── Forward ───────────────────────────────────────────────────
 
-export const forwardMessage = (
+export const forwardMessage = async (
   targetConversationId: string,
   body: ForwardMessageReq,
-) =>
-  api.post<Message>(
+) => {
+  const res = await api.post<Message>(
     `/messaging/conversations/${targetConversationId}/messages/forward`,
     body,
   );
+  return adaptMessage(res);
+};
 
 // ─── Views / Read Receipts ─────────────────────────────────────
 

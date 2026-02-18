@@ -6,7 +6,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional
 
-from app.core.aws_clients import ddb_resource
+import boto3
+from botocore.exceptions import ClientError, EndpointConnectionError
 from app.core.settings import S
 
 
@@ -46,10 +47,32 @@ def _table_defs() -> List[TableDef]:
         TableDef(_resolve_table_name(S.purchase_transactions_table_name, "purchase_transactions"), "user_sub", "sk"),
         TableDef(_resolve_table_name(S.purchase_events_table_name, "purchase_transaction_events"), "pk", "sk"),
         TableDef(_resolve_table_name(S.shopping_cart_table_name, "shopping_cart"), "PK", "SK"),
-        TableDef(_resolve_table_name(S.catalog_table_name, "shopping_catalog"), "PK", "SK"),
+        TableDef(
+            _resolve_table_name(S.catalog_table_name, "shopping_catalog"),
+            "PK",
+            "SK",
+            gsi=[{"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"}],
+        ),
         TableDef(_resolve_table_name(S.subscriptions_table_name, "subscriptions"), "pk", "sk"),
-        TableDef(_resolve_table_name(S.filemgr_table_name, "file_manager"), "PK", "SK"),
-        TableDef(os.getenv("APP_TABLE", "app_single_table"), "pk", "sk"),
+        TableDef(
+            _resolve_table_name(S.filemgr_table_name, "file_manager"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+        ),
+        TableDef(
+            os.getenv("APP_TABLE", "app_single_table"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+                {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+            ],
+        ),
         TableDef(os.getenv("DDB_CONVERSATIONS", "Conversations"), "conversation_id"),
         TableDef(
             os.getenv("DDB_PARTICIPANTS", "Participants"),
@@ -108,8 +131,47 @@ def _global_secondary_indexes(table: TableDef) -> Optional[List[Dict[str, object
 
 def _ensure_table(ddb, table: TableDef) -> None:
     client = ddb.meta.client
-    existing = client.list_tables().get("TableNames", [])
+    existing = _retry_transient_ddb_call(client.list_tables).get("TableNames", [])
     if table.name in existing:
+        if table.gsi:
+            desc = _retry_transient_ddb_call(client.describe_table, TableName=table.name).get("Table", {})
+            existing_indexes = {idx.get("IndexName") for idx in desc.get("GlobalSecondaryIndexes", [])}
+            existing_attributes = {attr.get("AttributeName") for attr in desc.get("AttributeDefinitions", [])}
+            missing = [g for g in table.gsi if g["index_name"] not in existing_indexes]
+            for gsi in missing:
+                attr_defs = []
+                if gsi["partition_key"] not in existing_attributes:
+                    attr_defs.append({"AttributeName": gsi["partition_key"], "AttributeType": "S"})
+                if gsi.get("sort_key") and gsi["sort_key"] not in existing_attributes:
+                    attr_defs.append({"AttributeName": gsi["sort_key"], "AttributeType": "S"})
+
+                update_kwargs: Dict[str, object] = {
+                    "TableName": table.name,
+                    "GlobalSecondaryIndexUpdates": [
+                        {
+                            "Create": {
+                                "IndexName": gsi["index_name"],
+                                "KeySchema": [
+                                    {"AttributeName": gsi["partition_key"], "KeyType": "HASH"},
+                                    *(
+                                        [{"AttributeName": gsi["sort_key"], "KeyType": "RANGE"}]
+                                        if gsi.get("sort_key")
+                                        else []
+                                    ),
+                                ],
+                                "Projection": {"ProjectionType": "ALL"},
+                            }
+                        }
+                    ],
+                }
+                if attr_defs:
+                    update_kwargs["AttributeDefinitions"] = attr_defs
+
+                _retry_transient_ddb_call(client.update_table, **update_kwargs)
+                waiter = client.get_waiter("table_exists")
+                waiter.wait(TableName=table.name)
+                desc = _retry_transient_ddb_call(client.describe_table, TableName=table.name).get("Table", {})
+                existing_attributes = {attr.get("AttributeName") for attr in desc.get("AttributeDefinitions", [])}
         return
     kwargs: Dict[str, object] = {
         "TableName": table.name,
@@ -120,7 +182,25 @@ def _ensure_table(ddb, table: TableDef) -> None:
     gsi = _global_secondary_indexes(table)
     if gsi:
         kwargs["GlobalSecondaryIndexes"] = gsi
-    client.create_table(**kwargs)
+    _retry_transient_ddb_call(client.create_table, **kwargs)
+
+
+def _retry_transient_ddb_call(func, *args, retries: int = 12, delay_seconds: float = 1.0, **kwargs):
+    """Retry DynamoDB Local operations when the embedded server is still warming up."""
+    for attempt in range(1, retries + 1):
+        try:
+            return func(*args, **kwargs)
+        except EndpointConnectionError:
+            if attempt == retries:
+                raise
+            time.sleep(delay_seconds)
+        except ClientError as exc:
+            error_code = exc.response.get("Error", {}).get("Code", "")
+            if error_code not in {"InternalFailure", "ThrottlingException", "LimitExceededException"}:
+                raise
+            if attempt == retries:
+                raise
+            time.sleep(delay_seconds)
 
 
 def _wait_for_tables(ddb, table_names: Iterable[str]) -> None:
@@ -128,10 +208,29 @@ def _wait_for_tables(ddb, table_names: Iterable[str]) -> None:
     for name in table_names:
         waiter = client.get_waiter("table_exists")
         waiter.wait(TableName=name)
+        table = _retry_transient_ddb_call(client.describe_table, TableName=name).get("Table", {})
+        for _ in range(120):
+            indexes = table.get("GlobalSecondaryIndexes", [])
+            if all(idx.get("IndexStatus") == "ACTIVE" for idx in indexes):
+                break
+            time.sleep(1)
+            table = _retry_transient_ddb_call(client.describe_table, TableName=name).get("Table", {})
+
+
+def _ddb_resource_for_local_bootstrap():
+    endpoint = os.getenv("DDB_ENDPOINT_URL") or os.getenv("AWS_ENDPOINT_URL") or "http://localhost:8001"
+    return boto3.resource(
+        "dynamodb",
+        region_name=S.aws_region or "us-east-1",
+        endpoint_url=endpoint,
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", "test"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", "test"),
+        aws_session_token=os.getenv("AWS_SESSION_TOKEN", "test"),
+    )
 
 
 def main() -> None:
-    ddb = ddb_resource()
+    ddb = _ddb_resource_for_local_bootstrap()
     tables = _table_defs()
     created = []
     for table in tables:

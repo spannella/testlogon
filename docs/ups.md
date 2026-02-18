@@ -1,22 +1,32 @@
 # UPS Integration
 
-This repository does not currently include first-party UPS API routes. We still document UPS usage here so operators know where to configure credentials and how shipping fits into the broader workflow.
+This service now includes a **minimal UPS integration** for local testing and early provider wiring.
 
-## Current integration status
-- **API routes**: no UPS-specific endpoints are exposed by this service today.
-- **UI**: there is no UPS panel in the control panel UI.
-- **Operational usage**: UPS is typically configured in the shipping or fulfillment system that sits alongside this service.
+## Implemented endpoints
 
-## Recommended configuration checklist
-- Store UPS credentials (client ID/secret, account number, and webhook secrets if used) in your secret manager.
-- Document which downstream service is responsible for:
-  - Rate quoting and label creation.
-  - Tracking updates and webhook handling.
-  - Persisting tracking numbers back to the customer profile or order system.
+### App endpoints
+- `POST /api/ups/quote` — request a shipping quote.
+- `POST /api/ups/label` — create a shipping label.
+- `POST /api/ups/tracking/webhook` — receive tracking updates (HMAC signature optional/configurable).
 
-## Suggested future integration points
-If you plan to add UPS support directly to this service, these are the likely touch points:
-- **Settings**: add UPS configuration fields to `app/core/settings.py`.
-- **Service layer**: create a new module under `app/services/` for UPS API calls.
-- **Routers**: expose routes for rate quoting, label creation, and webhook callbacks.
-- **UI**: add a panel in `app/static/index.html` and supporting logic in `app/static/main.js`.
+### Local mock/provider endpoints
+- `POST /mock/ups/oauth/token`
+- `POST /mock/ups/quote`
+- `POST /mock/ups/label`
+- `POST /emit/ups-tracking-webhook` (helper to emit signed tracking events to the app webhook)
+
+## Configuration
+
+- `UPS_BASE_URL`
+- `UPS_AUTH_URL`
+- `UPS_CLIENT_ID`
+- `UPS_CLIENT_SECRET`
+- `UPS_WEBHOOK_SECRET`
+
+For local usage, point UPS base/auth to the in-app mock endpoints (see `docs/local-dev-stack.md`).
+
+## Notes
+
+- The current implementation is intentionally minimal and aimed at local simulation.
+- Quote/label API payloads are passed through to the configured UPS base URL.
+- Tracking webhook events are stored under `UPS_TRACKING` records in the billing table for verification.
