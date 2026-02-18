@@ -6,7 +6,15 @@ import json
 from types import SimpleNamespace
 
 from app.auth import deps
-from app.auth.roles import Role, normalize_role
+from app.auth.roles import (
+    AdminProfile,
+    AdminProfileType,
+    AdminScope,
+    Role,
+    admin_profile_has_scope,
+    normalize_admin_profile,
+    normalize_role,
+)
 from app.core.settings import S
 
 
@@ -68,3 +76,48 @@ def test_get_authenticated_user_role_prefers_highest_privilege_in_roles_claim() 
     token = _encode_payload({"sub": "user-1", "roles": ["user", "admin"]})
     req = SimpleNamespace(headers={"authorization": f"Bearer {token}"})
     assert run_async(deps.get_authenticated_user_role(req)) == Role.ADMIN
+
+
+def test_normalize_admin_profile_defaults_to_general_for_missing_or_malformed() -> None:
+    assert normalize_admin_profile(None) == AdminProfile(type=AdminProfileType.GENERAL)
+    assert normalize_admin_profile("bad") == AdminProfile(type=AdminProfileType.GENERAL)
+    assert normalize_admin_profile({"type": "scoped", "scopes": []}) == AdminProfile(type=AdminProfileType.GENERAL)
+    assert normalize_admin_profile({"type": "scoped", "scopes": ["unknown"]}) == AdminProfile(type=AdminProfileType.GENERAL)
+
+
+def test_normalize_admin_profile_canonicalizes_scopes_deterministically() -> None:
+    profile = normalize_admin_profile(
+        {
+            "type": "SCOPED",
+            "scopes": ["billing_support", "auth_support", "billing_support", " content_moderation "],
+        }
+    )
+
+    assert profile == AdminProfile(
+        type=AdminProfileType.SCOPED,
+        scopes=(
+            AdminScope.AUTH_SUPPORT,
+            AdminScope.BILLING_SUPPORT,
+            AdminScope.CONTENT_MODERATION,
+        ),
+    )
+
+
+def test_normalize_admin_profile_accepts_admin_profile_instance_and_dedupes() -> None:
+    profile = normalize_admin_profile(
+        AdminProfile(
+            type=AdminProfileType.SCOPED,
+            scopes=(AdminScope.BILLING_SUPPORT, AdminScope.AUTH_SUPPORT, AdminScope.BILLING_SUPPORT),
+        )
+    )
+    assert profile.scopes == (AdminScope.AUTH_SUPPORT, AdminScope.BILLING_SUPPORT)
+
+
+def test_admin_profile_has_scope_supports_general_and_scoped_profiles() -> None:
+    general = AdminProfile(type=AdminProfileType.GENERAL)
+    scoped = AdminProfile(type=AdminProfileType.SCOPED, scopes=(AdminScope.AUTH_SUPPORT,))
+
+    assert admin_profile_has_scope(general, AdminScope.BILLING_SUPPORT)
+    assert admin_profile_has_scope(scoped, "auth_support")
+    assert not admin_profile_has_scope(scoped, AdminScope.BILLING_SUPPORT)
+    assert not admin_profile_has_scope(scoped, "not-a-scope")

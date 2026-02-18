@@ -8,19 +8,11 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { useAuthStore } from "@/stores/authStore";
+import { canAccessGeneralAdminControls } from "@/lib/adminCapabilities";
 import { useImpersonationStore } from "@/stores/impersonationStore";
 import { startImpersonation, stopImpersonation } from "@/api/endpoints/adminImpersonation";
 import { ApiError } from "@/api/client";
 
-function accessTokenRole(token: string | null): string | null {
-  if (!token || token.split(".").length < 2) return null;
-  try {
-    const payload = JSON.parse(atob(token.split(".")[1]!));
-    return typeof payload?.role === "string" ? payload.role : null;
-  } catch {
-    return null;
-  }
-}
 
 function formatExpiry(epoch?: number | null) {
   if (!epoch) return "-";
@@ -29,8 +21,7 @@ function formatExpiry(epoch?: number | null) {
 
 export default function ImpersonationBanner() {
   const accessToken = useAuthStore((s) => s.accessToken);
-  const role = accessTokenRole(accessToken);
-  const canImpersonate = role === "admin" || role === "root";
+  const canImpersonate = canAccessGeneralAdminControls(accessToken);
 
   const imp = useImpersonationStore();
   const active = imp.isActive();
@@ -90,7 +81,7 @@ export default function ImpersonationBanner() {
               {imp.actorSub ? <> (actor: {imp.actorSub})</> : null} • expires {formatExpiry(imp.expiresAt)}
             </span>
           ) : (
-            <span className="truncate">Admin/root impersonation controls available.</span>
+            <span className="truncate">General admin/root impersonation controls available.</span>
           )}
         </div>
 

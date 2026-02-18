@@ -9,8 +9,8 @@ import jwt
 from boto3.dynamodb.conditions import Key
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
-from app.auth.deps import AuthenticatedUser
-from app.auth.policy import require_admin_or_root
+from app.auth.deps import AuthenticatedUser, get_authenticated_user
+from app.auth.policy import require_admin_scope, require_general_admin_or_root, require_role_value
 from app.auth.roles import Role, normalize_role
 from app.core.settings import S
 from app.core.tables import T
@@ -22,6 +22,14 @@ from app.services.ttl import with_ttl
 
 router = APIRouter(prefix="/admin/impersonation", tags=["admin-impersonation"])
 
+require_auth_support_admin = require_admin_scope("auth_support")
+
+
+async def require_impersonation_operator(user: AuthenticatedUser = Depends(get_authenticated_user), request: Request = None) -> AuthenticatedUser:
+    if bool(getattr(S, "admin_scope_enforce_auth_support", True)):
+        return await require_auth_support_admin(request=request, user=user)
+    require_role_value(normalize_role(user.role).value, {Role.ADMIN, Role.ROOT})
+    return user
 
 
 def _encode_cursor(cursor: Dict[str, Any] | None) -> str | None:
@@ -62,7 +70,7 @@ def start_impersonation(
     req: Request,
     body: Dict[str, Any] = Body(default={}),
     _ctx: Dict[str, str] = Depends(require_ui_session),
-    actor: AuthenticatedUser = Depends(require_admin_or_root),
+    actor: AuthenticatedUser = Depends(require_impersonation_operator),
 ):
     rate_limit_admin_action(actor.sub, "impersonation_start")
     target_user_sub = str((body or {}).get("target_user_sub") or "").strip()
@@ -146,7 +154,7 @@ def stop_impersonation(
     req: Request,
     body: Dict[str, Any] = Body(default={}),
     _ctx: Dict[str, str] = Depends(require_ui_session),
-    actor: AuthenticatedUser = Depends(require_admin_or_root),
+    actor: AuthenticatedUser = Depends(require_impersonation_operator),
 ):
     rate_limit_admin_action(actor.sub, "impersonation_stop")
     impersonation_id = str((body or {}).get("impersonation_id") or "").strip()
@@ -189,7 +197,7 @@ def impersonation_audit(
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None),
     _ctx: Dict[str, str] = Depends(require_ui_session),
-    _actor: AuthenticatedUser = Depends(require_admin_or_root),
+    _actor: AuthenticatedUser = Depends(require_impersonation_operator),
 ):
     end = int(end_ts or now_ts())
     if start_ts > end:

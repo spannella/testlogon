@@ -10,8 +10,9 @@ from fastapi import APIRouter, Depends, File, Query, UploadFile, Body, Request, 
 from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 
-from app.auth.policy import require_role_value
-from app.auth.roles import Role
+from app.auth.deps import AuthenticatedUser, get_authenticated_user
+from app.auth.policy import require_admin_scope, require_role_value
+from app.auth.roles import AdminScope, Role, admin_profile_has_scope, normalize_role
 from app.core.tables import T
 from app.core.settings import S
 from app.services.filemanager import (
@@ -88,8 +89,48 @@ def _current_user(ctx=Depends(require_ui_session)) -> str:
     return ctx["user_sub"]
 
 
-def _admin_or_root_ctx(ctx=Depends(require_ui_session)) -> Dict[str, Any]:
-    require_role_value(ctx.get("role"), {Role.ADMIN, Role.ROOT})
+require_content_moderation_admin = require_admin_scope("content_moderation")
+
+
+async def require_content_moderation_operator(user: AuthenticatedUser = Depends(get_authenticated_user), request: Request = None) -> AuthenticatedUser:
+    if bool(getattr(S, "admin_scope_enforce_content_moderation", True)):
+        return await require_content_moderation_admin(request=request, user=user)
+    require_role_value(normalize_role(user.role).value, {Role.ADMIN, Role.ROOT})
+    return user
+
+
+def _resolve_actor_from_context(ctx: Dict[str, Any], actor: AuthenticatedUser | Any) -> AuthenticatedUser:
+    if isinstance(actor, AuthenticatedUser):
+        return actor
+    role = normalize_role((ctx or {}).get("role"))
+    return AuthenticatedUser(sub=str((ctx or {}).get("user_sub") or ""), role=role)
+
+
+def _require_content_moderation_actor(actor: AuthenticatedUser) -> None:
+    if not bool(getattr(S, "admin_scope_enforce_content_moderation", True)):
+        require_role_value(normalize_role(actor.role).value, {Role.ADMIN, Role.ROOT})
+        return
+    role = normalize_role(actor.role)
+    if role is Role.ROOT:
+        return
+    if role is Role.ADMIN:
+        if admin_profile_has_scope(actor.admin_profile, AdminScope.CONTENT_MODERATION):
+            return
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "role_required_scope",
+                "required_scope": AdminScope.CONTENT_MODERATION.value,
+                "actual_role": role.value,
+                "actual_admin_profile": actor.admin_profile.to_dict(),
+            },
+        )
+    require_role_value(role.value, {Role.ADMIN, Role.ROOT})
+
+
+def _admin_or_root_ctx(ctx=Depends(require_ui_session), actor: AuthenticatedUser | Any = Depends(require_content_moderation_operator)) -> Dict[str, Any]:
+    resolved_actor = _resolve_actor_from_context(ctx, actor)
+    _require_content_moderation_actor(resolved_actor)
     return ctx
 
 

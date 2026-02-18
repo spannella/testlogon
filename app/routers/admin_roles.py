@@ -10,8 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.auth.deps import AuthenticatedUser
-from app.auth.policy import require_assignable_role, require_root
-from app.auth.roles import Role, normalize_role
+from app.auth.policy import require_assignable_role, require_roles, require_root
+from app.auth.roles import AdminProfileType, AdminScope, Role, normalize_admin_profile, normalize_admin_scope, normalize_role
 from app.core.normalize import client_ip_from_request
 from app.core.settings import S
 from app.core.tables import T
@@ -27,6 +27,8 @@ class RoleGrantReq(BaseModel):
     target_user_sub: str = Field(..., min_length=1)
     role: str = Field(default="admin")
     reason: str = Field(default="", max_length=500)
+    admin_profile_type: str = Field(default=AdminProfileType.GENERAL.value)
+    admin_scopes: list[str] = Field(default_factory=list)
 
 
 class RoleRevokeReq(BaseModel):
@@ -35,11 +37,105 @@ class RoleRevokeReq(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
+class RoleUpdateProfileReq(BaseModel):
+    target_user_sub: str = Field(..., min_length=1)
+    admin_profile_type: str = Field(default=AdminProfileType.GENERAL.value)
+    admin_scopes: list[str] = Field(default_factory=list)
+    reason: str = Field(default="", max_length=500)
+
+
+def _normalize_admin_profile_type(value: str | None) -> AdminProfileType | None:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        for profile_type in AdminProfileType:
+            if profile_type.value == normalized:
+                return profile_type
+    return None
+
+
+def _validate_admin_profile_input(*, admin_profile_type: str | None, admin_scopes: list[str] | None) -> Dict[str, Any]:
+    profile_type = _normalize_admin_profile_type(admin_profile_type)
+    if profile_type is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_admin_profile_type",
+                "allowed_profile_types": sorted([item.value for item in AdminProfileType]),
+            },
+        )
+
+    raw_scopes = admin_scopes or []
+    if profile_type is AdminProfileType.GENERAL:
+        if raw_scopes:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_admin_scopes",
+                    "reason": "general_profile_disallows_scopes",
+                },
+            )
+        return {"type": AdminProfileType.GENERAL.value}
+
+    normalized_scopes: list[AdminScope] = []
+    seen: set[AdminScope] = set()
+    duplicate_scopes: set[str] = set()
+    invalid_scopes: set[str] = set()
+
+    for raw_scope in raw_scopes:
+        scope = normalize_admin_scope(raw_scope)
+        if scope is None:
+            invalid_scopes.add(str(raw_scope).strip())
+            continue
+        if scope in seen:
+            duplicate_scopes.add(scope.value)
+            continue
+        seen.add(scope)
+        normalized_scopes.append(scope)
+
+    if invalid_scopes:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_admin_scopes",
+                "reason": "unknown_scope_values",
+                "invalid_scopes": sorted(s for s in invalid_scopes if s),
+                "allowed_scopes": sorted([scope.value for scope in AdminScope]),
+            },
+        )
+
+    if duplicate_scopes:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_admin_scopes",
+                "reason": "duplicate_scope_values",
+                "duplicate_scopes": sorted(duplicate_scopes),
+            },
+        )
+
+    if not normalized_scopes:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_admin_scopes",
+                "reason": "scoped_profile_requires_non_empty_scopes",
+            },
+        )
+
+    return {"type": AdminProfileType.SCOPED.value, "scopes": sorted([scope.value for scope in normalized_scopes])}
+
+
 def _load_user_or_404(user_sub: str) -> Dict[str, Any]:
     item = T.users.get_item(Key={"user_sub": user_sub}).get("Item")
     if not item:
         raise HTTPException(status_code=404, detail="target user not found")
     return item
+
+
+
+
+def _normalized_user_admin_profile(user_item: Dict[str, Any]) -> Dict[str, Any]:
+    return normalize_admin_profile(user_item.get("admin_profile")).to_dict()
 
 
 def _encode_cursor(last_key: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -70,6 +166,8 @@ def _persist_role_assignment_event(
     action: str,
     previous_role: Role,
     new_role: Role,
+    previous_admin_profile: Dict[str, Any] | None,
+    new_admin_profile: Dict[str, Any] | None,
     reason: str,
 ) -> Dict[str, Any]:
     ts = now_ts()
@@ -85,6 +183,8 @@ def _persist_role_assignment_event(
         "target_user_sub": target_user_sub,
         "previous_role": previous_role.value,
         "new_role": new_role.value,
+        "previous_admin_profile": previous_admin_profile,
+        "new_admin_profile": new_admin_profile,
         "reason": reason,
         "ip": client_ip_from_request(req),
         "request_id": request_id,
@@ -109,12 +209,19 @@ def grant_role(
         raise HTTPException(status_code=400, detail="only admin role is assignable via this endpoint")
 
     try:
+        admin_profile = _validate_admin_profile_input(admin_profile_type=body.admin_profile_type, admin_scopes=body.admin_scopes)
+    except HTTPException as exc:
+        audit_event("admin_role_grant_failed", actor.sub, req, outcome="error", target_user_sub=target, reason="invalid_admin_profile", status_code=exc.status_code)
+        raise
+
+    try:
         user = _load_user_or_404(target)
     except HTTPException as exc:
         audit_event("admin_role_grant_failed", actor.sub, req, outcome="error", target_user_sub=target, reason="target_not_found", status_code=exc.status_code)
         raise
 
     current = normalize_role(user.get("role"))
+    previous_admin_profile = _normalized_user_admin_profile(user)
     if current is Role.ROOT or target == (S.root_user_sub or "").strip():
         audit_event("admin_role_grant_failed", actor.sub, req, outcome="error", target_user_sub=target, reason="root_immutable", status_code=409)
         raise HTTPException(status_code=409, detail="cannot modify root role through admin grant API")
@@ -125,10 +232,11 @@ def grant_role(
     reason = (body.reason or "").strip()
     T.users.update_item(
         Key={"user_sub": target},
-        UpdateExpression="SET #role=:role, role_updated_at=:ts, role_updated_by=:by, role_reason=:reason",
+        UpdateExpression="SET #role=:role, admin_profile=:admin_profile, role_updated_at=:ts, role_updated_by=:by, role_reason=:reason",
         ExpressionAttributeNames={"#role": "role"},
         ExpressionAttributeValues={
             ":role": Role.ADMIN.value,
+            ":admin_profile": admin_profile,
             ":ts": now_ts(),
             ":by": actor.sub,
             ":reason": reason,
@@ -141,6 +249,8 @@ def grant_role(
         action="grant",
         previous_role=current,
         new_role=Role.ADMIN,
+        previous_admin_profile=previous_admin_profile,
+        new_admin_profile=admin_profile,
         reason=reason,
     )
     audit_event(
@@ -153,9 +263,80 @@ def grant_role(
         role=Role.ADMIN.value,
         previous_role=current.value,
         reason=reason,
+        admin_profile=admin_profile,
         role_audit_event_id=event["event_id"],
     )
-    return {"ok": True, "target_user_sub": target, "role": Role.ADMIN.value, "event_id": event["event_id"]}
+    return {"ok": True, "target_user_sub": target, "role": Role.ADMIN.value, "admin_profile": admin_profile, "event_id": event["event_id"]}
+
+
+@router.post("/update-profile")
+def update_role_profile(
+    body: RoleUpdateProfileReq,
+    req: Request,
+    _ctx: Dict[str, str] = Depends(require_ui_session),
+    actor: AuthenticatedUser = Depends(require_root),
+):
+    require_roles(actor, {Role.ROOT})
+    rate_limit_admin_action(actor.sub, "role_update_profile")
+    target = body.target_user_sub.strip()
+
+    try:
+        admin_profile = _validate_admin_profile_input(admin_profile_type=body.admin_profile_type, admin_scopes=body.admin_scopes)
+    except HTTPException as exc:
+        audit_event("admin_role_profile_update_failed", actor.sub, req, outcome="error", target_user_sub=target, reason="invalid_admin_profile", status_code=exc.status_code)
+        raise
+
+    try:
+        user = _load_user_or_404(target)
+    except HTTPException as exc:
+        audit_event("admin_role_profile_update_failed", actor.sub, req, outcome="error", target_user_sub=target, reason="target_not_found", status_code=exc.status_code)
+        raise
+
+    current = normalize_role(user.get("role"))
+    previous_admin_profile = _normalized_user_admin_profile(user)
+    if current is Role.ROOT or target == (S.root_user_sub or "").strip():
+        audit_event("admin_role_profile_update_failed", actor.sub, req, outcome="error", target_user_sub=target, reason="root_immutable", status_code=409)
+        raise HTTPException(status_code=409, detail="cannot modify root role through admin profile API")
+    if current is not Role.ADMIN:
+        audit_event("admin_role_profile_update_failed", actor.sub, req, outcome="error", target_user_sub=target, reason="target_not_admin", status_code=409)
+        raise HTTPException(status_code=409, detail="target user is not admin")
+
+    reason = (body.reason or "").strip()
+    T.users.update_item(
+        Key={"user_sub": target},
+        UpdateExpression="SET admin_profile=:admin_profile, role_updated_at=:ts, role_updated_by=:by, role_reason=:reason",
+        ExpressionAttributeValues={
+            ":admin_profile": admin_profile,
+            ":ts": now_ts(),
+            ":by": actor.sub,
+            ":reason": reason,
+        },
+    )
+    event = _persist_role_assignment_event(
+        req=req,
+        actor_sub=actor.sub,
+        target_user_sub=target,
+        action="update_profile",
+        previous_role=Role.ADMIN,
+        new_role=Role.ADMIN,
+        previous_admin_profile=previous_admin_profile,
+        new_admin_profile=admin_profile,
+        reason=reason,
+    )
+
+    audit_event(
+        "admin_role_profile_updated",
+        actor.sub,
+        req,
+        outcome="success",
+        target_user_sub=target,
+        actor_sub=actor.sub,
+        role=Role.ADMIN.value,
+        reason=reason,
+        admin_profile=admin_profile,
+        role_audit_event_id=event["event_id"],
+    )
+    return {"ok": True, "target_user_sub": target, "role": Role.ADMIN.value, "admin_profile": admin_profile, "event_id": event["event_id"]}
 
 
 @router.post("/revoke")
@@ -179,6 +360,7 @@ def revoke_role(
         raise
 
     current = normalize_role(user.get("role"))
+    previous_admin_profile = _normalized_user_admin_profile(user)
     if current is Role.ROOT or target == (S.root_user_sub or "").strip():
         audit_event("admin_role_revoke_failed", actor.sub, req, outcome="error", target_user_sub=target, reason="root_immutable", status_code=409)
         raise HTTPException(status_code=409, detail="cannot modify root role through admin revoke API")
@@ -189,7 +371,7 @@ def revoke_role(
     reason = (body.reason or "").strip()
     T.users.update_item(
         Key={"user_sub": target},
-        UpdateExpression="SET #role=:role, role_updated_at=:ts, role_updated_by=:by, role_reason=:reason",
+        UpdateExpression="SET #role=:role, role_updated_at=:ts, role_updated_by=:by, role_reason=:reason REMOVE admin_profile",
         ExpressionAttributeNames={"#role": "role"},
         ExpressionAttributeValues={
             ":role": Role.USER.value,
@@ -205,6 +387,8 @@ def revoke_role(
         action="revoke",
         previous_role=current,
         new_role=Role.USER,
+        previous_admin_profile=previous_admin_profile,
+        new_admin_profile=None,
         reason=reason,
     )
     audit_event(
@@ -268,6 +452,8 @@ def list_role_audit(
             "target_user_sub": it.get("target_user_sub"),
             "previous_role": it.get("previous_role"),
             "new_role": it.get("new_role"),
+            "previous_admin_profile": it.get("previous_admin_profile"),
+            "new_admin_profile": it.get("new_admin_profile"),
             "reason": it.get("reason"),
             "ip": it.get("ip"),
             "request_id": it.get("request_id"),
