@@ -160,6 +160,12 @@ def rate_limit_login_attempt(user_sub: str, ip: str) -> None:
     if not _bucket_limit(_ip_user(ip), "rl#login", S.login_attempt_max_per_window, S.login_attempt_window_seconds):
         raise HTTPException(429, "Too many login attempts; try again later")
 
+
+def rate_limit_admin_action(actor_sub: str, action: str) -> None:
+    sid = f"rl#admin#{action}"
+    if not _bucket_limit(actor_sub, sid, S.admin_action_max_per_window, S.admin_action_window_seconds):
+        raise HTTPException(429, "Too many privileged actions; try again later")
+
 def rate_limit_mfa_verify(user_sub: str, ip: str, factor: str) -> None:
     sid = f"rl#mfa_verify#{factor}"
     if not _bucket_limit(user_sub, sid, S.mfa_verify_max_per_window, S.mfa_verify_window_seconds):

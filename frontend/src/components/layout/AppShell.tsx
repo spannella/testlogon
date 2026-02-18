@@ -3,6 +3,7 @@ import { Outlet } from "react-router-dom";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
 import MobileNav from "./MobileNav";
+import ImpersonationBanner from "@/components/shared/ImpersonationBanner";
 import { PageTransition } from "@/components/shared/PageTransition";
 import { OfflineBanner } from "@/components/shared/OfflineBanner";
 import {
@@ -42,6 +43,7 @@ export default function AppShell() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <OfflineBanner />
         <Header onMobileMenuToggle={() => setMobileMenuOpen(true)} />
+        <ImpersonationBanner />
 
         <main id="main-content" className="flex-1 overflow-y-auto pb-16 md:pb-0">
           <PageTransition>
@@ -74,6 +76,7 @@ import {
   Shield,
   Settings,
   Bell,
+  UsersRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -111,6 +114,7 @@ const MOBILE_NAV_GROUPS = [
       { label: "Security", path: "/security", icon: Shield },
       { label: "Alerts", path: "/alerts", icon: Bell },
       { label: "Settings", path: "/settings", icon: Settings },
+      { label: "Role Mgmt", path: "/root/roles", icon: UsersRound },
     ],
   },
 ];

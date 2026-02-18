@@ -14,6 +14,7 @@ import {
   Shield,
   Bell,
   Settings,
+  UsersRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -43,6 +44,7 @@ const MORE_LINKS = [
   { label: "Security", path: "/security", icon: Shield },
   { label: "Alerts", path: "/alerts", icon: Bell },
   { label: "Settings", path: "/settings", icon: Settings },
+  { label: "Role Mgmt", path: "/root/roles", icon: UsersRound },
 ];
 
 // ─── MobileNav Component ────────────────────────────────────────

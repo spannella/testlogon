@@ -68,6 +68,8 @@ async def ui_session_start(
 ):
     if response is None:
         response = Response()
+    if user_sub == (S.root_user_sub or "").strip():
+        raise HTTPException(status_code=403, detail="Root login must use /auth/root/login")
     rate_limit_login_attempt(user_sub, client_ip_from_request(req))
     anomaly = record_login_anomaly(user_sub, client_ip_from_request(req))
     if anomaly.get("user_threshold_exceeded") or anomaly.get("ip_threshold_exceeded"):

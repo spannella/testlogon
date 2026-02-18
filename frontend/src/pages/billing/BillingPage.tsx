@@ -7,6 +7,7 @@ import { BillingOverview } from "./BillingOverview";
 import { PaymentMethods } from "./PaymentMethods";
 import { Ledger } from "./Ledger";
 import { Subscriptions } from "./Subscriptions";
+import ImpersonationRouteIndicator from "@/components/shared/ImpersonationRouteIndicator";
 
 const TAB_VALUES = ["usage", "overview", "methods", "ledger", "subscriptions"] as const;
 
@@ -33,6 +34,7 @@ export default function BillingPage() {
         title="Usage & Billing"
         description="Track file usage, limits, and billing details"
       />
+      <ImpersonationRouteIndicator area="billing" />
 
       <Tabs value={activeTab} onValueChange={setTab}>
         <TabsList>
