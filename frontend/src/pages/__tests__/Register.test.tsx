@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 
 import { ApiError } from "@/api/client";
 import Register from "@/pages/Register";
@@ -27,6 +28,13 @@ vi.mock("@/stores/authStore", () => ({
   }),
 }));
 
+
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: ReactNode }) => children,
+  Tooltip: ({ children }: { children: ReactNode }) => children,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => children,
+  TooltipContent: ({ children }: { children: ReactNode }) => children ?? null,
+}));
 const REGISTER_STORAGE_KEY = "register-pending";
 
 const renderRegister = (initialEntries: string[] = ["/register"]) =>
@@ -128,8 +136,7 @@ describe("Register page", () => {
   });
 
   it("disables submit when email is already used", async () => {
-    vi.useFakeTimers();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const user = userEvent.setup();
     mocks.registerEmailCheck.mockResolvedValueOnce({ status: "ok", available: false });
     renderRegister();
 
@@ -137,16 +144,13 @@ describe("Register page", () => {
       screen.getByLabelText(/email/i, { selector: "input[type='email']" }),
       "taken@example.com",
     );
-    vi.advanceTimersByTime(500);
 
     expect(await screen.findByText(/email is already in use/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /request access/i })).toBeDisabled();
-    vi.useRealTimers();
   });
 
   it("shows rate limit message when email checks are throttled", async () => {
-    vi.useFakeTimers();
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const user = userEvent.setup();
     mocks.registerEmailCheck.mockRejectedValueOnce(
       new ApiError(429, "Too many checks"),
     );
@@ -156,11 +160,9 @@ describe("Register page", () => {
       screen.getByLabelText(/email/i, { selector: "input[type='email']" }),
       "rate@example.com",
     );
-    vi.advanceTimersByTime(500);
 
     expect(
       await screen.findByText(/too many checks\. please wait before trying again\./i),
     ).toBeInTheDocument();
-    vi.useRealTimers();
   });
 });

@@ -1,5 +1,5 @@
 import { api } from "@/api/client";
-import type { FileListResp, FileEntry, ShareFileReq, SharedItem, OkResp } from "@/api/types";
+import type { FileListResp, FileEntry, ShareFileReq, SharedItem, OkResp, FileEncryptionMetadata, UsageSummaryResp, UsageDailyResp, UsageStorageResp } from "@/api/types";
 
 export const listFiles = (
   path = "/",
@@ -31,10 +31,19 @@ export const searchText = (q: string, limit = 50) =>
 export const createFolder = (path: string) =>
   api.post<OkResp>("/v1/fs/folder", { path });
 
-export const uploadFile = (file: File, path: string) => {
+export const uploadFile = (
+  file: File,
+  path: string,
+  opts?: { encrypted?: boolean; encMeta?: FileEncryptionMetadata | null },
+) => {
   const formData = new FormData();
   formData.append("file", file);
-  return api.upload<{ ok: boolean; path: string; size: number }>("/v1/fs/upload", formData, { path });
+  const params: Record<string, string> = { path };
+  if (opts?.encrypted) {
+    params.encrypted = "true";
+    params.enc_meta = JSON.stringify(opts.encMeta ?? {});
+  }
+  return api.upload<{ ok: boolean; path: string; size: number }>("/v1/fs/upload", formData, params);
 };
 
 export const deleteFile = (path: string) =>
@@ -67,10 +76,26 @@ export const getSharedWith = (path: string) =>
 export const downloadUrl = (path: string) =>
   `/v1/fs/download?path=${encodeURIComponent(path)}`;
 
+
+export const getUsageSummary = (period?: string) =>
+  api.get<UsageSummaryResp>("/v1/fs/usage/summary", period ? { period } : undefined);
+
+export const getUsageDaily = (opts?: { from?: string; to?: string }) =>
+  api.get<UsageDailyResp>("/v1/fs/usage/daily", {
+    ...(opts?.from ? { from: opts.from } : {}),
+    ...(opts?.to ? { to: opts.to } : {}),
+  });
+
+export const getUsageStorage = (topN?: number) =>
+  api.get<UsageStorageResp>("/v1/fs/usage/storage", topN ? { top_n: String(topN) } : undefined);
+
 // ── Preview & Thumbnail URLs ────────────────────────────────────
 
 export const previewUrl = (path: string) =>
   `/v1/fs/preview?path=${encodeURIComponent(path)}`;
+
+export const sharedPreviewUrl = (owner: string, path: string) =>
+  `/v1/fs/shared-preview?owner=${encodeURIComponent(owner)}&path=${encodeURIComponent(path)}`;
 
 export const thumbnailUrl = (path: string) =>
   `/v1/fs/thumbnail?path=${encodeURIComponent(path)}`;
@@ -95,6 +120,9 @@ export const listSharedFolder = (
 
 export const sharedDownloadUrl = (owner: string, path: string) =>
   `/v1/fs/shared-download?owner=${encodeURIComponent(owner)}&path=${encodeURIComponent(path)}`;
+
+export const getSharedFileInfo = (owner: string, path: string) =>
+  api.get<FileEntry>("/v1/fs/shared-info", { owner, path });
 
 // ── Bulk & Advanced ─────────────────────────────────────────────
 
@@ -130,6 +158,7 @@ export const fsPresignUpload = (path: string, contentType?: string) =>
     upload_url: string;
     bucket: string;
     key: string;
+    ticket_id: string;
     path: string;
     content_type: string;
   }>("/v1/fs/presign-upload", {
@@ -137,13 +166,33 @@ export const fsPresignUpload = (path: string, contentType?: string) =>
     content_type: contentType ?? null,
   });
 
-export const completeUpload = (path: string, key: string, contentType?: string) =>
+export const completeUpload = (
+  path: string,
+  key: string,
+  ticketId: string,
+  contentType?: string,
+  opts?: { encrypted?: boolean; encMeta?: FileEncryptionMetadata | null },
+) =>
   api.post<{ ok: boolean; path: string; size: number | null; content_type: string }>(
     "/v1/fs/complete-upload",
-    { path, key, content_type: contentType ?? null },
+    {
+      path,
+      key,
+      ticket_id: ticketId,
+      content_type: contentType ?? null,
+      encrypted: !!opts?.encrypted,
+      enc_meta: opts?.encrypted ? (opts.encMeta ?? {}) : null,
+    },
   );
 
 export const purgeDeleted = () =>
   api.post<{ ok: boolean; purged: number; skipped: number; errors: number }>(
     "/v1/fs/purge-deleted",
   );
+
+export const emitFileCryptoTelemetry = (body: {
+  event: "decrypt_failure" | "remembered_password_used";
+  path?: string;
+  reason?: "wrong_password" | "corrupted_metadata" | "crypto_error";
+  remembered_password_used?: boolean;
+}) => api.post<{ ok: boolean }>("/v1/fs/client-telemetry", body);
