@@ -592,6 +592,24 @@ function fmtMoney(cents, currency="usd") {
   return sign + v.toFixed(2) + " " + currency.toUpperCase();
 }
 
+function fmtMicros(micros, currency="usd") {
+  const sign = Number(micros||0) < 0 ? "-" : "";
+  const v = Math.abs(Number(micros||0)) / 1000000.0;
+  return sign + v.toFixed(4) + " " + currency.toUpperCase();
+}
+
+function currentPeriodIdUtc() {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2, "0")}`;
+}
+
+function utilizationClass(pct) {
+  const n = Number(pct||0);
+  if (n >= 95) return "bad";
+  if (n >= 70) return "warn";
+  return "ok";
+}
+
 function renderAlertRow(a) {
   const row = document.createElement("button");
   row.type = "button";
@@ -2323,6 +2341,8 @@ async function refreshKeys() {
       <div>
         <button ${k.revoked ? "disabled" : ""} data-kid="${escapeHtml(k.key_id)}">Revoke</button>
         <button ${k.revoked ? "disabled" : ""} data-kid="${escapeHtml(k.key_id)}" data-allow="${escapeHtml((k.allow_cidrs||[]).join(","))}" data-deny="${escapeHtml((k.deny_cidrs||[]).join(","))}">Edit IP rules</button>
+        <button ${k.revoked ? "disabled" : ""} data-kid="${escapeHtml(k.key_id)}">Edit limits</button>
+        <button data-kid="${escapeHtml(k.key_id)}">Usage</button>
       </div>
     `;
     const btns = row.querySelectorAll("button");
@@ -2330,12 +2350,21 @@ async function refreshKeys() {
       const kid = e.target.getAttribute("data-kid");
       await apiPost("/ui/api_keys/revoke", { key_id: kid });
       await refreshKeys();
+      await refreshApiUsageViews(true);
     };
     btns[1].onclick = async (e) => {
       const kid = e.target.getAttribute("data-kid");
       const allowCsv = e.target.getAttribute("data-allow") || "";
       const denyCsv = e.target.getAttribute("data-deny") || "";
       openIpRulesModal(kid, allowCsv, denyCsv);
+    };
+    btns[2].onclick = async (e) => {
+      const kid = e.target.getAttribute("data-kid");
+      await openKeyLimitsModal(kid);
+    };
+    btns[3].onclick = async (e) => {
+      const kid = e.target.getAttribute("data-kid");
+      await openKeyUsageModal(kid);
     };
     el.appendChild(row);
   });
@@ -2410,6 +2439,190 @@ function openCreateKeyModal() {
       }},
       { text: "Close", onClick: modalClose },
     ]
+  });
+}
+
+
+const apiUsageState = { routeCursor: null, keyCursor: null };
+
+async function refreshApiUsageSummary(period) {
+  const res = await apiGet(`/ui/api-usage/summary?period=${encodeURIComponent(period)}`);
+  const callsUsed = Number((res.totals||{}).calls_total || 0);
+  const spendUsed = Number((res.totals||{}).estimated_cost_micros || 0);
+  const callsLimit = Number((res.limits||{}).monthly_calls_limit || 0);
+  const spendLimit = Number((res.limits||{}).monthly_spend_micros_limit || 0);
+
+  const callsPct = callsLimit > 0 ? (callsUsed * 100.0 / callsLimit) : 0;
+  const spendPct = spendLimit > 0 ? (spendUsed * 100.0 / spendLimit) : 0;
+  const maxPct = Math.max(callsPct, spendPct);
+
+  const callsEl = document.getElementById("apiUsageCallsCard");
+  const spendEl = document.getElementById("apiUsageSpendCard");
+  const limitEl = document.getElementById("apiUsageLimitCard");
+  const remEl = document.getElementById("apiUsageRemainCard");
+  if (callsEl) { callsEl.className = `pill ${utilizationClass(callsPct)}`; callsEl.textContent = `Calls: ${callsUsed}`; }
+  if (spendEl) { spendEl.className = `pill ${utilizationClass(spendPct)}`; spendEl.textContent = `Spend: ${fmtMicros(spendUsed)}`; }
+  if (limitEl) { limitEl.className = `pill ${utilizationClass(maxPct)}`; limitEl.textContent = `Limits: calls ${callsLimit||"∞"}, spend ${spendLimit>0?fmtMicros(spendLimit):"∞"}`; }
+  if (remEl) {
+    remEl.className = `pill ${utilizationClass(maxPct)}`;
+    remEl.textContent = `Remaining: calls ${(res.remaining||{}).monthly_calls_remaining ?? "∞"}, spend ${((res.remaining||{}).monthly_spend_micros_remaining==null)?"∞":fmtMicros((res.remaining||{}).monthly_spend_micros_remaining)}`;
+  }
+}
+
+function renderUsageTableRows(tableId, items, idField) {
+  const tbody = document.querySelector(`#${tableId} tbody`);
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  (items||[]).forEach(it => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td class="mono">${escapeHtml(it[idField] || "")}</td><td>${Number(it.calls_total||0)}</td><td>${Number(it.request_units_total||0)}</td><td>${fmtMicros(Number(it.cost_subtotal_micros||0))}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+async function refreshApiUsageRoutes(period, append=false) {
+  const search = (document.getElementById("apiUsageRouteSearch")?.value || "").trim();
+  const sortBy = document.getElementById("apiUsageRouteSort")?.value || "cost_subtotal_micros";
+  const order = document.getElementById("apiUsageRouteOrder")?.value || "desc";
+  const cursor = append ? apiUsageState.routeCursor : null;
+  const q = new URLSearchParams({ period, sort_by: sortBy, order, limit: "50" });
+  if (search) q.set("search", search);
+  if (cursor) q.set("cursor", cursor);
+  const res = await apiGet(`/ui/api-usage/routes?${q.toString()}`);
+  const tbody = document.querySelector('#apiUsageRoutesTbl tbody');
+  if (!append && tbody) tbody.innerHTML = "";
+  const items = res.items || [];
+  if (append && tbody) {
+    items.forEach(it => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td class="mono">${escapeHtml(it.route_id||"")}</td><td>${Number(it.calls_total||0)}</td><td>${Number(it.request_units_total||0)}</td><td>${fmtMicros(Number(it.cost_subtotal_micros||0))}</td>`;
+      tbody.appendChild(tr);
+    });
+  } else {
+    renderUsageTableRows("apiUsageRoutesTbl", items, "route_id");
+  }
+  apiUsageState.routeCursor = res.next_cursor || null;
+  const moreBtn = document.getElementById("apiUsageRouteMoreBtn");
+  if (moreBtn) moreBtn.style.display = apiUsageState.routeCursor ? "" : "none";
+}
+
+async function refreshApiUsageKeys(period, append=false) {
+  const search = (document.getElementById("apiUsageKeySearch")?.value || "").trim();
+  const sortBy = document.getElementById("apiUsageKeySort")?.value || "cost_subtotal_micros";
+  const order = document.getElementById("apiUsageKeyOrder")?.value || "desc";
+  const cursor = append ? apiUsageState.keyCursor : null;
+  const q = new URLSearchParams({ period, sort_by: sortBy, order, limit: "50" });
+  if (search) q.set("search", search);
+  if (cursor) q.set("cursor", cursor);
+  const res = await apiGet(`/ui/api-usage/keys?${q.toString()}`);
+  const tbody = document.querySelector('#apiUsageKeysTbl tbody');
+  if (!append && tbody) tbody.innerHTML = "";
+  const items = res.items || [];
+  if (append && tbody) {
+    items.forEach(it => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td class="mono">${escapeHtml(it.api_key_id||"")}</td><td>${Number(it.calls_total||0)}</td><td>${Number(it.request_units_total||0)}</td><td>${fmtMicros(Number(it.cost_subtotal_micros||0))}</td>`;
+      tbody.appendChild(tr);
+    });
+  } else {
+    renderUsageTableRows("apiUsageKeysTbl", items, "api_key_id");
+  }
+  apiUsageState.keyCursor = res.next_cursor || null;
+  const moreBtn = document.getElementById("apiUsageKeyMoreBtn");
+  if (moreBtn) moreBtn.style.display = apiUsageState.keyCursor ? "" : "none";
+}
+
+async function refreshApiUsageViews(resetCursors=false) {
+  const periodInput = document.getElementById("apiUsagePeriod");
+  if (!periodInput) return;
+  if (!periodInput.value.trim()) periodInput.value = currentPeriodIdUtc();
+  const period = periodInput.value.trim();
+  if (!/^\d{4}-\d{2}$/.test(period)) throw new Error("Period must be YYYY-MM");
+
+  if (resetCursors) {
+    apiUsageState.routeCursor = null;
+    apiUsageState.keyCursor = null;
+  }
+  await ensureUiSession();
+  document.getElementById("apiUsageState").textContent = "Loading…";
+  try {
+    await refreshApiUsageSummary(period);
+    await refreshApiUsageRoutes(period, false);
+    await refreshApiUsageKeys(period, false);
+    document.getElementById("apiUsageState").textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    document.getElementById("apiUsageState").textContent = String(e);
+    throw e;
+  }
+}
+
+async function openKeyLimitsModal(keyId) {
+  const key = (await apiGet('/ui/api_keys')).keys.find(k => k.key_id === keyId) || { key_id: keyId, route_caps: {} };
+  const routesText = Object.entries(key.route_caps || {}).map(([rid, cap]) => `${rid}|${Number(cap.monthly_calls_cap||0)}|${Number(cap.monthly_spend_cap_micros||0)}`).join("\n");
+  modalShow({
+    title: `API Key Limits: ${escapeHtml(keyId)}`,
+    bodyHtml: `
+      <div class="muted">Set stricter key caps. Route caps format: <code class="mono">METHOD:/path|calls_cap|spend_cap_micros</code></div>
+      <input id="keyLimitCalls" class="mono" placeholder="monthly_calls_cap" value="${escapeHtml(String(key.monthly_calls_cap||0))}"/>
+      <input id="keyLimitSpend" class="mono" placeholder="monthly_spend_cap_micros" value="${escapeHtml(String(key.monthly_spend_cap_micros||0))}"/>
+      <textarea id="keyLimitRoutes" class="mono" rows="6" placeholder="GET:/ui/api_keys|100|1000000">${escapeHtml(routesText)}</textarea>
+      <div id="keyLimitErr" class="err" style="margin-top:8px;"></div>
+    `,
+    actions: [
+      { text: "Cancel", onClick: modalClose },
+      { text: "Save", onClick: async () => {
+          try {
+            const calls = Number(document.getElementById("keyLimitCalls").value || 0);
+            const spend = Number(document.getElementById("keyLimitSpend").value || 0);
+            if (!Number.isFinite(calls) || calls < 0 || !Number.isInteger(calls)) throw new Error("monthly_calls_cap must be a non-negative integer");
+            if (!Number.isFinite(spend) || spend < 0 || !Number.isInteger(spend)) throw new Error("monthly_spend_cap_micros must be a non-negative integer");
+
+            const routeCaps = {};
+            const lines = (document.getElementById("keyLimitRoutes").value || "").split(/\n/).map(x => x.trim()).filter(Boolean);
+            for (const line of lines) {
+              const parts = line.split("|").map(x => x.trim());
+              if (parts.length !== 3) throw new Error(`Invalid route cap line: ${line}`);
+              const [routeId, cRaw, sRaw] = parts;
+              const c = Number(cRaw);
+              const s = Number(sRaw);
+              if (!/^([A-Z]+):\/.+/.test(routeId)) throw new Error(`Invalid route_id: ${routeId}`);
+              if (!Number.isInteger(c) || c < 0 || !Number.isInteger(s) || s < 0) throw new Error(`Invalid caps for route ${routeId}`);
+              routeCaps[routeId] = { monthly_calls_cap: c, monthly_spend_cap_micros: s };
+            }
+
+            await apiPatch(`/ui/api_keys/${encodeURIComponent(keyId)}/limits`, {
+              monthly_calls_cap: calls,
+              monthly_spend_cap_micros: spend,
+              route_caps: routeCaps,
+            });
+            modalClose();
+            await refreshKeys();
+            await refreshApiUsageViews(true);
+          } catch (e) {
+            document.getElementById("keyLimitErr").textContent = String(e);
+          }
+      } }
+    ]
+  });
+}
+
+async function openKeyUsageModal(keyId) {
+  await ensureUiSession();
+  const period = (document.getElementById("apiUsagePeriod")?.value || currentPeriodIdUtc()).trim();
+  const u = await apiGet(`/ui/api_keys/${encodeURIComponent(keyId)}/usage?period=${encodeURIComponent(period)}`);
+  modalShow({
+    title: `API Key Usage: ${escapeHtml(keyId)}`,
+    bodyHtml: `
+      <div class="muted">Period ${escapeHtml(period)}</div>
+      <div class="row-inline" style="margin-top:8px; gap:8px; flex-wrap:wrap;">
+        <span class="pill">Calls ${Number((u.totals||{}).calls_total||0)}</span>
+        <span class="pill">Units ${Number((u.totals||{}).request_units_total||0)}</span>
+        <span class="pill">Spend ${fmtMicros(Number((u.totals||{}).cost_subtotal_micros||0))}</span>
+      </div>
+      <div class="muted" style="margin-top:8px;">Remaining calls: ${((u.remaining||{}).monthly_calls_remaining ?? "∞")}, remaining spend: ${((u.remaining||{}).monthly_spend_micros_remaining==null)?"∞":fmtMicros((u.remaining||{}).monthly_spend_micros_remaining)}</div>
+      <pre class="mono" style="white-space:pre-wrap; margin-top:10px;">${escapeHtml(JSON.stringify((u.limits||{}).route_caps || {}, null, 2))}</pre>
+    `,
+    actions: [{ text: "Close", onClick: modalClose }]
   });
 }
 
@@ -2524,6 +2737,7 @@ async function refreshAll() {
       refreshSessions(),
       refreshDevices(),
       refreshKeys(),
+      refreshApiUsageViews(true),
       refreshAccountStatus(),
       refreshAlertEmailSettings(),
       refreshPushUI(),
@@ -6967,7 +7181,11 @@ document.getElementById("totpAddBtn").onclick = async () => { await ensureUiSess
 
 document.getElementById("keysRefreshBtn").onclick = async () => { await refreshKeys(); };
 document.getElementById("keysCreateBtn").onclick = async () => { openCreateKeyModal(); };
-
+document.getElementById("apiUsageRefreshBtn").onclick = async () => { await refreshApiUsageViews(true); };
+document.getElementById("apiUsageRouteApplyBtn").onclick = async () => { await refreshApiUsageViews(true); };
+document.getElementById("apiUsageKeyApplyBtn").onclick = async () => { await refreshApiUsageViews(true); };
+document.getElementById("apiUsageRouteMoreBtn").onclick = async () => { await refreshApiUsageRoutes((document.getElementById("apiUsagePeriod")?.value||currentPeriodIdUtc()).trim(), true); };
+document.getElementById("apiUsageKeyMoreBtn").onclick = async () => { await refreshApiUsageKeys((document.getElementById("apiUsagePeriod")?.value||currentPeriodIdUtc()).trim(), true); };
 
 
 document.getElementById("alertSmsAddBtn").onclick = async () => {

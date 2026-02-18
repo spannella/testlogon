@@ -91,5 +91,120 @@ class TestAdminUsageRoutes(unittest.TestCase):
             self.assertEqual(admin_usage._require_admin_user("alice"), "alice")
 
 
+    def test_generate_api_usage_invoice_lines_route(self):
+        with (
+            patch.object(admin_usage, "_api_usage_table", return_value="tbl"),
+            patch.object(admin_usage, "generate_api_invoice_line_items_for_snapshot", return_value={"total_amount_micros": 120, "invoice_sk": "API_USAGE#INVOICE#2026-02#V0001"}) as fn,
+            patch.object(admin_usage, "audit_event") as audit,
+        ):
+            resp = admin_usage.generate_api_usage_invoice_lines(
+                admin_usage.GenerateApiInvoiceLinesIn(user_sub="u1", period_id="2026-02", snapshot_version=1, include_key_sublines=True),
+                req=None,
+                admin_user="admin",
+            )
+        self.assertEqual(resp["total_amount_micros"], 120)
+        fn.assert_called_once_with("tbl", user_sub="u1", period_id="2026-02", snapshot_version=1, include_key_sublines=True)
+        audit.assert_called_once()
+
+    def test_create_api_usage_adjustment_route(self):
+        with (
+            patch.object(admin_usage, "_api_usage_table", return_value="tbl"),
+            patch.object(admin_usage, "create_api_billing_adjustment", return_value={"ok": True, "signed_amount_micros": -50, "adjustment_id": "adj_1"}) as fn,
+            patch.object(admin_usage, "audit_event") as audit,
+        ):
+            resp = admin_usage.create_api_usage_billing_adjustment(
+                admin_usage.CreateApiBillingAdjustmentIn(
+                    user_sub="u1",
+                    period_id="2026-02",
+                    snapshot_version=1,
+                    adjustment_type="credit",
+                    amount_micros=50,
+                    reason="support",
+                ),
+                req=None,
+                admin_user="admin",
+            )
+        self.assertTrue(resp["ok"])
+        fn.assert_called_once_with("tbl", user_sub="u1", period_id="2026-02", snapshot_version=1, adjustment_type="credit", amount_micros=50, reason="support", reference_id=None)
+        audit.assert_called_once()
+
+    def test_export_api_usage_reconciliation_route(self):
+        with (
+            patch.object(admin_usage, "_api_usage_table", return_value="tbl"),
+            patch.object(admin_usage, "export_api_billing_reconciliation_report", return_value={"variance_vs_snapshot_micros": 0}) as fn,
+        ):
+            resp = admin_usage.export_api_usage_reconciliation(user_sub="u1", period_id="2026-02", snapshot_version=1, admin_user="admin")
+        self.assertEqual(resp["variance_vs_snapshot_micros"], 0)
+        fn.assert_called_once_with("tbl", user_sub="u1", period_id="2026-02", snapshot_version=1)
+
+    def test_run_api_usage_shadow_validation_route(self):
+        with (
+            patch.object(admin_usage, "_api_usage_table", return_value="tbl"),
+            patch.object(admin_usage, "run_api_billing_shadow_validation", return_value={"within_threshold": True, "variance_vs_expected_micros": 0}) as fn,
+            patch.object(admin_usage, "audit_event") as audit,
+        ):
+            resp = admin_usage.run_api_usage_shadow_validation(
+                admin_usage.RunApiBillingShadowValidationIn(
+                    user_sub="u1",
+                    period_id="2026-02",
+                    snapshot_version=1,
+                    expected_total_micros=100,
+                    variance_threshold_micros=5,
+                    sample_expected_by_route={"GET:/ui/api_keys": 100},
+                    cycle_id="cycle-1",
+                ),
+                req=None,
+                admin_user="admin",
+            )
+        self.assertTrue(resp["within_threshold"])
+        fn.assert_called_once_with(
+            "tbl",
+            user_sub="u1",
+            period_id="2026-02",
+            snapshot_version=1,
+            expected_total_micros=100,
+            variance_threshold_micros=5,
+            sample_expected_by_route={"GET:/ui/api_keys": 100},
+            cycle_id="cycle-1",
+        )
+        audit.assert_called_once()
+
+    def test_create_api_usage_cutover_signoff_route(self):
+        with (
+            patch.object(admin_usage, "_api_usage_table", return_value="tbl"),
+            patch.object(admin_usage, "record_api_billing_cutover_signoff", return_value={"ok": True, "signoff_sk": "API_USAGE#CUTOVER_SIGNOFF#2026-02#V0001"}) as fn,
+            patch.object(admin_usage, "audit_event") as audit,
+        ):
+            resp = admin_usage.create_api_usage_cutover_signoff(
+                admin_usage.ApiBillingCutoverSignoffIn(
+                    user_sub="u1",
+                    period_id="2026-02",
+                    snapshot_version=1,
+                    shadow_report_sk="API_USAGE#SHADOW_BILLING#2026-02#V0001#cycle-1",
+                    product_approved_by="prod.user",
+                    finance_approved_by="fin.user",
+                    engineering_approved_by="eng.user",
+                    cutover_criteria="shadow variance under threshold",
+                    rollback_criteria="rollback on drift",
+                ),
+                req=None,
+                admin_user="admin",
+            )
+        self.assertTrue(resp["ok"])
+        fn.assert_called_once_with(
+            "tbl",
+            user_sub="u1",
+            period_id="2026-02",
+            snapshot_version=1,
+            shadow_report_sk="API_USAGE#SHADOW_BILLING#2026-02#V0001#cycle-1",
+            product_approved_by="prod.user",
+            finance_approved_by="fin.user",
+            engineering_approved_by="eng.user",
+            cutover_criteria="shadow variance under threshold",
+            rollback_criteria="rollback on drift",
+        )
+        audit.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

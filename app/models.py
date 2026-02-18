@@ -304,6 +304,59 @@ class ApiKeyIpRulesReq(BaseModel):
     allow_cidrs: List[str] = Field(default_factory=list)
     deny_cidrs: List[str] = Field(default_factory=list)
 
+class ApiKeyRouteCapReq(BaseModel):
+    monthly_calls_cap: int = Field(default=0, ge=0)
+    monthly_spend_cap_micros: int = Field(default=0, ge=0)
+
+
+class ApiKeyLimitsPatchReq(BaseModel):
+    monthly_calls_cap: int = Field(default=0, ge=0)
+    monthly_spend_cap_micros: int = Field(default=0, ge=0)
+    route_caps: Dict[str, ApiKeyRouteCapReq] = Field(default_factory=dict)
+
+    @field_validator("route_caps")
+    @classmethod
+    def _validate_route_caps(cls, value: Dict[str, ApiKeyRouteCapReq]) -> Dict[str, ApiKeyRouteCapReq]:
+        out: Dict[str, ApiKeyRouteCapReq] = {}
+        for route_id, cap in (value or {}).items():
+            rid = (route_id or "").strip()
+            if not rid or ":" not in rid:
+                raise ValueError("route_caps keys must be route_id entries like METHOD:/path")
+            method, path = rid.split(":", 1)
+            method = method.upper()
+            if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+                raise ValueError(f"invalid route method in route_caps: {method}")
+            if not path.startswith("/"):
+                raise ValueError(f"invalid route path in route_caps: {path}")
+            out[f"{method}:{path}"] = cap
+        return out
+
+
+class ApiKeySelfLimitsReq(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    key_id: str = Field(validation_alias=AliasChoices("key_id", "api_key_id"))
+    monthly_calls_cap: int = Field(default=0, ge=0)
+    monthly_spend_cap_micros: int = Field(default=0, ge=0)
+    route_caps: Dict[str, ApiKeyRouteCapReq] = Field(default_factory=dict)
+
+    @field_validator("route_caps")
+    @classmethod
+    def _validate_route_caps(cls, value: Dict[str, ApiKeyRouteCapReq]) -> Dict[str, ApiKeyRouteCapReq]:
+        out: Dict[str, ApiKeyRouteCapReq] = {}
+        for route_id, cap in (value or {}).items():
+            rid = (route_id or "").strip()
+            if not rid or ":" not in rid:
+                raise ValueError("route_caps keys must be route_id entries like METHOD:/path")
+            method, path = rid.split(":", 1)
+            method = method.upper()
+            if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+                raise ValueError(f"invalid route method in route_caps: {method}")
+            if not path.startswith("/"):
+                raise ValueError(f"invalid route path in route_caps: {path}")
+            out[f"{method}:{path}"] = cap
+        return out
+
+
 class RevokeSessionReq(BaseModel):
     session_id: str
 

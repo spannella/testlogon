@@ -4,9 +4,9 @@ import os
 from pathlib import Path
 
 from app.auth.root_invariant import validate_startup_root_invariant
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.core.settings import Settings
@@ -15,6 +15,7 @@ from app.routers.ui_session import router as ui_session_router
 from app.routers.ui_mfa import router as ui_mfa_router
 from app.routers.mfa_devices import router as mfa_devices_router
 from app.routers.api_keys import router as api_keys_router
+from app.routers.api_usage import router as api_usage_router
 from app.routers.alerts import router as alerts_router
 from app.routers.account import router as account_router
 from app.routers.push import router as push_router
@@ -49,7 +50,29 @@ from app.routers.ups import router as ups_router
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
+from app.services.api_usage_metering import record_api_usage_from_response, enforce_account_quota_pre_request
+from app.services.api_metering_policy import build_limit_denial_headers
 
+
+def _api_usage_metering_middleware():
+    async def _middleware(request: Request, call_next):
+        quota_headers = {}
+        try:
+            quota_headers = enforce_account_quota_pre_request(request)
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {"code": "api_limit_exceeded"}
+            headers = build_limit_denial_headers(detail)
+            return JSONResponse(status_code=int(exc.status_code or 429), content={"detail": detail}, headers=headers)
+
+        response = await call_next(request)
+        for k, v in quota_headers.items():
+            response.headers.setdefault(k, v)
+        try:
+            record_api_usage_from_response(request, response.status_code)
+        except Exception:
+            pass
+        return response
+    return _middleware
 
 def _security_headers_middleware(default_csp: str):
     async def _middleware(request: Request, call_next):
@@ -98,6 +121,7 @@ def create_app() -> FastAPI:
         return FileResponse(static_dir / "index.html")
 
     app.add_middleware(CORSMiddleware, **_build_cors_options())
+    app.middleware("http")(_api_usage_metering_middleware())
     if METRICS_ENABLED:
         app.middleware("http")(metrics_middleware)
         set_app_info(app.title, app.version)
@@ -107,6 +131,7 @@ def create_app() -> FastAPI:
     app.include_router(ui_mfa_router)
     app.include_router(mfa_devices_router)
     app.include_router(api_keys_router)
+    app.include_router(api_usage_router)
     app.include_router(alerts_router)
     app.include_router(account_router)
     app.include_router(push_router)
