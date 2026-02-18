@@ -25,9 +25,10 @@ interface ShareDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   filePath: string;
+  isEncrypted?: boolean;
 }
 
-export function ShareDialog({ open, onOpenChange, filePath }: ShareDialogProps) {
+export function ShareDialog({ open, onOpenChange, filePath, isEncrypted = false }: ShareDialogProps) {
   const [userId, setUserId] = React.useState("");
   const [permission, setPermission] = React.useState<"read" | "write">("read");
   const queryClient = useQueryClient();
@@ -64,6 +65,11 @@ export function ShareDialog({ open, onOpenChange, filePath }: ShareDialogProps) 
 
         <div className="space-y-4 py-2">
           <p className="text-xs text-muted-foreground font-mono truncate">{filePath}</p>
+          {isEncrypted && (
+            <div className="rounded-md border border-amber-300/70 bg-amber-50 p-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
+              This file is encrypted. Recipients will need the password to open it. Share the password via a separate channel.
+            </div>
+          )}
 
           {/* Add share */}
           <div className="flex items-end gap-2">

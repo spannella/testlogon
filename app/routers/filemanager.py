@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from typing import Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile, Body, Request, HTTPException
@@ -19,6 +20,8 @@ from app.services.filemanager import (
     list_shared_with,
     list_shared_with_me,
     move_node,
+    resume_move,
+    rollback_move,
     norm_path,
     remove_file,
     remove_folder,
@@ -28,14 +31,30 @@ from app.services.filemanager import (
     split_parent_name,
     upload_file,
     upload_zip,
+    upload_archive,
     get_node,
     search_text,
     presign_upload,
     register_presigned_upload,
     purge_deleted_nodes,
     require_shared_access,
+    encryption_info_from_node,
+    preview_capability_from_node,
+    record_download_usage,
+    get_usage_summary,
+    get_usage_daily,
+    get_usage_storage,
+    assert_download_allowed,
 )
 from app.services.alerts import audit_event
+from app.metrics import (
+    record_filemgr_encryption_event,
+    record_filemgr_shared_download,
+    record_filemgr_preview_attempt,
+    record_filemgr_preview_latency,
+    record_filemgr_preview_bytes,
+    record_filemgr_preview_fallback,
+)
 from app.services.purchase_history import record_receipt_download
 from app.services.sessions import require_ui_session
 
@@ -63,6 +82,20 @@ def _current_user(ctx=Depends(require_ui_session)) -> str:
     return ctx["user_sub"]
 
 
+def _parse_encryption_meta(raw: Optional[str]) -> Optional[Dict[str, Any]]:
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str):
+        return None
+    try:
+        obj = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="invalid encryption metadata") from exc
+    if not isinstance(obj, dict):
+        raise HTTPException(status_code=400, detail="invalid encryption metadata")
+    return obj
+
+
 class PresignUploadIn(BaseModel):
     path: str = Field(..., description="Full file path, e.g. /docs/a.txt")
     content_type: Optional[str] = Field(default=None, description="Optional content type")
@@ -72,6 +105,7 @@ class PresignUploadOut(BaseModel):
     upload_url: str
     bucket: str
     key: str
+    ticket_id: str
     path: str
     content_type: str
 
@@ -79,7 +113,21 @@ class PresignUploadOut(BaseModel):
 class CompleteUploadIn(BaseModel):
     path: str = Field(..., description="Full file path, e.g. /docs/a.txt")
     key: str = Field(..., description="S3 object key from presign response")
+    ticket_id: str = Field(..., description="Upload ticket id from presign response")
     content_type: Optional[str] = Field(default=None, description="Optional content type override")
+    encrypted: bool = Field(default=False, description="Whether payload was client-side encrypted")
+    enc_meta: Optional[Dict[str, Any]] = Field(default=None, description="Client-side encryption metadata")
+
+
+class MoveCheckpointIn(BaseModel):
+    move_id: str = Field(..., description="Move checkpoint id")
+
+
+class FileCryptoTelemetryIn(BaseModel):
+    event: str = Field(..., pattern="^(decrypt_failure|remembered_password_used)$")
+    path: Optional[str] = Field(default=None)
+    reason: Optional[str] = Field(default=None, pattern="^(wrong_password|corrupted_metadata|crypto_error)?$")
+    remembered_password_used: bool = Field(default=False)
 
 
 @router.get("/list")
@@ -129,6 +177,9 @@ def list_files(
                 "name": it["name"],
                 "size": it.get("size"),
                 "updated_at": it.get("updated_at"),
+                "content_type": it.get("content_type"),
+                **encryption_info_from_node(it),
+                **preview_capability_from_node(it),
             })
     if sort_by == "updated":
         out.sort(key=lambda x: (x["type"] != "folder", x.get("updated_at") or ""), reverse=not scan_forward)
@@ -157,6 +208,8 @@ def list_files(
 def file_info(path: str = Query(...), user: str = Depends(_current_user)):
     p = norm_path(path, is_folder=None)
     it = get_node(user, p if p.endswith("/") else p)
+    encryption_info = encryption_info_from_node(it)
+    preview_info = preview_capability_from_node(it)
     return {
         "path": it["path"],
         "type": it["type"],
@@ -173,6 +226,8 @@ def file_info(path: str = Query(...), user: str = Depends(_current_user)):
         "thumbnail": it.get("thumbnail"),
         "content_type": it.get("content_type"),
         "shared": it.get("shared", False),
+        **encryption_info,
+        **preview_info,
     }
 
 
@@ -205,10 +260,14 @@ def create_folder(path: str = Body(..., embed=True), req: Request = None, user: 
 def upload_fs_file(
     path: str = Query(..., description="Full file path, e.g. /docs/a.txt"),
     file: UploadFile = File(...),
+    encrypted: bool = Query(False),
+    enc_meta: Optional[str] = Query(default=None, description="JSON encryption metadata"),
     req: Request = None,
     user: str = Depends(_current_user),
 ):
-    result = upload_file(user, path, file)
+    encrypted_flag = encrypted if isinstance(encrypted, bool) else False
+    encryption_meta = _parse_encryption_meta(enc_meta) if encrypted_flag else None
+    result = upload_file(user, path, file, encryption_meta=encryption_meta)
     audit_event(
         "filemgr_file_uploaded",
         user,
@@ -217,7 +276,9 @@ def upload_fs_file(
         path=result.get("path"),
         size=result.get("size"),
         content_type=file.content_type,
+        encrypted_upload=encrypted_flag,
     )
+    record_filemgr_encryption_event("upload", encrypted=encrypted_flag)
     return {"ok": True, **result}
 
 
@@ -228,6 +289,7 @@ def presign_fs_upload(inp: PresignUploadIn, user: str = Depends(_current_user)):
         upload_url=result["upload_url"],
         bucket=result["bucket"],
         key=result["key"],
+        ticket_id=result["ticket_id"],
         path=result["path"],
         content_type=result["content_type"],
     )
@@ -235,7 +297,14 @@ def presign_fs_upload(inp: PresignUploadIn, user: str = Depends(_current_user)):
 
 @router.post("/complete-upload")
 def complete_fs_upload(inp: CompleteUploadIn, req: Request = None, user: str = Depends(_current_user)):
-    result = register_presigned_upload(user, inp.path, s3_key=inp.key, content_type=inp.content_type)
+    result = register_presigned_upload(
+        user,
+        inp.path,
+        s3_key=inp.key,
+        ticket_id=inp.ticket_id,
+        content_type=inp.content_type,
+        encryption_meta=inp.enc_meta if inp.encrypted else None,
+    )
     audit_event(
         "filemgr_file_uploaded",
         user,
@@ -244,13 +313,16 @@ def complete_fs_upload(inp: CompleteUploadIn, req: Request = None, user: str = D
         path=result.get("path"),
         size=result.get("size"),
         content_type=result.get("content_type"),
+        encrypted_upload=inp.encrypted,
     )
+    record_filemgr_encryption_event("upload", encrypted=inp.encrypted)
     return {"ok": True, **result}
 
 
 @router.get("/download")
 def download_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
     result = download_file(user, path)
+    assert_download_allowed(user, requested_bytes=int(result["node"].get("size") or 0))
     node = result["node"]
     obj = result["object"]
     audit_event(
@@ -260,7 +332,9 @@ def download_fs_file(path: str = Query(...), req: Request = None, user: str = De
         outcome="success",
         path=node.get("path"),
         size=node.get("size"),
+        encrypted_download_attempt=bool(node.get("is_encrypted")),
     )
+    record_filemgr_encryption_event("download_attempt", encrypted=bool(node.get("is_encrypted")))
     receipt_path = norm_path(path, is_folder=False)
     if receipt_path.startswith("/billing/receipts/") and receipt_path.lower().endswith(".pdf"):
         _, name = split_parent_name(receipt_path)
@@ -270,11 +344,15 @@ def download_fs_file(path: str = Query(...), req: Request = None, user: str = De
 
     def gen():
         body = obj["Body"]
+        sent = 0
         while True:
             chunk = body.read(1024 * 1024)
             if not chunk:
                 break
+            sent += len(chunk)
             yield chunk
+        request_id = req.headers.get("X-Request-Id") if req else None
+        record_download_usage(user, path, sent, source="download", request_id=request_id)
 
     return StreamingResponse(
         gen(),
@@ -288,10 +366,29 @@ def download_fs_file(path: str = Query(...), req: Request = None, user: str = De
 
 @router.get("/preview")
 def preview_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
+    started = time.perf_counter()
     result = download_file(user, path)
     node = result["node"]
     obj = result["object"]
+    preview_info = preview_capability_from_node(node)
+    preview_kind = preview_info.get("preview_kind", "none")
     if not is_previewable(node):
+        reason = preview_info.get("preview_reason") or "unsupported_type"
+        audit_event(
+            "filemgr_file_previewed",
+            user,
+            req,
+            outcome="fallback",
+            path=node.get("path"),
+            size=node.get("size"),
+            preview_kind=preview_kind,
+            preview_supported=False,
+            preview_reason=reason,
+            is_encrypted=bool(node.get("is_encrypted")),
+        )
+        record_filemgr_preview_attempt(kind=preview_kind, outcome="fallback", reason=reason)
+        record_filemgr_preview_fallback(kind=preview_kind, reason=reason)
+        record_filemgr_preview_latency(kind=preview_kind, elapsed_seconds=time.perf_counter() - started)
         raise HTTPException(status_code=415, detail="preview not available for this file type")
     audit_event(
         "filemgr_file_previewed",
@@ -300,7 +397,14 @@ def preview_fs_file(path: str = Query(...), req: Request = None, user: str = Dep
         outcome="success",
         path=node.get("path"),
         size=node.get("size"),
+        preview_kind=preview_kind,
+        preview_supported=True,
+        preview_reason="none",
+        is_encrypted=bool(node.get("is_encrypted")),
     )
+    record_filemgr_preview_attempt(kind=preview_kind, outcome="success", reason="none")
+    record_filemgr_preview_bytes(kind=preview_kind, nbytes=int(node.get("size") or 0))
+    record_filemgr_preview_latency(kind=preview_kind, elapsed_seconds=time.perf_counter() - started)
 
     def gen():
         body = obj["Body"]
@@ -319,10 +423,46 @@ def preview_fs_file(path: str = Query(...), req: Request = None, user: str = Dep
 
 @router.get("/thumbnail")
 def thumbnail_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
+    started = time.perf_counter()
     result = download_thumbnail(user, path)
     node = result["node"]
+    preview_info = preview_capability_from_node(node)
+    preview_kind = preview_info.get("preview_kind", "none")
+    if node.get("is_encrypted"):
+        reason = preview_info.get("preview_reason") or "encrypted"
+        audit_event(
+            "filemgr_file_thumbnailed",
+            user,
+            req,
+            outcome="fallback",
+            path=node.get("path"),
+            size=node.get("size"),
+            preview_kind=preview_kind,
+            preview_supported=False,
+            preview_reason=reason,
+            is_encrypted=True,
+        )
+        record_filemgr_preview_attempt(kind=preview_kind, outcome="fallback", reason=reason)
+        record_filemgr_preview_fallback(kind=preview_kind, reason=reason)
+        record_filemgr_preview_latency(kind=preview_kind, elapsed_seconds=time.perf_counter() - started)
+        raise HTTPException(status_code=415, detail="thumbnail not available for encrypted files")
     thumb = result["thumbnail"]
     obj = result["object"]
+    audit_event(
+        "filemgr_file_thumbnailed",
+        user,
+        req,
+        outcome="success",
+        path=node.get("path"),
+        size=node.get("size"),
+        preview_kind=preview_kind,
+        preview_supported=True,
+        preview_reason="none",
+        is_encrypted=bool(node.get("is_encrypted")),
+    )
+    record_filemgr_preview_attempt(kind=preview_kind, outcome="success", reason="none")
+    record_filemgr_preview_bytes(kind=preview_kind, nbytes=int(node.get("size") or 0))
+    record_filemgr_preview_latency(kind=preview_kind, elapsed_seconds=time.perf_counter() - started)
 
     def gen():
         body = obj["Body"]
@@ -380,6 +520,36 @@ def move_fs_node(
     return {"ok": True, **result}
 
 
+@router.post("/move-resume")
+def resume_fs_move(inp: MoveCheckpointIn, req: Request = None, user: str = Depends(_current_user)):
+    result = resume_move(user, inp.move_id)
+    audit_event(
+        "filemgr_move_resumed",
+        user,
+        req,
+        outcome="success",
+        move_id=inp.move_id,
+        moved_now=result.get("moved_now"),
+        already_done=result.get("already_done"),
+    )
+    return {"ok": True, **result}
+
+
+@router.post("/move-rollback")
+def rollback_fs_move(inp: MoveCheckpointIn, req: Request = None, user: str = Depends(_current_user)):
+    result = rollback_move(user, inp.move_id)
+    audit_event(
+        "filemgr_move_rolled_back",
+        user,
+        req,
+        outcome="success",
+        move_id=inp.move_id,
+        moved_now=result.get("moved_now"),
+        already_done=result.get("already_done"),
+    )
+    return {"ok": True, **result}
+
+
 @router.post("/rename-file")
 def rename_file(
     path: str = Body(..., embed=True),
@@ -426,6 +596,7 @@ def rename_folder(
 @router.post("/download-zip")
 def download_multiple_as_zip(paths: List[str] = Body(...), req: Request = None, user: str = Depends(_current_user)):
     result = download_zip(user, paths)
+    assert_download_allowed(user, requested_bytes=0)
     if isinstance(result, tuple):
         zip_stream, file_count = result
     else:
@@ -439,8 +610,16 @@ def download_multiple_as_zip(paths: List[str] = Body(...), req: Request = None, 
         count=file_count or 0,
     )
 
+    def metered_zip_stream():
+        sent = 0
+        for chunk in zip_stream:
+            sent += len(chunk)
+            yield chunk
+        request_id = req.headers.get("X-Request-Id") if req else None
+        record_download_usage(user, "/_zip/download.zip", sent, source="download_zip", request_id=request_id)
+
     return StreamingResponse(
-        zip_stream,
+        metered_zip_stream(),
         media_type="application/zip",
         headers={"Content-Disposition": 'attachment; filename="download.zip"'},
     )
@@ -461,6 +640,26 @@ def upload_zip_and_extract(
         outcome="success",
         dest_folder=dest_folder,
         count=len(created),
+    )
+    return {"ok": True, "created": created, "count": len(created)}
+
+
+@router.post("/upload-archive")
+def upload_archive_and_extract(
+    dest_folder: str = Query("/", description="Folder to extract into"),
+    archive_file: UploadFile = File(...),
+    req: Request = None,
+    user: str = Depends(_current_user),
+):
+    created = upload_archive(user, dest_folder, archive_file)
+    audit_event(
+        "filemgr_archive_uploaded",
+        user,
+        req,
+        outcome="success",
+        dest_folder=dest_folder,
+        count=len(created),
+        filename=archive_file.filename,
     )
     return {"ok": True, "created": created, "count": len(created)}
 
@@ -559,6 +758,9 @@ def list_shared_files(
                 "name": it["name"],
                 "size": it.get("size"),
                 "updated_at": it.get("updated_at"),
+                "content_type": it.get("content_type"),
+                **encryption_info_from_node(it),
+                **preview_capability_from_node(it),
             })
     if sort_by == "updated":
         out.sort(key=lambda x: (x["type"] != "folder", x.get("updated_at") or ""), reverse=not scan_forward)
@@ -592,6 +794,8 @@ def shared_file_info(
     require_shared_access(user, owner, path, permission="read")
     p = norm_path(path, is_folder=None)
     it = get_node(owner, p if p.endswith("/") else p)
+    encryption_info = encryption_info_from_node(it)
+    preview_info = preview_capability_from_node(it)
     return {
         "path": it["path"],
         "type": it["type"],
@@ -608,6 +812,8 @@ def shared_file_info(
         "thumbnail": it.get("thumbnail"),
         "content_type": it.get("content_type"),
         "shared": it.get("shared", False),
+        **encryption_info,
+        **preview_info,
     }
 
 
@@ -620,8 +826,10 @@ def shared_download_fs_file(
 ):
     require_shared_access(user, owner, path, permission="read")
     result = download_file(owner, path)
+    assert_download_allowed(user, requested_bytes=int(result["node"].get("size") or 0))
     node = result["node"]
     obj = result["object"]
+    is_encrypted = bool(node.get("is_encrypted"))
     audit_event(
         "filemgr_file_downloaded",
         user,
@@ -630,15 +838,24 @@ def shared_download_fs_file(
         path=node.get("path"),
         size=node.get("size"),
         owner=owner,
+        encrypted_download_attempt=is_encrypted,
+        encrypted_shared_access_attempt=is_encrypted,
+        share_scope="direct",
     )
+    record_filemgr_encryption_event("download_attempt", encrypted=is_encrypted)
+    record_filemgr_shared_download(encrypted=is_encrypted, outcome="attempt")
 
     def gen():
         body = obj["Body"]
+        sent = 0
         while True:
             chunk = body.read(1024 * 1024)
             if not chunk:
                 break
+            sent += len(chunk)
             yield chunk
+        request_id = req.headers.get("X-Request-Id") if req else None
+        record_download_usage(user, path, sent, source="shared_download", request_id=request_id)
 
     return StreamingResponse(
         gen(),
@@ -657,11 +874,33 @@ def shared_preview_fs_file(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    started = time.perf_counter()
     require_shared_access(user, owner, path, permission="read")
     result = download_file(owner, path)
     node = result["node"]
     obj = result["object"]
+    preview_info = preview_capability_from_node(node)
+    preview_kind = preview_info.get("preview_kind", "none")
     if not is_previewable(node):
+        reason = preview_info.get("preview_reason") or "unsupported_type"
+        audit_event(
+            "filemgr_file_previewed",
+            user,
+            req,
+            outcome="fallback",
+            path=node.get("path"),
+            size=node.get("size"),
+            owner=owner,
+            encrypted_shared_access_attempt=bool(node.get("is_encrypted")),
+            share_scope="direct",
+            preview_kind=preview_kind,
+            preview_supported=False,
+            preview_reason=reason,
+            is_encrypted=bool(node.get("is_encrypted")),
+        )
+        record_filemgr_preview_attempt(kind=preview_kind, outcome="fallback", reason=reason)
+        record_filemgr_preview_fallback(kind=preview_kind, reason=reason)
+        record_filemgr_preview_latency(kind=preview_kind, elapsed_seconds=time.perf_counter() - started)
         raise HTTPException(status_code=415, detail="preview not available for this file type")
     audit_event(
         "filemgr_file_previewed",
@@ -671,7 +910,16 @@ def shared_preview_fs_file(
         path=node.get("path"),
         size=node.get("size"),
         owner=owner,
+        encrypted_shared_access_attempt=bool(node.get("is_encrypted")),
+        share_scope="direct",
+        preview_kind=preview_kind,
+        preview_supported=True,
+        preview_reason="none",
+        is_encrypted=bool(node.get("is_encrypted")),
     )
+    record_filemgr_preview_attempt(kind=preview_kind, outcome="success", reason="none")
+    record_filemgr_preview_bytes(kind=preview_kind, nbytes=int(node.get("size") or 0))
+    record_filemgr_preview_latency(kind=preview_kind, elapsed_seconds=time.perf_counter() - started)
 
     def gen():
         body = obj["Body"]
@@ -692,13 +940,50 @@ def shared_preview_fs_file(
 def shared_thumbnail_fs_file(
     owner: str = Query(...),
     path: str = Query(...),
+    req: Request = None,
     user: str = Depends(_current_user),
 ):
+    started = time.perf_counter()
     require_shared_access(user, owner, path, permission="read")
     result = download_thumbnail(owner, path)
     node = result["node"]
+    preview_info = preview_capability_from_node(node)
+    preview_kind = preview_info.get("preview_kind", "none")
+    if node.get("is_encrypted"):
+        reason = preview_info.get("preview_reason") or "encrypted"
+        audit_event(
+            "filemgr_file_thumbnailed",
+            user,
+            req,
+            outcome="fallback",
+            path=node.get("path"),
+            size=node.get("size"),
+            preview_kind=preview_kind,
+            preview_supported=False,
+            preview_reason=reason,
+            is_encrypted=True,
+        )
+        record_filemgr_preview_attempt(kind=preview_kind, outcome="fallback", reason=reason)
+        record_filemgr_preview_fallback(kind=preview_kind, reason=reason)
+        record_filemgr_preview_latency(kind=preview_kind, elapsed_seconds=time.perf_counter() - started)
+        raise HTTPException(status_code=415, detail="thumbnail not available for encrypted files")
     thumb = result["thumbnail"]
     obj = result["object"]
+    audit_event(
+        "filemgr_file_thumbnailed",
+        user,
+        req,
+        outcome="success",
+        path=node.get("path"),
+        size=node.get("size"),
+        preview_kind=preview_kind,
+        preview_supported=True,
+        preview_reason="none",
+        is_encrypted=bool(node.get("is_encrypted")),
+    )
+    record_filemgr_preview_attempt(kind=preview_kind, outcome="success", reason="none")
+    record_filemgr_preview_bytes(kind=preview_kind, nbytes=int(node.get("size") or 0))
+    record_filemgr_preview_latency(kind=preview_kind, elapsed_seconds=time.perf_counter() - started)
 
     def gen():
         body = obj["Body"]
@@ -823,11 +1108,15 @@ def upload_shared_file(
     owner: str = Query(...),
     path: str = Query(..., description="Full file path, e.g. /docs/a.txt"),
     file: UploadFile = File(...),
+    encrypted: bool = Query(False),
+    enc_meta: Optional[str] = Query(default=None, description="JSON encryption metadata"),
     req: Request = None,
     user: str = Depends(_current_user),
 ):
     require_shared_access(user, owner, path, permission="write")
-    result = upload_file(owner, path, file)
+    encrypted_flag = encrypted if isinstance(encrypted, bool) else False
+    encryption_meta = _parse_encryption_meta(enc_meta) if encrypted_flag else None
+    result = upload_file(owner, path, file, encryption_meta=encryption_meta)
     audit_event(
         "filemgr_file_uploaded",
         user,
@@ -837,8 +1126,38 @@ def upload_shared_file(
         size=result.get("size"),
         content_type=file.content_type,
         owner=owner,
+        encrypted_upload=encrypted_flag,
     )
+    record_filemgr_encryption_event("upload", encrypted=encrypted_flag)
     return {"ok": True, **result}
+
+
+@router.post("/client-telemetry")
+def file_crypto_client_telemetry(inp: FileCryptoTelemetryIn, req: Request = None, user: str = Depends(_current_user)):
+    if inp.event == "decrypt_failure":
+        reason = inp.reason or "crypto_error"
+        audit_event(
+            "filemgr_client_decrypt_failure",
+            user,
+            req,
+            outcome="failure",
+            reason=reason,
+            path=inp.path,
+            remembered_password_used=inp.remembered_password_used,
+        )
+        record_filemgr_encryption_event("decrypt_failure", encrypted=True, reason=reason)
+        return {"ok": True}
+
+    audit_event(
+        "filemgr_client_remembered_password_used",
+        user,
+        req,
+        outcome="success",
+        path=inp.path,
+        remembered_password_used=inp.remembered_password_used,
+    )
+    record_filemgr_encryption_event("remembered_password_used", encrypted=True)
+    return {"ok": True}
 
 
 @router.post("/shared-upload-zip")
@@ -863,6 +1182,29 @@ def upload_shared_zip(
     return {"ok": True, "paths": created}
 
 
+@router.post("/shared-upload-archive")
+def upload_shared_archive(
+    owner: str = Query(...),
+    dest_folder: str = Query(..., description="Destination folder"),
+    archive_file: UploadFile = File(...),
+    req: Request = None,
+    user: str = Depends(_current_user),
+):
+    require_shared_access(user, owner, dest_folder, permission="write")
+    created = upload_archive(owner, dest_folder, archive_file)
+    audit_event(
+        "filemgr_archive_uploaded",
+        user,
+        req,
+        outcome="success",
+        path=dest_folder,
+        count=len(created),
+        owner=owner,
+        filename=archive_file.filename,
+    )
+    return {"ok": True, "paths": created}
+
+
 @router.post("/shared-download-zip")
 def shared_download_zip(
     owner: str = Query(...),
@@ -873,6 +1215,7 @@ def shared_download_zip(
     for path in paths:
         require_shared_access(user, owner, path, permission="read")
     zf, count = download_zip(owner, paths)
+    assert_download_allowed(user, requested_bytes=0)
     audit_event(
         "filemgr_download_zip",
         user,
@@ -882,11 +1225,44 @@ def shared_download_zip(
         count=count,
         owner=owner,
     )
+    def metered_shared_zip_stream():
+        sent = 0
+        for chunk in zf:
+            sent += len(chunk)
+            yield chunk
+        request_id = req.headers.get("X-Request-Id") if req else None
+        record_download_usage(user, "/_zip/shared-download.zip", sent, source="shared_download_zip", request_id=request_id)
+
     return StreamingResponse(
-        zf,
+        metered_shared_zip_stream(),
         media_type="application/zip",
         headers={"Content-Disposition": "attachment; filename=download.zip"},
     )
+
+
+@router.get("/usage/summary")
+def usage_summary(
+    period: Optional[str] = Query(default=None, description="Billing period YYYY-MM in UTC"),
+    user: str = Depends(_current_user),
+):
+    return get_usage_summary(user, period_id=period)
+
+
+@router.get("/usage/daily")
+def usage_daily(
+    from_day: Optional[str] = Query(default=None, alias="from", description="Start date YYYY-MM-DD UTC"),
+    to_day: Optional[str] = Query(default=None, alias="to", description="End date YYYY-MM-DD UTC"),
+    user: str = Depends(_current_user),
+):
+    return get_usage_daily(user, from_day=from_day, to_day=to_day)
+
+
+@router.get("/usage/storage")
+def usage_storage(
+    top_n: int = Query(default=10, ge=1, le=100),
+    user: str = Depends(_current_user),
+):
+    return get_usage_storage(user, top_n=top_n)
 
 
 @router.post("/purge-deleted")

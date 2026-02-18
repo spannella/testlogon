@@ -3,11 +3,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.core.settings import Settings
 from app.metrics import METRICS_ENABLED, metrics_endpoint, metrics_middleware, set_app_info
 from app.routers.ui_session import router as ui_session_router
 from app.routers.ui_mfa import router as ui_mfa_router
@@ -39,12 +40,23 @@ from app.routers.purchase_history import router as purchase_history_router
 from app.routers.shoppingcart import router as shoppingcart_router
 from app.routers.catalog import router as catalog_router
 from app.routers.subscription_server import router as subscription_server_router
+from app.routers.admin_usage import router as admin_usage_router
 from app.routers.ups import router as ups_router
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
 
 
+def _security_headers_middleware(default_csp: str):
+    async def _middleware(request: Request, call_next):
+        response = await call_next(request)
+        response.headers.setdefault("Content-Security-Policy", default_csp)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        return response
+    return _middleware
+  
 def _to_bool(value: str, *, default: bool) -> bool:
     if value is None:
         return default
@@ -72,6 +84,7 @@ def _build_cors_options() -> dict[str, object]:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Security Backend (refactored)", version="0.1.0")
+    settings = Settings()
     static_dir = Path(__file__).resolve().parent / "static"
 
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
@@ -119,6 +132,7 @@ def create_app() -> FastAPI:
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)
     app.include_router(subscription_server_router)
+    app.include_router(admin_usage_router)
     app.include_router(ups_router)
     app.add_event_handler("startup", start_billing_reconcile_task)
 

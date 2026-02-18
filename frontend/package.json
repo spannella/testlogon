@@ -35,7 +35,9 @@
     "cmdk": "^1.1.1",
     "date-fns": "^4.1.0",
     "framer-motion": "^12.33.0",
+    "hyparquet": "^1.25.0",
     "lucide-react": "^0.468.0",
+    "mammoth": "^1.11.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-hook-form": "^7.54.2",
@@ -43,6 +45,7 @@
     "sonner": "^1.7.1",
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "^4.1.18",
+    "xlsx": "^0.18.5",
     "zod": "^3.24.1",
     "zustand": "^5.0.2"
   },

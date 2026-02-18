@@ -5705,6 +5705,92 @@ function finishFileMgrTransfer(transfer, label, options = {}) {
   }, 1600);
 }
 
+
+
+async function deriveKey(password, saltBytes, iterations = 600000) {
+  if (!window.crypto || !window.crypto.subtle) {
+    throw new Error("WebCrypto is not available in this browser.");
+  }
+  const enc = new TextEncoder();
+  const baseKey = await window.crypto.subtle.importKey(
+    "raw",
+    enc.encode(password),
+    { name: "PBKDF2" },
+    false,
+    ["deriveKey"]
+  );
+  return window.crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: saltBytes,
+      iterations,
+      hash: "SHA-256",
+    },
+    baseKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+function toB64(bytes) {
+  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let binary = "";
+  for (let i = 0; i < arr.length; i++) binary += String.fromCharCode(arr[i]);
+  return btoa(binary);
+}
+
+function fromB64(value) {
+  const binary = atob(value || "");
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
+
+async function encryptFile(file, password) {
+  const salt = window.crypto.getRandomValues(new Uint8Array(16));
+  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+  const iterations = 600000;
+  const key = await deriveKey(password, salt, iterations);
+  const plaintext = await file.arrayBuffer();
+  const ciphertext = await window.crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+  const encryptedBlob = new Blob([ciphertext], { type: "application/octet-stream" });
+  return {
+    blob: encryptedBlob,
+    metadata: {
+      version: 1,
+      alg: "AES-256-GCM",
+      kdf: "PBKDF2-SHA256",
+      iterations,
+      salt_b64: toB64(salt),
+      iv_b64: toB64(iv),
+      orig_name: file.name,
+      orig_size: file.size,
+      mime: file.type || "application/octet-stream",
+    },
+  };
+}
+
+async function decryptFile(blob, password, metadata) {
+  const salt = fromB64(metadata?.salt_b64 || "");
+  const iv = fromB64(metadata?.iv_b64 || "");
+  const iterations = Number(metadata?.iterations || 600000);
+  const key = await deriveKey(password, salt, iterations);
+  const ciphertext = await blob.arrayBuffer();
+  const plaintext = await window.crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+  return new Blob([plaintext], { type: metadata?.mime || "application/octet-stream" });
+}
+
+function promptFileEncryptionPassword() {
+  const pass = prompt("Enter a password to encrypt selected file(s):");
+  if (!pass) return null;
+  const confirmPass = prompt("Confirm encryption password:");
+  if (pass !== confirmPass) {
+    throw new Error("Passwords did not match.");
+  }
+  return pass;
+}
+
 async function apiUploadFileManager(path, file, onProgress, onCancelReady, options = {}) {
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
@@ -5716,6 +5802,12 @@ async function apiUploadFileManager(path, file, onProgress, onCancelReady, optio
   params.set("path", path);
   if (sharedOwner) {
     params.set("owner", sharedOwner);
+  }
+  if (options.encrypted) {
+    params.set("encrypted", "true");
+    if (options.encryptionMeta) {
+      params.set("enc_meta", JSON.stringify(options.encryptionMeta));
+    }
   }
   const url = `${API_BASE}${endpoint}?${params.toString()}`;
   return await new Promise((resolve, reject) => {
@@ -5750,6 +5842,15 @@ function fileMgrDownloadKey(path, ownerOverride = null) {
   if (ownerOverride) return `shared:${ownerOverride}:${path}`;
   if (!fileMgrState.sharedMode) return path;
   return `${fileMgrState.sharedOwner || "shared"}:${path}`;
+}
+
+async function fileMgrFetchInfo(path, ownerOverride = null) {
+  const endpoint = ownerOverride || fileMgrState.sharedMode ? "/v1/fs/shared-info" : "/v1/fs/info";
+  const params = new URLSearchParams();
+  params.set("path", path);
+  const owner = ownerOverride || fileMgrState.sharedOwner;
+  if ((ownerOverride || fileMgrState.sharedMode) && owner) params.set("owner", owner);
+  return apiGet(`${endpoint}?${params.toString()}`);
 }
 
 async function fileMgrDownload(path, filename, button, options = {}) {
@@ -5801,20 +5902,32 @@ async function fileMgrDownload(path, filename, button, options = {}) {
           updateFileMgrTransfer(transfer, event.loaded, null, "Downloading");
         }
       };
-      xhr.onload = () => {
+      xhr.onload = async () => {
         if (xhr.status < 200 || xhr.status >= 300) {
           reject(new Error(xhr.responseText || "Download failed"));
           return;
         }
-        const blob = xhr.response;
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = filename || "download";
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        setTimeout(() => URL.revokeObjectURL(link.href), 2000);
-        resolve();
+        try {
+          let blob = xhr.response;
+          let downloadName = filename || "download";
+          const info = await fileMgrFetchInfo(path, ownerOverride);
+          if (info && info.is_encrypted) {
+            const password = prompt("This file is encrypted. Enter password to decrypt:");
+            if (!password) throw new Error("Decryption canceled.");
+            blob = await decryptFile(blob, password, info.enc_metadata || {});
+            downloadName = (info.enc_metadata && info.enc_metadata.orig_name) || downloadName;
+          }
+          const link = document.createElement("a");
+          link.href = URL.createObjectURL(blob);
+          link.download = downloadName;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          setTimeout(() => URL.revokeObjectURL(link.href), 2000);
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
       };
       xhr.onerror = () => reject(new Error("Download failed"));
       xhr.onabort = () => reject(new Error("Download canceled"));
@@ -5885,6 +5998,8 @@ async function fileMgrDetails(path) {
     ["Parent", info.parent],
     ["Size", info.size != null ? fmtBytes(info.size) : ""],
     ["Content type", info.content_type],
+    ["Encrypted", info.is_encrypted ? "Yes" : "No"],
+    ["Encryption metadata", info.enc_metadata ? JSON.stringify(info.enc_metadata) : ""],
     ["Created", info.created_at],
     ["Updated", info.updated_at],
     ["Uploaded", info.upload_at],
@@ -6350,6 +6465,17 @@ async function uploadFileMgr() {
     return;
   }
   const files = Array.from(input.files);
+  const encryptToggle = document.getElementById("filemgrEncryptToggle");
+  const encryptionEnabled = Boolean(encryptToggle && encryptToggle.checked);
+  let encryptionPassword = null;
+  if (encryptionEnabled) {
+    encryptionPassword = promptFileEncryptionPassword();
+    if (!encryptionPassword) {
+      fileMgrStatus("Encryption canceled.");
+      return;
+    }
+  }
+
   const uploadOne = async (file) => {
     const path = currentFileMgrPath() + file.name;
     let cancel = null;
@@ -6361,9 +6487,17 @@ async function uploadFileMgr() {
     });
     updateFileMgrTransfer(transfer, 0, file.size, "Uploading");
     try {
+      let sourceFile = file;
+      let encryptionMeta = null;
+      if (encryptionEnabled && encryptionPassword) {
+        updateFileMgrTransfer(transfer, 0, file.size, "Encrypting");
+        const enc = await encryptFile(file, encryptionPassword);
+        sourceFile = new File([enc.blob], file.name, { type: "application/octet-stream" });
+        encryptionMeta = enc.metadata;
+      }
       await apiUploadFileManager(
         path,
-        file,
+        sourceFile,
         (event) => {
           if (event.lengthComputable) {
             updateFileMgrTransfer(transfer, event.loaded, event.total, "Uploading");
@@ -6374,7 +6508,11 @@ async function uploadFileMgr() {
         (cancelFn) => {
           cancel = cancelFn;
         },
-        { sharedOwner: fileMgrState.sharedMode ? fileMgrState.sharedOwner : null }
+        {
+          sharedOwner: fileMgrState.sharedMode ? fileMgrState.sharedOwner : null,
+          encrypted: Boolean(encryptionMeta),
+          encryptionMeta,
+        }
       );
       finishFileMgrTransfer(transfer, "Upload complete");
     } catch (e) {
