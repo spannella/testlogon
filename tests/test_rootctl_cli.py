@@ -1385,3 +1385,266 @@ def test_rootctl_audit_security_timeline_invalid_cursor(capsys, monkeypatch) -> 
     assert rc == 2
     payload = json.loads(capsys.readouterr().err.strip())
     assert payload["error"] == "invalid cursor"
+
+
+def test_rootctl_user_deactivate_bulk_generates_correlation_and_summary(capsys, monkeypatch) -> None:
+    users = Mock()
+    users.get_item.side_effect = [{"Item": {"user_sub": "u1"}}, {"Item": {"user_sub": "u2"}}]
+    account_state = Mock()
+    account_state.get_item.side_effect = [{"Item": {"status": "active"}}, {"Item": {"status": "active"}}]
+    monkeypatch.setattr(rootctl, "T", SimpleNamespace(users=users, account_state=account_state))
+    monkeypatch.setattr(rootctl, "validate_root_user_sub_config", lambda: "root")
+    monkeypatch.setattr(rootctl, "revoke_all_sessions", Mock())
+    monkeypatch.setattr(rootctl, "revoke_all_api_keys", Mock())
+    audit = Mock()
+    monkeypatch.setattr(rootctl, "audit_event", audit)
+
+    rc = rootctl.main(
+        [
+            "user",
+            "deactivate-bulk",
+            "--target-user-sub",
+            "u1",
+            "--target-user-sub",
+            "u2",
+            "--actor-sub",
+            "root",
+            "--reason",
+            "containment",
+            "--ticket",
+            "INC-14",
+            "--output",
+            "json",
+        ]
+    )
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["summary"] == {"total_targets": 2, "success_count": 2, "failure_count": 0}
+    assert out["correlation_id"]
+    assert out["results"][0]["result"]["correlation_id"] == out["correlation_id"]
+    assert out["results"][1]["result"]["correlation_id"] == out["correlation_id"]
+    assert audit.call_count == 2
+
+
+def test_rootctl_user_deactivate_bulk_reports_partial_failures(capsys, monkeypatch) -> None:
+    users = Mock()
+    users.get_item.side_effect = [{"Item": {"user_sub": "u1"}}, {}]
+    account_state = Mock()
+    account_state.get_item.return_value = {"Item": {"status": "active"}}
+    monkeypatch.setattr(rootctl, "T", SimpleNamespace(users=users, account_state=account_state))
+    monkeypatch.setattr(rootctl, "validate_root_user_sub_config", lambda: "root")
+    monkeypatch.setattr(rootctl, "revoke_all_sessions", Mock())
+    monkeypatch.setattr(rootctl, "revoke_all_api_keys", Mock())
+    monkeypatch.setattr(rootctl, "audit_event", Mock())
+
+    rc = rootctl.main(
+        [
+            "user",
+            "deactivate-bulk",
+            "--target-user-sub",
+            "u1",
+            "--target-user-sub",
+            "missing-user",
+            "--actor-sub",
+            "root",
+            "--reason",
+            "containment",
+            "--ticket",
+            "INC-15",
+            "--correlation-id",
+            "corr-bulk-1",
+            "--output",
+            "json",
+        ]
+    )
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["ok"] is False
+    assert out["correlation_id"] == "corr-bulk-1"
+    assert out["summary"] == {"total_targets": 2, "success_count": 1, "failure_count": 1}
+    assert out["results"][1]["ok"] is False
+    assert "target user not found" in out["results"][1]["error"]
+
+
+def test_rootctl_audit_security_timeline_filters_by_correlation_id(capsys, monkeypatch) -> None:
+    alerts = Mock()
+    alerts.scan.return_value = {
+        "Items": [
+            {
+                "alert_id": "a1",
+                "user_sub": "admin@example.com",
+                "details": {
+                    "ts": 200,
+                    "event": "admin_role_granted",
+                    "outcome": "success",
+                    "actor_sub": "root",
+                    "target_user_sub": "user@example.com",
+                    "correlation_id": "corr-keep",
+                },
+            },
+            {
+                "alert_id": "a2",
+                "user_sub": "admin@example.com",
+                "details": {
+                    "ts": 201,
+                    "event": "admin_role_revoked",
+                    "outcome": "success",
+                    "actor_sub": "root",
+                    "target_user_sub": "user@example.com",
+                    "correlation_id": "corr-drop",
+                },
+            },
+        ],
+        "LastEvaluatedKey": None,
+    }
+    monkeypatch.setattr(rootctl, "T", SimpleNamespace(alerts=alerts))
+
+    rc = rootctl.main(
+        [
+            "audit",
+            "security",
+            "--correlation-id",
+            "corr-keep",
+            "--start-ts",
+            "100",
+            "--end-ts",
+            "999",
+            "--output",
+            "json",
+        ]
+    )
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["count"] == 1
+    assert out["items"][0]["correlation_id"] == "corr-keep"
+
+
+def test_rootctl_mutation_requires_actor_sub(capsys) -> None:
+    rc = rootctl.main(
+        [
+            "user",
+            "create",
+            "--email",
+            "u1@example.com",
+            "--reason",
+            "ops",
+            "--output",
+            "json",
+        ]
+    )
+    assert rc == 2
+    payload = json.loads(capsys.readouterr().err.strip())
+    assert payload == {
+        "ok": False,
+        "error": "actor_sub is required for mutating commands",
+        "exit_code": 2,
+    }
+
+
+def test_rootctl_error_payload_shape_is_deterministic_across_validation_and_authz(capsys, monkeypatch) -> None:
+    # validation error (missing reason)
+    rc_validation = rootctl.main(
+        [
+            "user",
+            "create",
+            "--email",
+            "u1@example.com",
+            "--actor-sub",
+            "root",
+            "--output",
+            "json",
+        ]
+    )
+    assert rc_validation == 2
+    validation = json.loads(capsys.readouterr().err.strip())
+    assert validation["ok"] is False
+    assert validation["exit_code"] == 2
+    assert isinstance(validation["error"], str)
+
+    # authz error (non-root actor)
+    rc_authz = rootctl.main(
+        [
+            "user",
+            "create",
+            "--email",
+            "u2@example.com",
+            "--actor-sub",
+            "not-root",
+            "--reason",
+            "ops",
+            "--output",
+            "json",
+        ]
+    )
+    assert rc_authz == 3
+    authz = json.loads(capsys.readouterr().err.strip())
+    assert authz["ok"] is False
+    assert authz["exit_code"] == 3
+    assert authz["code"] == "role_required"
+    assert authz["required_roles"] == ["root"]
+
+
+def test_rootctl_non_json_errors_are_human_readable(capsys) -> None:
+    rc = rootctl.main(
+        [
+            "user",
+            "create",
+            "--email",
+            "u1@example.com",
+            "--actor-sub",
+            "root",
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: ")
+    assert "reason is required for mutating commands" in err
+
+
+def test_rootctl_argument_validation_rejects_invalid_output_choice() -> None:
+    rc = rootctl.main(["user", "status", "--output", "yaml"])
+    assert rc == 2
+
+
+def test_rootctl_preflight_blocks_root_target_in_user_and_admin_paths(capsys, monkeypatch) -> None:
+    monkeypatch.setattr(rootctl, "validate_root_user_sub_config", lambda: "root")
+
+    rc_user = rootctl.main(
+        [
+            "user",
+            "verify",
+            "--target-user-sub",
+            "root",
+            "--email",
+            "verified",
+            "--actor-sub",
+            "root",
+            "--reason",
+            "ops",
+            "--output",
+            "json",
+        ]
+    )
+    assert rc_user == 3
+    user_err = json.loads(capsys.readouterr().err.strip())
+    assert user_err["code"] == "root_immutable"
+    assert user_err["target_user_sub"] == "root"
+
+    rc_admin = rootctl.main(
+        [
+            "admin",
+            "grant",
+            "--target-user-sub",
+            "root",
+            "--actor-sub",
+            "root",
+            "--reason",
+            "ops",
+            "--output",
+            "json",
+        ]
+    )
+    assert rc_admin == 3
+    admin_err = json.loads(capsys.readouterr().err.strip())
+    assert admin_err["code"] == "root_immutable"
+    assert admin_err["target_user_sub"] == "root"
