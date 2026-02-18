@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactNode } from "react";
 
 import { ApiError } from "@/api/client";
 import Register from "@/pages/Register";
@@ -28,6 +29,13 @@ vi.mock("@/stores/authStore", () => ({
   }),
 }));
 
+
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: ReactNode }) => children,
+  Tooltip: ({ children }: { children: ReactNode }) => children,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => children,
+  TooltipContent: ({ children }: { children: ReactNode }) => children ?? null,
+}));
 const REGISTER_STORAGE_KEY = "register-pending";
 
 const renderRegister = (initialEntries: string[] = ["/register"]) =>

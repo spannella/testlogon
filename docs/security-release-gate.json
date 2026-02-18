@@ -1,0 +1,40 @@
+{
+  "security_review": "client-side-file-encryption-phase3",
+  "required_tickets": [
+    {
+      "id": "SEC-201",
+      "title": "CSP review and hardening",
+      "status": "closed",
+      "owner": "platform-security",
+      "evidence": "app/main.py security headers middleware + tests/test_main_security_headers.py"
+    },
+    {
+      "id": "SEC-202",
+      "title": "Decrypt-failure telemetry",
+      "status": "closed",
+      "owner": "file-manager",
+      "evidence": "app/routers/filemanager.py client telemetry endpoint + docs/filemanager-encryption-observability.md"
+    },
+    {
+      "id": "SEC-203",
+      "title": "Clear-all remembered passwords UI",
+      "status": "closed",
+      "owner": "frontend-security",
+      "evidence": "frontend/src/pages/security/RememberedFilePasswords.tsx"
+    },
+    {
+      "id": "SEC-204",
+      "title": "Recurring threat-model review cadence",
+      "status": "closed",
+      "owner": "security-architecture",
+      "evidence": "docs/client-side-file-encryption-security-review.md recurring review cadence section"
+    }
+  ],
+  "release_gate": {
+    "required_for_release": true,
+    "all_required_closed": true,
+    "last_reviewed": "2026-02-15",
+    "cadence": "quarterly",
+    "approver": "security-review-board"
+  }
+}

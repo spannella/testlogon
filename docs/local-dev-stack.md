@@ -12,6 +12,14 @@ scripts/run_dev.sh
 # scripts/run_dev.sh --real-backend
 ```
 
+`run_dev.sh` in mock mode now auto-bootstraps local DynamoDB tables on first run and writes a marker at `.local/run/ddb-bootstrap.done`.
+
+Bootstrap controls (environment variables):
+- `DEV_DDB_BOOTSTRAP=1` (default): run table bootstrap logic.
+- `DEV_DDB_BOOTSTRAP=0`: skip DynamoDB bootstrap entirely.
+- `DEV_FORCE_DDB_BOOTSTRAP=1`: ignore marker and force table bootstrap again.
+- `DEV_DDB_SEED=1`: run `scripts/local-ddb-seed.py` after table creation.
+
 In another terminal:
 
 ```bash
@@ -20,16 +28,24 @@ scripts/test_mock_mode.sh
 
 ## 1) Boot local infrastructure
 
+Preferred (automatic bootstrap path):
+
+```bash
+scripts/run_dev.sh
+```
+
+Manual fallback / troubleshooting path:
+
 ```bash
 scripts/local-stack-up.sh
 python3 scripts/local-ddb-init.py
-python3 scripts/local-ddb-seed.py
+python3 scripts/local-ddb-seed.py   # optional
 python3 scripts/local-s3-init.py
 # optional: run manually if you want to re-generate Cognito ids
 python3 scripts/local-cognito-init.py
 ```
 
-`local-stack-up.sh` now supports **Docker mode** (when Docker is installed) and **host mode** (no Docker). In host mode it starts moto (AWS mock including S3/Cognito/SES), DynamoDB Local, and stripe-mock as local processes and stores logs under `.local/logs/`.
+`local-stack-up.sh` supports **Docker mode** (when Docker is installed) and **host mode** (no Docker). In host mode it starts moto (AWS mock including S3/Cognito/SES), DynamoDB Local, and stripe-mock as local processes and stores logs under `.local/logs/`.
 
 If `.env.local` does not exist, copy from `.env.local.example` and adjust as needed.
 
@@ -56,7 +72,42 @@ Use these in `.env.local`:
 - `UPS_WEBHOOK_SECRET=local-ups-webhook-secret`
 - `SES_FROM_EMAIL=dev-no-reply@example.com`
 
-## 4) QA checklist
+## 4) run_dev bootstrap validation checklist
+
+Use this after changing bootstrap logic:
+
+1. **Fresh run (no marker)**
+   ```bash
+   rm -f .local/run/ddb-bootstrap.done
+   scripts/run_dev.sh
+   ```
+   Expected: logs include DynamoDB table initialization and marker creation.
+
+2. **Warm run (marker present)**
+   ```bash
+   scripts/run_dev.sh
+   ```
+   Expected: logs show bootstrap skipped because marker exists.
+
+3. **Forced rerun**
+   ```bash
+   DEV_FORCE_DDB_BOOTSTRAP=1 scripts/run_dev.sh
+   ```
+   Expected: logs show forced bootstrap and table init rerun.
+
+4. **Bootstrap disabled**
+   ```bash
+   DEV_DDB_BOOTSTRAP=0 scripts/run_dev.sh
+   ```
+   Expected: logs show bootstrap skipped by env flag.
+
+5. **Optional seed enabled**
+   ```bash
+   DEV_DDB_SEED=1 DEV_FORCE_DDB_BOOTSTRAP=1 scripts/run_dev.sh
+   ```
+   Expected: logs show `scripts/local-ddb-seed.py` executed after table init.
+
+## 5) QA checklist
 
 Before manual validation, run:
 
@@ -92,7 +143,7 @@ scripts/test_mock_mode.sh
 - [ ] `POST /emit/ups-tracking-webhook` delivers signed webhook to `/api/ups/tracking/webhook`
 - [ ] Confirm webhook event persisted under `UPS_TRACKING` records in billing table
 
-## 5) Example UPS local simulation
+## 6) Example UPS local simulation
 
 1. Quote:
 ```bash

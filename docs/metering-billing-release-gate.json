@@ -1,0 +1,62 @@
+{
+  "review": "metering-billing-phase-final",
+  "required_tickets": [
+    {
+      "id": "MTR-110",
+      "title": "Unit test suite for event/aggregate correctness",
+      "status": "closed",
+      "evidence": "tests/test_usage_metering.py"
+    },
+    {
+      "id": "MTR-111",
+      "title": "Integration tests for end-to-end metering",
+      "status": "closed",
+      "evidence": "tests/test_filemanager_integration.py"
+    },
+    {
+      "id": "MTR-112",
+      "title": "Failure-mode tests",
+      "status": "closed",
+      "evidence": "tests/test_usage_metering.py + tests/test_filemanager_service.py"
+    },
+    {
+      "id": "MTR-113",
+      "title": "UI tests for usage surfaces",
+      "status": "closed",
+      "evidence": "frontend/src/pages/billing/__tests__/UsageBillingOverview.test.tsx + frontend/src/pages/files/__tests__/FilesPage.usageWidget.test.tsx"
+    },
+    {
+      "id": "MTR-114",
+      "title": "DoD release checklist",
+      "status": "closed",
+      "evidence": "docs/metering-billing-release-gate.json + scripts/check_metering_release_gate.py"
+    }
+  ],
+  "definition_of_done": [
+    {
+      "criterion": "Server-authoritative usage events and aggregate invariants verified",
+      "passed": true,
+      "evidence": "tests/test_usage_metering.py"
+    },
+    {
+      "criterion": "Replay/recompute pipeline produces expected aggregate outcomes",
+      "passed": true,
+      "evidence": "tests/test_filemanager_integration.py"
+    },
+    {
+      "criterion": "Failure modes (duplicate delivery, outage/replay, finalization race) covered",
+      "passed": true,
+      "evidence": "tests/test_usage_metering.py + tests/test_filemanager_service.py"
+    },
+    {
+      "criterion": "Usage UI surfaces validate cards/chart/warnings/limit messaging",
+      "passed": true,
+      "evidence": "frontend usage test suites"
+    }
+  ],
+  "release_gate": {
+    "approved": true,
+    "approver": "metering-billing-review-board",
+    "evidence_bundle": "docs/metering-and-billing-plan.md"
+  }
+}

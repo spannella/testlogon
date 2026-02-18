@@ -73,6 +73,7 @@ interface FileTableProps {
   onSelectionChange: (keys: Set<string>) => void;
   onNavigate: (folder: FileEntry) => void;
   onPreview?: (file: FileEntry) => void;
+  onDownload?: (file: FileEntry) => void;
   onShare: (file: FileEntry) => void;
   onRename: (file: FileEntry) => void;
   onMove: (file: FileEntry) => void;
@@ -93,6 +94,7 @@ export function FileTable({
   onSelectionChange,
   onNavigate,
   onPreview,
+  onDownload,
   onShare,
   onRename,
   onMove,
@@ -111,7 +113,7 @@ export function FileTable({
         <div className="flex items-center gap-2">
           {row.type === "folder" ? (
             <Folder className="h-4 w-4 shrink-0 text-primary" />
-          ) : isImage(row.content_type) ? (
+          ) : isImage(row.content_type) && !row.is_encrypted ? (
             <Thumbnail path={row.path} />
           ) : (
             <File className="h-4 w-4 shrink-0 text-muted-foreground" />
@@ -178,18 +180,16 @@ export function FileTable({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            {row.type === "file" && onPreview && (
+            {row.type === "file" && onPreview && !row.is_encrypted && (
               <DropdownMenuItem onClick={() => onPreview(row)}>
                 <Eye className="h-4 w-4" />
                 Preview
               </DropdownMenuItem>
             )}
             {row.type === "file" && (
-              <DropdownMenuItem asChild>
-                <a href={downloadUrl(row.path)} download>
-                  <Download className="h-4 w-4" />
-                  Download
-                </a>
+              <DropdownMenuItem onClick={() => onDownload ? onDownload(row) : window.open(downloadUrl(row.path), "_blank")}>
+                <Download className="h-4 w-4" />
+                Download
               </DropdownMenuItem>
             )}
             <DropdownMenuItem onClick={() => onShare(row)}>
@@ -232,8 +232,10 @@ export function FileTable({
       onRowClick={(row) => {
         if (row.type === "folder") {
           onNavigate(row);
-        } else if (onPreview) {
+        } else if (onPreview && !row.is_encrypted) {
           onPreview(row);
+        } else if (onDownload) {
+          onDownload(row);
         }
       }}
       hasMore={hasMore}

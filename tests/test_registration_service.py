@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
 from app.services import registration
@@ -89,3 +90,14 @@ def test_verify_registration_code_replay_attempt_denied(fake_tables):
     assert verified["user_sub"] == "jane@example.com"
     with pytest.raises(HTTPException):
         registration.verify_registration_code(user_sub="jane@example.com", code=code)
+
+
+def test_user_exists_returns_false_when_users_table_missing(monkeypatch):
+    def _raise_not_found(**_kwargs):
+        raise ClientError(
+            error_response={"Error": {"Code": "ResourceNotFoundException", "Message": "table missing"}},
+            operation_name="GetItem",
+        )
+
+    monkeypatch.setattr(registration, "T", SimpleNamespace(users=SimpleNamespace(get_item=_raise_not_found)))
+    assert registration.is_email_available("jane@example.com") is True

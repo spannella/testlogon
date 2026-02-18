@@ -1,11 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import { Download, Eye, FileText, FolderOpen } from "lucide-react";
+import { Download, Eye, FileText, FolderOpen, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { DataTable, type ColumnDef } from "@/components/shared/DataTable";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { getSharedWithMe, sharedDownloadUrl } from "@/api/endpoints/files";
+import { getSharedWithMe } from "@/api/endpoints/files";
 import type { SharedItem } from "@/api/types";
 
 function nameFromPath(path: string): string {
@@ -27,9 +27,10 @@ function formatDate(iso: string): string {
 
 interface SharedWithMeProps {
   onPreviewShared: (item: SharedItem) => void;
+  onDownloadShared: (item: SharedItem) => void;
 }
 
-export function SharedWithMe({ onPreviewShared }: SharedWithMeProps) {
+export function SharedWithMe({ onPreviewShared, onDownloadShared }: SharedWithMeProps) {
   const query = useQuery({
     queryKey: ["shared-with-me"],
     queryFn: getSharedWithMe,
@@ -48,7 +49,12 @@ export function SharedWithMe({ onPreviewShared }: SharedWithMeProps) {
           ) : (
             <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
           )}
-          <span className="truncate text-sm">{nameFromPath(row.path)}</span>
+          <span className="truncate text-sm">{row.name || nameFromPath(row.path)}</span>
+          {row.is_encrypted && (
+            <Badge variant="outline" className="ml-1 gap-1 text-[10px] uppercase tracking-wide">
+              <Lock className="h-3 w-3" /> Encrypted
+            </Badge>
+          )}
         </div>
       ),
     },
@@ -84,25 +90,29 @@ export function SharedWithMe({ onPreviewShared }: SharedWithMeProps) {
         <div className="flex items-center gap-1">
           {!isFolder(row.path) && (
             <>
+              {!row.is_encrypted && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onPreviewShared(row);
+                  }}
+                >
+                  <Eye className="h-3.5 w-3.5" />
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-7 w-7"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onPreviewShared(row);
+                  onDownloadShared(row);
                 }}
               >
-                <Eye className="h-3.5 w-3.5" />
-              </Button>
-              <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
-                <a
-                  href={sharedDownloadUrl(row.owner, row.path)}
-                  download
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <Download className="h-3.5 w-3.5" />
-                </a>
+                <Download className="h-3.5 w-3.5" />
               </Button>
             </>
           )}
@@ -128,7 +138,13 @@ export function SharedWithMe({ onPreviewShared }: SharedWithMeProps) {
       data={items}
       rowKey={(row) => `${row.owner}:${row.path}`}
       onRowClick={(row) => {
-        if (!isFolder(row.path)) onPreviewShared(row);
+        if (!isFolder(row.path)) {
+          if (row.is_encrypted) {
+            onDownloadShared(row);
+            return;
+          }
+          onPreviewShared(row);
+        }
       }}
       emptyState={
         <EmptyState
