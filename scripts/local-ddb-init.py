@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional
 
 import boto3
+from botocore.exceptions import ClientError, EndpointConnectionError
 from app.core.settings import S
 
 
@@ -130,10 +131,10 @@ def _global_secondary_indexes(table: TableDef) -> Optional[List[Dict[str, object
 
 def _ensure_table(ddb, table: TableDef) -> None:
     client = ddb.meta.client
-    existing = client.list_tables().get("TableNames", [])
+    existing = _retry_transient_ddb_call(client.list_tables).get("TableNames", [])
     if table.name in existing:
         if table.gsi:
-            desc = client.describe_table(TableName=table.name).get("Table", {})
+            desc = _retry_transient_ddb_call(client.describe_table, TableName=table.name).get("Table", {})
             existing_indexes = {idx.get("IndexName") for idx in desc.get("GlobalSecondaryIndexes", [])}
             existing_attributes = {attr.get("AttributeName") for attr in desc.get("AttributeDefinitions", [])}
             missing = [g for g in table.gsi if g["index_name"] not in existing_indexes]
@@ -166,10 +167,10 @@ def _ensure_table(ddb, table: TableDef) -> None:
                 if attr_defs:
                     update_kwargs["AttributeDefinitions"] = attr_defs
 
-                client.update_table(**update_kwargs)
+                _retry_transient_ddb_call(client.update_table, **update_kwargs)
                 waiter = client.get_waiter("table_exists")
                 waiter.wait(TableName=table.name)
-                desc = client.describe_table(TableName=table.name).get("Table", {})
+                desc = _retry_transient_ddb_call(client.describe_table, TableName=table.name).get("Table", {})
                 existing_attributes = {attr.get("AttributeName") for attr in desc.get("AttributeDefinitions", [])}
         return
     kwargs: Dict[str, object] = {
@@ -181,7 +182,25 @@ def _ensure_table(ddb, table: TableDef) -> None:
     gsi = _global_secondary_indexes(table)
     if gsi:
         kwargs["GlobalSecondaryIndexes"] = gsi
-    client.create_table(**kwargs)
+    _retry_transient_ddb_call(client.create_table, **kwargs)
+
+
+def _retry_transient_ddb_call(func, *args, retries: int = 12, delay_seconds: float = 1.0, **kwargs):
+    """Retry DynamoDB Local operations when the embedded server is still warming up."""
+    for attempt in range(1, retries + 1):
+        try:
+            return func(*args, **kwargs)
+        except EndpointConnectionError:
+            if attempt == retries:
+                raise
+            time.sleep(delay_seconds)
+        except ClientError as exc:
+            error_code = exc.response.get("Error", {}).get("Code", "")
+            if error_code not in {"InternalFailure", "ThrottlingException", "LimitExceededException"}:
+                raise
+            if attempt == retries:
+                raise
+            time.sleep(delay_seconds)
 
 
 def _wait_for_tables(ddb, table_names: Iterable[str]) -> None:
@@ -189,13 +208,13 @@ def _wait_for_tables(ddb, table_names: Iterable[str]) -> None:
     for name in table_names:
         waiter = client.get_waiter("table_exists")
         waiter.wait(TableName=name)
-        table = client.describe_table(TableName=name).get("Table", {})
+        table = _retry_transient_ddb_call(client.describe_table, TableName=name).get("Table", {})
         for _ in range(120):
             indexes = table.get("GlobalSecondaryIndexes", [])
             if all(idx.get("IndexStatus") == "ACTIVE" for idx in indexes):
                 break
             time.sleep(1)
-            table = client.describe_table(TableName=name).get("Table", {})
+            table = _retry_transient_ddb_call(client.describe_table, TableName=name).get("Table", {})
 
 
 def _ddb_resource_for_local_bootstrap():
