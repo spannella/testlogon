@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI
+
+from app.auth.root_invariant import validate_startup_root_invariant
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +23,9 @@ from app.routers.password_recovery import router as password_recovery_router
 from app.routers.passwordless import router as passwordless_router
 from app.routers.register import router as register_router
 from app.routers.webauthn import router as webauthn_router
+from app.routers.root_auth import router as root_auth_router
+from app.routers.admin_roles import router as admin_roles_router
+from app.routers.admin_impersonation import router as admin_impersonation_router
 from app.routers.misc import router as misc_router
 from app.routers.billing_ccbill import router as billing_ccbill_router
 from app.routers.ccbill_mock import router as ccbill_mock_router
@@ -98,6 +103,9 @@ def create_app() -> FastAPI:
     app.include_router(passwordless_router)
     app.include_router(register_router)
     app.include_router(webauthn_router)
+    app.include_router(root_auth_router)
+    app.include_router(admin_roles_router)
+    app.include_router(admin_impersonation_router)
     app.include_router(misc_router)
     app.include_router(billing_ccbill_router)
     app.include_router(ccbill_mock_router)
@@ -112,6 +120,7 @@ def create_app() -> FastAPI:
     app.include_router(calendar_public_router)
     app.include_router(device_trust_router)
     app.include_router(newsfeed_router)
+    app.add_event_handler("startup", validate_startup_root_invariant)
     app.add_event_handler("startup", newsfeed_startup)
     app.add_event_handler("startup", start_billing_dunning_task)
     app.add_event_handler("startup", start_filemgr_purge_task)

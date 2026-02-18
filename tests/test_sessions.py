@@ -96,7 +96,7 @@ class TestRequireUiSession(unittest.TestCase):
                 sessions_service.require_ui_session(self.request, user_sub="user", x_session_id="sid")
             )
 
-        self.assertEqual(result, {"user_sub": "user", "session_id": "sid"})
+        self.assertEqual(result, {"user_sub": "user", "session_id": "sid", "role": "user"})
         self.assertEqual(self.request.state.user_sub, "user")
         sessions_table.update_item.assert_called_once()
 
@@ -267,3 +267,134 @@ class TestRefreshTokenRotation(unittest.TestCase):
         with patch.object(sessions_service, "T", SimpleNamespace(sessions=sessions_table)):
             with self.assertRaises(HTTPException):
                 sessions_service.rotate_refresh_token(Response(), "user", "sid", "bad")
+
+class TestRootSessionHardening(unittest.TestCase):
+    def test_create_real_session_uses_shorter_root_ttl(self):
+        sessions_table = Mock()
+        fake_tables = SimpleNamespace(sessions=sessions_table)
+        fake_settings = SimpleNamespace(
+            ui_session_ttl_seconds=3600,
+            root_session_ttl_seconds=300,
+            root_refresh_token_ttl_seconds=120,
+            root_user_sub="root-user",
+            ui_refresh_token_ttl_seconds=3600,
+            login_anomaly_risk_score_threshold=1,
+        )
+        req = SimpleNamespace(headers={}, client=None)
+        with patch.object(sessions_service, "T", fake_tables), patch.object(sessions_service, "S", fake_settings), patch.object(
+            sessions_service, "now_ts", return_value=1000
+        ), patch.object(sessions_service, "with_ttl", side_effect=lambda item, ttl_epoch: {**item, "ttl_epoch": ttl_epoch}), patch.object(
+            sessions_service, "record_device_login"
+        ), patch.object(sessions_service, "record_session_created"):
+            sessions_service.create_real_session(req, "root-user")
+            sessions_service.create_real_session(req, "normal-user")
+
+        first = sessions_table.put_item.call_args_list[0].kwargs["Item"]
+        second = sessions_table.put_item.call_args_list[1].kwargs["Item"]
+        self.assertEqual(first["ttl_epoch"], 1300)
+        self.assertEqual(second["ttl_epoch"], 4600)
+
+    def test_mint_access_token_embeds_root_assurance_claims(self):
+        fake_settings = SimpleNamespace(
+            ui_access_token_secret="secret",
+            ui_access_token_ttl_seconds=900,
+            root_access_token_ttl_seconds=120,
+            root_user_sub="root-user",
+        )
+        with patch.object(sessions_service, "S", fake_settings), patch.object(sessions_service, "now_ts", return_value=1000):
+            token = sessions_service.mint_access_token("root-user", "sid-1")
+
+        payload = sessions_service.jwt.decode(token, "secret", algorithms=["HS256"], options={"verify_exp": False})
+        self.assertEqual(payload["role"], "root")
+        self.assertEqual(payload["auth_level"], "high")
+        self.assertEqual(payload["exp"], 1120)
+
+    def test_rotate_existing_session_rotates_on_elevation(self):
+        req = SimpleNamespace(cookies={"ui_session": "old-sid"})
+        resp = Response()
+        ctx = {"user_sub": "root-user", "session_id": "old-sid"}
+        with patch.object(sessions_service, "create_real_session", return_value=sessions_service.SessionInfo("new-sid", "csrf", "root-user")) as create_session, patch.object(
+            sessions_service, "revoke_session"
+        ) as revoke, patch.object(sessions_service, "set_session_cookies"), patch.object(
+            sessions_service, "ensure_device_cookie"
+        ):
+            sessions_service.rotate_existing_session(req, resp, ctx, mfa_verified_at=123)
+
+        create_session.assert_called_once()
+        revoke.assert_called_once_with("root-user", "old-sid")
+
+
+class TestImpersonationSessionContext(unittest.TestCase):
+    def test_require_ui_session_includes_impersonation_context(self):
+        req = SimpleNamespace(headers={}, client=None, state=SimpleNamespace(), cookies={})
+        sessions_table = Mock()
+
+        def fake_get_item(Key):
+            if Key["session_id"] == "sid":
+                return {"Item": {"revoked": False, "pending_auth": False, "last_seen_at": 0}}
+            if Key["session_id"] == "imp_1":
+                return {"Item": {"purpose": "impersonation", "revoked": False, "expires_at": 2000}}
+            return {}
+
+        sessions_table.get_item.side_effect = fake_get_item
+        fake_tables = SimpleNamespace(sessions=sessions_table)
+        fake_settings = SimpleNamespace(
+            ui_access_token_cookie_name="ui_access_token",
+            ui_access_token_secret="secret",
+            ui_session_cookie_name="ui_session",
+            ui_inactivity_seconds=0,
+            ddb_ttl_attr="ttl_epoch",
+            ddb_sessions_table="",
+            ui_csrf_header_name="x-csrf-token",
+            ui_csrf_cookie_name="ui_csrf",
+        )
+        token = sessions_service.jwt.encode(
+            {"impersonation": True, "actor_sub": "user", "effective_sub": "target", "sid": "imp_1", "exp": 9999999999},
+            "secret",
+            algorithm="HS256",
+        )
+        with patch.object(sessions_service, "T", fake_tables), patch.object(sessions_service, "S", fake_settings), patch.object(
+            sessions_service, "now_ts", return_value=1000
+        ):
+            result = run_async(sessions_service.require_ui_session(req, user_sub="user", x_session_id="sid", x_impersonation_token=token))
+
+        self.assertEqual(result["actor_sub"], "user")
+        self.assertEqual(result["effective_sub"], "target")
+        self.assertEqual(result["impersonation_id"], "imp_1")
+
+    def test_require_ui_session_rejects_expired_impersonation_session(self):
+        req = SimpleNamespace(headers={}, client=None, state=SimpleNamespace(), cookies={})
+        sessions_table = Mock()
+
+        def fake_get_item(Key):
+            if Key["session_id"] == "sid":
+                return {"Item": {"revoked": False, "pending_auth": False, "last_seen_at": 0}}
+            if Key["session_id"] == "imp_1":
+                return {"Item": {"purpose": "impersonation", "revoked": False, "expires_at": 900}}
+            return {}
+
+        sessions_table.get_item.side_effect = fake_get_item
+        fake_tables = SimpleNamespace(sessions=sessions_table)
+        fake_settings = SimpleNamespace(
+            ui_access_token_cookie_name="ui_access_token",
+            ui_access_token_secret="secret",
+            ui_session_cookie_name="ui_session",
+            ui_inactivity_seconds=0,
+            ddb_ttl_attr="ttl_epoch",
+            ddb_sessions_table="",
+            ui_csrf_header_name="x-csrf-token",
+            ui_csrf_cookie_name="ui_csrf",
+        )
+        token = sessions_service.jwt.encode(
+            {"impersonation": True, "actor_sub": "user", "effective_sub": "target", "sid": "imp_1", "exp": 9999999999},
+            "secret",
+            algorithm="HS256",
+        )
+        with patch.object(sessions_service, "T", fake_tables), patch.object(sessions_service, "S", fake_settings), patch.object(
+            sessions_service, "now_ts", return_value=1000
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                run_async(sessions_service.require_ui_session(req, user_sub="user", x_session_id="sid", x_impersonation_token=token))
+
+        self.assertEqual(ctx.exception.status_code, 401)
+        self.assertEqual(str(ctx.exception.detail), "impersonation_expired")

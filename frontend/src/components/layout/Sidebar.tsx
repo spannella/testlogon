@@ -14,6 +14,7 @@ import {
   Shield,
   Settings,
   Bell,
+  UsersRound,
   PanelLeftClose,
   PanelLeft,
 } from "lucide-react";
@@ -70,6 +71,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Security", path: "/security", icon: <Shield className="h-5 w-5" /> },
       { label: "Alerts", path: "/alerts", icon: <Bell className="h-5 w-5" /> },
       { label: "Settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
+      { label: "Role Management", path: "/root/roles", icon: <UsersRound className="h-5 w-5" /> },
     ],
   },
 ];

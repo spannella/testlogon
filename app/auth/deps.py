@@ -3,12 +3,15 @@ from __future__ import annotations
 import base64
 import json
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
 import jwt
 import requests
 from fastapi import HTTPException, Request
 
+from app.auth.roles import Role, normalize_role
+from app.auth.root_invariant import enforce_root_role_invariant
 from app.core.settings import S
 from app.models import UiSessionStartReq
 
@@ -85,20 +88,41 @@ def _decode_cognito_token(token: str) -> Dict[str, Any]:
     return payload
 
 
-def _decode_jwt_sub(token: str) -> Optional[str]:
+def _decode_jwt_payload(token: str) -> Dict[str, Any]:
     if token.count(".") != 2:
-        return None
+        return {}
     _, payload, _ = token.split(".", 2)
     if not payload:
-        return None
+        return {}
     padding = "=" * (-len(payload) % 4)
     try:
         decoded = base64.urlsafe_b64decode(payload + padding)
         data = json.loads(decoded.decode("utf-8"))
     except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
-        return None
-    sub = data.get("sub")
-    return sub if isinstance(sub, str) and sub.strip() else None
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _extract_role_from_claims(claims: Dict[str, Any]) -> Role:
+    role = claims.get("role")
+    if role is not None:
+        return normalize_role(role)
+
+    roles = claims.get("roles")
+    if isinstance(roles, list):
+        for candidate in roles:
+            normalized = normalize_role(candidate)
+            if normalized is Role.ROOT:
+                return Role.ROOT
+            if normalized is Role.ADMIN:
+                return Role.ADMIN
+    return Role.USER
+
+
+@dataclass(frozen=True)
+class AuthenticatedUser:
+    sub: str
+    role: Role = Role.USER
 
 
 def extract_bearer_token(auth_header: Optional[str]) -> str:
@@ -111,6 +135,16 @@ def extract_bearer_token(auth_header: Optional[str]) -> str:
 
 
 async def get_authenticated_user_sub(request: Request) -> str:
+    user = await get_authenticated_user(request)
+    return user.sub
+
+
+async def get_authenticated_user_role(request: Request) -> Role:
+    user = await get_authenticated_user(request)
+    return user.role
+
+
+async def get_authenticated_user(request: Request) -> AuthenticatedUser:
     """
     Wire this into your real authentication (Cognito JWT validation, cookies, etc.)
 
@@ -125,18 +159,26 @@ async def get_authenticated_user_sub(request: Request) -> str:
         user_sub = payload.get("sub") or payload.get("cognito:username") or payload.get("username")
         if not user_sub:
             raise HTTPException(401, "Token missing subject")
-        return str(user_sub)
+        role = _extract_role_from_claims(payload)
+        role = enforce_root_role_invariant(user_sub=str(user_sub), role=role)
+        return AuthenticatedUser(sub=str(user_sub), role=role)
 
     if not S.dev_mode:
         raise HTTPException(401, "Authentication not configured")
 
     fallback_user = request.headers.get("x-user-sub")
     if fallback_user:
-        return fallback_user
+        fallback_role = normalize_role(request.headers.get("x-user-role"))
+        fallback_role = enforce_root_role_invariant(user_sub=fallback_user, role=fallback_role)
+        return AuthenticatedUser(sub=fallback_user, role=fallback_role)
 
     auth = request.headers.get("authorization", "")
     token = extract_bearer_token(auth)
-    return _decode_jwt_sub(token) or token
+    payload = _decode_jwt_payload(token)
+    sub = payload.get("sub") if isinstance(payload.get("sub"), str) and payload.get("sub").strip() else token
+    role = _extract_role_from_claims(payload)
+    role = enforce_root_role_invariant(user_sub=sub, role=role)
+    return AuthenticatedUser(sub=sub, role=role)
 
 
 async def resolve_dev_or_authenticated_user_sub(

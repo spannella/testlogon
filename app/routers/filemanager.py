@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import base64
 import json
+import uuid
 from typing import Annotated, Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile, Body, Request, HTTPException
 from pydantic import BaseModel, Field
 from fastapi.responses import StreamingResponse
 
+from app.auth.policy import require_role_value
+from app.auth.roles import Role
+from app.core.tables import T
+from app.core.settings import S
 from app.services.filemanager import (
     create_empty_folder,
     download_file,
@@ -34,6 +39,7 @@ from app.services.filemanager import (
     register_presigned_upload,
     purge_deleted_nodes,
     require_shared_access,
+    admin_search_metadata,
 )
 from app.services.alerts import audit_event
 from app.services.purchase_history import record_receipt_download
@@ -61,6 +67,48 @@ def _decode_cursor(cursor: Optional[str]) -> Optional[Dict[str, Any]]:
 
 def _current_user(ctx=Depends(require_ui_session)) -> str:
     return ctx["user_sub"]
+
+
+def _admin_or_root_ctx(ctx=Depends(require_ui_session)) -> Dict[str, Any]:
+    require_role_value(ctx.get("role"), {Role.ADMIN, Role.ROOT})
+    return ctx
+
+
+def _admin_can_read_content(ctx: Dict[str, Any]) -> bool:
+    tier = str(getattr(S, "filemgr_admin_content_access_tier", "none") or "none").lower()
+    role = str(ctx.get("role") or "")
+    if tier == "admin_root":
+        return role in {Role.ADMIN.value, Role.ROOT.value}
+    if tier == "root_only":
+        return role == Role.ROOT.value
+    return False
+
+
+def _file_audit_fields(
+    *,
+    ctx: Optional[Dict[str, Any]] = None,
+    owner: Optional[str] = None,
+    file_path: Optional[str] = None,
+    correlation_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    if ctx:
+        out["actor_sub"] = str(ctx.get("actor_sub") or ctx.get("user_sub") or "")
+        out["target_user_sub"] = str(ctx.get("effective_sub") or owner or ctx.get("user_sub") or "")
+        if ctx.get("effective_sub"):
+            out["impersonation"] = True
+            out["effective_sub"] = str(ctx.get("effective_sub"))
+            if ctx.get("impersonation_id"):
+                out["impersonation_id"] = str(ctx.get("impersonation_id"))
+    elif owner:
+        out["target_user_sub"] = owner
+    if owner:
+        out.setdefault("target_user_sub", owner)
+    if file_path:
+        out["file_path"] = file_path
+    if correlation_id:
+        out["correlation_id"] = correlation_id
+    return out
 
 
 class PresignUploadIn(BaseModel):
@@ -192,6 +240,186 @@ def search_text_files(
     user: str = Depends(_current_user),
 ):
     return {"query": q, "results": search_text(user, q, limit=limit)}
+
+
+@router.get("/admin/list")
+def admin_list_files(
+    path: str = Query("/", description="Folder path"),
+    owner: Optional[str] = Query(default=None, description="Optional owner user_sub filter"),
+    limit: int = Query(200, ge=1, le=500),
+    req: Request = None,
+    ctx: Dict[str, Any] = Depends(_admin_or_root_ctx),
+):
+    folder = norm_path(path, is_folder=True)
+    items = admin_search_metadata(owner=(owner or None), folder=folder, limit=limit)
+    audit_event(
+        "filemgr_admin_metadata_list",
+        ctx["user_sub"],
+        req,
+        outcome="success",
+        owner_filter=owner,
+        path=folder,
+        result_count=len(items),
+        actor_sub=str(ctx.get("actor_sub") or ctx["user_sub"]),
+    )
+    return {"path": folder, "owner": owner, "items": items}
+
+
+@router.get("/admin/search")
+def admin_search_files(
+    q: Optional[str] = Query(default=None, description="Optional free-text match against name/path"),
+    prefix: Optional[str] = Query(default=None, description="Optional filename prefix"),
+    owner: Optional[str] = Query(default=None, description="Optional owner user_sub filter"),
+    limit: int = Query(200, ge=1, le=500),
+    req: Request = None,
+    ctx: Dict[str, Any] = Depends(_admin_or_root_ctx),
+):
+    if not (q or prefix):
+        raise HTTPException(status_code=400, detail="q or prefix is required")
+    items = admin_search_metadata(owner=(owner or None), query=q, prefix=prefix, limit=limit)
+    audit_event(
+        "filemgr_admin_metadata_search",
+        ctx["user_sub"],
+        req,
+        outcome="success",
+        owner_filter=owner,
+        q=q,
+        prefix=prefix,
+        result_count=len(items),
+        actor_sub=str(ctx.get("actor_sub") or ctx["user_sub"]),
+    )
+    return {"owner": owner, "q": q, "prefix": prefix, "items": items}
+
+
+@router.get("/admin/read")
+def admin_read_file(
+    owner: str = Query(..., description="Owner user_sub"),
+    path: str = Query(..., description="File path"),
+    include_content: bool = Query(False, description="Whether to return file content stream"),
+    req: Request = None,
+    ctx: Dict[str, Any] = Depends(_admin_or_root_ctx),
+):
+    normalized_path = norm_path(path, is_folder=False)
+    actor_sub = str(ctx.get("actor_sub") or ctx["user_sub"])
+    if include_content and not _admin_can_read_content(ctx):
+        raise HTTPException(status_code=403, detail="admin_content_access_disabled")
+
+    node = get_node(owner, normalized_path)
+    if not include_content:
+        audit_event(
+            "filemgr_admin_metadata_read",
+            ctx["user_sub"],
+            req,
+            outcome="success",
+            owner=owner,
+            path=node.get("path"),
+            include_content=False,
+            **_file_audit_fields(ctx=ctx, owner=owner, file_path=str(node.get("path") or normalized_path)),
+        )
+        return {
+            "owner": owner,
+            "path": node.get("path"),
+            "type": node.get("type"),
+            "name": node.get("name"),
+            "size": node.get("size"),
+            "updated_at": node.get("updated_at"),
+            "content_type": node.get("content_type"),
+        }
+    result = download_file(owner, normalized_path)
+    node = result["node"]
+    obj = result["object"]
+    audit_event(
+        "filemgr_admin_content_read",
+        ctx["user_sub"],
+        req,
+        outcome="success",
+        owner=owner,
+        path=node.get("path"),
+        size=node.get("size"),
+        include_content=True,
+        **_file_audit_fields(ctx=ctx, owner=owner, file_path=str(node.get("path") or normalized_path)),
+    )
+
+    def gen():
+        body = obj["Body"]
+        while True:
+            chunk = body.read(1024 * 1024)
+            if not chunk:
+                break
+            yield chunk
+
+    return StreamingResponse(
+        gen(),
+        media_type=node.get("content_type", "application/octet-stream"),
+        headers={
+            "Content-Disposition": f'attachment; filename="{node["name"]}"',
+            **({"Content-Length": str(node["size"])} if node.get("size") is not None else {}),
+        },
+    )
+
+
+@router.get("/admin/audit")
+def admin_file_audit(
+    actor_sub: Optional[str] = Query(default=None),
+    target_user_sub: Optional[str] = Query(default=None),
+    file_path: Optional[str] = Query(default=None),
+    start_ts: Optional[int] = Query(default=None),
+    end_ts: Optional[int] = Query(default=None),
+    limit: int = Query(100, ge=1, le=500),
+    cursor: Optional[str] = Query(default=None),
+    _ctx: Dict[str, Any] = Depends(_admin_or_root_ctx),
+):
+    offset = 0
+    if cursor:
+        payload = _decode_cursor(cursor) or {}
+        offset = int(payload.get("offset", 0) or 0)
+
+    items: List[Dict[str, Any]] = []
+    eks: Optional[Dict[str, Any]] = None
+    scanned = 0
+    max_scan = 40
+    while scanned < max_scan:
+        scanned += 1
+        kwargs: Dict[str, Any] = {"Limit": 250}
+        if eks:
+            kwargs["ExclusiveStartKey"] = eks
+        resp = T.alerts.scan(**kwargs)
+        for it in resp.get("Items", []):
+            event = str(it.get("event") or "")
+            if not event.startswith("filemgr_"):
+                continue
+            ts = int(it.get("ts") or 0)
+            if start_ts and ts < start_ts:
+                continue
+            if end_ts and ts > end_ts:
+                continue
+            details = it.get("details") or {}
+            if actor_sub and str(details.get("actor_sub") or "") != actor_sub:
+                continue
+            if target_user_sub and str(details.get("target_user_sub") or "") != target_user_sub:
+                continue
+            if file_path and str(details.get("file_path") or "") != file_path:
+                continue
+            items.append(
+                {
+                    "ts": ts,
+                    "event": event,
+                    "outcome": it.get("outcome"),
+                    "actor_sub": details.get("actor_sub"),
+                    "target_user_sub": details.get("target_user_sub"),
+                    "file_path": details.get("file_path"),
+                    "correlation_id": details.get("correlation_id"),
+                    "details": details,
+                }
+            )
+        eks = resp.get("LastEvaluatedKey")
+        if not eks:
+            break
+
+    items.sort(key=lambda x: int(x.get("ts") or 0), reverse=True)
+    page = items[offset: offset + limit]
+    next_cursor = _encode_cursor({"offset": offset + limit}) if (offset + limit) < len(items) else None
+    return {"items": page, "cursor": next_cursor}
 
 
 @router.post("/folder")
@@ -342,13 +570,14 @@ def thumbnail_fs_file(path: str = Query(...), req: Request = None, user: str = D
 @router.delete("/file")
 def remove_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
     remove_file(user, path)
-    audit_event("filemgr_file_removed", user, req, outcome="success", path=path)
+    audit_event("filemgr_file_removed", user, req, outcome="success", path=path, **_file_audit_fields(file_path=norm_path(path, is_folder=False), owner=user))
     return {"ok": True}
 
 
 @router.delete("/folder")
 def remove_fs_folder(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
     deleted_count = remove_folder(user, path)
+    correlation_id = uuid.uuid4().hex
     audit_event(
         "filemgr_folder_removed",
         user,
@@ -356,6 +585,7 @@ def remove_fs_folder(path: str = Query(...), req: Request = None, user: str = De
         outcome="success",
         path=path,
         deleted_count=deleted_count,
+        **_file_audit_fields(file_path=norm_path(path, is_folder=True), owner=user, correlation_id=correlation_id),
     )
     return {"ok": True, "deleted_count": deleted_count}
 
@@ -376,6 +606,7 @@ def move_fs_node(
         src=result.get("src"),
         dst=result.get("dst"),
         node_type=result.get("type"),
+        **_file_audit_fields(file_path=str(result.get("src") or norm_path(src, is_folder=None)), owner=user),
     )
     return {"ok": True, **result}
 
@@ -431,12 +662,15 @@ def download_multiple_as_zip(paths: List[str] = Body(...), req: Request = None, 
     else:
         zip_stream = result
         file_count = None
+    correlation_id = uuid.uuid4().hex
     audit_event(
         "filemgr_zip_downloaded",
         user,
         req,
         outcome="success",
         count=file_count or 0,
+        paths=paths,
+        **_file_audit_fields(owner=user, correlation_id=correlation_id),
     )
 
     return StreamingResponse(
@@ -487,6 +721,7 @@ def share_fs_node(
         shared_with=to_user,
         permission=permission,
         expires_at=expires_at,
+        **_file_audit_fields(file_path=norm_path(path, is_folder=None), owner=user),
     )
     return {"ok": True}
 
@@ -506,6 +741,7 @@ def unshare_fs_node(
         outcome="success",
         path=path,
         unshared_with=to_user,
+        **_file_audit_fields(file_path=norm_path(path, is_folder=None), owner=user),
     )
     return {"ok": True}
 
@@ -630,6 +866,7 @@ def shared_download_fs_file(
         path=node.get("path"),
         size=node.get("size"),
         owner=owner,
+        **_file_audit_fields(file_path=str(node.get("path") or norm_path(path, is_folder=False)), owner=owner),
     )
 
     def gen():
@@ -873,6 +1110,7 @@ def shared_download_zip(
     for path in paths:
         require_shared_access(user, owner, path, permission="read")
     zf, count = download_zip(owner, paths)
+    correlation_id = uuid.uuid4().hex
     audit_event(
         "filemgr_download_zip",
         user,
@@ -881,6 +1119,8 @@ def shared_download_zip(
         path="(zip)",
         count=count,
         owner=owner,
+        paths=paths,
+        **_file_audit_fields(owner=owner, correlation_id=correlation_id),
     )
     return StreamingResponse(
         zf,
@@ -890,7 +1130,8 @@ def shared_download_zip(
 
 
 @router.post("/purge-deleted")
-def purge_deleted(req: Request = None, user: str = Depends(_current_user)):
+def purge_deleted(req: Request = None, ctx: Dict[str, Any] = Depends(_admin_or_root_ctx)):
+    user = ctx["user_sub"]
     result = purge_deleted_nodes(user)
     audit_event(
         "filemgr_purge_deleted",

@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/authStore";
+import { useImpersonationStore } from "@/stores/impersonationStore";
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
@@ -107,6 +108,11 @@ export async function api<T>(
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
 
+  const imp = useImpersonationStore.getState();
+  if (imp.isActive() && imp.token && !headers.has("X-IMPERSONATION-TOKEN")) {
+    headers.set("X-IMPERSONATION-TOKEN", imp.token);
+  }
+
   // CSRF token
   const csrf = getCookie("ui_csrf");
   if (csrf) {
@@ -133,6 +139,7 @@ export async function api<T>(
 
   // Handle 401 — try refreshing the session once
   if (res.status === 401) {
+    useImpersonationStore.getState().clear();
     if (!refreshPromise) {
       refreshPromise = refreshSession().finally(() => {
         refreshPromise = null;

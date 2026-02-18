@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from fastapi import UploadFile
+from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from app.routers import filemanager
 
@@ -52,6 +53,79 @@ class TestFileManagerRoutes(unittest.TestCase):
             resp = filemanager.create_folder(path="/docs", user="user")
             self.assertTrue(resp["ok"])
             self.assertEqual(resp["path"], "/docs/")
+
+    def test_admin_metadata_list_and_search(self):
+        rows = [{"owner": "u1", "path": "/docs/a.txt", "type": "file", "name": "a.txt"}]
+        with patch.object(filemanager, "admin_search_metadata", return_value=rows) as search_meta:
+            ctx = {"user_sub": "admin1", "role": "admin"}
+            listed = filemanager.admin_list_files(path="/docs", owner=None, limit=50, ctx=ctx)
+            self.assertEqual(len(listed["items"]), 1)
+            self.assertEqual(listed["items"][0]["owner"], "u1")
+
+            searched = filemanager.admin_search_files(q="a", prefix=None, owner=None, limit=50, ctx=ctx)
+            self.assertEqual(len(searched["items"]), 1)
+            self.assertEqual(searched["items"][0]["path"], "/docs/a.txt")
+            self.assertTrue(search_meta.called)
+
+    def test_admin_read_content_policy_tier(self):
+        ctx_admin = {"user_sub": "admin1", "role": "admin"}
+        node = {"path": "/docs/a.txt", "type": "file", "name": "a.txt", "size": 5, "content_type": "text/plain", "updated_at": "t1"}
+        with patch.object(filemanager, "get_node", return_value=node):
+            meta = filemanager.admin_read_file(owner="u1", path="/docs/a.txt", include_content=False, ctx=ctx_admin)
+            self.assertEqual(meta["path"], "/docs/a.txt")
+
+        original_tier = filemanager.S.filemgr_admin_content_access_tier
+        object.__setattr__(filemanager.S, "filemgr_admin_content_access_tier", "none")
+        try:
+            with self.assertRaises(HTTPException) as exc:
+                filemanager.admin_read_file(owner="u1", path="/docs/a.txt", include_content=True, ctx=ctx_admin)
+            self.assertEqual(exc.exception.status_code, 403)
+        finally:
+            object.__setattr__(filemanager.S, "filemgr_admin_content_access_tier", original_tier)
+
+    def test_bulk_operations_emit_correlation_id(self):
+        captured = []
+
+        def _audit(_event, _user, _req=None, **fields):
+            captured.append(fields)
+
+        with patch.object(filemanager, "audit_event", side_effect=_audit), \
+             patch.object(filemanager, "download_zip", return_value=(iter([b"zip"]), 1)):
+            filemanager.download_multiple_as_zip(paths=["/a"], user="user")
+
+        self.assertTrue(captured)
+        self.assertTrue(captured[-1].get("correlation_id"))
+
+    def test_admin_file_audit_query_filters(self):
+        alerts = [
+            {
+                "event": "filemgr_file_downloaded",
+                "ts": 100,
+                "outcome": "success",
+                "details": {"actor_sub": "admin1", "target_user_sub": "u1", "file_path": "/a", "correlation_id": "c1"},
+            },
+            {
+                "event": "billing_charge_once",
+                "ts": 101,
+                "outcome": "success",
+                "details": {"actor_sub": "admin1"},
+            },
+        ]
+        fake_alerts = type("A", (), {"scan": lambda self, **kwargs: {"Items": alerts}})()
+        tables = type("T", (), {"alerts": fake_alerts})()
+        with patch.object(filemanager, "T", tables):
+            resp = filemanager.admin_file_audit(
+                actor_sub="admin1",
+                target_user_sub="u1",
+                file_path="/a",
+                start_ts=90,
+                end_ts=110,
+                limit=10,
+                cursor=None,
+                _ctx={"user_sub": "root", "role": "root"},
+            )
+        self.assertEqual(len(resp["items"]), 1)
+        self.assertEqual(resp["items"][0]["event"], "filemgr_file_downloaded")
 
     def test_upload_and_download(self):
         upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"))

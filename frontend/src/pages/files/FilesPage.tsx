@@ -56,6 +56,7 @@ import { ShareDialog } from "./ShareDialog";
 import { UploadZone } from "./UploadZone";
 import { BulkActions } from "./BulkActions";
 import { MoveDialog } from "./MoveDialog";
+import ImpersonationRouteIndicator from "@/components/shared/ImpersonationRouteIndicator";
 
 type SearchMode = "name" | "content";
 
@@ -327,6 +328,7 @@ export default function FilesPage() {
         title="Files"
         description="Manage your files and folders"
       />
+      <ImpersonationRouteIndicator area="files" />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>

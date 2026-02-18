@@ -10,7 +10,8 @@ import jwt
 from boto3.dynamodb.conditions import Key
 from fastapi import Depends, Header, HTTPException, Request, Response
 
-from app.auth.deps import get_authenticated_user_sub
+from app.auth.deps import AuthenticatedUser, get_authenticated_user
+from app.auth.roles import Role, normalize_role
 from app.core.crypto import sha256_str
 from app.core.normalize import client_ip_from_request
 from app.core.settings import S
@@ -25,6 +26,30 @@ class SessionInfo:
     session_id: str
     csrf_token: str
     user_sub: str
+
+
+def _is_root_user(user_sub: str) -> bool:
+    return user_sub == (S.root_user_sub or "").strip()
+
+
+def _session_ttl_seconds_for_user(user_sub: str) -> int:
+    if _is_root_user(user_sub):
+        return max(60, int(getattr(S, "root_session_ttl_seconds", 3600)))
+    return int(S.ui_session_ttl_seconds)
+
+
+def _access_ttl_seconds_for_user(user_sub: str) -> int:
+    if _is_root_user(user_sub):
+        return max(60, int(getattr(S, "root_access_token_ttl_seconds", 300)))
+    return int(S.ui_access_token_ttl_seconds)
+
+
+def _refresh_ttl_seconds_for_user(user_sub: str, explicit_ttl: Optional[int] = None) -> int:
+    if explicit_ttl and explicit_ttl > 0:
+        return int(explicit_ttl)
+    if _is_root_user(user_sub):
+        return max(60, int(getattr(S, "root_refresh_token_ttl_seconds", 1800)))
+    return int(S.ui_refresh_token_ttl_seconds)
 
 def _coerce_session_info(session: SessionInfo | str, user_sub: str) -> SessionInfo:
     if isinstance(session, SessionInfo):
@@ -50,21 +75,24 @@ def session_id_value(session: SessionInfo | str) -> str:
     return session.session_id if hasattr(session, "session_id") else str(session)
 
 def set_session_cookies(response: Response, session: SessionInfo, *, refresh_ttl_seconds: Optional[int] = None) -> None:
+    session_ttl = _session_ttl_seconds_for_user(session.user_sub)
+    access_ttl = _access_ttl_seconds_for_user(session.user_sub)
+    refresh_ttl = _refresh_ttl_seconds_for_user(session.user_sub, refresh_ttl_seconds)
     response.set_cookie(
         S.ui_session_cookie_name,
         session.session_id,
-        max_age=S.ui_session_ttl_seconds,
+        max_age=session_ttl,
         httponly=True,
         secure=S.ui_cookie_secure,
         samesite=S.ui_cookie_samesite,
     )
-    _issue_refresh_token(response, session.session_id, session.user_sub, refresh_ttl_seconds=refresh_ttl_seconds)
+    _issue_refresh_token(response, session.session_id, session.user_sub, refresh_ttl_seconds=refresh_ttl)
     access = mint_access_token(session.user_sub, session.session_id)
     if access:
         response.set_cookie(
             S.ui_access_token_cookie_name,
             access,
-            max_age=S.ui_access_token_ttl_seconds,
+            max_age=_access_ttl_seconds_for_user(user_sub),
             httponly=True,
             secure=S.ui_cookie_secure,
             samesite=S.ui_cookie_samesite,
@@ -72,7 +100,7 @@ def set_session_cookies(response: Response, session: SessionInfo, *, refresh_ttl
     response.set_cookie(
         S.ui_csrf_cookie_name,
         session.csrf_token,
-        max_age=S.ui_session_ttl_seconds,
+        max_age=session_ttl,
         httponly=False,
         secure=S.ui_cookie_secure,
         samesite=S.ui_cookie_samesite,
@@ -122,7 +150,7 @@ def rotate_existing_session(
     mfa_verified_at: Optional[int] = None,
     refresh_ttl_seconds: Optional[int] = None,
 ) -> SessionInfo:
-    session = create_real_session(request, ctx["user_sub"], mfa_verified_at=mfa_verified_at)
+    session = create_real_session(request, ctx["user_sub"], mfa_verified_at=mfa_verified_at, refresh_ttl_seconds=refresh_ttl_seconds)
     revoke_session(ctx["user_sub"], ctx["session_id"])
     set_session_cookies(response, session, refresh_ttl_seconds=refresh_ttl_seconds)
     ensure_device_cookie(request, response, ctx["user_sub"])
@@ -142,10 +170,15 @@ def is_real_ui_session_id(session_id: str) -> bool:
 def mint_access_token(user_sub: str, session_id: str) -> str:
     if not S.ui_access_token_secret:
         return ""
+    access_ttl = _access_ttl_seconds_for_user(user_sub)
+    role = "root" if _is_root_user(user_sub) else "user"
+    auth_level = "high" if role == "root" else "standard"
     payload = {
         "sub": user_sub,
         "sid": session_id,
-        "exp": now_ts() + S.ui_access_token_ttl_seconds,
+        "role": role,
+        "auth_level": auth_level,
+        "exp": now_ts() + access_ttl,
         "iat": now_ts(),
     }
     return jwt.encode(payload, S.ui_access_token_secret, algorithm="HS256")
@@ -164,11 +197,58 @@ def _issue_refresh_token(response: Response, session_id: str, user_sub: str, *, 
     response.set_cookie(
         S.ui_refresh_token_cookie_name,
         token,
-        max_age=refresh_ttl_seconds or S.ui_refresh_token_ttl_seconds,
+        max_age=_refresh_ttl_seconds_for_user(user_sub, refresh_ttl_seconds),
         httponly=True,
         secure=S.ui_cookie_secure,
         samesite=S.ui_cookie_samesite,
     )
+
+
+
+def _resolve_impersonation_context(request: Request, actor_sub: str, token: str) -> Dict[str, str]:
+    if not token:
+        return {}
+    if not S.ui_access_token_secret:
+        raise HTTPException(401, "Impersonation token validation unavailable")
+    try:
+        payload = jwt.decode(token, S.ui_access_token_secret, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError as exc:
+        raise HTTPException(401, "impersonation_expired") from exc
+    except jwt.PyJWTError as exc:
+        raise HTTPException(401, "Invalid impersonation token") from exc
+
+    if not payload.get("impersonation"):
+        raise HTTPException(401, "Invalid impersonation token")
+
+    token_actor = str(payload.get("actor_sub") or payload.get("sub") or "").strip()
+    effective_sub = str(payload.get("effective_sub") or "").strip()
+    imp_sid = str(payload.get("sid") or "").strip()
+    if not token_actor or not effective_sub or not imp_sid or token_actor != actor_sub:
+        raise HTTPException(401, "Invalid impersonation token")
+
+    it = T.sessions.get_item(Key={"user_sub": actor_sub, "session_id": imp_sid}).get("Item") or {}
+    if not it or it.get("purpose") != "impersonation":
+        raise HTTPException(401, "Invalid impersonation token")
+    if it.get("revoked"):
+        raise HTTPException(401, "Impersonation revoked")
+    ts = now_ts()
+    if int(it.get("expires_at") or 0) <= ts:
+        try:
+            T.sessions.update_item(
+                Key={"user_sub": actor_sub, "session_id": imp_sid},
+                UpdateExpression="SET revoked=:t, revoked_at=:now",
+                ExpressionAttributeValues={":t": True, ":now": ts},
+            )
+        except Exception:
+            pass
+        raise HTTPException(401, "impersonation_expired")
+
+    return {
+        "actor_sub": actor_sub,
+        "effective_sub": effective_sub,
+        "impersonation_id": imp_sid,
+        "impersonation": "true",
+    }
 
 def rotate_refresh_token(response: Response, user_sub: str, session_id: str, refresh_token: str) -> None:
     if not refresh_token:
@@ -184,7 +264,7 @@ def rotate_refresh_token(response: Response, user_sub: str, session_id: str, ref
         response.set_cookie(
             S.ui_access_token_cookie_name,
             access,
-            max_age=S.ui_access_token_ttl_seconds,
+            max_age=_access_ttl_seconds_for_user(user_sub),
             httponly=True,
             secure=S.ui_cookie_secure,
             samesite=S.ui_cookie_samesite,
@@ -192,9 +272,15 @@ def rotate_refresh_token(response: Response, user_sub: str, session_id: str, ref
 
 async def require_ui_session(
     request: Request,
-    user_sub: str = Depends(get_authenticated_user_sub),
+    auth_user: Optional[AuthenticatedUser] = Depends(get_authenticated_user),
+    user_sub: Optional[str] = None,
     x_session_id: Optional[str] = Header(default=None, alias="X-SESSION-ID"),
+    x_impersonation_token: Optional[str] = Header(default=None, alias="X-IMPERSONATION-TOKEN"),
 ) -> Dict[str, str]:
+    resolved_user_sub = user_sub or (auth_user.sub if auth_user else "")
+    if not resolved_user_sub:
+        raise HTTPException(401, "Missing user")
+    role: Role = normalize_role(getattr(auth_user, "role", None))
     session_id = None
     cookies = getattr(request, "cookies", {}) or {}
     headers = getattr(request, "headers", {}) or {}
@@ -215,7 +301,7 @@ async def require_ui_session(
     session_id = session_id or session_cookie or x_session_id
     if not session_id:
         raise HTTPException(401, "Missing session")
-    it = T.sessions.get_item(Key={"user_sub": user_sub, "session_id": session_id}).get("Item")
+    it = T.sessions.get_item(Key={"user_sub": resolved_user_sub, "session_id": session_id}).get("Item")
     if not it:
         raise HTTPException(401, "Unknown session")
     if it.get("revoked", False):
@@ -229,7 +315,7 @@ async def require_ui_session(
     if ttl_epoch and ttl_epoch <= ts:
         try:
             T.sessions.update_item(
-                Key={"user_sub": user_sub, "session_id": session_id},
+                Key={"user_sub": resolved_user_sub, "session_id": session_id},
                 UpdateExpression="SET revoked=:t, revoked_at=:now",
                 ExpressionAttributeValues={":t": True, ":now": ts},
             )
@@ -239,18 +325,18 @@ async def require_ui_session(
     last = int(it.get("last_seen_at", 0) or 0)
     inactivity_seconds = getattr(S, "ui_inactivity_seconds", 0)
     if last and inactivity_seconds and (ts - last) > inactivity_seconds:
-        T.sessions.update_item(Key={"user_sub": user_sub, "session_id": session_id}, UpdateExpression="SET revoked=:t", ExpressionAttributeValues={":t": True})
+        T.sessions.update_item(Key={"user_sub": resolved_user_sub, "session_id": session_id}, UpdateExpression="SET revoked=:t", ExpressionAttributeValues={":t": True})
         raise HTTPException(401, "Session expired (inactive)")
 
     if getattr(S, "ddb_sessions_table", ""):
-        device_info = record_device_login(request, user_sub)
+        device_info = record_device_login(request, resolved_user_sub)
         if not device_info.get("trusted", False) and (
             device_info.get("new_device")
             or device_info.get("location_mismatch")
             or device_info.get("token_mismatch")
         ):
             if compute_required_factors(user_sub):
-                require_fresh_mfa({"user_sub": user_sub, "session_id": session_id})
+                require_fresh_mfa({"user_sub": resolved_user_sub, "session_id": session_id})
             else:
                 raise HTTPException(401, "Re-auth required")
 
@@ -267,18 +353,29 @@ async def require_ui_session(
 
     # Touch last_seen (best effort)
     try:
-        T.sessions.update_item(Key={"user_sub": user_sub, "session_id": session_id}, UpdateExpression="SET last_seen_at=:t", ExpressionAttributeValues={":t": ts})
+        T.sessions.update_item(Key={"user_sub": resolved_user_sub, "session_id": session_id}, UpdateExpression="SET last_seen_at=:t", ExpressionAttributeValues={":t": ts})
     except Exception:
         pass
 
-    request.state.user_sub = user_sub
-    return {"user_sub": user_sub, "session_id": session_id}
+    imp_token = x_impersonation_token if isinstance(x_impersonation_token, str) else ""
+    impersonation_ctx = _resolve_impersonation_context(request, resolved_user_sub, imp_token)
+
+    request.state.user_sub = resolved_user_sub
+    request.state.user_role = role.value
+    if impersonation_ctx:
+        request.state.actor_sub = impersonation_ctx["actor_sub"]
+        request.state.effective_sub = impersonation_ctx["effective_sub"]
+        request.state.impersonation_id = impersonation_ctx["impersonation_id"]
+
+    out = {"user_sub": resolved_user_sub, "session_id": session_id, "role": role.value}
+    out.update(impersonation_ctx)
+    return out
 
 def create_real_session(req: Request, user_sub: str, *, mfa_verified_at: Optional[int] = None, risk_score: int = 0, refresh_ttl_seconds: Optional[int] = None) -> SessionInfo:
     session_id = str(uuid.uuid4())
     csrf_token = secrets.token_urlsafe(32)
     ts = now_ts()
-    ttl = ts + S.ui_session_ttl_seconds
+    ttl = ts + _session_ttl_seconds_for_user(user_sub)
     is_new_user = _is_new_user(user_sub)
     item: Dict[str, Any] = {
         "user_sub": user_sub,
@@ -296,8 +393,7 @@ def create_real_session(req: Request, user_sub: str, *, mfa_verified_at: Optiona
     if risk_score > 0:
         item["risk_score"] = risk_score
         item["risk_level"] = "high" if risk_score >= getattr(S, "login_anomaly_risk_score_threshold", 1) else "elevated"
-    if refresh_ttl_seconds and refresh_ttl_seconds > 0:
-        item["refresh_ttl_seconds"] = int(refresh_ttl_seconds)
+    item["refresh_ttl_seconds"] = _refresh_ttl_seconds_for_user(user_sub, refresh_ttl_seconds)
     T.sessions.put_item(Item=with_ttl(item, ttl_epoch=ttl))
     try:
         record_device_login(req, user_sub)
@@ -406,8 +502,7 @@ def create_stepup_challenge(
         item["purpose"] = purpose
     if risk_score > 0:
         item["risk_score"] = risk_score
-    if refresh_ttl_seconds and refresh_ttl_seconds > 0:
-        item["refresh_ttl_seconds"] = int(refresh_ttl_seconds)
+    item["refresh_ttl_seconds"] = _refresh_ttl_seconds_for_user(user_sub, refresh_ttl_seconds)
     T.sessions.put_item(Item=with_ttl(item, ttl_epoch=expires))
     return challenge_id
 

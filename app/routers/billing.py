@@ -15,6 +15,8 @@ else:  # pragma: no cover
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.auth.policy import require_role_value
+from app.auth.roles import Role
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
@@ -57,6 +59,36 @@ from app.services.ttl import with_ttl
 
 router = APIRouter(tags=["billing"])
 logger = logging.getLogger(__name__)
+
+
+def require_admin_or_root_session(ctx=Depends(require_ui_session)) -> Dict[str, Any]:
+    require_role_value(ctx.get("role"), {Role.ADMIN, Role.ROOT})
+    return ctx
+
+
+def _billing_read_user_sub(ctx: Dict[str, Any], target_user_sub: Optional[str]) -> str:
+    requested = (target_user_sub or "").strip()
+    if requested and requested != ctx["user_sub"]:
+        require_role_value(ctx.get("role"), {Role.ADMIN, Role.ROOT})
+        return requested
+    return ctx["user_sub"]
+
+
+def _billing_write_user_context(ctx: Dict[str, Any], target_user_sub: Optional[str]) -> tuple[str, Dict[str, Any]]:
+    requested = (target_user_sub or "").strip()
+    actor_sub = str(ctx.get("actor_sub") or ctx["user_sub"])
+    effective_sub = ctx["user_sub"]
+    tags: Dict[str, Any] = {}
+    if requested and requested != ctx["user_sub"]:
+        require_role_value(ctx.get("role"), {Role.ADMIN, Role.ROOT})
+        effective_sub = requested
+        tags = {
+            "viewed_as_admin": True,
+            "viewed-as-admin": True,
+            "actor_sub": actor_sub,
+            "effective_sub": effective_sub,
+        }
+    return effective_sub, tags
 
 
 def dual_route(methods: str | Iterable[str], path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -255,29 +287,29 @@ def billing_config() -> Dict[str, str]:
 
 
 @dual_route("GET", "/billing/settings")
-def get_settings(ctx=Depends(require_ui_session)) -> Dict[str, Any]:
-    user_id = ctx["user_sub"]
+def get_settings(ctx=Depends(require_ui_session), user_sub: Optional[str] = None) -> Dict[str, Any]:
+    user_id = _billing_read_user_sub(ctx, user_sub)
     pk = user_pk(user_id)
     settings = ddb_get(T.billing, pk, "BILLING") or {"autopay_enabled": False, "currency": "usd", "default_payment_method_id": None}
     return settings
 
 
 @dual_route("POST", "/billing/autopay")
-def set_autopay(body: SetAutopayReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
-    user_id = ctx["user_sub"]
+def set_autopay(body: SetAutopayReq, req: Request = None, ctx=Depends(require_ui_session), user_sub: Optional[str] = None) -> Dict[str, bool]:
+    user_id, admin_tags = _billing_write_user_context(ctx, user_sub)
     pk = user_pk(user_id)
     if not ddb_get(T.billing, pk, "BILLING"):
         ddb_put(T.billing, {"pk": pk, "sk": "BILLING", "autopay_enabled": False, "currency": "usd", "default_payment_method_id": None})
     ddb_update(T.billing, pk, "BILLING", "SET autopay_enabled = :e", {":e": bool(body.enabled)})
-    audit_event("billing_autopay_set", user_id, req, outcome="success", enabled=bool(body.enabled))
+    audit_event("billing_autopay_set", user_id, req, outcome="success", enabled=bool(body.enabled), **admin_tags)
     if not body.enabled:
         schedule_autopay_disabled_notice(user_id, "stripe")
     return {"ok": True}
 
 
 @dual_route("GET", "/billing/balance")
-def get_balance(ctx=Depends(require_ui_session)) -> Dict[str, Any]:
-    user_id = ctx["user_sub"]
+def get_balance(ctx=Depends(require_ui_session), user_sub: Optional[str] = None) -> Dict[str, Any]:
+    user_id = _billing_read_user_sub(ctx, user_sub)
     pk = user_pk(user_id)
     ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
     bal = ddb_get(T.billing, pk, "BALANCE") or {}
@@ -358,20 +390,21 @@ def list_payment_methods(ctx=Depends(require_ui_session)) -> List[StripePaymentM
 
 
 @dual_route("POST", "/billing/payment-methods/priority")
-def set_priority(body: SetPriorityReq, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
-    user_id = ctx["user_sub"]
+def set_priority(body: SetPriorityReq, req: Request = None, ctx=Depends(require_ui_session), user_sub: Optional[str] = None) -> Dict[str, bool]:
+    user_id, admin_tags = _billing_write_user_context(ctx, user_sub)
     pk = user_pk(user_id)
     sk = pm_sk(body.payment_method_id)
     if not ddb_get(T.billing, pk, sk):
         raise HTTPException(404, "Payment method not found")
     ddb_update(T.billing, pk, sk, "SET priority = :p", {":p": int(body.priority)})
+    audit_event("billing_payment_method_priority", user_id, req, outcome="success", payment_method_id=body.payment_method_id, priority=int(body.priority), **admin_tags)
     return {"ok": True}
 
 
 @dual_route("POST", "/billing/payment-methods/default")
-def set_default(body: SetDefaultReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
+def set_default(body: SetDefaultReq, req: Request = None, ctx=Depends(require_ui_session), user_sub: Optional[str] = None) -> Dict[str, bool]:
     ensure_stripe_configured()
-    user_id = ctx["user_sub"]
+    user_id, admin_tags = _billing_write_user_context(ctx, user_sub)
     pk = user_pk(user_id)
     if not ddb_get(T.billing, pk, pm_sk(body.payment_method_id)):
         raise HTTPException(404, "Payment method not found")
@@ -379,15 +412,15 @@ def set_default(body: SetDefaultReq, req: Request = None, ctx=Depends(require_ui
     customer_id = get_or_create_customer(user_id)
     set_default_pm(user_id, body.payment_method_id)
     stripe.Customer.modify(customer_id, invoice_settings={"default_payment_method": body.payment_method_id})
-    audit_event("billing_payment_method_default", user_id, req, outcome="success", payment_method_id=body.payment_method_id)
+    audit_event("billing_payment_method_default", user_id, req, outcome="success", payment_method_id=body.payment_method_id, **admin_tags)
     bump_dunning_after_payment_method_update(user_id, "stripe")
     return {"ok": True}
 
 
 @dual_route("DELETE", "/billing/payment-methods/{payment_method_id}")
-def remove_payment_method(payment_method_id: str, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, bool]:
+def remove_payment_method(payment_method_id: str, req: Request = None, ctx=Depends(require_ui_session), user_sub: Optional[str] = None) -> Dict[str, bool]:
     ensure_stripe_configured()
-    user_id = ctx["user_sub"]
+    user_id, admin_tags = _billing_write_user_context(ctx, user_sub)
     pk = user_pk(user_id)
     sk = pm_sk(payment_method_id)
     if not ddb_get(T.billing, pk, sk):
@@ -415,16 +448,17 @@ def remove_payment_method(payment_method_id: str, req: Request = None, ctx=Depen
             outcome="success",
             payment_method_id=payment_method_id,
             new_default_payment_method_id=new_default,
+            **admin_tags,
         )
     else:
-        audit_event("billing_payment_method_removed", user_id, req, outcome="success", payment_method_id=payment_method_id)
+        audit_event("billing_payment_method_removed", user_id, req, outcome="success", payment_method_id=payment_method_id, **admin_tags)
     return {"ok": True}
 
 
 @dual_route("POST", "/billing/pay-balance")
-def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, str]:
+def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui_session), user_sub: Optional[str] = None) -> Dict[str, str]:
     ensure_stripe_configured()
-    user_id = ctx["user_sub"]
+    user_id, admin_tags = _billing_write_user_context(ctx, user_sub)
     pk = user_pk(user_id)
 
     ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
@@ -465,6 +499,7 @@ def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui
             amount_cents=amount,
             currency=billing.get("currency", "usd"),
             reason=str(exc),
+            **admin_tags,
         )
         return {"status": "failed", "reason": str(exc)}
 
@@ -515,14 +550,15 @@ def pay_balance(body: PayBalanceReq, req: Request = None, ctx=Depends(require_ui
         status=pi.get("status"),
         ledger_sk=led_sk,
         purchase_txn_id=purchase_txn_id,
+        **admin_tags,
     )
     return {"status": pi.get("status"), "payment_intent_id": pi["id"]}
 
 
 @dual_route("POST", "/billing/charge-once")
-def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, Any]:
+def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_ui_session), user_sub: Optional[str] = None) -> Dict[str, Any]:
     ensure_stripe_configured()
-    user_id = ctx["user_sub"]
+    user_id, admin_tags = _billing_write_user_context(ctx, user_sub)
     pk = user_pk(user_id)
 
     ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
@@ -556,6 +592,7 @@ def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_
             amount_cents=int(body.amount_cents),
             currency=billing.get("currency", "usd"),
             reason=str(exc),
+            **admin_tags,
         )
         return {"status": "failed", "reason": str(exc)}
 
@@ -612,14 +649,15 @@ def charge_once(body: StripeChargeReq, req: Request = None, ctx=Depends(require_
         status=pi.get("status"),
         ledger_sk=led_sk,
         purchase_txn_id=purchase_txn_id,
+        **admin_tags,
     )
     return {"status": pi.get("status"), "payment_intent_id": pi["id"]}
 
 
 @dual_route("POST", "/billing/refund")
-def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, Any]:
+def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(require_ui_session), user_sub: Optional[str] = None) -> Dict[str, Any]:
     ensure_stripe_configured()
-    user_id = ctx["user_sub"]
+    user_id, admin_tags = _billing_write_user_context(ctx, user_sub)
     pk = user_pk(user_id)
 
     pay = ddb_get(T.billing, pk, pay_sk(body.payment_intent_id))
@@ -672,13 +710,15 @@ def refund_payment(body: StripeRefundReq, req: Request = None, ctx=Depends(requi
         refund_id=refund.get("id"),
         amount_cents=amount,
         reason=body.reason,
+        **admin_tags,
     )
     return {"ok": True, "refund_id": refund.get("id"), "payment_intent_id": body.payment_intent_id}
 
 
 @dual_route("POST", "/billing/checkout_session")
-def create_checkout_session(body: BillingCheckoutReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, str]:
+def create_checkout_session(body: BillingCheckoutReq, req: Request = None, ctx=Depends(require_ui_session), user_sub: Optional[str] = None) -> Dict[str, str]:
     ensure_stripe_configured()
+    target_user_sub, admin_tags = _billing_write_user_context(ctx, user_sub)
     if body.amount_cents <= 0:
         raise HTTPException(400, "amount_cents must be greater than zero")
     currency = (body.currency or S.stripe_default_currency or "usd").lower()
@@ -691,7 +731,7 @@ def create_checkout_session(body: BillingCheckoutReq, req: Request = None, ctx=D
         mode="payment",
         success_url=success_url,
         cancel_url=cancel_url,
-        client_reference_id=ctx["user_sub"],
+        client_reference_id=target_user_sub,
         line_items=[
             {
                 "quantity": 1,
@@ -702,16 +742,17 @@ def create_checkout_session(body: BillingCheckoutReq, req: Request = None, ctx=D
                 },
             }
         ],
-        metadata={"user_sub": ctx["user_sub"]},
+        metadata={"user_sub": target_user_sub},
     )
     audit_event(
         "billing_checkout_session",
-        ctx["user_sub"],
+        target_user_sub,
         req,
         outcome="success",
         amount_cents=body.amount_cents,
         currency=currency,
         session_id=session.id,
+        **admin_tags,
     )
     return {"session_id": session.id, "url": session.url}
 
@@ -1018,8 +1059,8 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
 
 
 @dual_route("POST", "/billing/_dev/add-charge")
-def dev_add_charge(body: AddChargeReq, ctx=Depends(require_ui_session)) -> Dict[str, Any]:
-    user_id = ctx["user_sub"]
+def dev_add_charge(body: AddChargeReq, req: Request = None, ctx=Depends(require_admin_or_root_session), user_sub: Optional[str] = None) -> Dict[str, Any]:
+    user_id, admin_tags = _billing_write_user_context(ctx, user_sub)
     pk = user_pk(user_id)
     ensure_balance_row(T.billing, pk, S.stripe_default_currency or "usd")
 
@@ -1038,12 +1079,24 @@ def dev_add_charge(body: AddChargeReq, ctx=Depends(require_ui_session)) -> Dict[
     else:
         apply_balance_delta(T.billing, pk, {"owed_settled_cents": int(body.amount_cents)}, currency=S.stripe_default_currency or "usd")
 
+    audit_event(
+        "billing_dev_add_charge",
+        user_id,
+        req,
+        outcome="success",
+        amount_cents=int(body.amount_cents),
+        state=body.state,
+        reason=body.reason,
+        ledger_sk=led_sk_value,
+        **admin_tags,
+    )
+
     return {"ok": True, "ledger_sk": led_sk_value}
 
 
 @dual_route("GET", "/billing/ledger")
-def list_ledger(ctx=Depends(require_ui_session), limit: int = 50) -> Dict[str, Any]:
-    user_id = ctx["user_sub"]
+def list_ledger(ctx=Depends(require_ui_session), limit: int = 50, user_sub: Optional[str] = None) -> Dict[str, Any]:
+    user_id = _billing_read_user_sub(ctx, user_sub)
     items = ddb_query_pk(T.billing, user_pk(user_id))
     led = [it for it in items if it["sk"].startswith("LEDGER#")]
     led.sort(key=lambda x: x.get("ts", 0), reverse=True)
@@ -1051,17 +1104,17 @@ def list_ledger(ctx=Depends(require_ui_session), limit: int = 50) -> Dict[str, A
 
 
 @dual_route("GET", "/billing/payments")
-def list_payments(ctx=Depends(require_ui_session), limit: int = 50) -> Dict[str, Any]:
-    user_id = ctx["user_sub"]
+def list_payments(ctx=Depends(require_ui_session), limit: int = 50, user_sub: Optional[str] = None) -> Dict[str, Any]:
+    user_id = _billing_read_user_sub(ctx, user_sub)
     pays = list_payment_records_ddb(user_id)
     pays.sort(key=lambda x: x.get("created_at", 0), reverse=True)
     return {"items": pays[: max(1, min(limit, 200))]}
 
 
 @dual_route("GET", "/billing/subscriptions")
-def list_subscriptions(ctx=Depends(require_ui_session), limit: int = 50) -> Dict[str, Any]:
+def list_subscriptions(ctx=Depends(require_ui_session), limit: int = 50, user_sub: Optional[str] = None) -> Dict[str, Any]:
     ensure_stripe_configured()
-    user_id = ctx["user_sub"]
+    user_id = _billing_read_user_sub(ctx, user_sub)
     customer_id = get_or_create_customer(user_id)
     capped_limit = max(1, min(limit, 200))
     resp = stripe.Subscription.list(customer=customer_id, limit=capped_limit)

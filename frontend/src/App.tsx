@@ -27,6 +27,7 @@ const ProfilePage = lazy(() => import("@/pages/settings/ProfilePage"));
 const SettingsPage = lazy(() => import("@/pages/settings/SettingsPage"));
 const PurchasesPage = lazy(() => import("@/pages/purchases/PurchasesPage"));
 const SubscriptionsPage = lazy(() => import("@/pages/subscriptions/SubscriptionsPage"));
+const RootRoleManagementPage = lazy(() => import("@/pages/admin/RootRoleManagementPage"));
 
 function PageSpinner() {
   return (
@@ -65,6 +66,7 @@ export default function App() {
           <Route path="purchases" element={<PurchasesPage />} />
           <Route path="purchases/:txnId" element={<PurchasesPage />} />
           <Route path="subscriptions" element={<SubscriptionsPage />} />
+          <Route path="root/roles" element={<RootRoleManagementPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

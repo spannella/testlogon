@@ -4,6 +4,7 @@ import { BillingOverview } from "./BillingOverview";
 import { PaymentMethods } from "./PaymentMethods";
 import { Ledger } from "./Ledger";
 import { Subscriptions } from "./Subscriptions";
+import ImpersonationRouteIndicator from "@/components/shared/ImpersonationRouteIndicator";
 
 export default function BillingPage() {
   return (
@@ -12,6 +13,7 @@ export default function BillingPage() {
         title="Billing"
         description="Manage your balance, payment methods, and subscriptions"
       />
+      <ImpersonationRouteIndicator area="billing" />
 
       <Tabs defaultValue="overview">
         <TabsList>
