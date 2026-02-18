@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 from urllib.parse import urlparse
 from typing import Optional
@@ -31,8 +32,35 @@ def _is_local_endpoint(endpoint_url: Optional[str]) -> bool:
     return host in {"localhost", "127.0.0.1", "0.0.0.0"}
 
 
+def _is_non_aws_localish_endpoint(endpoint_url: Optional[str]) -> bool:
+    if not endpoint_url:
+        return False
+
+    host = (urlparse(endpoint_url).hostname or "").lower()
+    if not host:
+        return False
+
+    if host.endswith("amazonaws.com"):
+        return False
+
+    if S.dev_mode:
+        return True
+
+    if host in {"host.docker.internal", "localstack", "minio"}:
+        return True
+
+    if host.endswith(".local") or host.endswith(".internal"):
+        return True
+
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+    except ValueError:
+        return False
+
+
 def _local_credentials_kwargs(endpoint_url: Optional[str]) -> dict:
-    if not _is_local_endpoint(endpoint_url):
+    if not (_is_local_endpoint(endpoint_url) or _is_non_aws_localish_endpoint(endpoint_url)):
         return {}
     if os.getenv("AWS_ACCESS_KEY_ID") and os.getenv("AWS_SECRET_ACCESS_KEY"):
         return {}
