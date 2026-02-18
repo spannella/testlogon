@@ -760,11 +760,30 @@ export interface UsageMetricSummary {
   percent_used: number;
 }
 
+export interface UsageUnitMetricSummary {
+  used_count: number;
+  limit_count: number;
+  percent_used: number;
+}
+
+export interface UsageTransferSplitSummary {
+  upload_bytes_total: number;
+  download_bytes_total: number;
+}
+
 export interface UsageSummaryResp {
   period_id: string;
   upload: UsageMetricSummary;
   download: UsageMetricSummary;
   storage: UsageMetricSummary;
+  message_send?: UsageUnitMetricSummary;
+  post_publish?: UsageUnitMetricSummary;
+  messaging_transfer?: UsageTransferSplitSummary;
+  newsfeed_transfer?: UsageTransferSplitSummary;
+  messaging_upload_bytes_total?: number;
+  messaging_download_bytes_total?: number;
+  newsfeed_upload_bytes_total?: number;
+  newsfeed_download_bytes_total?: number;
   updated_at?: string;
 }
 

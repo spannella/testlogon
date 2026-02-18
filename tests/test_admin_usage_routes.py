@@ -30,10 +30,51 @@ class TestAdminUsageRoutes(unittest.TestCase):
         audit.assert_called_once()
 
     def test_user_detail_route(self):
-        with patch.object(admin_usage, "get_admin_user_usage_detail", return_value={"user_id": "u1"}) as fn:
+        detail = {
+            "user_id": "u1",
+            "summary": {
+                "upload": {"used_bytes": 10},
+                "download": {"used_bytes": 5},
+                "storage": {"used_bytes": 2},
+                "message_send": {"used_count": 7},
+                "post_publish": {"used_count": 3},
+                "messaging_upload_bytes_total": 11,
+                "messaging_download_bytes_total": 12,
+                "newsfeed_upload_bytes_total": 13,
+                "newsfeed_download_bytes_total": 14,
+            },
+            "snapshots": [{"upload_bytes_total": 10, "message_send_count_total": 7, "newsfeed_upload_bytes_total": 13}],
+        }
+        with patch.object(admin_usage, "get_admin_user_usage_detail", return_value=detail) as fn:
             resp = admin_usage.admin_user_usage_detail("u1", period_id="2026-02", top_n=5, admin_user="admin")
         self.assertEqual(resp["user_id"], "u1")
+        self.assertEqual(resp["source_family"], "all")
+        self.assertEqual(resp["surface_segments"]["messaging"]["message_send_count_total"], 7)
         fn.assert_called_once_with("u1", period_id="2026-02", top_n=5, include_resource_paths=False)
+
+    def test_user_detail_route_source_family_filter(self):
+        detail = {
+            "user_id": "u1",
+            "summary": {
+                "upload": {"used_bytes": 10},
+                "download": {"used_bytes": 5},
+                "storage": {"used_bytes": 2},
+                "message_send": {"used_count": 7},
+                "post_publish": {"used_count": 3},
+                "messaging_upload_bytes_total": 11,
+                "messaging_download_bytes_total": 12,
+                "newsfeed_upload_bytes_total": 13,
+                "newsfeed_download_bytes_total": 14,
+            },
+            "snapshots": [{"upload_bytes_total": 10, "download_bytes_total": 5, "storage_bytes_peak": 2, "message_send_count_total": 7, "post_publish_count_total": 3, "messaging_upload_bytes_total": 11, "messaging_download_bytes_total": 12, "newsfeed_upload_bytes_total": 13, "newsfeed_download_bytes_total": 14}],
+        }
+        with patch.object(admin_usage, "get_admin_user_usage_detail", return_value=detail):
+            resp = admin_usage.admin_user_usage_detail("u1", source_family="messaging", admin_user="admin")
+        self.assertEqual(resp["source_family"], "messaging")
+        self.assertEqual(resp["summary_surface"]["message_send_count_total"], 7)
+        self.assertEqual(resp["summary_surface"]["upload_bytes_total"], 11)
+        self.assertEqual(resp["snapshots"][0]["upload_bytes_total"], 0)
+        self.assertEqual(resp["snapshots"][0]["message_send_count_total"], 7)
 
     def test_generate_invoice_lines_route(self):
         with (

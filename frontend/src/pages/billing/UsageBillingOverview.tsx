@@ -19,6 +19,10 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(value >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
 }
 
+function formatCount(count: number): string {
+  return `${Number(count || 0).toLocaleString()} units`;
+}
+
 function formatPercent(value: number): string {
   return `${Math.max(0, value).toFixed(1)}%`;
 }
@@ -53,6 +57,28 @@ type UsageCardProps = {
   percent: number;
 };
 
+type UsageLevel = "normal" | "warning" | "critical";
+
+function warningLevel(percent: number): UsageLevel {
+  if (percent >= 95) return "critical";
+  if (percent >= 80) return "warning";
+  return "normal";
+}
+
+function usageBarClass(percent: number): string {
+  const level = warningLevel(percent);
+  if (level === "critical") return "bg-red-500";
+  if (level === "warning") return "bg-amber-500";
+  return "bg-primary";
+}
+
+function usageTextClass(percent: number): string {
+  const level = warningLevel(percent);
+  if (level === "critical") return "text-red-700";
+  if (level === "warning") return "text-amber-700";
+  return "text-muted-foreground";
+}
+
 function UsageCard({ title, used, limit, percent }: UsageCardProps) {
   const capped = Math.min(percent, 100);
   return (
@@ -66,9 +92,34 @@ function UsageCard({ title, used, limit, percent }: UsageCardProps) {
           {limit > 0 ? `${formatBytes(limit)} limit` : "No configured limit"}
         </div>
         <div className="h-2 rounded bg-muted">
-          <div className="h-2 rounded bg-primary" style={{ width: `${Math.max(2, capped)}%` }} />
+          <div className={`h-2 rounded ${usageBarClass(percent)}`} style={{ width: `${Math.max(2, capped)}%` }} />
         </div>
-        <div className="text-xs">{formatPercent(percent)} used</div>
+        <div className={`text-xs ${usageTextClass(percent)}`}>{formatPercent(percent)} used</div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function UsageUnitCard({ title, used, limit, percent }: UsageCardProps) {
+  const capped = Math.min(percent, 100);
+  const level = warningLevel(percent);
+  return (
+    <Card className={level === "critical" ? "border-red-300" : level === "warning" ? "border-amber-300" : undefined}>
+      <CardHeader className="pb-2">
+        <CardDescription>{title}</CardDescription>
+        <CardTitle className="text-xl">{formatCount(used)}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <div className="text-xs text-muted-foreground">{limit > 0 ? `${formatCount(limit)} monthly limit` : "No configured limit"}</div>
+        <div className="h-2 rounded bg-muted">
+          <div className={`h-2 rounded ${usageBarClass(percent)}`} style={{ width: `${Math.max(2, capped)}%` }} />
+        </div>
+        <div className={`text-xs ${usageTextClass(percent)}`}>{formatPercent(percent)} used</div>
+        {level !== "normal" ? (
+          <div className={`text-xs font-medium ${level === "critical" ? "text-red-700" : "text-amber-700"}`}>
+            {level === "critical" ? "Critical threshold reached" : "Near monthly limit"}
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -139,13 +190,61 @@ export default function UsageBillingOverview() {
           <Skeleton className="h-36" />
           <Skeleton className="h-36" />
         </div>
+      ) : summaryQuery.isError ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Usage summary unavailable</CardTitle>
+            <CardDescription>We could not load period usage right now. Please retry shortly.</CardDescription>
+          </CardHeader>
+        </Card>
       ) : summary ? (
         <div className="grid gap-4 md:grid-cols-3">
           <UsageCard title="Upload usage" used={summary.upload.used_bytes} limit={summary.upload.limit_bytes} percent={summary.upload.percent_used} />
           <UsageCard title="Download usage" used={summary.download.used_bytes} limit={summary.download.limit_bytes} percent={summary.download.percent_used} />
           <UsageCard title="Storage usage" used={summary.storage.used_bytes} limit={summary.storage.limit_bytes} percent={summary.storage.percent_used} />
         </div>
-      ) : null}
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle>No usage summary yet</CardTitle>
+            <CardDescription>Your current period summary is not available yet.</CardDescription>
+          </CardHeader>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Messaging &amp; Newsfeed usage</CardTitle>
+          <CardDescription>Current period unit usage and limits for sends and posts</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {summaryQuery.isLoading ? (
+            <div className="grid gap-4 md:grid-cols-2">
+              <Skeleton className="h-32" />
+              <Skeleton className="h-32" />
+            </div>
+          ) : summaryQuery.isError ? (
+            <div className="text-sm text-muted-foreground">Could not load messaging/newsfeed usage.</div>
+          ) : !summary?.message_send || !summary?.post_publish ? (
+            <div className="text-sm text-muted-foreground">No messaging/newsfeed unit usage available for this period.</div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              <UsageUnitCard
+                title="Message sends"
+                used={summary.message_send.used_count}
+                limit={summary.message_send.limit_count}
+                percent={summary.message_send.percent_used}
+              />
+              <UsageUnitCard
+                title="Post publishes"
+                used={summary.post_publish.used_count}
+                limit={summary.post_publish.limit_count}
+                percent={summary.post_publish.percent_used}
+              />
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

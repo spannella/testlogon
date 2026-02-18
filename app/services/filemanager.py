@@ -1333,6 +1333,8 @@ def _parse_plan_limits_config() -> Dict[str, Dict[str, int]]:
             "upload_limit_bytes": int(limits.get("upload_limit_bytes") or 0),
             "download_limit_bytes": int(limits.get("download_limit_bytes") or 0),
             "storage_limit_bytes": int(limits.get("storage_limit_bytes") or 0),
+            "message_send_limit_count": int(limits.get("message_send_limit_count") or 0),
+            "post_publish_limit_count": int(limits.get("post_publish_limit_count") or 0),
         }
     return out
 
@@ -1372,6 +1374,8 @@ def resolve_user_usage_plan(user: str) -> Dict[str, Any]:
     upload_limit = int(selected_limits.get("upload_limit_bytes") or getattr(S, "filemgr_usage_upload_limit_bytes", 0) or 0)
     download_limit = int(selected_limits.get("download_limit_bytes") or getattr(S, "filemgr_usage_download_limit_bytes", 0) or 0)
     storage_limit = int(selected_limits.get("storage_limit_bytes") or getattr(S, "filemgr_usage_storage_limit_bytes", 0) or 0)
+    message_send_limit = int(selected_limits.get("message_send_limit_count") or getattr(S, "filemgr_usage_message_send_limit_count", 0) or 0)
+    post_publish_limit = int(selected_limits.get("post_publish_limit_count") or getattr(S, "filemgr_usage_post_publish_limit_count", 0) or 0)
 
     return {
         "plan_id": plan_id,
@@ -1379,6 +1383,8 @@ def resolve_user_usage_plan(user: str) -> Dict[str, Any]:
         "upload_limit_bytes": upload_limit,
         "download_limit_bytes": download_limit,
         "storage_limit_bytes": storage_limit,
+        "message_send_limit_count": message_send_limit,
+        "post_publish_limit_count": post_publish_limit,
     }
 
 
@@ -1457,11 +1463,19 @@ def get_usage_summary(user: str, *, period_id: Optional[str] = None) -> Dict[str
     upload_used = int(item.get("upload_bytes_total") or 0)
     download_used = int(item.get("download_bytes_total") or 0)
     storage_used = int(item.get("storage_bytes_current") or 0)
+    message_send_used = int(item.get("message_send_count_total") or 0)
+    post_publish_used = int(item.get("post_publish_count_total") or 0)
+    messaging_upload_used = int(item.get("messaging_upload_bytes_total") or 0)
+    messaging_download_used = int(item.get("messaging_download_bytes_total") or 0)
+    newsfeed_upload_used = int(item.get("newsfeed_upload_bytes_total") or 0)
+    newsfeed_download_used = int(item.get("newsfeed_download_bytes_total") or 0)
 
     plan = resolve_user_usage_plan(user)
     upload_limit = int(plan["upload_limit_bytes"])
     download_limit = int(plan["download_limit_bytes"])
     storage_limit = int(plan["storage_limit_bytes"])
+    message_send_limit = int(plan.get("message_send_limit_count") or 0)
+    post_publish_limit = int(plan.get("post_publish_limit_count") or 0)
 
     return {
         "period_id": resolved_period,
@@ -1482,6 +1496,30 @@ def get_usage_summary(user: str, *, period_id: Optional[str] = None) -> Dict[str
             "limit_bytes": storage_limit,
             "percent_used": _usage_limit_percentage(storage_used, storage_limit),
         },
+        "message_send": {
+            "used_count": message_send_used,
+            "limit_count": message_send_limit,
+            "percent_used": _usage_limit_percentage(message_send_used, message_send_limit),
+        },
+        "post_publish": {
+            "used_count": post_publish_used,
+            "limit_count": post_publish_limit,
+            "percent_used": _usage_limit_percentage(post_publish_used, post_publish_limit),
+        },
+        # New source-split counters for compatibility-safe API extension.
+        "messaging_transfer": {
+            "upload_bytes_total": messaging_upload_used,
+            "download_bytes_total": messaging_download_used,
+        },
+        "newsfeed_transfer": {
+            "upload_bytes_total": newsfeed_upload_used,
+            "download_bytes_total": newsfeed_download_used,
+        },
+        # Top-level compatibility aliases for clients that prefer flat fields.
+        "messaging_upload_bytes_total": messaging_upload_used,
+        "messaging_download_bytes_total": messaging_download_used,
+        "newsfeed_upload_bytes_total": newsfeed_upload_used,
+        "newsfeed_download_bytes_total": newsfeed_download_used,
         "updated_at": item.get("updated_at"),
     }
 
@@ -2742,11 +2780,23 @@ def finalize_billing_period_admin(*, period_id: str, user_id: Optional[str] = No
                 continue
         next_version = current_version + 1
 
-        snap = build_billing_usage_snapshot_item(user_id=uid, period_id=period_id, version=next_version, status="finalized")
+        snap = build_billing_usage_snapshot_item(
+            user_id=uid,
+            period_id=period_id,
+            version=next_version,
+            schema_version=2,
+            status="finalized",
+        )
         snap["upload_bytes_total"] = int(period_row.get("upload_bytes_total") or 0)
         snap["download_bytes_total"] = int(period_row.get("download_bytes_total") or 0)
         snap["storage_bytes_peak"] = int(period_row.get("storage_bytes_peak") or 0)
         snap["storage_byte_seconds"] = int(period_row.get("storage_byte_seconds") or 0)
+        snap["message_send_count_total"] = int(period_row.get("message_send_count_total") or 0)
+        snap["post_publish_count_total"] = int(period_row.get("post_publish_count_total") or 0)
+        snap["messaging_upload_bytes_total"] = int(period_row.get("messaging_upload_bytes_total") or 0)
+        snap["messaging_download_bytes_total"] = int(period_row.get("messaging_download_bytes_total") or 0)
+        snap["newsfeed_upload_bytes_total"] = int(period_row.get("newsfeed_upload_bytes_total") or 0)
+        snap["newsfeed_download_bytes_total"] = int(period_row.get("newsfeed_download_bytes_total") or 0)
         snap["finalized_at"] = now_iso()
         snap["ttl_epoch"] = _ttl_epoch_from_now(getattr(S, "filemgr_usage_snapshot_retention_days", 2555))
         tbl.put_item(Item=snap)
@@ -2787,10 +2837,17 @@ def get_admin_user_usage_detail(user_id: str, *, period_id: Optional[str] = None
                 "period_id": it.get("period_id"),
                 "version": int(it.get("version") or 0),
                 "status": it.get("status"),
+                "schema_version": int(it.get("schema_version") or 1),
                 "finalized_at": it.get("finalized_at"),
                 "upload_bytes_total": int(it.get("upload_bytes_total") or 0),
                 "download_bytes_total": int(it.get("download_bytes_total") or 0),
                 "storage_bytes_peak": int(it.get("storage_bytes_peak") or 0),
+                "message_send_count_total": int(it.get("message_send_count_total") or 0),
+                "post_publish_count_total": int(it.get("post_publish_count_total") or 0),
+                "messaging_upload_bytes_total": int(it.get("messaging_upload_bytes_total") or 0),
+                "messaging_download_bytes_total": int(it.get("messaging_download_bytes_total") or 0),
+                "newsfeed_upload_bytes_total": int(it.get("newsfeed_upload_bytes_total") or 0),
+                "newsfeed_download_bytes_total": int(it.get("newsfeed_download_bytes_total") or 0),
             }
             for it in snap_resp.get("Items", [])
         ],
@@ -2818,6 +2875,18 @@ def _parse_pricing_catalog_config() -> Dict[str, Dict[str, Any]]:
                 "upload_overage_cents_per_gb": 0,
                 "download_overage_cents_per_gb": 0,
                 "storage_overage_cents_per_gb": 0,
+                "message_send_included_units": 0,
+                "post_publish_included_units": 0,
+                "message_send_overage_cents_per_unit": 0,
+                "post_publish_overage_cents_per_unit": 0,
+                "messaging_upload_included_bytes": 0,
+                "messaging_download_included_bytes": 0,
+                "newsfeed_upload_included_bytes": 0,
+                "newsfeed_download_included_bytes": 0,
+                "messaging_upload_overage_cents_per_gb": 0,
+                "messaging_download_overage_cents_per_gb": 0,
+                "newsfeed_upload_overage_cents_per_gb": 0,
+                "newsfeed_download_overage_cents_per_gb": 0,
             }
         }
     try:
@@ -2827,7 +2896,38 @@ def _parse_pricing_catalog_config() -> Dict[str, Dict[str, Any]]:
         return {}
     if not isinstance(data, dict):
         return {}
-    return {str(k): (v if isinstance(v, dict) else {}) for k, v in data.items()}
+
+    def _as_non_negative_int(value: Any) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, parsed)
+
+    out: Dict[str, Dict[str, Any]] = {}
+    for key, value in data.items():
+        raw_entry = value if isinstance(value, dict) else {}
+        out[str(key)] = {
+            "upload_included_bytes": _as_non_negative_int(raw_entry.get("upload_included_bytes")),
+            "download_included_bytes": _as_non_negative_int(raw_entry.get("download_included_bytes")),
+            "storage_included_bytes": _as_non_negative_int(raw_entry.get("storage_included_bytes")),
+            "upload_overage_cents_per_gb": _as_non_negative_int(raw_entry.get("upload_overage_cents_per_gb")),
+            "download_overage_cents_per_gb": _as_non_negative_int(raw_entry.get("download_overage_cents_per_gb")),
+            "storage_overage_cents_per_gb": _as_non_negative_int(raw_entry.get("storage_overage_cents_per_gb")),
+            "message_send_included_units": _as_non_negative_int(raw_entry.get("message_send_included_units")),
+            "post_publish_included_units": _as_non_negative_int(raw_entry.get("post_publish_included_units")),
+            "message_send_overage_cents_per_unit": _as_non_negative_int(raw_entry.get("message_send_overage_cents_per_unit")),
+            "post_publish_overage_cents_per_unit": _as_non_negative_int(raw_entry.get("post_publish_overage_cents_per_unit")),
+            "messaging_upload_included_bytes": _as_non_negative_int(raw_entry.get("messaging_upload_included_bytes")),
+            "messaging_download_included_bytes": _as_non_negative_int(raw_entry.get("messaging_download_included_bytes")),
+            "newsfeed_upload_included_bytes": _as_non_negative_int(raw_entry.get("newsfeed_upload_included_bytes")),
+            "newsfeed_download_included_bytes": _as_non_negative_int(raw_entry.get("newsfeed_download_included_bytes")),
+            "messaging_upload_overage_cents_per_gb": _as_non_negative_int(raw_entry.get("messaging_upload_overage_cents_per_gb")),
+            "messaging_download_overage_cents_per_gb": _as_non_negative_int(raw_entry.get("messaging_download_overage_cents_per_gb")),
+            "newsfeed_upload_overage_cents_per_gb": _as_non_negative_int(raw_entry.get("newsfeed_upload_overage_cents_per_gb")),
+            "newsfeed_download_overage_cents_per_gb": _as_non_negative_int(raw_entry.get("newsfeed_download_overage_cents_per_gb")),
+        }
+    return out
 
 
 def _resolve_pricing_catalog(version: Optional[str] = None) -> tuple[str, Dict[str, Any]]:
@@ -2848,6 +2948,12 @@ def _calc_metered_cost_cents(used_bytes: int, included_bytes: int, rate_per_gb_c
     gb = 1024 * 1024 * 1024
     cents = int(round((overage_bytes / gb) * int(rate_per_gb_cents)))
     return overage_bytes, cents
+
+def _calc_unit_cost_cents(used_units: int, included_units: int, rate_per_unit_cents: int) -> tuple[int, int]:
+    overage_units = max(0, int(used_units) - int(included_units))
+    if overage_units <= 0 or int(rate_per_unit_cents) <= 0:
+        return overage_units, 0
+    return overage_units, overage_units * int(rate_per_unit_cents)
 
 
 def generate_invoice_line_items_for_snapshot_admin(
@@ -2872,6 +2978,12 @@ def generate_invoice_line_items_for_snapshot_admin(
     upload_used = int(snapshot.get("upload_bytes_total") or 0)
     download_used = int(snapshot.get("download_bytes_total") or 0)
     storage_used = int(snapshot.get("storage_bytes_peak") or 0)
+    message_send_used = int(snapshot.get("message_send_count_total") or 0)
+    post_publish_used = int(snapshot.get("post_publish_count_total") or 0)
+    messaging_upload_used = int(snapshot.get("messaging_upload_bytes_total") or 0)
+    messaging_download_used = int(snapshot.get("messaging_download_bytes_total") or 0)
+    newsfeed_upload_used = int(snapshot.get("newsfeed_upload_bytes_total") or 0)
+    newsfeed_download_used = int(snapshot.get("newsfeed_download_bytes_total") or 0)
 
     upload_over_bytes, upload_over_cents = _calc_metered_cost_cents(
         upload_used,
@@ -2887,6 +2999,36 @@ def generate_invoice_line_items_for_snapshot_admin(
         storage_used,
         int(pricing.get("storage_included_bytes") or 0),
         int(pricing.get("storage_overage_cents_per_gb") or 0),
+    )
+    message_send_over_units, message_send_over_cents = _calc_unit_cost_cents(
+        message_send_used,
+        int(pricing.get("message_send_included_units") or 0),
+        int(pricing.get("message_send_overage_cents_per_unit") or 0),
+    )
+    post_publish_over_units, post_publish_over_cents = _calc_unit_cost_cents(
+        post_publish_used,
+        int(pricing.get("post_publish_included_units") or 0),
+        int(pricing.get("post_publish_overage_cents_per_unit") or 0),
+    )
+    messaging_upload_over_bytes, messaging_upload_over_cents = _calc_metered_cost_cents(
+        messaging_upload_used,
+        int(pricing.get("messaging_upload_included_bytes") or 0),
+        int(pricing.get("messaging_upload_overage_cents_per_gb") or 0),
+    )
+    messaging_download_over_bytes, messaging_download_over_cents = _calc_metered_cost_cents(
+        messaging_download_used,
+        int(pricing.get("messaging_download_included_bytes") or 0),
+        int(pricing.get("messaging_download_overage_cents_per_gb") or 0),
+    )
+    newsfeed_upload_over_bytes, newsfeed_upload_over_cents = _calc_metered_cost_cents(
+        newsfeed_upload_used,
+        int(pricing.get("newsfeed_upload_included_bytes") or 0),
+        int(pricing.get("newsfeed_upload_overage_cents_per_gb") or 0),
+    )
+    newsfeed_download_over_bytes, newsfeed_download_over_cents = _calc_metered_cost_cents(
+        newsfeed_download_used,
+        int(pricing.get("newsfeed_download_included_bytes") or 0),
+        int(pricing.get("newsfeed_download_overage_cents_per_gb") or 0),
     )
 
     lines = [
@@ -2915,6 +3057,60 @@ def generate_invoice_line_items_for_snapshot_admin(
             "overage_bytes": storage_over_bytes,
             "unit_price": int(pricing.get("storage_overage_cents_per_gb") or 0),
             "amount_cents": storage_over_cents,
+            "pricing_unit": "GB",
+        },
+        {
+            "line_type": "message_send_usage",
+            "quantity_units": message_send_used,
+            "included_units": int(pricing.get("message_send_included_units") or 0),
+            "overage_units": message_send_over_units,
+            "unit_price": int(pricing.get("message_send_overage_cents_per_unit") or 0),
+            "amount_cents": message_send_over_cents,
+            "pricing_unit": "unit",
+        },
+        {
+            "line_type": "post_publish_usage",
+            "quantity_units": post_publish_used,
+            "included_units": int(pricing.get("post_publish_included_units") or 0),
+            "overage_units": post_publish_over_units,
+            "unit_price": int(pricing.get("post_publish_overage_cents_per_unit") or 0),
+            "amount_cents": post_publish_over_cents,
+            "pricing_unit": "unit",
+        },
+        {
+            "line_type": "messaging_upload_usage",
+            "quantity_bytes": messaging_upload_used,
+            "included_bytes": int(pricing.get("messaging_upload_included_bytes") or 0),
+            "overage_bytes": messaging_upload_over_bytes,
+            "unit_price": int(pricing.get("messaging_upload_overage_cents_per_gb") or 0),
+            "amount_cents": messaging_upload_over_cents,
+            "pricing_unit": "GB",
+        },
+        {
+            "line_type": "messaging_download_usage",
+            "quantity_bytes": messaging_download_used,
+            "included_bytes": int(pricing.get("messaging_download_included_bytes") or 0),
+            "overage_bytes": messaging_download_over_bytes,
+            "unit_price": int(pricing.get("messaging_download_overage_cents_per_gb") or 0),
+            "amount_cents": messaging_download_over_cents,
+            "pricing_unit": "GB",
+        },
+        {
+            "line_type": "newsfeed_upload_usage",
+            "quantity_bytes": newsfeed_upload_used,
+            "included_bytes": int(pricing.get("newsfeed_upload_included_bytes") or 0),
+            "overage_bytes": newsfeed_upload_over_bytes,
+            "unit_price": int(pricing.get("newsfeed_upload_overage_cents_per_gb") or 0),
+            "amount_cents": newsfeed_upload_over_cents,
+            "pricing_unit": "GB",
+        },
+        {
+            "line_type": "newsfeed_download_usage",
+            "quantity_bytes": newsfeed_download_used,
+            "included_bytes": int(pricing.get("newsfeed_download_included_bytes") or 0),
+            "overage_bytes": newsfeed_download_over_bytes,
+            "unit_price": int(pricing.get("newsfeed_download_overage_cents_per_gb") or 0),
+            "amount_cents": newsfeed_download_over_cents,
             "pricing_unit": "GB",
         },
     ]
