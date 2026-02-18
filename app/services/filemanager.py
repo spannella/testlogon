@@ -70,6 +70,67 @@ def _table():
     return ddb.Table(S.filemgr_table_name)
 
 
+def admin_search_metadata(
+    *,
+    owner: Optional[str] = None,
+    folder: Optional[str] = None,
+    prefix: Optional[str] = None,
+    query: Optional[str] = None,
+    limit: int = 100,
+) -> List[Dict[str, Any]]:
+    tbl = _table()
+    cap = max(1, min(int(limit or 100), 500))
+    owner_pk = pk_user(owner) if owner else None
+    folder_norm = norm_path(folder or "/", is_folder=True) if folder else None
+    prefix_norm = (prefix or "").strip().lower()
+    query_norm = (query or "").strip().lower()
+
+    results: List[Dict[str, Any]] = []
+    eks: Optional[Dict[str, Any]] = None
+    scans = 0
+    while len(results) < cap and scans < 30:
+        scans += 1
+        kwargs: Dict[str, Any] = {"Limit": max(cap * 3, 100)}
+        if eks:
+            kwargs["ExclusiveStartKey"] = eks
+        resp = tbl.scan(**kwargs)
+        for it in resp.get("Items", []):
+            if not str(it.get("SK", "")).startswith("NODE#"):
+                continue
+            if it.get("deleted_at"):
+                continue
+            if owner_pk and it.get("PK") != owner_pk:
+                continue
+            if folder_norm and it.get("parent") != folder_norm:
+                continue
+            name_l = str(it.get("name", "")).lower()
+            path_l = str(it.get("path", "")).lower()
+            if prefix_norm and not name_l.startswith(prefix_norm):
+                continue
+            if query_norm and (query_norm not in name_l and query_norm not in path_l):
+                continue
+            owner_sub = str(it.get("PK", "")).removeprefix("USER#")
+            results.append(
+                {
+                    "owner": owner_sub,
+                    "path": it.get("path"),
+                    "type": it.get("type"),
+                    "name": it.get("name"),
+                    "parent": it.get("parent"),
+                    "size": it.get("size"),
+                    "updated_at": it.get("updated_at"),
+                    "content_type": it.get("content_type"),
+                }
+            )
+            if len(results) >= cap:
+                break
+        eks = resp.get("LastEvaluatedKey")
+        if not eks:
+            break
+    results.sort(key=lambda x: ((x.get("owner") or "").lower(), (x.get("path") or "").lower()))
+    return results[:cap]
+
+
 def _bucket() -> str:
     if not S.filemgr_bucket:
         raise HTTPException(500, "file manager bucket not configured")

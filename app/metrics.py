@@ -223,6 +223,11 @@ USAGE_METERING_PIPELINE_LATENCY = Histogram(
     ["stage"],
     buckets=(0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5),
 )
+ADMIN_SCOPE_DENIED = Counter(
+    "admin_scope_denied_total",
+    "Denied admin scope authorization checks by route, required scope, and profile type",
+    ["route", "required_scope", "admin_profile_type"],
+)
 
 _START_TIME = time.monotonic()
 _ACTIVE_SESSIONS_BY_USER: dict[str, int] = {}
@@ -344,6 +349,14 @@ def record_usage_metering_pipeline_error(stage: str) -> None:
 
 def record_usage_metering_pipeline_latency(stage: str, elapsed_seconds: float) -> None:
     USAGE_METERING_PIPELINE_LATENCY.labels(stage=stage).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_admin_scope_denied(*, route: str, required_scope: str, admin_profile_type: str) -> None:
+    ADMIN_SCOPE_DENIED.labels(
+        route=route or "unknown",
+        required_scope=required_scope or "unknown",
+        admin_profile_type=admin_profile_type or "unknown",
+    ).inc()
 
 def set_app_info(name: str, version: str) -> None:
     APP_INFO.info({"name": name, "version": version})

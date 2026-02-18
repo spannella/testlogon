@@ -1,4 +1,5 @@
 import asyncio
+import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -161,6 +162,7 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "tbl_msgs", tbl_msgs),
             patch.object(messaging, "tbl_convos", tbl_convos),
             patch.object(messaging, "_meter_message_send") as meter_send,
+            patch.object(messaging, "fanout_event_to_conversation") as fanout,
         ):
             resp = messaging.send_text_message(
                 "c1",
@@ -173,6 +175,116 @@ class TestMessagingRoutes(unittest.TestCase):
         meter_send.assert_called_once_with(user_id="user-1", conversation_id="c1", message_id="m_xyz")
         self.assertEqual(resp.message_id, "m_xyz")
         self.assertEqual(resp.text, "Hello world")
+        fanout.assert_called_once()
+        self.assertEqual(fanout.call_args.kwargs["event_type"], "message:new")
+        payload = fanout.call_args.kwargs["payload"]
+        self.assertEqual(payload["message"]["message_id"], "m_xyz")
+        self.assertEqual(payload["message"]["text"], "Hello world")
+        self.assertNotIn("encryption", payload["message"])
+
+
+
+    def test_send_encrypted_message_rejected_when_feature_flag_off(self):
+        with (
+            patch.dict(os.environ, {"MESSAGING_ENCRYPTED_MESSAGES_ENABLED": "0"}, clear=False),
+            patch.object(messaging, "require_participant_active"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.send_text_message(
+                    "c1",
+                    messaging.SendTextMessageIn(
+                        encryption={
+                            "version": 1,
+                            "alg": "AES-256-GCM",
+                            "kdf": "PBKDF2-SHA256",
+                            "iterations": 600000,
+                            "salt_b64": "MTIzNDU2Nzg5MGFiY2RlZg==",
+                            "iv_b64": "MTIzNDU2Nzg5MDEy",
+                            "ciphertext_b64": "cGF5bG9hZC1ieXRlcy0xMjM0NTY=",
+                        }
+                    ),
+                    user_id="user-1",
+                )
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_messaging_config_reflects_kill_switch(self):
+        with patch.dict(
+            os.environ,
+            {
+                "MESSAGING_ENCRYPTED_MESSAGES_ENABLED": "1",
+                "MESSAGING_ENCRYPTED_MESSAGES_KILL_SWITCH": "1",
+            },
+            clear=False,
+        ):
+            resp = messaging.messaging_config(user_id="user-1")
+        self.assertFalse(resp.messaging_encrypted_messages_enabled)
+
+
+    def test_plaintext_send_works_when_encryption_feature_flag_off(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        with (
+            patch.dict(os.environ, {"MESSAGING_ENCRYPTED_MESSAGES_ENABLED": "0"}, clear=False),
+            patch.object(messaging, "now_ts", return_value=55),
+            patch.object(messaging, "new_id", return_value="xyz"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "fanout_event_to_conversation"),
+        ):
+            resp = messaging.send_text_message(
+                "c1",
+                messaging.SendTextMessageIn(text="Hello world"),
+                user_id="user-1",
+            )
+
+        self.assertEqual(resp.text, "Hello world")
+        self.assertFalse(resp.is_encrypted)
+        tbl_msgs.put_item.assert_called_once()
+
+    def test_send_encrypted_text_message_skips_search_index(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        with (
+            patch.dict(os.environ, {"MESSAGING_ENCRYPTED_MESSAGES_ENABLED": "1"}, clear=False),
+            patch.object(messaging, "now_ts", return_value=55),
+            patch.object(messaging, "new_id", return_value="xyz"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "index_message_search") as index_message_search,
+            patch.object(messaging, "fanout_event_to_conversation") as fanout,
+        ):
+            resp = messaging.send_text_message(
+                "c1",
+                messaging.SendTextMessageIn(
+                    encryption={
+                        "version": 1,
+                        "alg": "AES-256-GCM",
+                        "kdf": "PBKDF2-SHA256",
+                        "iterations": 600000,
+                        "salt_b64": "MTIzNDU2Nzg5MGFiY2RlZg==",
+                        "iv_b64": "MTIzNDU2Nzg5MDEy",
+                        "ciphertext_b64": "cGF5bG9hZC1ieXRlcy0xMjM0NTY=",
+                    }
+                ),
+                user_id="user-1",
+            )
+
+        index_message_search.assert_not_called()
+        self.assertTrue(resp.is_encrypted)
+        self.assertIsNotNone(resp.encryption)
+        stored_item = tbl_msgs.put_item.call_args.kwargs["Item"]
+        self.assertTrue(stored_item["is_encrypted"])
+        self.assertIsNone(stored_item["text"])
+        self.assertEqual(stored_item["encryption"]["alg"], "AES-256-GCM")
+        fanout.assert_called_once()
+        self.assertEqual(fanout.call_args.kwargs["event_type"], "message:new")
+        payload = fanout.call_args.kwargs["payload"]
+        self.assertEqual(payload["message"]["message_id"], "m_xyz")
+        self.assertTrue(payload["message"]["is_encrypted"])
+        self.assertEqual(payload["message"]["encryption"]["ciphertext_b64"], "cGF5bG9hZC1ieXRlcy0xMjM0NTY=")
+        self.assertNotIn("text", payload["message"])
 
     def test_meter_message_send_builds_deterministic_idempotency_key(self):
         table = Mock()
@@ -610,6 +722,93 @@ class TestMessagingRoutes(unittest.TestCase):
             resp = messaging.search_messages_all_conversations(q="fallback", limit=50, user_id="u1")
         self.assertEqual(resp[0].message_id, "m3")
 
+
+
+    def test_fallback_search_messages_skips_encrypted_messages(self):
+        tbl_msgs = Mock()
+        tbl_msgs.query.return_value = {
+            "Items": [
+                {
+                    "conversation_id": "c1",
+                    "message_id": "m1",
+                    "sender_id": "u1",
+                    "created_at": 20,
+                    "kind": "text",
+                    "text": None,
+                    "is_encrypted": True,
+                    "encryption": {
+                        "version": 1,
+                        "alg": "AES-256-GCM",
+                        "kdf": "PBKDF2-SHA256",
+                        "iterations": 600000,
+                        "salt_b64": "MTIzNDU2Nzg5MGFiY2RlZg==",
+                        "iv_b64": "MTIzNDU2Nzg5MDEy",
+                        "ciphertext_b64": "cGF5bG9hZC1ieXRlcy0xMjM0NTY=",
+                    },
+                }
+            ]
+        }
+        with patch.object(messaging, "tbl_msgs", tbl_msgs):
+            resp = messaging._fallback_search_messages("c1", "payload", limit=10, user_id="u1")
+        self.assertEqual(resp, [])
+
+    def test_search_messages_in_conversation_filters_encrypted_opensearch_hits(self):
+        encrypted_item = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u1",
+            "created_at": 10,
+            "kind": "text",
+            "text": None,
+            "is_encrypted": True,
+            "encryption": {
+                "version": 1,
+                "alg": "AES-256-GCM",
+                "kdf": "PBKDF2-SHA256",
+                "iterations": 600000,
+                "salt_b64": "MTIzNDU2Nzg5MGFiY2RlZg==",
+                "iv_b64": "MTIzNDU2Nzg5MDEy",
+                "ciphertext_b64": "cGF5bG9hZC1ieXRlcy0xMjM0NTY=",
+            },
+            "deleted_for": [],
+            "reactions": {},
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_opensearch_search_messages", return_value=["c1#m1"]),
+            patch.object(messaging, "_fetch_message_items", return_value=[encrypted_item]),
+            patch.object(messaging, "tbl_parts", Mock(query=Mock(return_value={"Items": []}))),
+        ):
+            resp = messaging.search_messages_in_conversation("c1", q="hello", limit=50, user_id="u1")
+        self.assertEqual(resp, [])
+
+    def test_edit_encrypted_message_is_rejected(self):
+        encrypted_msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u1",
+            "created_at": 1,
+            "kind": "text",
+            "is_encrypted": True,
+            "encryption": {
+                "version": 1,
+                "alg": "AES-256-GCM",
+                "kdf": "PBKDF2-SHA256",
+                "iterations": 600000,
+                "salt_b64": "MTIzNDU2Nzg5MGFiY2RlZg==",
+                "iv_b64": "MTIzNDU2Nzg5MDEy",
+                "ciphertext_b64": "cGF5bG9hZC1ieXRlcy0xMjM0NTY=",
+            },
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_message_or_404", return_value=encrypted_msg),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.edit_message("c1", "m1", messaging.EditMessageIn(text="new"), user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], messaging.ENCRYPTED_EDIT_ERROR_CODE)
+
     def test_opensearch_search_builds_filters(self):
         captured = {}
 
@@ -861,6 +1060,45 @@ class TestMessagingRoutes(unittest.TestCase):
         self.assertTrue(resp["ok"])
         tbl_msgs.update_item.assert_called_once()
 
+    def test_revoke_encrypted_message_for_all_supported(self):
+        tbl_msgs = Mock()
+        encrypted_msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u1",
+            "created_at": 1,
+            "kind": "text",
+            "is_encrypted": True,
+            "encryption": {
+                "version": 1,
+                "alg": "AES-256-GCM",
+                "kdf": "PBKDF2-SHA256",
+                "iterations": 600000,
+                "salt_b64": "MTIzNDU2Nzg5MGFiY2RlZg==",
+                "iv_b64": "MTIzNDU2Nzg5MDEy",
+                "ciphertext_b64": "cGF5bG9hZC1ieXRlcy0xMjM0NTY=",
+            },
+        }
+        revoked_msg = {**encrypted_msg, "revoked_at": 10, "revoked_by": "u1"}
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_ensure_can_revoke_message"),
+            patch.object(messaging, "_get_message_or_404", side_effect=[encrypted_msg, revoked_msg]),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "fanout_event_to_conversation") as fanout,
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "remove_message_search") as remove_search,
+            patch.object(messaging, "_reaction_summaries", return_value=({}, [])),
+        ):
+            resp = messaging.revoke_message_for_all("c1", "m1", user_id="u1")
+
+        tbl_msgs.update_item.assert_called_once()
+        fanout.assert_called_once()
+        self.assertEqual(fanout.call_args.kwargs["event_type"], "message:revoked")
+        remove_search.assert_called_once_with("c1", "m1", "")
+        self.assertTrue(resp.is_encrypted)
+        self.assertEqual(resp.revoked_by, "u1")
+
     def test_react_to_message(self):
         tbl_msgs = Mock()
         with (
@@ -948,7 +1186,7 @@ class TestMessagingRoutes(unittest.TestCase):
             ),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
             patch.object(messaging, "tbl_convos", tbl_convos),
-            patch.object(messaging, "fanout_event_to_conversation"),
+            patch.object(messaging, "fanout_event_to_conversation") as fanout,
         ):
             resp = messaging.forward_message(
                 "c2",
@@ -956,7 +1194,59 @@ class TestMessagingRoutes(unittest.TestCase):
                 user_id="u1",
             )
         self.assertEqual(resp.message_id, "m_fwd")
+        self.assertEqual(resp.text, "hello")
+        self.assertFalse(resp.is_encrypted)
         tbl_msgs.put_item.assert_called_once()
+        fanout.assert_called_once()
+        payload = fanout.call_args.kwargs["payload"]
+        self.assertEqual(payload["message"]["message_id"], "m_fwd")
+
+    def test_forward_encrypted_message_preserves_encryption_fields(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        source = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "created_at": 1,
+            "kind": "text",
+            "text": None,
+            "is_encrypted": True,
+            "encryption": {
+                "version": 1,
+                "alg": "AES-256-GCM",
+                "kdf": "PBKDF2-SHA256",
+                "iterations": 600000,
+                "salt_b64": "MTIzNDU2Nzg5MGFiY2RlZg==",
+                "iv_b64": "MTIzNDU2Nzg5MDEy",
+                "ciphertext_b64": "cGF5bG9hZC1ieXRlcy0xMjM0NTY=",
+            },
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "new_id", return_value="fwd"),
+            patch.object(messaging, "_get_message_or_404", return_value=source),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "index_message_search") as index_search,
+            patch.object(messaging, "fanout_event_to_conversation") as fanout,
+        ):
+            resp = messaging.forward_message(
+                "c2",
+                messaging.ForwardMessageIn(source_conversation_id="c1", source_message_id="m1"),
+                user_id="u1",
+            )
+
+        self.assertTrue(resp.is_encrypted)
+        self.assertIsNotNone(resp.encryption)
+        self.assertIsNone(resp.text)
+        index_search.assert_not_called()
+        item = tbl_msgs.put_item.call_args.kwargs["Item"]
+        self.assertTrue(item["is_encrypted"])
+        self.assertIn("encryption", item)
+        payload = fanout.call_args.kwargs["payload"]
+        self.assertTrue(payload["message"]["is_encrypted"])
 
     def test_mark_message_viewed(self):
         tbl_views = Mock()

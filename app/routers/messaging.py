@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import os
@@ -22,6 +24,7 @@ import snowballstemmer
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
+from pydantic_core import PydanticCustomError
 
 from app.auth.deps import extract_bearer_token, get_authenticated_user_sub
 from app.core.settings import S
@@ -90,6 +93,10 @@ tbl_receipts = ddb.Table(DDB_MESSAGE_RECEIPTS)
 
 router = APIRouter(prefix="/messaging", tags=["messaging"])
 logger = logging.getLogger(__name__)
+
+MESSAGE_TEXT_MAX_CHARS = 4000
+ENCRYPTED_CIPHERTEXT_MAX_BYTES = 8192
+ENCRYPTED_EDIT_ERROR_CODE = "encrypted_message_edit_unsupported"
 
 
 # -------------------------
@@ -391,11 +398,54 @@ class LinkPreviewIn(BaseModel):
     site_name: Optional[str] = Field(default=None, max_length=200)
 
 
+class MessageEncryptionEnvelope(BaseModel):
+    version: Literal[1] = 1
+    alg: Literal["AES-256-GCM"] = "AES-256-GCM"
+    kdf: Literal["PBKDF2-SHA256"] = "PBKDF2-SHA256"
+    iterations: int = Field(ge=100000, le=2000000)
+    salt_b64: str = Field(min_length=4, max_length=256)
+    iv_b64: str = Field(min_length=4, max_length=128)
+    ciphertext_b64: str = Field(min_length=4, max_length=12000)
+
+    @model_validator(mode="after")
+    def _validate_binary_fields(self):
+        try:
+            salt = base64.b64decode(self.salt_b64, validate=True)
+        except binascii.Error as exc:
+            raise PydanticCustomError("enc_salt_invalid", "salt_b64 must be valid base64") from exc
+        if len(salt) != 16:
+            raise PydanticCustomError("enc_salt_length", "salt_b64 must decode to exactly 16 bytes")
+
+        try:
+            iv = base64.b64decode(self.iv_b64, validate=True)
+        except binascii.Error as exc:
+            raise PydanticCustomError("enc_iv_invalid", "iv_b64 must be valid base64") from exc
+        if len(iv) != 12:
+            raise PydanticCustomError("enc_iv_length", "iv_b64 must decode to exactly 12 bytes")
+
+        try:
+            ciphertext = base64.b64decode(self.ciphertext_b64, validate=True)
+        except binascii.Error as exc:
+            raise PydanticCustomError("enc_ciphertext_invalid", "ciphertext_b64 must be valid base64") from exc
+        if len(ciphertext) <= 16:
+            raise PydanticCustomError(
+                "enc_ciphertext_length",
+                "ciphertext_b64 must include ciphertext bytes plus authentication tag",
+            )
+        if len(ciphertext) > ENCRYPTED_CIPHERTEXT_MAX_BYTES:
+            raise PydanticCustomError(
+                "enc_ciphertext_too_large",
+                f"ciphertext payload exceeds {ENCRYPTED_CIPHERTEXT_MAX_BYTES} byte limit",
+            )
+        return self
+
+
 class SendTextMessageIn(BaseModel):
-    text: str = Field(min_length=1, max_length=4000)
+    text: Optional[str] = Field(default=None, min_length=1, max_length=MESSAGE_TEXT_MAX_CHARS)
     body: Optional[str] = None
     reply_to_message_id: Optional[str] = None
     preview: Optional[LinkPreviewIn] = None
+    encryption: Optional[MessageEncryptionEnvelope] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -407,6 +457,25 @@ class SendTextMessageIn(BaseModel):
             payload["text"] = payload["body"]
             logger.warning("messaging.send_text legacy payload used: body")
         return payload
+
+    @model_validator(mode="after")
+    def _validate_shape(self):
+        if self.encryption and self.text:
+            raise PydanticCustomError(
+                "message_text_encryption_conflict",
+                "Provide either plaintext text or encryption envelope, not both",
+            )
+        if self.encryption and self.preview:
+            raise PydanticCustomError(
+                "message_encryption_preview_conflict",
+                "Link previews are not supported for encrypted messages",
+            )
+        if not self.encryption and not self.text:
+            raise PydanticCustomError(
+                "message_text_required",
+                "text is required when encryption envelope is not provided",
+            )
+        return self
 
 
 class SendImagePresignIn(BaseModel):
@@ -480,6 +549,10 @@ class PresenceOut(BaseModel):
     user_id: str
     online: bool
     last_seen_at: int
+
+
+class MessagingConfigOut(BaseModel):
+    messaging_encrypted_messages_enabled: bool
 
 
 class ParticipantOut(BaseModel):
@@ -593,6 +666,8 @@ class MessageOut(BaseModel):
     read_by_user_ids: Optional[List[str]] = None
     reactions_counts: Optional[Dict[str, int]] = None
     my_reactions: Optional[List[str]] = None
+    is_encrypted: bool = False
+    encryption: Optional[MessageEncryptionEnvelope] = None
 
 
 # -------------------------
@@ -675,6 +750,18 @@ def _message_search_enabled() -> bool:
 
 def _message_receipts_enabled() -> bool:
     return bool(DDB_MESSAGE_RECEIPTS) and _aws_credentials_available()
+
+
+def _encrypted_messages_enabled() -> bool:
+    enabled = os.getenv(
+        "MESSAGING_ENCRYPTED_MESSAGES_ENABLED",
+        "true" if S.messaging_encrypted_messages_enabled else "false",
+    ) not in ("0", "false", "False")
+    kill_switch = os.getenv(
+        "MESSAGING_ENCRYPTED_MESSAGES_KILL_SWITCH",
+        "true" if S.messaging_encrypted_messages_kill_switch else "false",
+    ) not in ("0", "false", "False")
+    return enabled and not kill_switch
 
 
 def _aws_credentials_available() -> bool:
@@ -845,11 +932,19 @@ def _filter_message_visible(message_item: dict, user_id: str) -> bool:
 
 
 def _message_search_text(message_item: dict) -> str:
+    if bool(message_item.get("is_encrypted")):
+        return ""
     return str(message_item.get("search_text") or message_item.get("text") or "")
 
 
 def _is_searchable_kind(kind: Optional[str]) -> bool:
     return kind in {"text", "file", "audio", "video"}
+
+
+
+
+def _is_searchable_message(message_item: dict) -> bool:
+    return _is_searchable_kind(message_item.get("kind")) and not bool(message_item.get("is_encrypted"))
 
 
 def _filter_search_kinds(kinds: Optional[Sequence[str]]) -> Optional[set[str]]:
@@ -913,7 +1008,14 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         revoked_by=message_item.get("revoked_by"),
         reactions_counts=counts if counts else None,
         my_reactions=mine if mine else None,
+        is_encrypted=bool(message_item.get("is_encrypted")),
+        encryption=message_item.get("encryption"),
     )
+
+
+def _serialize_message_event_payload(message_item: dict, viewer_user_id: str) -> dict:
+    """Serialize a message item to a JSON-safe event payload."""
+    return _message_out_from_item(message_item, viewer_user_id).model_dump(exclude_none=True)
 
 
 def _fetch_message_items(message_keys: Iterable[str]) -> list[dict]:
@@ -1007,7 +1109,7 @@ def _fallback_search_messages(
                 continue
             if kinds and item.get("kind") not in kinds:
                 continue
-            if not _is_searchable_kind(item.get("kind")):
+            if not _is_searchable_message(item):
                 continue
             text = _message_search_text(item).lower()
             if text and query_lower in text:
@@ -1339,6 +1441,16 @@ def _get_message_or_404(conversation_id: str, message_id: str) -> dict:
     if not isinstance(item, dict):
         return {}
     return item
+
+
+def _raise_encrypted_edit_unsupported() -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": ENCRYPTED_EDIT_ERROR_CODE,
+            "message": "Encrypted messages cannot be edited. Delete and resend a new encrypted message.",
+        },
+    )
 
 
 def _validate_reply_target(conversation_id: str, reply_to_message_id: Optional[str]) -> None:
@@ -1958,7 +2070,7 @@ def search_messages_in_conversation(
         matches = [
             item
             for item in message_items
-            if _is_searchable_kind(item.get("kind")) and _filter_message_visible(item, user_id)
+            if _is_searchable_message(item) and _filter_message_visible(item, user_id)
             and (not sender_id or item.get("sender_id") == sender_id)
             and (after_ts is None or int(item.get("created_at", 0)) >= int(after_ts))
             and (not kind_filter or item.get("kind") in kind_filter)
@@ -1987,7 +2099,7 @@ def search_messages_in_conversation(
             matches = [
                 item
                 for item in message_items
-                if _is_searchable_kind(item.get("kind")) and _filter_message_visible(item, user_id)
+                if _is_searchable_message(item) and _filter_message_visible(item, user_id)
                 and (not sender_id or item.get("sender_id") == sender_id)
                 and (after_ts is None or int(item.get("created_at", 0)) >= int(after_ts))
                 and (not kind_filter or item.get("kind") in kind_filter)
@@ -2046,7 +2158,7 @@ def search_messages_all_conversations(
             item
             for item in message_items
             if item.get("conversation_id") in allowed_conversation_ids
-            and _is_searchable_kind(item.get("kind"))
+            and _is_searchable_message(item)
             and _filter_message_visible(item, user_id)
             and (not sender_id or item.get("sender_id") == sender_id)
             and (after_ts is None or int(item.get("created_at", 0)) >= int(after_ts))
@@ -2115,6 +2227,8 @@ def send_text_message(
     user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, conversation_id)
+    if inp.encryption and not _encrypted_messages_enabled():
+        raise HTTPException(status_code=403, detail="Encrypted messaging is disabled")
     convo = _get_conversation_or_404(conversation_id)
     try:
         resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
@@ -2131,19 +2245,25 @@ def send_text_message(
     mid = "m_" + new_id()
     ts = now_ts()
 
+    is_encrypted = inp.encryption is not None
+    message_text = inp.text or ""
     item: Dict[str, Any] = {
         "conversation_id": conversation_id,
         "message_id": mid,
         "sender_id": user_id,
         "created_at": ts,
         "kind": "text",
-        "text": inp.text,
+        "text": message_text if not is_encrypted else None,
+        "is_encrypted": is_encrypted,
         "deleted_for": set(),
         "reactions": {},
     }
-    link_preview = _serialize_preview(inp.preview)
-    if not link_preview:
-        url = _extract_first_url(inp.text)
+    if is_encrypted and inp.encryption:
+        item["encryption"] = inp.encryption.model_dump()
+
+    link_preview = _serialize_preview(inp.preview) if not is_encrypted else None
+    if not link_preview and not is_encrypted:
+        url = _extract_first_url(message_text)
         if url:
             link_preview = _fetch_link_preview(url)
     if link_preview:
@@ -2157,9 +2277,10 @@ def send_text_message(
     tbl_msgs.put_item(Item=item)
     _bump_unread_counts(conversation_id, user_id, participants)
     _record_delivery_receipts(conversation_id, mid, user_id, participants)
-    index_message_search(conversation_id, mid, user_id, ts, inp.text, kind="text")
+    if not is_encrypted:
+        index_message_search(conversation_id, mid, user_id, ts, message_text, kind="text")
 
-    preview_text = inp.text[:140]
+    preview_text = "[Encrypted message]" if is_encrypted else message_text[:140]
     tbl_convos.update_item(
         Key={"conversation_id": conversation_id},
         UpdateExpression="SET last_message_at = :ts, last_message_preview = :p",
@@ -2172,11 +2293,26 @@ def send_text_message(
         sender_id=user_id,
         created_at=ts,
         kind="text",
-        text=inp.text,
+        text=message_text if not is_encrypted else None,
         preview=link_preview,
         reply_to_message_id=inp.reply_to_message_id,
+        is_encrypted=is_encrypted,
+        encryption=inp.encryption,
     )
     message = _apply_message_receipts(message, item, participants)
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="message:new",
+        payload={
+            "message_id": mid,
+            "created_at": ts,
+            "message": _serialize_message_event_payload(item, user_id),
+        },
+        respect_mute=False,
+    )
+
     audit_event(
         "messaging_message_sent",
         user_id,
@@ -2185,6 +2321,7 @@ def send_text_message(
         conversation_id=conversation_id,
         message_id=mid,
         kind="text",
+        is_encrypted=is_encrypted,
         reply_to_message_id=inp.reply_to_message_id,
     )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
@@ -2223,6 +2360,7 @@ def create_image_message(
             require_subscription_access(user_id, pid)
     _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
+
 
     mid = "m_" + new_id()
     ts = now_ts()
@@ -2673,6 +2811,8 @@ def edit_message(
         raise HTTPException(400, "Cannot edit a revoked message")
     if msg.get("sender_id") != user_id:
         raise HTTPException(403, "Only the sender can edit this message")
+    if bool(msg.get("is_encrypted")):
+        _raise_encrypted_edit_unsupported()
 
     old_text = msg.get("text") or ""
     new_text = inp.text
@@ -2837,11 +2977,18 @@ def forward_message(
         item["reply_to_message_id"] = inp.reply_to_message_id
 
     if kind == "text":
-        item["text"] = src.get("text", "")
-        item["search_text"] = item["text"]
-        if src.get("preview"):
+        is_encrypted = bool(src.get("is_encrypted"))
+        if is_encrypted:
+            item["is_encrypted"] = True
+            item["encryption"] = src.get("encryption")
+            item["text"] = None
+            preview = "[fwd encrypted]"
+        else:
+            item["text"] = src.get("text", "")
+            item["search_text"] = item["text"]
+            preview = "[fwd] " + (item["text"] or "")[:140]
+        if src.get("preview") and not is_encrypted:
             item["preview"] = src.get("preview")
-        preview = "[fwd] " + (item["text"] or "")[:140]
     elif kind == "image":
         item["image"] = src.get("image")
         preview = "[fwd image]"
@@ -2858,7 +3005,7 @@ def forward_message(
         preview = f"[fwd {kind}]"
 
     tbl_msgs.put_item(Item=item)
-    if _is_searchable_kind(kind):
+    if _is_searchable_kind(kind) and not bool(item.get("is_encrypted")):
         index_message_search(
             target_conversation_id,
             mid,
@@ -2882,29 +3029,20 @@ def forward_message(
         ExpressionAttributeValues={":ts": ts, ":p": preview},
     )
 
+    message = _apply_message_receipts(_message_out_from_item(item, user_id), item, participants)
+
     fanout_event_to_conversation(
         conversation_id=target_conversation_id,
         sender_id=user_id,
         event_type="message:forwarded",
-        payload={"message_id": mid, "forwarded_from": forwarded_from, "created_at": ts},
+        payload={
+            "message_id": mid,
+            "forwarded_from": forwarded_from,
+            "created_at": ts,
+            "message": _serialize_message_event_payload(item, user_id),
+        },
         respect_mute=False,
     )
-
-    message = MessageOut(
-        conversation_id=target_conversation_id,
-        message_id=mid,
-        sender_id=user_id,
-        created_at=ts,
-        kind=kind,
-        text=item.get("text"),
-        image=item.get("image"),
-        file=item.get("file"),
-        preview=item.get("preview"),
-        reply_to_message_id=item.get("reply_to_message_id"),
-        forwarded_from=item.get("forwarded_from"),
-        forward_note=item.get("forward_note"),
-    )
-    message = _apply_message_receipts(message, item, participants)
     audit_event(
         "messaging_message_forwarded",
         user_id,
@@ -3159,6 +3297,12 @@ async def events_stream(
             await asyncio.sleep(poll_ms / 1000.0)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+@router.get("/config", response_model=MessagingConfigOut)
+def messaging_config(user_id: str = Depends(get_messaging_user_id)):
+    _ = user_id
+    return MessagingConfigOut(messaging_encrypted_messages_enabled=_encrypted_messages_enabled())
 
 
 @router.get("/healthz")

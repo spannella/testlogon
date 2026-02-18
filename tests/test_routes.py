@@ -50,7 +50,7 @@ from app.models import (
     UiSessionFinalizeReq,
     UiSessionStartReq,
 )
-from app.routers import alerts, api_keys, misc, mfa_devices, password_recovery, push, recovery, ui_mfa, ui_session
+from app.routers import alerts, api_keys, misc, mfa_devices, password_recovery, push, recovery, root_auth, ui_mfa, ui_session
 
 
 def run_async(coro):
@@ -196,6 +196,13 @@ class TestUiSessionRoutes(unittest.TestCase):
 
             resp = run_async(ui_session.ui_session_finalize(req, UiSessionFinalizeReq(challenge_id="chal"), user_sub="user"))
             self.assertEqual(resp["status"], "pending")
+
+    def test_ui_session_start_rejects_root_subject(self):
+        req = build_request()
+        with self.assertRaises(HTTPException) as ctx:
+            run_async(ui_session.ui_session_start(req, UiSessionStartReq(), user_sub=ui_session.S.root_user_sub))
+        self.assertEqual(ctx.exception.status_code, 403)
+
 
 
 class TestUiMfaRoutes(unittest.TestCase):
@@ -794,6 +801,35 @@ class TestPasswordRecoveryRoutes(unittest.TestCase):
                     req,
                     PasswordRecoveryTotpVerifyReq(username="user", challenge_id="chal", totp_code="123456"),
                 ))
+
+
+class TestRootAuthRoutes(unittest.TestCase):
+    def test_root_login_requires_root_subject(self):
+        req = build_request()
+        with self.assertRaises(HTTPException) as ctx:
+            run_async(root_auth.root_login(req, UiSessionStartReq(), user_sub="not-root"))
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_root_login_requires_mfa_configuration(self):
+        req = build_request()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(root_auth, "enforce_root_network_gate", return_value="127.0.0.1"))
+            stack.enter_context(patch.object(root_auth, "compute_required_factors", return_value=[]))
+            with self.assertRaises(HTTPException) as ctx:
+                run_async(root_auth.root_login(req, UiSessionStartReq(), user_sub=root_auth.S.root_user_sub))
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_root_login_creates_stepup_challenge(self):
+        req = build_request()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(root_auth, "enforce_root_network_gate", return_value="127.0.0.1"))
+            stack.enter_context(patch.object(root_auth, "compute_required_factors", return_value=["totp"]))
+            create_stepup = stack.enter_context(patch.object(root_auth, "create_stepup_challenge", return_value="chal-root"))
+            stack.enter_context(patch.object(root_auth, "audit_event"))
+            resp = run_async(root_auth.root_login(req, UiSessionStartReq(), user_sub=root_auth.S.root_user_sub))
+        self.assertTrue(resp.auth_required)
+        self.assertEqual(resp.challenge_id, "chal-root")
+        create_stepup.assert_called_once()
 
 
 class TestMiscRoutes(unittest.TestCase):

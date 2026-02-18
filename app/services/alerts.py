@@ -5,9 +5,11 @@ import json
 import uuid
 import hashlib
 import hmac
+import logging
 import requests
+import time
 from urllib.parse import urlparse
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from boto3.dynamodb.conditions import Key
 
@@ -32,6 +34,7 @@ ALERT_EVENT_TYPES: List[str] = [
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.
 _SSE_SUBSCRIBERS: Dict[str, Set[asyncio.Queue]] = {}
+logger = logging.getLogger(__name__)
 
 def sse_subscribe(user_sub: str) -> asyncio.Queue:
     q: asyncio.Queue = asyncio.Queue(maxsize=200)
@@ -254,12 +257,47 @@ def _webhook_event_types() -> Set[str]:
         return set()
     return {t.strip() for t in S.alerts_webhook_event_types.split(",") if t.strip()}
 
-def send_alert_webhook(payload: Dict[str, Any], *, alert_type: str, alert_id: str = "") -> None:
+def _post_webhook_with_retry(
+    url: str,
+    *,
+    data: bytes | None = None,
+    json_payload: Dict[str, Any] | None = None,
+    headers: Optional[Dict[str, str]] = None,
+) -> Tuple[bool, str]:
+    retries = 3
+    backoff_seconds = 0.2
+    for attempt in range(1, retries + 1):
+        try:
+            response = requests.post(
+                url,
+                data=data,
+                json=json_payload,
+                headers=headers,
+                timeout=S.alerts_webhook_timeout_seconds,
+            )
+            if 200 <= response.status_code < 300:
+                return True, ""
+            raise RuntimeError(f"webhook status={response.status_code}")
+        except Exception as exc:
+            if attempt == retries:
+                logger.warning(
+                    "Alert webhook delivery failed after retries",
+                    extra={"url": url, "attempts": retries},
+                    exc_info=exc,
+                )
+                return False, str(exc)[:400]
+            sleep_for = backoff_seconds * (2 ** (attempt - 1))
+            time.sleep(sleep_for)
+
+    return False, "retry_exhausted"
+
+
+def send_alert_webhook(payload: Dict[str, Any], *, alert_type: str, alert_id: str = "") -> Dict[str, Any]:
     if not S.alerts_webhook_url:
-        return
+        return {"enabled": False, "delivered": False, "reason": "disabled"}
     allowed = _webhook_event_types()
     if allowed and alert_type not in allowed:
-        return
+        return {"enabled": True, "delivered": False, "reason": "event_type_filtered"}
     body = {
         "alert_type": alert_type,
         "event": payload.get("event"),
@@ -274,15 +312,56 @@ def send_alert_webhook(payload: Dict[str, Any], *, alert_type: str, alert_id: st
     if S.alerts_webhook_secret:
         sig = hmac.new(S.alerts_webhook_secret.encode("utf-8"), data, hashlib.sha256).hexdigest()
         headers["X-Alert-Signature"] = f"sha256={sig}"
-    try:
-        requests.post(
-            S.alerts_webhook_url,
-            data=data,
-            headers=headers,
-            timeout=S.alerts_webhook_timeout_seconds,
-        )
-    except Exception:
-        pass
+    delivered, error = _post_webhook_with_retry(S.alerts_webhook_url, data=data, headers=headers)
+    return {
+        "enabled": True,
+        "delivered": delivered,
+        "reason": "ok" if delivered else "delivery_failed",
+        "target": "alerts_webhook",
+        "url": S.alerts_webhook_url,
+        "error": error,
+    }
+
+
+def _is_privileged_event(payload: Dict[str, Any]) -> bool:
+    event = str(payload.get("event") or "")
+    if event.startswith(("root_", "admin_")):
+        return True
+    actor_sub = str(payload.get("actor_sub") or "").strip()
+    if actor_sub:
+        return True
+    role = str(payload.get("role") or payload.get("actual_role") or "").lower()
+    return role in {"root", "admin"}
+
+
+def send_siem_event(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if not S.siem_webhook_enabled or not S.siem_webhook_url:
+        return {"enabled": False, "delivered": False, "reason": "disabled"}
+    if S.siem_root_admin_events_only and not _is_privileged_event(payload):
+        return {"enabled": True, "delivered": False, "reason": "non_privileged_filtered"}
+    body = {
+        "stream": "security_audit",
+        "ts": payload.get("ts"),
+        "event": payload.get("event"),
+        "user_sub": payload.get("user_sub"),
+        "actor_sub": payload.get("actor_sub"),
+        "effective_sub": payload.get("effective_sub"),
+        "payload": payload,
+    }
+    data = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if S.siem_webhook_secret:
+        sig = hmac.new(S.siem_webhook_secret.encode("utf-8"), data, hashlib.sha256).hexdigest()
+        headers["X-SIEM-Signature"] = f"sha256={sig}"
+    delivered, error = _post_webhook_with_retry(S.siem_webhook_url, data=data, headers=headers)
+    return {
+        "enabled": True,
+        "delivered": delivered,
+        "reason": "ok" if delivered else "delivery_failed",
+        "target": "siem_webhook",
+        "url": S.siem_webhook_url,
+        "error": error,
+    }
 
 
 def _normalize_webhook_urls(values: List[str]) -> List[str]:
@@ -300,23 +379,38 @@ def _normalize_webhook_urls(values: List[str]) -> List[str]:
             cleaned.append(url[:500])
     return cleaned
 
-def send_alert_webhook(urls: List[str], payload: Dict[str, Any]) -> None:
+def send_alert_webhook_fanout(urls: List[str], payload: Dict[str, Any]) -> None:
     if not S.alerts_webhook_enabled:
         return
     if not urls:
         return
-    try:
-        import requests
-        for url in urls[:5]:
-            requests.post(url, json=payload, timeout=S.alerts_webhook_timeout_seconds)
-    except Exception:
-        pass
+    for url in urls[:5]:
+        _post_webhook_with_retry(url, json_payload=payload)
 
 def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
     payload: Dict[str, Any] = {"event": event, "user_sub": user_sub, "ts": now_ts(), **fields}
+    if bool(fields.get("cli", False)):
+        payload.setdefault("event_source", "rootctl")
+        payload.setdefault("event_channel", "cli")
+        payload.setdefault("cli_event_name", f"rootctl.{event}")
+        if event.startswith("root_"):
+            payload.setdefault("root_cli_event_name", f"rootctl.root.{event}")
     if request is not None:
         payload["ip"] = client_ip_from_request(request)
         payload["user_agent"] = (request.headers.get("user-agent", "")[:256])
+        state = getattr(request, "state", None)
+        if state is not None:
+            actor_sub = getattr(state, "actor_sub", "")
+            effective_sub = getattr(state, "effective_sub", "")
+            impersonation_id = getattr(state, "impersonation_id", "")
+            if actor_sub:
+                payload.setdefault("actor_sub", actor_sub)
+            if effective_sub:
+                payload.setdefault("effective_sub", effective_sub)
+            if impersonation_id:
+                payload.setdefault("impersonation_id", impersonation_id)
+            if actor_sub or effective_sub:
+                payload.setdefault("impersonation", True)
     try:
         identity = get_profile_identity(user_sub)
     except Exception:
@@ -361,7 +455,46 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
         wr = write_alert(user_sub, event=event, outcome=outcome, title=title, details={**payload, "alert_type": alert_type})
         alert_id = (wr or {}).get("alert_id", "")
         send_push_for_alert(user_sub, alert_type, title, f"{event} ({outcome})", alert_id or "")
-        send_alert_webhook(payload, alert_type=alert_type, alert_id=alert_id or "")
+        webhook_result = send_alert_webhook(payload, alert_type=alert_type, alert_id=alert_id or "")
+        siem_result = send_siem_event(payload)
+
+        delivery_failures: List[Dict[str, Any]] = []
+        for result in (webhook_result, siem_result):
+            if result.get("enabled") and not result.get("delivered") and result.get("reason") == "delivery_failed":
+                delivery_failures.append(
+                    {
+                        "target": result.get("target"),
+                        "url": result.get("url"),
+                        "error": result.get("error"),
+                    }
+                )
+        if delivery_failures:
+            payload["delivery_failures"] = delivery_failures
+            record_auth_event("alerts_delivery_failure")
+            logger.warning(
+                "Alert/SIEM delivery failure",
+                extra={
+                    "event": event,
+                    "user_sub": user_sub,
+                    "correlation_id": str(payload.get("correlation_id") or ""),
+                    "failures": delivery_failures,
+                },
+            )
+            try:
+                write_alert(
+                    user_sub,
+                    event="alerts_delivery_failure",
+                    outcome="error",
+                    title="Alert delivery failure",
+                    details={
+                        "event": event,
+                        "user_sub": user_sub,
+                        "correlation_id": str(payload.get("correlation_id") or ""),
+                        "delivery_failures": delivery_failures,
+                    },
+                )
+            except Exception:
+                pass
     except Exception:
         alert_id = ""
 
@@ -429,7 +562,7 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
                 "title": title,
                 "details": payload,
             }
-            send_alert_webhook(urls, webhook_payload)
+            send_alert_webhook_fanout(urls, webhook_payload)
     except Exception:
         pass
 
