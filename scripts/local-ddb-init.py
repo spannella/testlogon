@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional
 
-from app.core.aws_clients import ddb_resource
+import boto3
 from app.core.settings import S
 
 
@@ -198,8 +198,20 @@ def _wait_for_tables(ddb, table_names: Iterable[str]) -> None:
             table = client.describe_table(TableName=name).get("Table", {})
 
 
+def _ddb_resource_for_local_bootstrap():
+    endpoint = os.getenv("DDB_ENDPOINT_URL") or os.getenv("AWS_ENDPOINT_URL") or "http://localhost:8001"
+    return boto3.resource(
+        "dynamodb",
+        region_name=S.aws_region or "us-east-1",
+        endpoint_url=endpoint,
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", "test"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", "test"),
+        aws_session_token=os.getenv("AWS_SESSION_TOKEN", "test"),
+    )
+
+
 def main() -> None:
-    ddb = ddb_resource()
+    ddb = _ddb_resource_for_local_bootstrap()
     tables = _table_defs()
     created = []
     for table in tables:
