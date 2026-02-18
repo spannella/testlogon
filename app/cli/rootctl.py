@@ -1111,6 +1111,65 @@ def _user_deactivate_command(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+def _user_deactivate_bulk_command(args: argparse.Namespace) -> Dict[str, Any]:
+    shared = _shared_opts(args)
+    root_sub = str(getattr(args, "root_sub", "") or "").strip()
+    actor_sub = str(getattr(args, "actor_sub", "") or "").strip()
+    reason = str(getattr(args, "reason", "") or "").strip()
+    ticket = str(getattr(args, "ticket", "") or "").strip()
+    targets = [str(value or "").strip() for value in list(getattr(args, "target_user_sub", []) or [])]
+    targets = [value for value in targets if value]
+    if not targets:
+        raise ValueError("at least one --target-user-sub is required")
+
+    correlation_id = shared.correlation_id or str(uuid.uuid4())
+    bulk_results: list[Dict[str, Any]] = []
+    success = 0
+
+    for target_user_sub in targets:
+        per_target = argparse.Namespace(**vars(args))
+        setattr(per_target, "target_user_sub", target_user_sub)
+        setattr(per_target, "command", "deactivate")
+        setattr(per_target, "correlation_id", correlation_id)
+        try:
+            result = _user_deactivate_command(per_target)
+            bulk_results.append(
+                {
+                    "target_user_sub": target_user_sub,
+                    "ok": True,
+                    "result": result,
+                }
+            )
+            success += 1
+        except Exception as exc:  # bulk flow should continue through target failures
+            bulk_results.append(
+                {
+                    "target_user_sub": target_user_sub,
+                    "ok": False,
+                    "error": str(exc),
+                }
+            )
+
+    failed = len(targets) - success
+    return {
+        "ok": failed == 0,
+        "group": str(args.group),
+        "command": str(args.command),
+        "dry_run": shared.dry_run,
+        "actor_sub": actor_sub,
+        "reason": reason,
+        "ticket": ticket,
+        "request_id": shared.request_id,
+        "correlation_id": correlation_id,
+        "summary": {
+            "total_targets": len(targets),
+            "success_count": success,
+            "failure_count": failed,
+        },
+        "results": bulk_results,
+    }
+
+
 def _user_delete_command(args: argparse.Namespace) -> Dict[str, Any]:
     shared = _shared_opts(args)
     root_sub = str(getattr(args, "root_sub", "") or "").strip()
@@ -1716,6 +1775,7 @@ def _timeline_matches_filters(
     actor_sub: str,
     target_user_sub: str,
     event_filter: str,
+    correlation_filter: str,
     start_ts: int,
     end_ts: int,
 ) -> bool:
@@ -1731,6 +1791,8 @@ def _timeline_matches_filters(
         action_value = str(item.get("action") or "")
         if event_filter not in {event_value, action_value}:
             return False
+    if correlation_filter and str(item.get("correlation_id") or "") != correlation_filter:
+        return False
     return True
 
 
@@ -1738,6 +1800,7 @@ def _role_timeline_command(args: argparse.Namespace) -> Dict[str, Any]:
     actor_filter = str(getattr(args, "actor_sub", "") or "").strip()
     target_filter = str(getattr(args, "target_user_sub", "") or "").strip()
     event_filter = str(getattr(args, "event", "") or "").strip()
+    correlation_filter = str(getattr(args, "correlation_id", "") or "").strip()
     start_ts = int(getattr(args, "start_ts", 0) or 0)
     end_ts = int(getattr(args, "end_ts", now_ts()) or now_ts())
     limit = int(getattr(args, "limit", 50) or 50)
@@ -1785,12 +1848,14 @@ def _role_timeline_command(args: argparse.Namespace) -> Dict[str, Any]:
             "new_role": str(it.get("new_role") or ""),
             "reason": str(it.get("reason") or ""),
             "request_id": str(it.get("request_id") or ""),
+            "correlation_id": str(it.get("correlation_id") or ""),
         }
         if _timeline_matches_filters(
             row,
             actor_sub=actor_filter,
             target_user_sub=target_filter,
             event_filter=event_filter,
+            correlation_filter=correlation_filter,
             start_ts=start_ts,
             end_ts=end_ts,
         ):
@@ -1822,6 +1887,7 @@ def _alerts_timeline_command(args: argparse.Namespace) -> Dict[str, Any]:
     actor_filter = str(getattr(args, "actor_sub", "") or "").strip()
     target_filter = str(getattr(args, "target_user_sub", "") or "").strip()
     event_filter = str(getattr(args, "event", "") or "").strip()
+    correlation_filter = str(getattr(args, "correlation_id", "") or "").strip()
     start_ts = int(getattr(args, "start_ts", 0) or 0)
     end_ts = int(getattr(args, "end_ts", now_ts()) or now_ts())
     limit = int(getattr(args, "limit", 50) or 50)
@@ -1856,6 +1922,7 @@ def _alerts_timeline_command(args: argparse.Namespace) -> Dict[str, Any]:
             "target_user_sub": str(details.get("target_user_sub") or ""),
             "user_sub": str(details.get("user_sub") or it.get("user_sub") or ""),
             "request_id": str(details.get("request_id") or ""),
+            "correlation_id": str(details.get("correlation_id") or ""),
             "details": details,
         }
         if _timeline_matches_filters(
@@ -1863,6 +1930,7 @@ def _alerts_timeline_command(args: argparse.Namespace) -> Dict[str, Any]:
             actor_sub=actor_filter,
             target_user_sub=target_filter,
             event_filter=event_filter,
+            correlation_filter=correlation_filter,
             start_ts=start_ts,
             end_ts=end_ts,
         ):
@@ -2146,6 +2214,24 @@ def _add_group_commands(group_name: str, group_parser: argparse.ArgumentParser) 
             requires_root=True,
             requires_ticket=True,
             requires_confirm=True,
+        )
+
+        deactivate_bulk = commands.add_parser("deactivate-bulk", help="Deactivate multiple users and emit per-target results")
+        _add_shared_options(deactivate_bulk)
+        _add_mutation_guard_options(deactivate_bulk)
+        deactivate_bulk.add_argument(
+            "--target-user-sub",
+            action="append",
+            default=[],
+            help="Target user subject (repeat flag for multiple targets)",
+        )
+        deactivate_bulk.set_defaults(
+            handler=_user_deactivate_bulk_command,
+            group=group_name,
+            mutating=True,
+            requires_root=True,
+            requires_ticket=True,
+            requires_confirm=False,
         )
 
         delete = commands.add_parser("delete", help="Delete user (soft delete by default; optional hard delete)")

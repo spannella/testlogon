@@ -11,6 +11,7 @@ session management, MFA, billing, notifications, and a lightweight control panel
 - [Root break-glass CLI plan](docs/root-cli-breakglass-plan.md)
 - [Root break-glass CLI implementation ticket backlog](docs/root-cli-implementation-tickets.md)
 - [Security hardening and break-glass runbook](docs/security-hardening-runbook.md)
+- [Root CLI operator runbook](docs/root-cli-operator-runbook.md)
 - [Incident response playbook (compromised admin/root session)](docs/incident-response-privileged-session.md)
 - [DynamoDB setup](docs/dynamodb.md)
 - [AWS services](docs/aws-services.md)

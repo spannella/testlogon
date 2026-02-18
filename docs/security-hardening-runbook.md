@@ -89,3 +89,10 @@ SIEM payload includes:
 - Security owner signs runbook updates.
 - Ops owner confirms monitor/dashboard health checks.
 - Platform owner confirms env vars are deployed in all environments.
+
+## Root CLI operational procedures
+
+For step-by-step break-glass execution guidance (including approvals/escalation points, CLI-vs-API decision criteria, and evidence capture checklists), use:
+- `docs/root-cli-operator-runbook.md`
+
+Treat that runbook as the primary operational playbook for `rootctl` incident actions.
