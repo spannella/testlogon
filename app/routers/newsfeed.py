@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import time
 import uuid
@@ -17,7 +18,13 @@ from app.core.aws import ddb
 from app.core.aws_clients import s3_client, sqs_client
 from app.core.cursor import decode_cursor, encode_cursor
 from app.core.settings import S
+from app.services.filemanager import get_usage_summary
 from app.services.subscription_access import can_access_creator
+from app.services.usage_metering import (
+    build_usage_event,
+    build_usage_source_idempotency_key,
+    record_usage_event_and_aggregates,
+)
 
 # -----------------------------
 # Config
@@ -33,6 +40,7 @@ s3 = s3_client() if UPLOAD_BUCKET else None
 sqs = sqs_client() if EVENTS_SQS_URL else None
 
 router = APIRouter(tags=["newsfeed"])
+logger = logging.getLogger(__name__)
 
 
 # -----------------------------
@@ -65,6 +73,97 @@ def require_user(x_user_id: Optional[str], user_id_qs: Optional[str] = None) -> 
 def ensure_uploads_enabled() -> None:
     if not UPLOAD_BUCKET or not s3:
         raise HTTPException(status_code=500, detail="UPLOAD_BUCKET not configured")
+
+
+def _newsfeed_post_quota_error(*, period_id: str, limit_count: int, used_count: int) -> HTTPException:
+    remaining_count = max(0, int(limit_count) - int(used_count))
+    return HTTPException(
+        status_code=403,
+        detail={
+            "code": "newsfeed_post_quota_exceeded",
+            "message": "newsfeed post quota exceeded",
+            "quota_type": "newsfeed_post",
+            "period_id": period_id,
+            "limit_count": int(limit_count),
+            "used_count": int(used_count),
+            "remaining_count": remaining_count,
+        },
+    )
+
+
+def _parse_newsfeed_post_warning_thresholds() -> List[int]:
+    raw = str(getattr(S, "newsfeed_post_quota_warning_thresholds", "80,95") or "80,95").strip()
+    out: List[int] = []
+    for token in raw.split(','):
+        t = token.strip()
+        if not t:
+            continue
+        try:
+            value = int(t)
+        except ValueError:
+            continue
+        if 1 <= value <= 100 and value not in out:
+            out.append(value)
+    out.sort()
+    return out or [80, 95]
+
+
+def _emit_newsfeed_post_quota_warning(
+    *,
+    threshold_percent: int,
+    user_id: str,
+    period_id: str,
+    limit_count: int,
+    projected_count: int,
+) -> None:
+    logger.warning(
+        "newsfeed post quota warning threshold crossed",
+        extra={
+            "user_id": user_id,
+            "period_id": period_id,
+            "threshold_percent": threshold_percent,
+            "limit_count": int(limit_count),
+            "projected_count": int(projected_count),
+        },
+    )
+
+
+def _enforce_newsfeed_post_quota_precheck(*, user_id: str) -> None:
+    table_name = getattr(S, "filemgr_table_name", None)
+    if not table_name:
+        return
+    try:
+        usage = get_usage_summary(user_id)
+    except Exception:
+        logger.exception("failed to load usage summary for newsfeed post quota pre-check", extra={"user_id": user_id})
+        return
+
+    post_usage = usage.get("post_publish") or {}
+    used_count = int(post_usage.get("used_count") or 0)
+    limit_count = int(post_usage.get("limit_count") or 0)
+    period_id = str(usage.get("period_id") or "")
+
+    if limit_count > 0 and used_count >= limit_count:
+        overage_mode = str(getattr(S, "newsfeed_post_quota_overage_mode", "block") or "block").strip().lower()
+        if overage_mode != "allow":
+            raise _newsfeed_post_quota_error(period_id=period_id, limit_count=limit_count, used_count=used_count)
+
+    if not bool(getattr(S, "newsfeed_post_quota_soft_warnings_enabled", False)):
+        return
+    if limit_count <= 0:
+        return
+
+    projected_count = used_count + 1
+    for threshold in _parse_newsfeed_post_warning_thresholds():
+        trigger_at = max(1, int((limit_count * threshold + 99) // 100))
+        if used_count < trigger_at <= projected_count:
+            _emit_newsfeed_post_quota_warning(
+                threshold_percent=threshold,
+                user_id=user_id,
+                period_id=period_id,
+                limit_count=limit_count,
+                projected_count=projected_count,
+            )
 
 
 def ddb_put_item(item: Dict[str, Any]) -> None:
@@ -116,6 +215,99 @@ def ddb_query(**kwargs) -> Dict[str, Any]:
         return tbl.query(**kwargs)
     except ClientError as exc:
         raise HTTPException(status_code=500, detail=f"DynamoDB error: {exc.response['Error'].get('Message','unknown')}") from exc
+
+
+def _meter_newsfeed_post_publish(*, user_id: str, post_id: str) -> None:
+    table_name = getattr(S, "filemgr_table_name", None)
+    if not table_name:
+        return
+    try:
+        idempotency_key = build_usage_source_idempotency_key(
+            "newsfeed_post",
+            user_id=user_id,
+            post_id=post_id,
+        )
+        event = build_usage_event(
+            user_id=user_id,
+            event_type="upload",
+            bytes_count=0,
+            source="newsfeed_post",
+            resource_path=f"/newsfeed/posts/{post_id}",
+            idempotency_key=idempotency_key,
+        )
+        record_usage_event_and_aggregates(ddb.Table(table_name), event)
+    except Exception:
+        logger.exception("newsfeed post publish usage metering failed", extra={"user_id": user_id, "post_id": post_id})
+
+
+def _meter_newsfeed_attachment_uploads(*, user_id: str, post_id: str, attachments: List[Attachment]) -> None:
+    table_name = getattr(S, "filemgr_table_name", None)
+    if not table_name or not attachments or not s3 or not UPLOAD_BUCKET:
+        return
+    usage_table = ddb.Table(table_name)
+    for attachment in attachments:
+        s3_key = str(attachment.s3_key or "").strip()
+        if not s3_key:
+            continue
+        try:
+            head = s3.head_object(Bucket=UPLOAD_BUCKET, Key=s3_key)
+            size_bytes = int(head.get("ContentLength") or 0)
+            if size_bytes <= 0:
+                continue
+            idempotency_key = build_usage_source_idempotency_key(
+                "newsfeed_attachment_upload",
+                user_id=user_id,
+                attachment_key=f"{UPLOAD_BUCKET}/{s3_key}",
+                operation_id=post_id,
+            )
+            event = build_usage_event(
+                user_id=user_id,
+                event_type="upload",
+                bytes_count=size_bytes,
+                source="newsfeed_attachment_upload",
+                resource_path=f"/newsfeed/posts/{post_id}/attachments/{s3_key}",
+                idempotency_key=idempotency_key,
+            )
+            record_usage_event_and_aggregates(usage_table, event)
+        except Exception:
+            logger.exception(
+                "newsfeed attachment upload usage metering failed",
+                extra={"user_id": user_id, "post_id": post_id, "s3_key": s3_key},
+            )
+
+
+def _record_newsfeed_attachment_download(
+    *,
+    user_id: str,
+    post_id: str,
+    attachment_key: str,
+    bytes_count: int,
+    idempotency_operation_id: Optional[str] = None,
+) -> None:
+    table_name = getattr(S, "filemgr_table_name", None)
+    if not table_name or bytes_count <= 0:
+        return
+    try:
+        idempotency_key = build_usage_source_idempotency_key(
+            "newsfeed_attachment_download",
+            user_id=user_id,
+            attachment_key=attachment_key,
+            operation_id=idempotency_operation_id or post_id,
+        )
+        event = build_usage_event(
+            user_id=user_id,
+            event_type="download",
+            bytes_count=bytes_count,
+            source="newsfeed_attachment_download",
+            resource_path=f"/newsfeed/posts/{post_id}/attachments/{attachment_key}",
+            idempotency_key=idempotency_key,
+        )
+        record_usage_event_and_aggregates(ddb.Table(table_name), event)
+    except Exception:
+        logger.exception(
+            "newsfeed attachment download usage metering failed",
+            extra={"user_id": user_id, "post_id": post_id, "attachment_key": attachment_key, "bytes_count": bytes_count},
+        )
 
 
 # -----------------------------
@@ -535,6 +727,7 @@ def refollow(req: UnfollowRequest, x_user_id: Optional[str] = Header(default=Non
 @router.post("/posts", response_model=PostResponse)
 def create_post(req: CreatePostRequest, x_user_id: Optional[str] = Header(default=None)):
     user_id = require_user(x_user_id)
+    _enforce_newsfeed_post_quota_precheck(user_id=user_id)
     post_id = new_id("post")
     created_at = now_iso()
 
@@ -568,6 +761,8 @@ def create_post(req: CreatePostRequest, x_user_id: Optional[str] = Header(defaul
         "GSI1SK": f"{created_at}#POST#{post_id}",
     }
     ddb_put_item(feed_item)
+    _meter_newsfeed_post_publish(user_id=user_id, post_id=post_id)
+    _meter_newsfeed_attachment_uploads(user_id=user_id, post_id=post_id, attachments=req.attachments)
 
     return PostResponse(
         post_id=post_id,
@@ -683,6 +878,83 @@ def view_feed(
         ordered.append(post)
 
     return {"items": ordered, "next_cursor": encode_cursor(resp.get("LastEvaluatedKey"))}
+
+
+@router.get("/posts/{post_id}/attachments/{attachment_id}")
+def download_post_attachment(
+    post_id: str,
+    attachment_id: str,
+    x_user_id: Optional[str] = Header(default=None),
+    x_request_id: Optional[str] = Header(default=None, alias="X-Request-Id"),
+):
+    user_id = require_user(x_user_id)
+    ensure_uploads_enabled()
+
+    post = ddb_get_item({"PK": pk_post(post_id), "SK": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    author = post.get("user_id")
+    if author and author != user_id:
+        if not can_access_creator(user_id, author):
+            raise HTTPException(status_code=403, detail="Subscription required")
+        if not is_following(user_id, author):
+            raise HTTPException(status_code=403, detail="Following required")
+
+    if bool(post.get("locked")) and author != user_id and not has_unlocked(user_id, post_id):
+        raise HTTPException(status_code=402, detail="Post is locked; unlock required")
+
+    attachment = None
+    for it in post.get("attachments") or []:
+        if str((it or {}).get("attachment_id") or "") == attachment_id:
+            attachment = it or {}
+            break
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    s3_key = str(attachment.get("s3_key") or "").strip()
+    if not s3_key:
+        raise HTTPException(status_code=404, detail="Attachment object not found")
+
+    try:
+        obj = s3.get_object(Bucket=UPLOAD_BUCKET, Key=s3_key)
+    except ClientError as exc:
+        raise HTTPException(status_code=404, detail="Attachment object not found") from exc
+
+    body = obj.get("Body")
+    if body is None:
+        raise HTTPException(status_code=404, detail="Attachment stream missing")
+
+    content_len = int(obj.get("ContentLength") or 0)
+    content_type = str(attachment.get("content_type") or obj.get("ContentType") or "application/octet-stream")
+    filename = str(attachment.get("filename") or os.path.basename(s3_key) or "attachment")
+    attachment_key = f"{UPLOAD_BUCKET}/{s3_key}"
+
+    def _iter_stream():
+        sent = 0
+        try:
+            for chunk in body.iter_chunks(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                sent += len(chunk)
+                yield chunk
+        finally:
+            _record_newsfeed_attachment_download(
+                user_id=user_id,
+                post_id=post_id,
+                attachment_key=attachment_key,
+                bytes_count=sent,
+                idempotency_operation_id=x_request_id or attachment_id,
+            )
+
+    headers = {
+        "Content-Disposition": f'inline; filename="{filename}"',
+        "Cache-Control": "private, max-age=60",
+    }
+    if content_len > 0:
+        headers["Content-Length"] = str(content_len)
+
+    return StreamingResponse(_iter_stream(), media_type=content_type, headers=headers)
 
 
 # -----------------------------

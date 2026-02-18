@@ -31,9 +31,14 @@ from app.core.settings import S
 from app.core.aws import ddb
 from app.core.aws_clients import s3_client
 from app.services.alerts import audit_event
-from app.services.filemanager import get_node, norm_path
+from app.services.filemanager import get_node, get_usage_summary, norm_path
 from app.services.sessions import require_ui_session
 from app.services.subscription_access import require_subscription_access
+from app.services.usage_metering import (
+    build_usage_event,
+    build_usage_source_idempotency_key,
+    record_usage_event_and_aggregates,
+)
 
 # -------------------------
 # Config / AWS clients
@@ -103,6 +108,215 @@ def get_current_user_id(authorization: Optional[str] = Header(default=None)) -> 
     Dev behavior: Authorization: Bearer <user_id>
     """
     return extract_bearer_token(authorization)
+
+
+def _meter_message_send(*, user_id: str, conversation_id: str, message_id: str) -> None:
+    """Record one message-send unit usage event for a persisted message."""
+    table_name = getattr(S, "filemgr_table_name", None)
+    if not table_name:
+        return
+    try:
+        key = build_usage_source_idempotency_key(
+            "messaging_send",
+            user_id=user_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+        )
+        event = build_usage_event(
+            user_id=user_id,
+            event_type="upload",
+            bytes_count=0,
+            source="messaging_send",
+            resource_path=f"/messaging/{conversation_id}/{message_id}",
+            idempotency_key=key,
+        )
+        record_usage_event_and_aggregates(ddb.Table(table_name), event)
+    except Exception:
+        logger.exception(
+            "messaging send usage metering failed",
+            extra={"conversation_id": conversation_id, "message_id": message_id, "user_id": user_id},
+        )
+
+
+def _meter_messaging_attachment_upload(
+    *,
+    user_id: str,
+    bucket: str,
+    key: str,
+    conversation_id: str,
+    message_id: str,
+) -> None:
+    """Record authoritative attachment upload bytes using object metadata."""
+    table_name = getattr(S, "filemgr_table_name", None)
+    if not table_name:
+        return
+    try:
+        head = s3.head_object(Bucket=bucket, Key=key)
+        size_bytes = int(head.get("ContentLength") or 0)
+        if size_bytes <= 0:
+            return
+        idempotency_key = build_usage_source_idempotency_key(
+            "messaging_attachment_upload",
+            user_id=user_id,
+            attachment_key=f"{bucket}/{key}",
+            operation_id=message_id,
+        )
+        event = build_usage_event(
+            user_id=user_id,
+            event_type="upload",
+            bytes_count=size_bytes,
+            source="messaging_attachment_upload",
+            resource_path=f"/messaging/{conversation_id}/{message_id}/attachments/{key}",
+            idempotency_key=idempotency_key,
+        )
+        record_usage_event_and_aggregates(ddb.Table(table_name), event)
+    except Exception:
+        logger.exception(
+            "messaging attachment upload metering failed",
+            extra={
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "user_id": user_id,
+                "bucket": bucket,
+                "key": key,
+            },
+        )
+
+
+def _record_messaging_attachment_download(
+    *,
+    user_id: str,
+    conversation_id: str,
+    message_id: str,
+    attachment_key: str,
+    bytes_count: int,
+    idempotency_operation_id: Optional[str] = None,
+) -> None:
+    table_name = getattr(S, "filemgr_table_name", None)
+    if not table_name or bytes_count <= 0:
+        return
+    try:
+        idempotency_key = build_usage_source_idempotency_key(
+            "messaging_attachment_download",
+            user_id=user_id,
+            attachment_key=attachment_key,
+            operation_id=idempotency_operation_id or message_id,
+        )
+        event = build_usage_event(
+            user_id=user_id,
+            event_type="download",
+            bytes_count=bytes_count,
+            source="messaging_attachment_download",
+            resource_path=f"/messaging/{conversation_id}/{message_id}/attachments/{attachment_key}",
+            idempotency_key=idempotency_key,
+        )
+        record_usage_event_and_aggregates(ddb.Table(table_name), event)
+    except Exception:
+        logger.exception(
+            "messaging attachment download metering failed",
+            extra={
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "user_id": user_id,
+                "attachment_key": attachment_key,
+                "bytes_count": bytes_count,
+            },
+        )
+
+
+def _messaging_quota_error(*, period_id: str, limit_count: int, used_count: int) -> HTTPException:
+    remaining_count = max(0, int(limit_count) - int(used_count))
+    return HTTPException(
+        status_code=403,
+        detail={
+            "code": "messaging_send_quota_exceeded",
+            "message": "messaging send quota exceeded",
+            "quota_type": "messaging_send",
+            "period_id": period_id,
+            "limit_count": int(limit_count),
+            "used_count": int(used_count),
+            "remaining_count": remaining_count,
+        },
+    )
+
+
+def _emit_messaging_quota_warning(
+    *,
+    threshold_percent: int,
+    user_id: str,
+    conversation_id: str,
+    period_id: str,
+    limit_count: int,
+    projected_count: int,
+    req: Optional[Request],
+) -> None:
+    logger.warning(
+        "messaging send quota warning threshold crossed",
+        extra={
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "period_id": period_id,
+            "threshold_percent": threshold_percent,
+            "limit_count": int(limit_count),
+            "projected_count": int(projected_count),
+        },
+    )
+    try:
+        audit_event(
+            "messaging_send_quota_warning",
+            user_id,
+            req,
+            outcome="warning",
+            conversation_id=conversation_id,
+            period_id=period_id,
+            threshold_percent=threshold_percent,
+            limit_count=int(limit_count),
+            projected_count=int(projected_count),
+        )
+    except Exception:
+        logger.exception(
+            "failed to emit messaging send quota warning audit event",
+            extra={"user_id": user_id, "conversation_id": conversation_id, "threshold_percent": threshold_percent},
+        )
+
+
+def _enforce_message_send_quota_precheck(*, user_id: str, conversation_id: str, req: Optional[Request]) -> None:
+    table_name = getattr(S, "filemgr_table_name", None)
+    if not table_name:
+        return
+    try:
+        usage = get_usage_summary(user_id)
+    except Exception:
+        logger.exception("failed to load usage summary for messaging quota pre-check", extra={"user_id": user_id})
+        return
+
+    message_usage = usage.get("message_send") or {}
+    used_count = int(message_usage.get("used_count") or 0)
+    limit_count = int(message_usage.get("limit_count") or 0)
+    period_id = str(usage.get("period_id") or "")
+
+    if limit_count > 0 and used_count >= limit_count:
+        raise _messaging_quota_error(period_id=period_id, limit_count=limit_count, used_count=used_count)
+
+    if not bool(getattr(S, "messaging_send_quota_soft_warnings_enabled", False)):
+        return
+
+    if limit_count <= 0:
+        return
+
+    projected_count = used_count + 1
+    for threshold in (80, 95):
+        trigger_at = max(1, int((limit_count * threshold + 99) // 100))
+        if used_count < trigger_at <= projected_count:
+            _emit_messaging_quota_warning(
+                threshold_percent=threshold,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                period_id=period_id,
+                limit_count=limit_count,
+                projected_count=projected_count,
+                req=req,
+            )
 
 
 async def get_messaging_user_id(
@@ -2025,6 +2239,7 @@ def send_text_message(
         pid = participant.get("user_id")
         if pid and pid != user_id:
             require_subscription_access(user_id, pid)
+    _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
     mid = "m_" + new_id()
@@ -2109,6 +2324,7 @@ def send_text_message(
         is_encrypted=is_encrypted,
         reply_to_message_id=inp.reply_to_message_id,
     )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     return message
 
 
@@ -2142,6 +2358,7 @@ def create_image_message(
         pid = participant.get("user_id")
         if pid and pid != user_id:
             require_subscription_access(user_id, pid)
+    _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
 
@@ -2200,6 +2417,14 @@ def create_image_message(
         kind="image",
         reply_to_message_id=inp.reply_to_message_id,
     )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    _meter_messaging_attachment_upload(
+        user_id=user_id,
+        bucket=inp.bucket,
+        key=inp.key,
+        conversation_id=conversation_id,
+        message_id=mid,
+    )
     return message
 
 
@@ -2217,6 +2442,7 @@ def create_file_message(
         pid = participant.get("user_id")
         if pid and pid != user_id:
             require_subscription_access(user_id, pid)
+    _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
     path = norm_path(inp.path, is_folder=False)
@@ -2299,7 +2525,93 @@ def create_file_message(
         kind=inp.kind,
         reply_to_message_id=inp.reply_to_message_id,
     )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     return message
+
+
+@router.get("/conversations/{conversation_id}/messages/{message_id}/attachment")
+def download_message_attachment(
+    conversation_id: str,
+    message_id: str,
+    request: Request,
+    x_request_id: Optional[str] = Header(default=None, alias="X-Request-Id"),
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+    kind = str(msg.get("kind") or "")
+
+    if kind == "image":
+        image = msg.get("image") or {}
+        bucket = str(image.get("bucket") or S3_BUCKET_IMAGES)
+        key = str(image.get("key") or "")
+        content_type = str(image.get("content_type") or "application/octet-stream")
+        filename = os.path.basename(key) or "image"
+    elif kind in {"file", "audio", "video"}:
+        file_ref = msg.get("file") or {}
+        path = file_ref.get("path")
+        owner = str(msg.get("sender_id") or "") or user_id
+        if not path:
+            raise HTTPException(400, "Attachment path missing")
+        node = get_node(owner, str(path))
+        bucket = str(node.get("s3_bucket") or "")
+        key = str(node.get("s3_key") or "")
+        content_type = str(node.get("content_type") or file_ref.get("content_type") or "application/octet-stream")
+        filename = str(node.get("name") or file_ref.get("name") or os.path.basename(key) or "attachment")
+    else:
+        raise HTTPException(400, "Message does not contain downloadable attachment")
+
+    if not bucket or not key:
+        raise HTTPException(404, "Attachment object not found")
+
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=key)
+    except Exception as exc:
+        raise HTTPException(404, "Attachment object not found") from exc
+
+    body = obj.get("Body")
+    if body is None:
+        raise HTTPException(404, "Attachment stream missing")
+
+    content_len = int(obj.get("ContentLength") or 0)
+    attachment_key = f"{bucket}/{key}"
+
+    def _iter_stream() -> Iterable[bytes]:
+        sent = 0
+        try:
+            for chunk in body.iter_chunks(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                sent += len(chunk)
+                yield chunk
+        finally:
+            _record_messaging_attachment_download(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                message_id=message_id,
+                attachment_key=attachment_key,
+                bytes_count=sent,
+                idempotency_operation_id=x_request_id,
+            )
+
+    headers = {
+        "Content-Disposition": f'inline; filename="{filename}"',
+        "Cache-Control": "private, max-age=60",
+    }
+    if content_len > 0:
+        headers["Content-Length"] = str(content_len)
+
+    audit_event(
+        "messaging_attachment_downloaded",
+        user_id,
+        request,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+        kind=kind,
+        attachment_key=attachment_key,
+    )
+    return StreamingResponse(_iter_stream(), media_type=content_type, headers=headers)
 
 
 @router.post("/conversations/{conversation_id}/read")

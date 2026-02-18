@@ -3,6 +3,8 @@ from datetime import datetime, timezone
 import pytest
 
 from app.services.usage_metering import (
+    USAGE_EVENT_SOURCES,
+    build_usage_source_idempotency_key,
     build_billing_usage_snapshot_item,
     build_usage_daily_item,
     build_usage_event,
@@ -83,19 +85,74 @@ def test_aggregate_item_builders() -> None:
     assert period["PK"] == "USER#u1"
     assert period["SK"] == "USAGE#PERIOD#2026-03"
     assert period["upload_bytes_total"] == 0
+    assert period["message_send_count_total"] == 0
+    assert period["post_publish_count_total"] == 0
 
     daily = build_usage_daily_item(user_id="u1", day_utc="2026-03-20", now="2026-03-20T00:00:00+00:00")
     assert daily["SK"] == "USAGE#DAY#2026-03-20"
     assert daily["period_id"] == "2026-03"
+    assert daily["message_send_count_total"] == 0
+    assert daily["post_publish_count_total"] == 0
 
     snap = build_billing_usage_snapshot_item(user_id="u1", period_id="2026-03", version=2, status="draft")
     assert snap["SK"] == "USAGE#SNAPSHOT#2026-03#V0002"
     assert snap["status"] == "draft"
+    assert snap["schema_version"] == 2
+    assert snap["message_send_count_total"] == 0
+    assert snap["post_publish_count_total"] == 0
+    assert snap["messaging_upload_bytes_total"] == 0
+    assert snap["messaging_download_bytes_total"] == 0
+    assert snap["newsfeed_upload_bytes_total"] == 0
+    assert snap["newsfeed_download_bytes_total"] == 0
 
 
 def test_snapshot_version_validation() -> None:
     with pytest.raises(ValueError):
         build_billing_usage_snapshot_item(user_id="u1", period_id="2026-03", version=0)
+
+
+def test_snapshot_schema_version_validation() -> None:
+    with pytest.raises(ValueError):
+        build_billing_usage_snapshot_item(user_id="u1", period_id="2026-03", schema_version=0)
+
+
+def test_mtr001_taxonomy_includes_required_messaging_newsfeed_sources() -> None:
+    assert {
+        "messaging_send",
+        "newsfeed_post",
+        "messaging_attachment_upload",
+        "messaging_attachment_download",
+        "newsfeed_attachment_upload",
+        "newsfeed_attachment_download",
+    }.issubset(USAGE_EVENT_SOURCES)
+
+    # existing file-manager sources remain available for backward compatibility
+    assert {"api_upload", "download", "shared_download", "delete_soft"}.issubset(USAGE_EVENT_SOURCES)
+
+
+def test_mtr001_idempotency_key_patterns_for_new_sources() -> None:
+    assert build_usage_source_idempotency_key(
+        "messaging_send",
+        user_id="u1",
+        conversation_id="c1",
+        message_id="m1",
+    ) == "u1|messaging_send|c1|m1"
+
+    assert build_usage_source_idempotency_key(
+        "newsfeed_post",
+        user_id="u1",
+        post_id="p1",
+    ) == "u1|newsfeed_post|p1"
+
+    assert build_usage_source_idempotency_key(
+        "messaging_attachment_upload",
+        user_id="u1",
+        attachment_key="attachments/a.png",
+        operation_id="op-1",
+    ) == "u1|messaging_attachment_upload|attachments/a.png|op-1"
+
+    with pytest.raises(ValueError):
+        build_usage_source_idempotency_key("not-a-source", user_id="u1")
 
 class _FakeUsageTable:
     def __init__(self):
@@ -184,6 +241,8 @@ class _ApplyingUsageTable:
             item["storage_bytes_current"] = int(item.get("storage_bytes_current", 0)) + int(vals[":storage_delta"])
             item["storage_bytes_peak"] = int(item.get("storage_bytes_peak", 0))
             item["storage_byte_seconds"] = int(item.get("storage_byte_seconds", 0))
+            item["message_send_count_total"] = int(item.get("message_send_count_total", 0)) + int(vals.get(":message_send_inc", 0))
+            item["post_publish_count_total"] = int(item.get("post_publish_count_total", 0)) + int(vals.get(":post_publish_inc", 0))
             item["updated_at"] = vals[":updated_at"]
             item["ttl_epoch"] = vals[":ttl_epoch"]
         elif "USAGE#DAY#" in Key["SK"]:
@@ -194,6 +253,8 @@ class _ApplyingUsageTable:
             item["upload_bytes_total"] = int(item.get("upload_bytes_total", 0)) + int(vals[":upload_inc"])
             item["download_bytes_total"] = int(item.get("download_bytes_total", 0)) + int(vals[":download_inc"])
             item["storage_bytes_end_of_day"] = int(item.get("storage_bytes_end_of_day", 0)) + int(vals[":storage_delta"])
+            item["message_send_count_total"] = int(item.get("message_send_count_total", 0)) + int(vals.get(":message_send_inc", 0))
+            item["post_publish_count_total"] = int(item.get("post_publish_count_total", 0)) + int(vals.get(":post_publish_inc", 0))
             item["updated_at"] = vals[":updated_at"]
             item["ttl_epoch"] = vals[":ttl_epoch"]
         self.items[(Key["PK"], Key["SK"])] = item
@@ -299,3 +360,234 @@ def test_pipeline_outage_then_replay_applies_once() -> None:
     assert record_usage_event_and_aggregates(table, event) is True
     period = table.items[("USER#u1", "USAGE#PERIOD#2026-02")]
     assert period["download_bytes_total"] == 77
+
+
+def test_mtr002_unit_counters_increment_and_backfill_missing_fields() -> None:
+    from app.services.usage_metering import record_usage_event_and_aggregates
+
+    table = _ApplyingUsageTable()
+
+    # Simulate older aggregate rows that predate unit counter columns.
+    table.items[("USER#u1", "USAGE#PERIOD#2026-02")] = {
+        "PK": "USER#u1",
+        "SK": "USAGE#PERIOD#2026-02",
+        "entity_type": "usage_period_totals",
+        "user_id": "u1",
+        "period_id": "2026-02",
+        "upload_bytes_total": 0,
+        "download_bytes_total": 0,
+        "storage_bytes_current": 0,
+    }
+    table.items[("USER#u1", "USAGE#DAY#2026-02-12")] = {
+        "PK": "USER#u1",
+        "SK": "USAGE#DAY#2026-02-12",
+        "entity_type": "usage_daily",
+        "user_id": "u1",
+        "day_utc": "2026-02-12",
+        "period_id": "2026-02",
+        "upload_bytes_total": 0,
+        "download_bytes_total": 0,
+        "storage_bytes_end_of_day": 0,
+    }
+
+    msg_event = build_usage_event(
+        user_id="u1",
+        event_type="upload",
+        bytes_count=10,
+        source="messaging_send",
+        timestamp="2026-02-12T00:00:00+00:00",
+        idempotency_key="u1|messaging_send|c1|m1",
+    )
+    post_event = build_usage_event(
+        user_id="u1",
+        event_type="upload",
+        bytes_count=20,
+        source="newsfeed_post",
+        timestamp="2026-02-12T00:01:00+00:00",
+        idempotency_key="u1|newsfeed_post|p1",
+    )
+
+    assert record_usage_event_and_aggregates(table, msg_event) is True
+    assert record_usage_event_and_aggregates(table, post_event) is True
+
+    period = table.items[("USER#u1", "USAGE#PERIOD#2026-02")]
+    daily = table.items[("USER#u1", "USAGE#DAY#2026-02-12")]
+
+    assert period["message_send_count_total"] == 1
+    assert period["post_publish_count_total"] == 1
+    assert daily["message_send_count_total"] == 1
+    assert daily["post_publish_count_total"] == 1
+
+
+def test_qa001_message_and_post_events_are_idempotent_on_retries() -> None:
+    from app.services.usage_metering import record_usage_event_and_aggregates
+
+    table = _ApplyingUsageTable()
+    message_event = build_usage_event(
+        user_id="u1",
+        event_type="upload",
+        bytes_count=0,
+        source="messaging_send",
+        timestamp="2026-02-15T12:00:00+00:00",
+        idempotency_key=build_usage_source_idempotency_key(
+            "messaging_send",
+            user_id="u1",
+            conversation_id="c1",
+            message_id="m1",
+        ),
+    )
+    post_event = build_usage_event(
+        user_id="u1",
+        event_type="upload",
+        bytes_count=0,
+        source="newsfeed_post",
+        timestamp="2026-02-15T12:00:01+00:00",
+        idempotency_key=build_usage_source_idempotency_key(
+            "newsfeed_post",
+            user_id="u1",
+            post_id="p1",
+        ),
+    )
+
+    assert record_usage_event_and_aggregates(table, message_event) is True
+    assert record_usage_event_and_aggregates(table, message_event) is False
+    assert record_usage_event_and_aggregates(table, post_event) is True
+    assert record_usage_event_and_aggregates(table, post_event) is False
+
+    period = table.items[("USER#u1", "USAGE#PERIOD#2026-02")]
+    daily = table.items[("USER#u1", "USAGE#DAY#2026-02-15")]
+    assert period["message_send_count_total"] == 1
+    assert period["post_publish_count_total"] == 1
+    assert daily["message_send_count_total"] == 1
+    assert daily["post_publish_count_total"] == 1
+
+
+def test_qa001_mixed_event_types_roll_up_in_same_period_and_day() -> None:
+    from app.services.usage_metering import record_usage_event_and_aggregates
+
+    table = _ApplyingUsageTable()
+    events = [
+        build_usage_event(
+            user_id="u1",
+            event_type="upload",
+            bytes_count=0,
+            source="messaging_send",
+            timestamp="2026-02-16T09:00:00+00:00",
+            idempotency_key=build_usage_source_idempotency_key(
+                "messaging_send",
+                user_id="u1",
+                conversation_id="c1",
+                message_id="m2",
+            ),
+        ),
+        build_usage_event(
+            user_id="u1",
+            event_type="upload",
+            bytes_count=0,
+            source="newsfeed_post",
+            timestamp="2026-02-16T09:00:01+00:00",
+            idempotency_key=build_usage_source_idempotency_key(
+                "newsfeed_post",
+                user_id="u1",
+                post_id="p2",
+            ),
+        ),
+        build_usage_event(
+            user_id="u1",
+            event_type="upload",
+            bytes_count=120,
+            source="messaging_attachment_upload",
+            timestamp="2026-02-16T09:01:00+00:00",
+            idempotency_key=build_usage_source_idempotency_key(
+                "messaging_attachment_upload",
+                user_id="u1",
+                attachment_key="msg/a.png",
+                operation_id="op-1",
+            ),
+        ),
+        build_usage_event(
+            user_id="u1",
+            event_type="download",
+            bytes_count=80,
+            source="messaging_attachment_download",
+            timestamp="2026-02-16T09:02:00+00:00",
+            idempotency_key=build_usage_source_idempotency_key(
+                "messaging_attachment_download",
+                user_id="u1",
+                attachment_key="msg/a.png",
+                operation_id="op-2",
+            ),
+        ),
+        build_usage_event(
+            user_id="u1",
+            event_type="upload",
+            bytes_count=50,
+            source="newsfeed_attachment_upload",
+            timestamp="2026-02-16T09:03:00+00:00",
+            idempotency_key=build_usage_source_idempotency_key(
+                "newsfeed_attachment_upload",
+                user_id="u1",
+                attachment_key="post/a.mp4",
+                operation_id="op-3",
+            ),
+        ),
+        build_usage_event(
+            user_id="u1",
+            event_type="download",
+            bytes_count=20,
+            source="newsfeed_attachment_download",
+            timestamp="2026-02-16T09:04:00+00:00",
+            idempotency_key=build_usage_source_idempotency_key(
+                "newsfeed_attachment_download",
+                user_id="u1",
+                attachment_key="post/a.mp4",
+                operation_id="op-4",
+            ),
+        ),
+    ]
+
+    for event in events:
+        assert record_usage_event_and_aggregates(table, event) is True
+
+    period = table.items[("USER#u1", "USAGE#PERIOD#2026-02")]
+    daily = table.items[("USER#u1", "USAGE#DAY#2026-02-16")]
+
+    assert period["message_send_count_total"] == 1
+    assert period["post_publish_count_total"] == 1
+    assert period["upload_bytes_total"] == 170
+    assert period["download_bytes_total"] == 100
+
+    assert daily["message_send_count_total"] == 1
+    assert daily["post_publish_count_total"] == 1
+    assert daily["upload_bytes_total"] == 170
+    assert daily["download_bytes_total"] == 100
+
+
+def test_ops001_metrics_emit_period_and_surface_labels(monkeypatch) -> None:
+    from app.services import usage_metering
+
+    table = _ApplyingUsageTable()
+    event = build_usage_event(
+        user_id="u1",
+        event_type="upload",
+        bytes_count=42,
+        source="messaging_attachment_upload",
+        timestamp="2026-02-12T00:00:00+00:00",
+        idempotency_key="u1|messaging_attachment_upload|b/key|op1",
+    )
+
+    seen = {"event": [], "bytes": [], "units": [], "transfer": []}
+
+    monkeypatch.setattr(usage_metering, "record_usage_metering_event", lambda *a, **k: seen["event"].append((a, k)))
+    monkeypatch.setattr(usage_metering, "record_usage_metering_bytes", lambda *a, **k: seen["bytes"].append((a, k)))
+    monkeypatch.setattr(usage_metering, "record_usage_surface_units", lambda *a, **k: seen["units"].append((a, k)))
+    monkeypatch.setattr(usage_metering, "record_usage_surface_transfer_bytes", lambda *a, **k: seen["transfer"].append((a, k)))
+
+    assert usage_metering.record_usage_event_and_aggregates(table, event) is True
+
+    assert seen["event"][0][1]["period_id"] == "2026-02"
+    assert seen["bytes"][0][1]["period_id"] == "2026-02"
+    assert seen["transfer"][0][0][0] == "messaging"
+    assert seen["transfer"][0][0][1] == "upload"
+    assert seen["transfer"][0][1]["period_id"] == "2026-02"
+    assert seen["units"] == []
