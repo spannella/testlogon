@@ -598,6 +598,16 @@ export interface MessageImage {
   url?: string;
 }
 
+export interface MessageEncryptionEnvelope {
+  version: 1;
+  alg: "AES-256-GCM";
+  kdf: "PBKDF2-SHA256";
+  iterations: number;
+  salt_b64: string;
+  iv_b64: string;
+  ciphertext_b64: string;
+}
+
 export interface MessageFile {
   path?: string;
   name?: string;
@@ -631,6 +641,8 @@ export interface Message {
   read_by_user_ids?: string[];
   reactions_counts?: Record<string, number>;
   my_reactions?: string[];
+  is_encrypted?: boolean;
+  encryption?: MessageEncryptionEnvelope;
   // UI convenience fields (derived client-side)
   edited?: boolean;
   revoked?: boolean;
@@ -645,7 +657,8 @@ export interface LinkPreview {
 }
 
 export interface SendTextMessageReq {
-  text: string;
+  text?: string;
+  encryption?: MessageEncryptionEnvelope;
   reply_to_message_id?: string;
   preview?: LinkPreview;
 }
@@ -1304,4 +1317,9 @@ export interface StatusResp {
 export interface ChallengeResp {
   challenge_id: string;
   sent_to?: string[];
+}
+
+
+export interface MessagingConfig {
+  messaging_encrypted_messages_enabled: boolean;
 }
