@@ -12,8 +12,10 @@ import type {
   ForwardMessageReq,
   AddParticipantsReq,
   UpdateRoleReq,
+  MessagingConfig,
 } from "@/api/types";
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
+import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
 
 export const getConversations = async (cursor?: string) => {
   const res = await api.get<{ conversations: Conversation[]; next_cursor?: string }>(
@@ -53,12 +55,18 @@ export const getMessages = async (conversationId: string, cursor?: string) => {
 };
 
 export const sendTextMessage = async (conversationId: string, body: SendTextMessageReq) => {
+  if (body.encryption && !isMessagingEncryptionEnabled()) {
+    throw new Error("Encrypted messaging is disabled");
+  }
   const res = await api.post<Message>(
     `/messaging/conversations/${conversationId}/messages/text`,
     body,
   );
   return adaptMessage(res);
 };
+
+export const getMessagingConfig = () =>
+  api.get<MessagingConfig>("/messaging/config");
 
 const uploadToPresignedUrl = async (uploadUrl: string, file: File, contentType: string) => {
   const resp = await fetch(uploadUrl, {
