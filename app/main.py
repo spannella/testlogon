@@ -42,9 +42,11 @@ from app.routers.catalog import router as catalog_router
 from app.routers.subscription_server import router as subscription_server_router
 from app.routers.admin_usage import router as admin_usage_router
 from app.routers.ups import router as ups_router
+from app.routers.projects import router as projects_router
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
+from app.services.projects_reconcile import start_projects_reconcile_task
 
 
 def _security_headers_middleware(default_csp: str):
@@ -134,7 +136,9 @@ def create_app() -> FastAPI:
     app.include_router(subscription_server_router)
     app.include_router(admin_usage_router)
     app.include_router(ups_router)
+    app.include_router(projects_router)
     app.add_event_handler("startup", start_billing_reconcile_task)
+    app.add_event_handler("startup", start_projects_reconcile_task)
 
     return app
 

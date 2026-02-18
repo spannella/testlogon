@@ -1305,3 +1305,112 @@ export interface ChallengeResp {
   challenge_id: string;
   sent_to?: string[];
 }
+
+// ─── Projects ───────────────────────────────────────────────────
+
+export interface Project {
+  id: string;
+  owner: string;
+  name: string;
+  description?: string | null;
+  tags: string[];
+  settings: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectCreateReq {
+  name: string;
+  description?: string | null;
+  tags?: string[];
+  settings?: Record<string, unknown>;
+}
+
+export interface ProjectUpdateReq {
+  name?: string;
+  description?: string | null;
+  tags?: string[];
+  settings?: Record<string, unknown>;
+}
+
+export interface ProjectListResp {
+  items: Project[];
+  cursor?: string | null;
+}
+
+export interface TrackedFile {
+  id: string;
+  project_id: string;
+  owner: string;
+  provider: string;
+  provider_ref: string;
+  display_path: string;
+  status: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  last_seen_at?: string | null;
+  archived_at?: string | null;
+}
+
+export interface ProjectDetailResp {
+  project: Project;
+  files: TrackedFile[];
+  cursor?: string | null;
+}
+
+export interface TrackedFileListResp {
+  items: TrackedFile[];
+  cursor?: string | null;
+}
+
+export interface TrackedFileCreateReq {
+  provider: string;
+  provider_ref: string;
+  display_path?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface DeleteTrackedFileResp {
+  ok: boolean;
+  deleted: boolean;
+}
+
+export interface ProjectEvent {
+  id: string;
+  project_id: string;
+  owner: string;
+  event_type: string;
+  tracked_file_id?: string | null;
+  provider?: string | null;
+  provider_ref?: string | null;
+  message?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ProjectEventListResp {
+  items: ProjectEvent[];
+  cursor?: string | null;
+}
+
+export interface ProviderCredentialUpsertReq {
+  token: string;
+  org?: string;
+  api_base_url?: string;
+  required_scopes?: string[];
+}
+
+export interface ProviderCredential {
+  provider: string;
+  org?: string | null;
+  scopes: string[];
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeleteProviderCredentialResp {
+  ok: boolean;
+  deleted: boolean;
+}

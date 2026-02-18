@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Literal, Optional
 
 import re
+from datetime import datetime, timezone
 
 from pydantic import (
     AliasChoices,
@@ -1027,3 +1028,181 @@ class AddChargeReq(BaseModel):
 
 class AccountStatusReq(BaseModel):
     reason: Optional[str] = None
+
+
+class ProjectModel(BaseModel):
+    id: str = Field(min_length=1, max_length=128)
+    owner: str = Field(min_length=1, max_length=256)
+    name: str = Field(min_length=1, max_length=120)
+    description: Optional[str] = Field(default=None, max_length=2000)
+    tags: List[str] = Field(default_factory=list)
+    settings: Dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+    @field_validator("id", "owner", "name")
+    @classmethod
+    def _strip_required(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Value required")
+        return cleaned
+
+    @field_validator("description")
+    @classmethod
+    def _strip_optional_description(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("tags")
+    @classmethod
+    def _normalize_tags(cls, value: List[str]) -> List[str]:
+        out: List[str] = []
+        seen = set()
+        for tag in value or []:
+            normalized = (tag or "").strip().lower()
+            if not normalized:
+                continue
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            out.append(normalized)
+        return out
+
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def _validate_iso(cls, value: str) -> str:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError("timestamp must include timezone")
+        return value
+
+
+class TrackedFileModel(BaseModel):
+    id: str = Field(min_length=1, max_length=128)
+    project_id: str = Field(min_length=1, max_length=128)
+    owner: str = Field(min_length=1, max_length=256)
+    provider: str = Field(min_length=1, max_length=32)
+    provider_ref: str = Field(min_length=1, max_length=2048)
+    display_path: str = Field(min_length=1, max_length=2048)
+    status: Literal["active", "missing", "archived"] = "active"
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+    last_seen_at: Optional[str] = None
+    archived_at: Optional[str] = None
+
+    @field_validator("id", "project_id", "owner", "provider", "provider_ref", "display_path")
+    @classmethod
+    def _strip_required(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Value required")
+        return cleaned
+
+    @field_validator("provider")
+    @classmethod
+    def _normalize_provider(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", normalized):
+            raise ValueError("invalid provider")
+        return normalized
+
+    @field_validator("provider_ref")
+    @classmethod
+    def _normalize_provider_ref(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("provider_ref required")
+        return cleaned
+
+    @field_validator("created_at", "updated_at", "last_seen_at", "archived_at")
+    @classmethod
+    def _validate_optional_iso(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError("timestamp must include timezone")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_archive_consistency(self) -> "TrackedFileModel":
+        if self.status == "archived" and not self.archived_at:
+            self.archived_at = datetime.now(timezone.utc).isoformat()
+        if self.status != "archived":
+            self.archived_at = None
+        return self
+
+
+class ProjectEventModel(BaseModel):
+    id: str = Field(min_length=1, max_length=128)
+    project_id: str = Field(min_length=1, max_length=128)
+    owner: str = Field(min_length=1, max_length=256)
+    event_type: Literal["file_added", "file_removed", "sync_ran", "provider_error"]
+    tracked_file_id: Optional[str] = Field(default=None, max_length=128)
+    provider: Optional[str] = Field(default=None, max_length=32)
+    provider_ref: Optional[str] = Field(default=None, max_length=2048)
+    message: Optional[str] = Field(default=None, max_length=1024)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+
+    @field_validator("id", "project_id", "owner", "tracked_file_id", "provider", "provider_ref", "message")
+    @classmethod
+    def _strip_optional(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("created_at")
+    @classmethod
+    def _validate_iso(cls, value: str) -> str:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError("timestamp must include timezone")
+        return value
+
+
+class ProviderCredentialModel(BaseModel):
+    owner: str = Field(min_length=1, max_length=256)
+    provider: Literal["github", "gitlab"]
+    org: Optional[str] = Field(default=None, max_length=256)
+    token_ct_b64: str = Field(min_length=1)
+    scopes: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+
+    @field_validator("owner", "org", "token_ct_b64")
+    @classmethod
+    def _strip_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        return cleaned
+
+    @field_validator("scopes")
+    @classmethod
+    def _normalize_scopes(cls, value: List[str]) -> List[str]:
+        out: List[str] = []
+        seen = set()
+        for raw in value or []:
+            normalized = (raw or "").strip().lower()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            out.append(normalized)
+        return out
+
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def _validate_iso(cls, value: str) -> str:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError("timestamp must include timezone")
+        return value

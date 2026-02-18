@@ -55,6 +55,15 @@ def _table_defs() -> List[TableDef]:
         ),
         TableDef(_resolve_table_name(S.subscriptions_table_name, "subscriptions"), "pk", "sk"),
         TableDef(
+            _resolve_table_name(S.projects_table_name, "projects"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
+            ],
+        ),
+        TableDef(
             _resolve_table_name(S.filemgr_table_name, "file_manager"),
             "PK",
             "SK",
