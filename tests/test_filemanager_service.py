@@ -98,6 +98,26 @@ class TestFileManagerService(unittest.TestCase):
             filemanager.upload_file("user", "/docs/a.txt", upload)
         require_not_exists.assert_called_once()
 
+    def test_upload_file_persists_media_derivative_layout(self):
+        upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"))
+        with (
+            patch.object(filemanager, "_bucket", return_value="bucket"),
+            patch.object(filemanager, "ensure_folder_exists"),
+            patch.object(filemanager, "require_not_exists"),
+            patch.object(filemanager, "put_node") as put_node,
+            patch.object(filemanager, "_put_token_entries"),
+            patch.object(filemanager, "_s3") as s3,
+        ):
+            s3.head_object.return_value = {"ContentLength": 5, "ETag": '"etag-1"'}
+            filemanager.upload_file("user", "/docs/a.txt", upload)
+
+        stored = put_node.call_args.kwargs.get("item") or put_node.call_args.args[0]
+        self.assertIn("media_preview_version", stored)
+        self.assertTrue(stored["media_preview_prefix"].startswith("user/derived/media/"))
+        self.assertIn("poster_image", stored["media_preview_keys"])
+        self.assertIn("hover_clip", stored["media_preview_keys"])
+        self.assertIn("waveform_image", stored["media_preview_keys"])
+
 
     def test_upload_file_persists_encrypted_flags(self):
         upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"), headers={"content-type": "application/octet-stream"})
@@ -192,6 +212,645 @@ class TestFileManagerService(unittest.TestCase):
             "csv",
         )
 
+    def test_media_derivative_layout_uses_versioned_prefix_and_expected_keys(self):
+        layout = filemanager.build_media_derivative_layout(
+            owner="user",
+            source_key="user/objects/abc123",
+            etag='"etag-1"',
+            size=42,
+        )
+        self.assertIn("media_preview_version", layout)
+        self.assertTrue(layout["media_preview_prefix"].startswith("user/derived/media/"))
+        self.assertEqual(
+            layout["media_preview_keys"],
+            {
+                "poster_image": f"{layout['media_preview_prefix']}/poster_image.webp",
+                "hover_clip": f"{layout['media_preview_prefix']}/hover_clip.mp4",
+                "waveform_image": f"{layout['media_preview_prefix']}/waveform_image.png",
+            },
+        )
+
+    def test_media_derivative_layout_changes_when_source_version_changes(self):
+        first = filemanager.build_media_derivative_layout("user", "user/objects/abc123", "etag-1", 42)
+        second = filemanager.build_media_derivative_layout("user", "user/objects/abc123", "etag-2", 42)
+        self.assertNotEqual(first["media_preview_version"], second["media_preview_version"])
+        self.assertNotEqual(first["media_preview_prefix"], second["media_preview_prefix"])
+
+    def test_normalize_media_inspection_result_is_deterministic(self):
+        probe = {
+            "format": {"duration": "12.9", "format_name": "mov,mp4,m4a,3gp,3g2,mj2"},
+            "streams": [
+                {"index": 2, "codec_type": "audio", "codec_name": "aac", "sample_rate": "48000", "channels": 2},
+                {"index": 1, "codec_type": "video", "codec_name": "h264", "width": 1280, "height": 720},
+            ],
+        }
+        out = filemanager.normalize_media_inspection_result(probe, content_type_hint="video/mp4")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["mime_type"], "video/mp4")
+        self.assertEqual(out["container"], "mov")
+        self.assertEqual(out["duration_seconds"], 12)
+        self.assertEqual(out["primary_video_codec"], "h264")
+        self.assertEqual(out["primary_audio_codec"], "aac")
+        self.assertEqual([s["index"] for s in out["streams"]], [1, 2])
+
+    def test_inspect_media_object_handles_malformed_probe_output(self):
+        with (
+            patch.object(filemanager.shutil, "which", return_value="/usr/bin/ffprobe"),
+            patch.object(filemanager, "_s3") as s3,
+            patch.object(filemanager.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="not-json")),
+        ):
+            s3.download_fileobj = Mock()
+            out = filemanager.inspect_media_object(bucket="bucket", s3_key="user/objects/a", content_type_hint="video/mp4")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "probe_malformed")
+
+    def test_inspect_media_object_handles_probe_failure(self):
+        with (
+            patch.object(filemanager.shutil, "which", return_value="/usr/bin/ffprobe"),
+            patch.object(filemanager, "_s3") as s3,
+            patch.object(filemanager.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="")),
+        ):
+            s3.download_fileobj = Mock()
+            out = filemanager.inspect_media_object(bucket="bucket", s3_key="user/objects/a", content_type_hint="video/mp4")
+        self.assertFalse(out["ok"])
+        self.assertEqual(out["error"], "probe_failed")
+
+    def test_inspect_media_object_happy_path(self):
+        probe_json = {
+            "format": {"duration": "7.5", "format_name": "matroska,webm"},
+            "streams": [
+                {"index": 0, "codec_type": "video", "codec_name": "vp9", "width": 640, "height": 360},
+                {"index": 1, "codec_type": "audio", "codec_name": "opus", "sample_rate": "48000", "channels": 2},
+            ],
+        }
+        with (
+            patch.object(filemanager.shutil, "which", return_value="/usr/bin/ffprobe"),
+            patch.object(filemanager, "_s3") as s3,
+            patch.object(
+                filemanager.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=0, stdout=filemanager.json.dumps(probe_json)),
+            ),
+        ):
+            s3.download_fileobj = Mock()
+            out = filemanager.inspect_media_object(bucket="bucket", s3_key="user/objects/a", content_type_hint="video/webm")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["container"], "matroska")
+        self.assertEqual(out["duration_seconds"], 7)
+        self.assertEqual(out["primary_video_codec"], "vp9")
+        self.assertEqual(out["primary_audio_codec"], "opus")
+
+    def test_media_preview_eligibility_video_guards(self):
+        with patch.object(
+            filemanager,
+            "S",
+            SimpleNamespace(
+                filemgr_video_preview_max_mb=1,
+                filemgr_video_preview_max_duration_seconds=10,
+                filemgr_audio_waveform_max_mb=100,
+            ),
+        ):
+            too_large = filemanager.media_preview_eligibility_from_node(
+                {"content_type": "video/mp4", "size": 2 * 1024 * 1024, "media_inspection": {"container": "mp4", "primary_video_codec": "h264", "duration_seconds": 5}}
+            )
+            self.assertFalse(too_large["eligible"])
+            self.assertEqual(too_large["reason"], "too_large")
+
+            too_long = filemanager.media_preview_eligibility_from_node(
+                {"content_type": "video/mp4", "size": 10, "media_inspection": {"container": "mp4", "primary_video_codec": "h264", "duration_seconds": 20}}
+            )
+            self.assertFalse(too_long["eligible"])
+            self.assertEqual(too_long["reason"], "too_long")
+
+            bad_codec = filemanager.media_preview_eligibility_from_node(
+                {"content_type": "video/mp4", "size": 10, "media_inspection": {"container": "mp4", "primary_video_codec": "mpeg2video", "duration_seconds": 5}}
+            )
+            self.assertFalse(bad_codec["eligible"])
+            self.assertEqual(bad_codec["reason"], "unsupported_codec")
+
+    def test_media_preview_eligibility_audio_guard(self):
+        with patch.object(filemanager, "S", SimpleNamespace(filemgr_audio_waveform_max_mb=1, filemgr_video_preview_max_mb=200, filemgr_video_preview_max_duration_seconds=600)):
+            too_large = filemanager.media_preview_eligibility_from_node(
+                {"content_type": "audio/mpeg", "size": 2 * 1024 * 1024, "media_inspection": {"primary_audio_codec": "mp3"}}
+            )
+            self.assertFalse(too_large["eligible"])
+            self.assertEqual(too_large["reason"], "too_large")
+
+            bad_codec = filemanager.media_preview_eligibility_from_node(
+                {"content_type": "audio/mpeg", "size": 10, "media_inspection": {"primary_audio_codec": "amr_nb"}}
+            )
+            self.assertFalse(bad_codec["eligible"])
+            self.assertEqual(bad_codec["reason"], "unsupported_codec")
+
+    def test_media_preview_eligibility_rejects_unsupported_container(self):
+        with patch.object(
+            filemanager,
+            "S",
+            SimpleNamespace(
+                filemgr_video_preview_max_mb=50,
+                filemgr_video_preview_max_duration_seconds=60,
+                filemgr_audio_waveform_max_mb=50,
+            ),
+        ):
+            out = filemanager.media_preview_eligibility_from_node(
+                {
+                    "content_type": "video/ogg",
+                    "size": 1024,
+                    "media_inspection": {
+                        "container": "ogg",
+                        "primary_video_codec": "theora",
+                        "duration_seconds": 5,
+                    },
+                }
+            )
+        self.assertFalse(out["eligible"])
+        self.assertEqual(out["reason"], "unsupported_container")
+
+    def test_preview_status_state_machine_video_reasons(self):
+        with patch.object(
+            filemanager,
+            "S",
+            SimpleNamespace(
+                filemgr_media_previews_v1=True,
+                filemgr_video_hover_clip_enabled=True,
+                filemgr_audio_waveform_enabled=True,
+                filemgr_preview_max_bytes=10485760,
+                filemgr_video_preview_max_mb=50,
+                filemgr_video_preview_max_duration_seconds=120,
+                filemgr_audio_waveform_max_mb=50,
+            ),
+        ):
+            unsupported = filemanager.preview_capability_from_node(
+                {
+                    "type": "file",
+                    "name": "bad.mov",
+                    "content_type": "video/quicktime",
+                    "size": 1024,
+                    "media_inspection": {"container": "mov", "primary_video_codec": "mpeg2video", "duration_seconds": 5},
+                    "is_encrypted": False,
+                }
+            )
+            self.assertEqual(unsupported["preview_status"], "unsupported")
+            self.assertEqual(unsupported["preview_reason"], "unsupported_codec")
+
+            pending = filemanager.preview_capability_from_node(
+                {
+                    "type": "file",
+                    "name": "queued.mp4",
+                    "content_type": "video/mp4",
+                    "size": 1024,
+                    "media_inspection": {"container": "mp4", "primary_video_codec": "h264", "duration_seconds": 5},
+                    "is_encrypted": False,
+                }
+            )
+            self.assertEqual(pending["preview_status"], "pending")
+            self.assertEqual(pending["preview_reason"], "transcoding_pending")
+
+            ready = filemanager.preview_capability_from_node(
+                {
+                    "type": "file",
+                    "name": "ready.mp4",
+                    "content_type": "video/mp4",
+                    "size": 1024,
+                    "poster_url": "https://example/poster.webp",
+                    "hover_preview_url": "https://example/clip.mp4",
+                    "media_inspection": {"container": "mp4", "primary_video_codec": "h264", "duration_seconds": 5},
+                    "is_encrypted": False,
+                }
+            )
+            self.assertEqual(ready["preview_status"], "ready")
+            self.assertIsNone(ready["preview_reason"])
+
+    def test_preview_capability_marks_media_unsupported_when_ineligible(self):
+        with patch.object(
+            filemanager,
+            "S",
+            SimpleNamespace(
+                filemgr_media_previews_v1=True,
+                filemgr_video_hover_clip_enabled=True,
+                filemgr_audio_waveform_enabled=True,
+                filemgr_preview_max_bytes=10485760,
+                filemgr_video_preview_max_mb=1,
+                filemgr_video_preview_max_duration_seconds=600,
+                filemgr_audio_waveform_max_mb=100,
+            ),
+        ):
+            info = filemanager.preview_capability_from_node(
+                {
+                    "type": "file",
+                    "name": "big.mp4",
+                    "content_type": "video/mp4",
+                    "size": 2 * 1024 * 1024,
+                    "media_inspection": {"container": "mp4", "primary_video_codec": "h264", "duration_seconds": 20},
+                    "is_encrypted": False,
+                }
+            )
+            self.assertEqual(info["preview_kind"], "video")
+            self.assertEqual(info["preview_status"], "unsupported")
+            self.assertEqual(info["preview_reason"], "too_large")
+
+    def test_preview_capability_honors_media_preview_status_override(self):
+        with patch.object(filemanager, "S", SimpleNamespace(filemgr_media_previews_v1=True, filemgr_video_hover_clip_enabled=True, filemgr_audio_waveform_enabled=True, filemgr_preview_max_bytes=10485760, filemgr_video_preview_max_mb=200, filemgr_video_preview_max_duration_seconds=600, filemgr_audio_waveform_max_mb=100)):
+            pending = filemanager.preview_capability_from_node(
+                {
+                    "type": "file",
+                    "name": "clip.mp4",
+                    "content_type": "video/mp4",
+                    "size": 100,
+                    "media_preview_status": "pending",
+                    "media_preview_reason": "transcoding_pending",
+                    "is_encrypted": False,
+                }
+            )
+            self.assertEqual(pending["preview_status"], "pending")
+            self.assertEqual(pending["preview_reason"], "transcoding_pending")
+
+            failed = filemanager.preview_capability_from_node(
+                {
+                    "type": "file",
+                    "name": "clip.mp4",
+                    "content_type": "video/mp4",
+                    "size": 100,
+                    "media_preview_status": "failed",
+                    "media_preview_reason": "generation_failed",
+                    "is_encrypted": False,
+                }
+            )
+            self.assertEqual(failed["preview_status"], "failed")
+            self.assertEqual(failed["preview_reason"], "generation_failed")
+
+    def test_enqueue_media_preview_job_sets_pending_or_unsupported(self):
+        table = Mock()
+        with (
+            patch.object(filemanager, "_table", return_value=table),
+            patch.object(filemanager, "media_preview_eligibility_from_node", return_value={"eligible": True, "reason": None}),
+        ):
+            table.get_item.return_value = {}
+            filemanager._enqueue_media_preview_job(
+                "user",
+                {
+                    "PK": "USER#user",
+                    "SK": "NODE#/docs/clip.mp4",
+                    "path": "/docs/clip.mp4",
+                    "content_type": "video/mp4",
+                },
+            )
+        self.assertGreaterEqual(table.put_item.call_count, 1)
+        self.assertGreaterEqual(table.update_item.call_count, 1)
+
+    def test_enqueue_media_preview_job_is_idempotent_for_duplicate_events(self):
+        table = Mock()
+        table.get_item.return_value = {
+            "Item": {
+                "status": "pending",
+                "job_id": "v-dup",
+            }
+        }
+        with (
+            patch.object(filemanager, "_table", return_value=table),
+            patch.object(filemanager, "media_preview_eligibility_from_node", return_value={"eligible": True, "reason": None}),
+        ):
+            filemanager._enqueue_media_preview_job(
+                "user",
+                {
+                    "PK": "USER#user",
+                    "SK": "NODE#/docs/clip.mp4",
+                    "path": "/docs/clip.mp4",
+                    "content_type": "video/mp4",
+                    "media_preview_version": "abc",
+                    "s3_key": "user/objects/1",
+                    "etag": "etag",
+                    "size": 10,
+                },
+            )
+        table.put_item.assert_not_called()
+        self.assertGreaterEqual(table.update_item.call_count, 1)
+
+        table2 = Mock()
+        with (
+            patch.object(filemanager, "_table", return_value=table2),
+            patch.object(filemanager, "media_preview_eligibility_from_node", return_value={"eligible": False, "reason": "unsupported_codec"}),
+        ):
+            filemanager._enqueue_media_preview_job(
+                "user",
+                {
+                    "PK": "USER#user",
+                    "SK": "NODE#/docs/clip.mp4",
+                    "path": "/docs/clip.mp4",
+                    "content_type": "video/mp4",
+                },
+            )
+        table2.put_item.assert_not_called()
+        self.assertGreaterEqual(table2.update_item.call_count, 1)
+
+    def test_mark_media_preview_job_failed_retries_then_dead_letters(self):
+        table = Mock()
+        table.get_item.return_value = {
+            "Item": {
+                "PK": "USER#user",
+                "SK": "PREVIEWJOB#jid",
+                "job_id": "jid",
+                "path": "/docs/clip.mp4",
+                "attempts": 0,
+                "max_attempts": 2,
+                "status": "pending",
+            }
+        }
+        with patch.object(filemanager, "_table", return_value=table):
+            out = filemanager.mark_media_preview_job_failed("user", "jid", reason="ffmpeg_timeout", transient=True)
+        self.assertEqual(out["status"], "retry_pending")
+        self.assertFalse(out["dead_letter"])
+
+        table.get_item.return_value = {
+            "Item": {
+                "PK": "USER#user",
+                "SK": "PREVIEWJOB#jid",
+                "job_id": "jid",
+                "path": "/docs/clip.mp4",
+                "attempts": 1,
+                "max_attempts": 2,
+                "status": "retry_pending",
+            }
+        }
+        with patch.object(filemanager, "_table", return_value=table):
+            out2 = filemanager.mark_media_preview_job_failed("user", "jid", reason="unsupported_codec", transient=False)
+        self.assertEqual(out2["status"], "dead_letter")
+        self.assertTrue(out2["dead_letter"])
+
+    def test_run_media_preview_job_completes_and_sets_poster(self):
+        table = Mock()
+        table.get_item.return_value = {
+            "Item": {
+                "PK": "USER#user",
+                "SK": "PREVIEWJOB#jid",
+                "job_id": "jid",
+                "path": "/docs/clip.mp4",
+                "preview_kind": "video",
+                "status": "pending",
+            }
+        }
+        node = {
+            "path": "/docs/clip.mp4",
+            "s3_bucket": "bucket",
+            "s3_key": "user/objects/abc",
+            "media_preview_keys": {
+                "poster_image": "user/derived/media/ver/poster_image.webp",
+                "hover_clip": "user/derived/media/ver/hover_clip.mp4",
+            },
+        }
+        with (
+            patch.object(filemanager, "_table", return_value=table),
+            patch.object(filemanager, "get_node", return_value=node),
+            patch.object(filemanager, "_extract_video_poster_bytes", return_value={"bytes": b"img", "content_type": "image/webp", "ext": "webp"}),
+            patch.object(filemanager, "_extract_video_hover_clip_bytes", return_value={"bytes": b"clip", "content_type": "video/mp4", "ext": "mp4"}),
+            patch.object(filemanager, "_s3") as s3,
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_media_preview_cdn_base_url="", filemgr_media_preview_private=True, filemgr_media_preview_url_ttl_seconds=900)),
+        ):
+            s3.generate_presigned_url.side_effect = ["https://signed/poster", "https://signed/clip"]
+            out = filemanager.run_media_preview_job("user", "jid")
+        self.assertEqual(out["status"], "completed")
+        self.assertIn("hover_preview_url", out)
+        self.assertEqual(s3.put_object.call_count, 2)
+        for c in s3.put_object.call_args_list:
+            self.assertEqual(c.kwargs.get("CacheControl"), "public, immutable, max-age=31536000")
+        self.assertGreaterEqual(table.update_item.call_count, 1)
+
+    def test_run_media_preview_job_marks_failed_when_poster_generation_fails(self):
+        table = Mock()
+        table.get_item.return_value = {
+            "Item": {
+                "PK": "USER#user",
+                "SK": "PREVIEWJOB#jid",
+                "job_id": "jid",
+                "path": "/docs/clip.mp4",
+                "preview_kind": "video",
+                "status": "pending",
+                "attempts": 0,
+                "max_attempts": 2,
+            }
+        }
+        node = {
+            "path": "/docs/clip.mp4",
+            "s3_bucket": "bucket",
+            "s3_key": "user/objects/abc",
+            "media_preview_keys": {"poster_image": "user/derived/media/ver/poster_image.webp"},
+        }
+        with (
+            patch.object(filemanager, "_table", return_value=table),
+            patch.object(filemanager, "get_node", return_value=node),
+            patch.object(filemanager, "_extract_video_poster_bytes", return_value=None),
+        ):
+            out = filemanager.run_media_preview_job("user", "jid")
+        self.assertEqual(out["status"], "retry_pending")
+        self.assertEqual(out["reason"], "poster_generation_failed")
+
+    def test_run_media_preview_job_dead_letters_when_retry_budget_exhausted(self):
+        table = Mock()
+        table.get_item.return_value = {
+            "Item": {
+                "PK": "USER#user",
+                "SK": "PREVIEWJOB#jid",
+                "job_id": "jid",
+                "path": "/docs/clip.mp4",
+                "preview_kind": "video",
+                "status": "pending",
+                "attempts": 1,
+                "max_attempts": 2,
+            }
+        }
+        node = {
+            "path": "/docs/clip.mp4",
+            "s3_bucket": "bucket",
+            "s3_key": "user/objects/abc",
+            "media_preview_keys": {"poster_image": "user/derived/media/ver/poster_image.webp"},
+        }
+        with (
+            patch.object(filemanager, "_table", return_value=table),
+            patch.object(filemanager, "get_node", return_value=node),
+            patch.object(filemanager, "_extract_video_poster_bytes", return_value=None),
+        ):
+            out = filemanager.run_media_preview_job("user", "jid")
+        self.assertEqual(out["status"], "dead_letter")
+        self.assertTrue(out["dead_letter"])
+        self.assertEqual(out["reason"], "poster_generation_failed")
+
+    def test_extract_video_hover_clip_bytes_honors_config(self):
+        class _FakeRun:
+            def __init__(self):
+                self.args = None
+
+            def __call__(self, args, **kwargs):
+                self.args = args
+                out_path = args[-1]
+                with open(out_path, "wb") as fh:
+                    fh.write(b"clip")
+                return SimpleNamespace(returncode=0)
+
+        fake_run = _FakeRun()
+        with (
+            patch.object(filemanager.shutil, "which", return_value="/usr/bin/ffmpeg"),
+            patch.object(filemanager, "_s3") as s3,
+            patch.object(filemanager, "_run_media_tool", side_effect=fake_run),
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_video_preview_target_height=240, filemgr_video_preview_clip_seconds=4)),
+        ):
+            s3.download_fileobj = Mock()
+            out = filemanager._extract_video_hover_clip_bytes("bucket", "user/objects/abc")
+
+        self.assertIsNotNone(out)
+        self.assertEqual(out["content_type"], "video/mp4")
+        self.assertIn("-t", fake_run.args)
+        self.assertIn("4", fake_run.args)
+        self.assertIn("scale=-2:240", fake_run.args)
+
+    def test_extract_video_hover_clip_bytes_handles_timeout_safely(self):
+        with (
+            patch.object(filemanager.shutil, "which", return_value="/usr/bin/ffmpeg"),
+            patch.object(filemanager, "_s3") as s3,
+            patch.object(filemanager, "_run_media_tool", side_effect=filemanager.subprocess.TimeoutExpired(cmd="ffmpeg", timeout=1)),
+        ):
+            s3.download_fileobj = Mock()
+            out = filemanager._extract_video_hover_clip_bytes("bucket", "user/objects/abc")
+        self.assertIsNone(out)
+
+    def test_extract_audio_waveform_bytes_uses_standardized_filter(self):
+        class _FakeRun:
+            def __init__(self):
+                self.args = None
+
+            def __call__(self, args, **kwargs):
+                self.args = args
+                out_path = args[-1]
+                with open(out_path, "wb") as fh:
+                    fh.write(b"wave")
+                return SimpleNamespace(returncode=0)
+
+        fake_run = _FakeRun()
+        with (
+            patch.object(filemanager.shutil, "which", return_value="/usr/bin/ffmpeg"),
+            patch.object(filemanager, "_s3") as s3,
+            patch.object(filemanager, "_run_media_tool", side_effect=fake_run),
+        ):
+            s3.download_fileobj = Mock()
+            out = filemanager._extract_audio_waveform_bytes("bucket", "user/objects/a")
+        self.assertIsNotNone(out)
+        self.assertEqual(out["content_type"], "image/png")
+        self.assertIn("showwavespic=s=640x120:colors=0x4f46e5", " ".join(fake_run.args))
+
+    def test_run_media_preview_job_completes_and_sets_waveform(self):
+        table = Mock()
+        table.get_item.return_value = {
+            "Item": {
+                "PK": "USER#user",
+                "SK": "PREVIEWJOB#jid-a",
+                "job_id": "jid-a",
+                "path": "/docs/track.mp3",
+                "preview_kind": "audio",
+                "status": "pending",
+            }
+        }
+        node = {
+            "path": "/docs/track.mp3",
+            "s3_bucket": "bucket",
+            "s3_key": "user/objects/audio",
+            "media_preview_keys": {"waveform_image": "user/derived/media/ver/waveform_image.png"},
+        }
+        with (
+            patch.object(filemanager, "_table", return_value=table),
+            patch.object(filemanager, "get_node", return_value=node),
+            patch.object(filemanager, "_extract_audio_waveform_bytes", return_value={"bytes": b"wave", "content_type": "image/png", "ext": "png"}),
+            patch.object(filemanager, "_s3") as s3,
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_media_preview_cdn_base_url="", filemgr_media_preview_private=True, filemgr_media_preview_url_ttl_seconds=900)),
+        ):
+            s3.generate_presigned_url.return_value = "https://signed/wave"
+            out = filemanager.run_media_preview_job("user", "jid-a")
+        self.assertEqual(out["status"], "completed")
+        self.assertIn("waveform_url", out)
+        s3.put_object.assert_called_once()
+        self.assertEqual(s3.put_object.call_args.kwargs.get("CacheControl"), "public, immutable, max-age=31536000")
+
+    def test_preview_capability_audio_ready_uses_signed_derivative_url(self):
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_media_previews_v1=True, filemgr_video_hover_clip_enabled=True, filemgr_audio_waveform_enabled=True, filemgr_preview_max_bytes=10485760, filemgr_media_preview_cdn_base_url="", filemgr_media_preview_private=True, filemgr_media_preview_url_ttl_seconds=600)),
+            patch.object(filemanager, "_s3") as s3,
+        ):
+            s3.generate_presigned_url.return_value = "https://signed/wave-derivative"
+            info = filemanager.preview_capability_from_node(
+                {
+                    "type": "file",
+                    "name": "track.mp3",
+                    "content_type": "audio/mpeg",
+                    "size": 100,
+                    "s3_bucket": "bucket",
+                    "media_preview_status": "ready",
+                    "media_preview_reason": None,
+                    "media_preview_keys": {"waveform_image": "user/derived/media/ver/waveform_image.png"},
+                    "is_encrypted": False,
+                }
+            )
+        self.assertEqual(info["preview_status"], "ready")
+        self.assertEqual(info["waveform_url"], "https://signed/wave-derivative")
+
+    def test_preview_capability_audio_ready_uses_cdn_when_public(self):
+        with patch.object(filemanager, "S", SimpleNamespace(filemgr_media_previews_v1=True, filemgr_video_hover_clip_enabled=True, filemgr_audio_waveform_enabled=True, filemgr_preview_max_bytes=10485760, filemgr_media_preview_cdn_base_url="https://cdn.example", filemgr_media_preview_private=False, filemgr_media_preview_url_ttl_seconds=600)):
+            info = filemanager.preview_capability_from_node(
+                {
+                    "type": "file",
+                    "name": "track.mp3",
+                    "content_type": "audio/mpeg",
+                    "size": 100,
+                    "s3_bucket": "bucket",
+                    "media_preview_status": "ready",
+                    "media_preview_reason": None,
+                    "media_preview_keys": {"waveform_image": "user/derived/media/ver/waveform_image.png"},
+                    "is_encrypted": False,
+                }
+            )
+        self.assertEqual(info["waveform_url"], "https://cdn.example/user/derived/media/ver/waveform_image.png")
+
+    def test_run_media_preview_job_marks_failed_when_waveform_generation_fails(self):
+        table = Mock()
+        table.get_item.return_value = {
+            "Item": {
+                "PK": "USER#user",
+                "SK": "PREVIEWJOB#jid-a",
+                "job_id": "jid-a",
+                "path": "/docs/track.mp3",
+                "preview_kind": "audio",
+                "status": "pending",
+                "attempts": 0,
+                "max_attempts": 2,
+            }
+        }
+        node = {
+            "path": "/docs/track.mp3",
+            "s3_bucket": "bucket",
+            "s3_key": "user/objects/audio",
+            "media_preview_keys": {"waveform_image": "user/derived/media/ver/waveform_image.png"},
+        }
+        with (
+            patch.object(filemanager, "_table", return_value=table),
+            patch.object(filemanager, "get_node", return_value=node),
+            patch.object(filemanager, "_extract_audio_waveform_bytes", return_value=None),
+        ):
+            out = filemanager.run_media_preview_job("user", "jid-a")
+        self.assertEqual(out["status"], "retry_pending")
+        self.assertEqual(out["reason"], "waveform_generation_failed")
+
+    def test_media_artifact_url_uses_signed_urls_for_private_delivery(self):
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_media_preview_cdn_base_url="https://cdn.example", filemgr_media_preview_private=True, filemgr_media_preview_url_ttl_seconds=600)),
+            patch.object(filemanager, "_s3") as s3,
+        ):
+            s3.generate_presigned_url.return_value = "https://signed.example/object"
+            url = filemanager._media_artifact_url(bucket="b", key="k")
+        self.assertEqual(url, "https://signed.example/object")
+        s3.generate_presigned_url.assert_called_once()
+
+    def test_media_artifact_url_uses_cdn_for_public_delivery(self):
+        with patch.object(filemanager, "S", SimpleNamespace(filemgr_media_preview_cdn_base_url="https://cdn.example", filemgr_media_preview_private=False, filemgr_media_preview_url_ttl_seconds=600)):
+            url = filemanager._media_artifact_url(bucket="b", key="path/to/k")
+        self.assertEqual(url, "https://cdn.example/path/to/k")
+
     def test_detect_preview_kind_mapping_matrix(self):
         cases = [
             ({"name": "diagram.PNG", "content_type": "application/octet-stream"}, "image"),
@@ -217,6 +876,10 @@ class TestFileManagerService(unittest.TestCase):
             {"type": "file", "name": "archive.bin", "content_type": "application/octet-stream", "is_encrypted": False}
         )
         self.assertEqual(info["preview_kind"], "none")
+        self.assertEqual(info["preview_status"], "unsupported")
+        self.assertIsNone(info["poster_url"])
+        self.assertIsNone(info["hover_preview_url"])
+        self.assertIsNone(info["waveform_url"])
         self.assertFalse(info["preview_supported"])
         self.assertEqual(info["preview_reason"], "unsupported_type")
 
@@ -226,6 +889,7 @@ class TestFileManagerService(unittest.TestCase):
         )
 
         self.assertEqual(info["preview_kind"], "none")
+        self.assertEqual(info["preview_status"], "unsupported")
         self.assertFalse(info["preview_supported"])
         self.assertEqual(info["preview_reason"], "not_file")
 
@@ -239,7 +903,7 @@ class TestFileManagerService(unittest.TestCase):
                     "size": 1,
                     "is_encrypted": True,
                 },
-                "csv",
+                "document",
                 "encrypted",
             ),
             (
@@ -261,7 +925,7 @@ class TestFileManagerService(unittest.TestCase):
                     "size": 1,
                     "is_encrypted": False,
                 },
-                "csv",
+                "document",
                 "not_enabled",
             ),
         ]
@@ -320,7 +984,8 @@ class TestFileManagerService(unittest.TestCase):
             }
         )
 
-        self.assertEqual(info["preview_kind"], "csv")
+        self.assertEqual(info["preview_kind"], "document")
+        self.assertEqual(info["preview_status"], "unsupported")
         self.assertFalse(info["preview_supported"])
         self.assertEqual(info["preview_reason"], "too_large")
 
@@ -336,9 +1001,113 @@ class TestFileManagerService(unittest.TestCase):
                 }
             )
 
-        self.assertEqual(info["preview_kind"], "csv")
+        self.assertEqual(info["preview_kind"], "document")
+        self.assertEqual(info["preview_status"], "ready")
         self.assertTrue(info["preview_supported"])
         self.assertIsNone(info["preview_reason"])
+
+    def test_preview_capability_for_video_and_audio_contract_fields(self):
+        with patch.object(filemanager, "S", SimpleNamespace(filemgr_media_previews_v1=True, filemgr_video_hover_clip_enabled=True, filemgr_audio_waveform_enabled=True, filemgr_preview_max_bytes=10485760)):
+            video_info = filemanager.preview_capability_from_node(
+                {
+                    "type": "file",
+                    "name": "clip.mp4",
+                    "content_type": "video/mp4",
+                    "is_encrypted": False,
+                }
+            )
+            self.assertEqual(video_info["preview_kind"], "video")
+            self.assertEqual(video_info["preview_status"], "pending")
+            self.assertEqual(video_info["preview_reason"], "transcoding_pending")
+            self.assertIsNone(video_info["poster_url"])
+            self.assertIsNone(video_info["hover_preview_url"])
+            self.assertIsNone(video_info["waveform_url"])
+
+            audio_info = filemanager.preview_capability_from_node(
+                {
+                    "type": "file",
+                    "name": "track.mp3",
+                    "content_type": "audio/mpeg",
+                    "is_encrypted": False,
+                }
+            )
+            self.assertEqual(audio_info["preview_kind"], "audio")
+            self.assertEqual(audio_info["preview_status"], "pending")
+            self.assertEqual(audio_info["preview_reason"], "transcoding_pending")
+
+    def test_preview_capability_uses_video_audio_artifacts_when_present(self):
+        with patch.object(filemanager, "S", SimpleNamespace(filemgr_media_previews_v1=True, filemgr_video_hover_clip_enabled=True, filemgr_audio_waveform_enabled=True, filemgr_preview_max_bytes=10485760)):
+            video_info = filemanager.preview_capability_from_node(
+                {
+                    "type": "file",
+                    "name": "clip.mp4",
+                    "content_type": "video/mp4",
+                    "poster_url": "https://example/poster.webp",
+                    "hover_preview_url": "https://example/clip.mp4",
+                    "is_encrypted": False,
+                }
+            )
+            self.assertEqual(video_info["preview_status"], "ready")
+            self.assertIsNone(video_info["preview_reason"])
+
+            audio_info = filemanager.preview_capability_from_node(
+                {
+                    "type": "file",
+                    "name": "track.mp3",
+                    "content_type": "audio/mpeg",
+                    "waveform_url": "https://example/waveform.png",
+                    "is_encrypted": False,
+                }
+            )
+            self.assertEqual(audio_info["preview_status"], "ready")
+            self.assertIsNone(audio_info["preview_reason"])
+
+    def test_preview_capability_media_feature_flag_disabled_returns_deterministic_fallback(self):
+        with patch.object(filemanager, "S", SimpleNamespace(filemgr_media_previews_v1=False, filemgr_video_hover_clip_enabled=True, filemgr_audio_waveform_enabled=True, filemgr_preview_max_bytes=10485760)):
+            video_info = filemanager.preview_capability_from_node(
+                {"type": "file", "name": "clip.mp4", "content_type": "video/mp4", "is_encrypted": False}
+            )
+            self.assertEqual(video_info["preview_kind"], "video")
+            self.assertEqual(video_info["preview_status"], "unsupported")
+            self.assertEqual(video_info["preview_reason"], "not_enabled")
+            self.assertIsNone(video_info["poster_url"])
+            self.assertIsNone(video_info["hover_preview_url"])
+
+            audio_info = filemanager.preview_capability_from_node(
+                {"type": "file", "name": "track.mp3", "content_type": "audio/mpeg", "is_encrypted": False}
+            )
+            self.assertEqual(audio_info["preview_kind"], "audio")
+            self.assertEqual(audio_info["preview_status"], "unsupported")
+            self.assertEqual(audio_info["preview_reason"], "not_enabled")
+            self.assertIsNone(audio_info["waveform_url"])
+
+    def test_preview_capability_artifact_toggles_control_video_and_audio_outputs(self):
+        with patch.object(filemanager, "S", SimpleNamespace(filemgr_media_previews_v1=True, filemgr_video_hover_clip_enabled=False, filemgr_audio_waveform_enabled=False, filemgr_preview_max_bytes=10485760)):
+            video_info = filemanager.preview_capability_from_node(
+                {
+                    "type": "file",
+                    "name": "clip.mp4",
+                    "content_type": "video/mp4",
+                    "poster_url": "https://example/poster.webp",
+                    "hover_preview_url": "https://example/clip.mp4",
+                    "is_encrypted": False,
+                }
+            )
+            self.assertEqual(video_info["preview_status"], "ready")
+            self.assertIsNone(video_info["hover_preview_url"])
+
+            audio_info = filemanager.preview_capability_from_node(
+                {
+                    "type": "file",
+                    "name": "track.mp3",
+                    "content_type": "audio/mpeg",
+                    "waveform_url": "https://example/waveform.png",
+                    "is_encrypted": False,
+                }
+            )
+            self.assertEqual(audio_info["preview_status"], "unsupported")
+            self.assertEqual(audio_info["preview_reason"], "not_enabled")
+            self.assertIsNone(audio_info["waveform_url"])
 
     def test_download_thumbnail_rejects_encrypted_file(self):
         with patch.object(filemanager, "get_node", return_value={"type": "file", "is_encrypted": True}):
@@ -604,6 +1373,8 @@ class TestFileManagerService(unittest.TestCase):
         self.assertEqual(out["path"], "/docs/a.txt")
         stored = put_node.call_args.kwargs["item"] if "item" in put_node.call_args.kwargs else put_node.call_args.args[0]
         self.assertEqual(stored["enc_version"], 1)
+        self.assertIn("media_preview_version", stored)
+        self.assertTrue(stored["media_preview_prefix"].startswith("user/derived/media/"))
 
     def test_register_presigned_upload_rejects_invalid_ticket(self):
         with (
@@ -1345,3 +2116,42 @@ class TestFileManagerService(unittest.TestCase):
 
         self.assertEqual(out1["snapshots"][0]["version"], 2)
         self.assertEqual(out2["snapshots"][0]["version"], 3)
+
+
+    def test_media_preview_eligibility_rejects_malformed_video_inspection(self):
+        with patch.object(filemanager, "S", SimpleNamespace(filemgr_video_preview_max_mb=500, filemgr_video_preview_max_duration_seconds=600)):
+            out = filemanager.media_preview_eligibility_from_node(
+                {
+                    "content_type": "video/mp4",
+                    "size": 1024,
+                    "media_inspection": {"error": "probe_malformed", "container": "unknown", "primary_video_codec": "unknown"},
+                }
+            )
+        self.assertFalse(out["eligible"])
+        self.assertEqual(out["reason"], "malformed_media")
+
+    def test_media_preview_eligibility_rejects_malformed_audio_inspection(self):
+        with patch.object(filemanager, "S", SimpleNamespace(filemgr_audio_waveform_max_mb=500)):
+            out = filemanager.media_preview_eligibility_from_node(
+                {
+                    "content_type": "audio/mpeg",
+                    "size": 1024,
+                    "media_inspection": {"error": "probe_failed", "primary_audio_codec": "unknown"},
+                }
+            )
+        self.assertFalse(out["eligible"])
+        self.assertEqual(out["reason"], "malformed_media")
+
+    def test_run_media_tool_uses_hardened_subprocess_defaults(self):
+        with patch.object(filemanager.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="{}")) as mocked:
+            out = filemanager._run_media_tool(["ffprobe", "-version"], timeout_seconds=7)
+        self.assertEqual(out.returncode, 0)
+        kwargs = mocked.call_args.kwargs
+        self.assertFalse(kwargs["shell"])
+        self.assertEqual(kwargs["stdin"], filemanager.subprocess.DEVNULL)
+        self.assertTrue(kwargs["close_fds"])
+        self.assertEqual(kwargs["timeout"], 7)
+
+    def test_run_media_tool_rejects_non_list_args(self):
+        with self.assertRaises(ValueError):
+            filemanager._run_media_tool("ffprobe -version")

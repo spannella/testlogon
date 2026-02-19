@@ -69,6 +69,8 @@ import {
   sharedPreviewUrl,
 } from "@/api/endpoints/files";
 import { FileTable } from "./FileTable";
+import { ImageEditorDialog } from "./ImageEditorDialog";
+import { isEditableImageFile } from "./imageEdit";
 import { FilePreview } from "./FilePreview";
 import { SharedWithMe } from "./SharedWithMe";
 import { ShareDialog } from "./ShareDialog";
@@ -148,6 +150,7 @@ export default function FilesPage() {
   // Move dialog state
   const [moveDialogOpen, setMoveDialogOpen] = React.useState(false);
   const [moveTarget, setMoveTarget] = React.useState<FileEntry | null>(null);
+  const [imageEditTarget, setImageEditTarget] = React.useState<FileEntry | null>(null);
 
   // ── Queries ─────────────────────────────────────────────────────
 
@@ -276,6 +279,14 @@ export default function FilesPage() {
     setPreviewContext({ file, files: displayItems, source: "owned" });
   };
 
+  const handleEditImage = (file: FileEntry) => {
+    if (!isEditableImageFile(file)) {
+      toast.error("Only non-encrypted image files can be edited.");
+      return;
+    }
+    setImageEditTarget(file);
+  };
+
   const handlePreviewShared = (_item: SharedItem) => {
     const segments = _item.path.split("/").filter(Boolean);
     const name = _item.name || (segments.length > 0 ? (segments[segments.length - 1] ?? _item.path) : _item.path);
@@ -297,6 +308,10 @@ export default function FilesPage() {
       enc_orig_size: _item.enc_orig_size,
       enc_orig_content_type: _item.enc_orig_content_type,
       preview_kind: _item.preview_kind,
+      preview_status: _item.preview_status,
+      poster_url: _item.poster_url,
+      hover_preview_url: _item.hover_preview_url,
+      waveform_url: _item.waveform_url,
       preview_supported: _item.preview_supported,
       preview_reason: _item.preview_reason,
     };
@@ -829,6 +844,7 @@ export default function FilesPage() {
                 onNavigate={handleNavigate}
                 onPreview={handlePreview}
                 onDownload={handleDownload}
+                onEditImage={handleEditImage}
                 onShare={(f) => setShareTarget(f)}
                 onRename={(f) => { setRenameTarget(f); setRenameName(f.name); }}
                 onMove={handleMoveOpen}
@@ -1015,6 +1031,16 @@ export default function FilesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+
+      <ImageEditorDialog
+        open={!!imageEditTarget}
+        file={imageEditTarget}
+        onOpenChange={(open) => { if (!open) setImageEditTarget(null); }}
+        onSaved={() => {
+          queryClient.invalidateQueries({ queryKey: ["files"] });
+        }}
+      />
 
       {/* File preview modal */}
       {previewContext && (

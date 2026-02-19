@@ -1,30 +1,51 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, Headphones } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
+import {
+  isMessagingEncryptionEnabled,
+  isMessagingListenOnceAudioEnabled,
+  isMessagingViewOnceImageEnabled,
+  isMessagingViewOnceVideoEnabled,
+} from "@/lib/featureFlags";
 import { encryptMessage, type MessageEncryptionEnvelope } from "@/lib/messageEncryption";
 import type { SendTextMessageReq } from "@/api/types";
 
 interface ComposeBarProps {
   onSendText: (payload: SendTextMessageReq) => void;
-  onSendImage?: (file: File) => void;
+  onSendImage?: (file: File, options?: { consumption_policy?: "none" | "view_once" }) => void;
+  onSendVideoAttachment?: (file: File, options?: { consumption_policy?: "none" | "view_once" }) => void;
+  onSendAudioRecording?: (file: File, options?: { consumption_policy?: "none" | "listen_once" }) => void;
   sending?: boolean;
   disabled?: boolean;
   onKeystroke?: () => void;
 }
 
-export function ComposeBar({ onSendText, onSendImage, sending, disabled, onKeystroke }: ComposeBarProps) {
+export function ComposeBar({
+  onSendText,
+  onSendImage,
+  onSendVideoAttachment,
+  onSendAudioRecording,
+  sending,
+  disabled,
+  onKeystroke,
+}: ComposeBarProps) {
   const [text, setText] = React.useState("");
   const [encryptEnabled, setEncryptEnabled] = React.useState(false);
   const [password, setPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
   const [encrypting, setEncrypting] = React.useState(false);
   const [encryptError, setEncryptError] = React.useState<string | null>(null);
+  const [viewOnceImage, setViewOnceImage] = React.useState(false);
+  const [viewOnceVideo, setViewOnceVideo] = React.useState(false);
+  const [listenOnceAudio, setListenOnceAudio] = React.useState(false);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const featureEnabled = isMessagingEncryptionEnabled();
+  const onceImageEnabled = isMessagingViewOnceImageEnabled();
+  const onceVideoEnabled = isMessagingViewOnceVideoEnabled();
+  const onceAudioEnabled = isMessagingListenOnceAudioEnabled();
 
   const resetTextArea = () => {
     if (textareaRef.current) {
@@ -92,9 +113,19 @@ export function ComposeBar({ onSendText, onSendImage, sending, disabled, onKeyst
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file && onSendImage) {
-      onSendImage(file);
+    if (!file) {
+      e.target.value = "";
+      return;
     }
+
+    if (file.type.startsWith("image/") && onSendImage) {
+      onSendImage(file, { consumption_policy: viewOnceImage ? "view_once" : "none" });
+    } else if (file.type.startsWith("video/") && onSendVideoAttachment) {
+      onSendVideoAttachment(file, { consumption_policy: viewOnceVideo ? "view_once" : "none" });
+    } else if (file.type.startsWith("audio/") && onSendAudioRecording) {
+      onSendAudioRecording(file, { consumption_policy: listenOnceAudio ? "listen_once" : "none" });
+    }
+
     e.target.value = "";
   };
 
@@ -147,6 +178,47 @@ export function ComposeBar({ onSendText, onSendImage, sending, disabled, onKeyst
         </div>
       )}
 
+      {(onceImageEnabled || onceVideoEnabled || onceAudioEnabled) && (
+        <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+          {onceImageEnabled && onSendImage && (
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={viewOnceImage}
+                onChange={(e) => setViewOnceImage(e.target.checked)}
+                disabled={disabled || sending || encrypting}
+              />
+              <Eye className="h-3.5 w-3.5" />
+              View once (image)
+            </label>
+          )}
+          {onceVideoEnabled && onSendVideoAttachment && (
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={viewOnceVideo}
+                onChange={(e) => setViewOnceVideo(e.target.checked)}
+                disabled={disabled || sending || encrypting}
+              />
+              <Eye className="h-3.5 w-3.5" />
+              View once (video)
+            </label>
+          )}
+          {onceAudioEnabled && onSendAudioRecording && (
+            <label className="inline-flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={listenOnceAudio}
+                onChange={(e) => setListenOnceAudio(e.target.checked)}
+                disabled={disabled || sending || encrypting}
+              />
+              <Headphones className="h-3.5 w-3.5" />
+              Listen once (audio)
+            </label>
+          )}
+        </div>
+      )}
+
       <div className="flex items-end gap-2">
         {onSendImage && (
           <>
@@ -163,7 +235,7 @@ export function ComposeBar({ onSendText, onSendImage, sending, disabled, onKeyst
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*"
+              accept="image/*,video/*,audio/*"
               className="hidden"
               onChange={handleFileChange}
             />

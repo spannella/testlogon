@@ -26,7 +26,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { deleteMessage } from "@/api/endpoints/messaging";
+import {
+  buildAttachmentDownloadUrl,
+  consumeOnceMediaAttachment,
+  createOnceMediaAttachmentGrant,
+  deleteMessage,
+} from "@/api/endpoints/messaging";
+import { ApiError } from "@/api/client";
 import type { Message } from "@/api/types";
 import { FileMessageCard } from "./FileMessageCard";
 import { ReadReceipts, ViewTracker } from "./ReadReceipts";
@@ -39,6 +45,45 @@ interface MessageBubbleProps {
   conversationId: string;
 }
 
+const onceLabel = (message: Message): string | undefined => {
+  if (message.consumption_policy === "view_once") return "View once";
+  if (message.consumption_policy === "listen_once") return "Listen once";
+  return undefined;
+};
+
+const consumeTrigger = (message: Message): "open" | "play" => (message.media_kind === "image" ? "open" : "play");
+
+const playbackThresholdSeconds = (message: Message): number => {
+  if (message.media_kind === "video" || message.media_kind === "audio") return 1.2;
+  return 0;
+};
+
+const onceErrorMessageFromCode = (code: string | undefined): string => {
+  switch (code) {
+    case "already_consumed":
+      return "Already consumed on another device.";
+    case "grant_expired":
+      return "Grant expired. Please try opening again.";
+    case "consume_threshold_not_met":
+      return "Playback threshold not reached yet. Keep playing and retry.";
+    case "invalid_grant":
+      return "Unable to validate once-media grant.";
+    default:
+      return "Unable to open once-media attachment.";
+  }
+};
+
+const openBlobInEphemeralWindow = (blob: Blob) => {
+  const objectUrl = URL.createObjectURL(blob);
+  const opened = window.open(objectUrl, "_blank", "noopener,noreferrer");
+
+  // Revoke quickly to reduce in-memory persistence; delay allows the new tab to read it.
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  if (!opened) {
+    URL.revokeObjectURL(objectUrl);
+  }
+};
+
 export function MessageBubble({ message, isOwn, showSender, conversationId }: MessageBubbleProps) {
   const queryClient = useQueryClient();
   const [forwardOpen, setForwardOpen] = useState(false);
@@ -48,6 +93,8 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
   const [decryptPassword, setDecryptPassword] = useState("");
   const [decryptError, setDecryptError] = useState<string | null>(null);
   const [decryptedText, setDecryptedText] = useState<string | null>(null);
+  const [openingOnce, setOpeningOnce] = useState(false);
+  const [onceError, setOnceError] = useState<string | null>(null);
 
   const deleteMut = useMutation({
     mutationFn: () => deleteMessage(conversationId, message.message_id),
@@ -100,10 +147,49 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
     }
   };
 
+  const handleOpenOnceAttachment = async () => {
+    if (openingOnce || !message.consumption_policy || message.consumption_state === "consumed") return;
+    setOpeningOnce(true);
+    setOnceError(null);
+    try {
+      const grant = await createOnceMediaAttachmentGrant(conversationId, message.message_id);
+      const trigger = consumeTrigger(message);
+      await consumeOnceMediaAttachment(conversationId, message.message_id, grant.grant_token, {
+        consumption_attempt_id: `attempt-${message.message_id}-${Date.now()}`,
+        trigger,
+        playback_seconds: playbackThresholdSeconds(message),
+      });
+      const url = buildAttachmentDownloadUrl(conversationId, message.message_id, grant.grant_token);
+      const response = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        referrerPolicy: "no-referrer",
+      });
+      if (!response.ok) {
+        throw new Error("once_media_fetch_failed");
+      }
+      const blob = await response.blob();
+      openBlobInEphemeralWindow(blob);
+      await queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+    } catch (err) {
+      if (err instanceof ApiError && err.body && typeof err.body === "object") {
+        const detail = (err.body as { detail?: { code?: string } }).detail;
+        setOnceError(onceErrorMessageFromCode(detail?.code));
+      } else {
+        setOnceError("Unable to open once-media attachment.");
+      }
+    } finally {
+      setOpeningOnce(false);
+    }
+  };
+
   const encryptedEnabled = isMessagingEncryptionEnabled();
   const encryptedSupported = encryptedEnabled && isMessageCryptoSupported();
   const hasDecryptableEnvelope = Boolean(message.encryption);
   const showUnsupportedEncryptedState = message.is_encrypted && (!encryptedSupported || !hasDecryptableEnvelope);
+  const onceMediaLabel = onceLabel(message);
+  const canForward = !message.consumption_policy;
 
   return (
     <>
@@ -116,7 +202,6 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
               : "bg-muted text-foreground",
           )}
         >
-          {/* Actions menu */}
           <div className={cn(
             "absolute -top-2 opacity-0 transition-opacity group-hover:opacity-100",
             isOwn ? "left-0 -translate-x-full pr-1" : "right-0 translate-x-full pl-1",
@@ -128,9 +213,11 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align={isOwn ? "start" : "end"}>
-                <DropdownMenuItem onClick={() => setForwardOpen(true)}>
-                  <Forward className="mr-2 h-4 w-4" /> Forward
-                </DropdownMenuItem>
+                {canForward && (
+                  <DropdownMenuItem onClick={() => setForwardOpen(true)}>
+                    <Forward className="mr-2 h-4 w-4" /> Forward
+                  </DropdownMenuItem>
+                )}
                 {isOwn && (
                   <DropdownMenuItem
                     className="text-destructive focus:text-destructive"
@@ -149,7 +236,15 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
             </p>
           )}
 
-          {/* Text / encrypted placeholder */}
+          {onceMediaLabel && (
+            <div className="mb-1 text-[10px] uppercase tracking-wide">
+              <span className="rounded-full bg-background/70 px-2 py-0.5 font-semibold">{onceMediaLabel}</span>
+              {message.consumption_state && (
+                <span className="ml-2 text-muted-foreground">{message.consumption_state}</span>
+              )}
+            </div>
+          )}
+
           {message.is_encrypted ? (
             <div className="space-y-1">
               <span className="inline-flex items-center gap-1 rounded-full bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
@@ -195,11 +290,24 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
           ) : null}
 
           {message.kind === "image" && typeof message.image?.url === "string" && (
-            <img
-              src={message.image.url}
-              alt="Shared image"
-              className="mt-1 max-h-64 rounded-lg object-cover"
-            />
+            <button
+              type="button"
+              disabled={message.consumption_state === "consumed" || openingOnce}
+              onClick={() => {
+                if (message.consumption_policy) {
+                  void handleOpenOnceAttachment();
+                } else {
+                  window.open(message.image?.url, "_blank", "noopener,noreferrer");
+                }
+              }}
+              className={cn("mt-1 block", message.consumption_state === "consumed" && "opacity-60 cursor-not-allowed")}
+            >
+              <img
+                src={message.image.url}
+                alt="Shared image"
+                className="max-h-64 rounded-lg object-cover"
+              />
+            </button>
           )}
 
           {isFileKind && typeof message.file?.name === "string" && (
@@ -208,6 +316,18 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
               fileUrl={typeof message.file?.url === "string" ? message.file.url : undefined}
               kind={message.kind}
               isOwn={isOwn}
+              consumptionState={message.consumption_state}
+              onceError={onceError}
+              opening={openingOnce}
+              onOpen={() => {
+                if (message.consumption_policy) {
+                  void handleOpenOnceAttachment();
+                  return;
+                }
+                if (message.file?.url) {
+                  window.open(message.file.url, "_blank", "noopener,noreferrer");
+                }
+              }}
             />
           )}
 
@@ -234,17 +354,9 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
         </div>
       </div>
 
-      <ReadReceipts
-        conversationId={conversationId}
-        messageId={message.message_id}
-        isOwn={isOwn}
-      />
+      <ReadReceipts conversationId={conversationId} messageId={message.message_id} isOwn={isOwn} />
 
-      <ViewTracker
-        conversationId={conversationId}
-        messageId={message.message_id}
-        isOwn={isOwn}
-      />
+      <ViewTracker conversationId={conversationId} messageId={message.message_id} isOwn={isOwn} />
 
       <ForwardDialog
         open={forwardOpen}
@@ -295,17 +407,10 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
           </div>
 
           <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setDecryptOpen(false)}
-              disabled={decrypting}
-            >
+            <Button variant="outline" onClick={() => setDecryptOpen(false)} disabled={decrypting}>
               Cancel
             </Button>
-            <Button
-              onClick={() => void handleDecrypt()}
-              disabled={decrypting || !decryptPassword}
-            >
+            <Button onClick={() => void handleDecrypt()} disabled={decrypting || !decryptPassword}>
               {decrypting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Decrypt"}
             </Button>
           </DialogFooter>

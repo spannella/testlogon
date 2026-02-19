@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { File, Folder, MoreHorizontal, Download, Share2, Pencil, Move, Trash2, Eye } from "lucide-react";
+import { File, Folder, MoreHorizontal, Download, Share2, Pencil, Move, Trash2, Eye, Image } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -13,6 +13,8 @@ import { DataTable, type ColumnDef, type SortState } from "@/components/shared/D
 import type { FileEntry } from "@/api/types";
 import { downloadUrl, previewUrl } from "@/api/endpoints/files";
 import { cn } from "@/lib/utils";
+import { isEditableImageFile } from "./imageEdit";
+import { MediaPreviewThumb } from "./MediaPreviewThumb";
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
@@ -39,6 +41,7 @@ function formatDate(iso?: string): string {
 function isImage(ct?: string): boolean {
   return !!ct && ct.startsWith("image/");
 }
+
 
 // ─── Thumbnail ──────────────────────────────────────────────────
 
@@ -74,6 +77,7 @@ interface FileTableProps {
   onNavigate: (folder: FileEntry) => void;
   onPreview?: (file: FileEntry) => void;
   onDownload?: (file: FileEntry) => void;
+  onEditImage?: (file: FileEntry) => void;
   onShare: (file: FileEntry) => void;
   onRename: (file: FileEntry) => void;
   onMove: (file: FileEntry) => void;
@@ -95,6 +99,7 @@ export function FileTable({
   onNavigate,
   onPreview,
   onDownload,
+  onEditImage,
   onShare,
   onRename,
   onMove,
@@ -113,6 +118,8 @@ export function FileTable({
         <div className="flex items-center gap-2">
           {row.type === "folder" ? (
             <Folder className="h-4 w-4 shrink-0 text-primary" />
+          ) : row.preview_kind === "video" || row.preview_kind === "audio" ? (
+            <MediaPreviewThumb item={row} />
           ) : isImage(row.content_type) && !row.is_encrypted ? (
             <Thumbnail path={row.path} />
           ) : (
@@ -190,6 +197,12 @@ export function FileTable({
               <DropdownMenuItem onClick={() => onDownload ? onDownload(row) : window.open(downloadUrl(row.path), "_blank")}>
                 <Download className="h-4 w-4" />
                 Download
+              </DropdownMenuItem>
+            )}
+            {row.type === "file" && onEditImage && isEditableImageFile(row) && (
+              <DropdownMenuItem onClick={() => onEditImage(row)}>
+                <Image className="h-4 w-4" />
+                Edit image
               </DropdownMenuItem>
             )}
             <DropdownMenuItem onClick={() => onShare(row)}>

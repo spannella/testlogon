@@ -13,6 +13,7 @@ type RawMessage = Partial<Message> & {
   created_at?: number | string;
   edited_at?: number | string;
   revoked_at?: number | string;
+  consumed_at?: number | string;
 };
 
 const buildS3ObjectUrl = (bucket?: string, key?: string): string | undefined => {
@@ -87,6 +88,10 @@ export function adaptMessage(raw: RawMessage): Message {
     my_reactions: raw.my_reactions,
     is_encrypted: raw.is_encrypted,
     encryption: raw.encryption,
+    consumption_policy: raw.consumption_policy,
+    media_kind: raw.media_kind,
+    consumption_state: raw.consumption_state,
+    consumed_at: raw.consumed_at != null ? toNum(raw.consumed_at) : undefined,
     edited: Boolean(raw.edited_at),
     revoked: Boolean(raw.revoked_at),
   };

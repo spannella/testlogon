@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.internal/schemas/messaging-once-media-v1.json",
+  "title": "Messaging Once-Media Contract Extension v1",
+  "description": "Additive schema extension for one-time media support in messaging payloads.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "messaging_contract_version": {
+      "type": "string",
+      "const": "2026-02-once-media-v1"
+    },
+    "consumption_policy": {
+      "type": "string",
+      "enum": [
+        "none",
+        "view_once",
+        "listen_once"
+      ]
+    },
+    "media_kind": {
+      "type": "string",
+      "enum": [
+        "image",
+        "video",
+        "audio"
+      ]
+    },
+    "consumption_state": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "consumed",
+        "expired",
+        "failed"
+      ]
+    },
+    "consumed_at": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "consumption_attempt_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Idempotency key for consume attempts."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "consumption_policy": {
+            "const": "view_once"
+          }
+        },
+        "required": [
+          "consumption_policy"
+        ]
+      },
+      "then": {
+        "required": [
+          "media_kind"
+        ],
+        "properties": {
+          "media_kind": {
+            "enum": [
+              "image",
+              "video"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "consumption_policy": {
+            "const": "listen_once"
+          }
+        },
+        "required": [
+          "consumption_policy"
+        ]
+      },
+      "then": {
+        "required": [
+          "media_kind"
+        ],
+        "properties": {
+          "media_kind": {
+            "const": "audio"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "consumption_state": {
+            "const": "consumed"
+          }
+        },
+        "required": [
+          "consumption_state"
+        ]
+      },
+      "then": {
+        "required": [
+          "consumed_at"
+        ],
+        "properties": {
+          "consumed_at": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    }
+  ]
+}

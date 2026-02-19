@@ -6,6 +6,8 @@ import binascii
 import json
 import logging
 import os
+import hashlib
+import hmac
 import re
 import time
 import uuid
@@ -35,10 +37,20 @@ from app.metrics import (
     record_helpdesk_failover,
     record_helpdesk_no_agents_notice,
     record_helpdesk_time_to_first_claim_ms,
+    record_messaging_gallery_cursor_page_depth,
+    record_messaging_gallery_latency,
+    record_messaging_gallery_request
 )
 from app.core.settings import S
 from app.core.aws import ddb
 from app.core.aws_clients import s3_client
+from app.metrics import (
+    record_once_media_conflict,
+    record_once_media_consume,
+    record_once_media_grant,
+    record_once_media_grant_latency,
+    record_once_media_send,
+)
 from app.services.alerts import audit_event
 from app.services.messaging_routing import (
     RoutingTransitionError,
@@ -47,6 +59,8 @@ from app.services.messaging_routing import (
     transition_helpdesk_routing,
 )
 from app.services.filemanager import get_node, get_usage_summary, norm_path
+from app.services.messaging_gallery import fetch_gallery_page
+from app.services.messaging_gallery_index import fetch_gallery_index_page, sync_gallery_index_entries
 from app.services.sessions import require_ui_session
 from app.services.subscription_access import require_subscription_access
 from app.services.usage_metering import (
@@ -69,6 +83,7 @@ DDB_CONVERSATION_ROUTING_EVENTS = os.getenv("DDB_CONVERSATION_ROUTING_EVENTS", "
 DDB_USERS = os.getenv("DDB_USERS", "Users")
 DDB_USER_SEARCH = os.getenv("DDB_USER_SEARCH", "UserSearch")
 DDB_MESSAGE_SEARCH = os.getenv("DDB_MESSAGE_SEARCH", "MessageSearch")
+DDB_MESSAGE_GALLERY_INDEX = os.getenv("DDB_MESSAGE_GALLERY_INDEX", "")
 OPENSEARCH_ENDPOINT = os.getenv("OPENSEARCH_ENDPOINT", "").strip()
 OPENSEARCH_INDEX = os.getenv("OPENSEARCH_INDEX", "messages")
 OPENSEARCH_REGION = os.getenv("OPENSEARCH_REGION", AWS_REGION)
@@ -79,6 +94,7 @@ DDB_TYPING = os.getenv("DDB_TYPING", "Typing")
 DDB_MESSAGE_EDITS = os.getenv("DDB_MESSAGE_EDITS", "MessageEdits")
 DDB_MESSAGE_VIEWS = os.getenv("DDB_MESSAGE_VIEWS", "MessageViews")
 DDB_MESSAGE_RECEIPTS = os.getenv("DDB_MESSAGE_RECEIPTS", "MessageReceipts")
+DDB_MESSAGE_CONSUMPTION = os.getenv("DDB_MESSAGE_CONSUMPTION", "MessageConsumption")
 
 S3_BUCKET_IMAGES = os.getenv("S3_BUCKET_IMAGES", "my-chat-images")
 
@@ -102,12 +118,14 @@ tbl_routing_events = ddb.Table(DDB_CONVERSATION_ROUTING_EVENTS)
 tbl_users = ddb.Table(DDB_USERS)
 tbl_search = ddb.Table(DDB_USER_SEARCH)
 tbl_msg_search = ddb.Table(DDB_MESSAGE_SEARCH)
+tbl_gallery_index = ddb.Table(DDB_MESSAGE_GALLERY_INDEX) if DDB_MESSAGE_GALLERY_INDEX else None
 tbl_presence = ddb.Table(DDB_PRESENCE)
 tbl_typing = ddb.Table(DDB_TYPING)
 
 tbl_edits = ddb.Table(DDB_MESSAGE_EDITS)
 tbl_views = ddb.Table(DDB_MESSAGE_VIEWS)
 tbl_receipts = ddb.Table(DDB_MESSAGE_RECEIPTS)
+tbl_msg_consumption = ddb.Table(DDB_MESSAGE_CONSUMPTION)
 
 router = APIRouter(prefix="/messaging", tags=["messaging"])
 logger = logging.getLogger(__name__)
@@ -126,6 +144,12 @@ HELPDESK_ROUTING_LIFECYCLE_EVENT_TYPES = {
     "helpdesk.conversation.released",
     "helpdesk.conversation.no_agents_online",
 }
+CONSUMPTION_POLICY_NONE = "none"
+CONSUMPTION_STATE_PENDING = "pending"
+ONCE_MEDIA_GRANT_TTL_SEC = int(os.getenv("ONCE_MEDIA_GRANT_TTL_SEC", "120"))
+ONCE_MEDIA_VIDEO_CONSUME_THRESHOLD_SEC = float(os.getenv("ONCE_MEDIA_VIDEO_CONSUME_THRESHOLD_SEC", "1.0"))
+ONCE_MEDIA_AUDIO_CONSUME_THRESHOLD_SEC = float(os.getenv("ONCE_MEDIA_AUDIO_CONSUME_THRESHOLD_SEC", "1.0"))
+ONCE_MEDIA_COHORT_HEADER = "x-once-media-cohort"
 
 
 # -------------------------
@@ -620,6 +644,7 @@ class CreateImageMessageIn(BaseModel):
     width: Optional[int] = None
     height: Optional[int] = None
     reply_to_message_id: Optional[str] = None
+    consumption_policy: Literal["none", "view_once"] = "none"
 
 
 class MarkReadIn(BaseModel):
@@ -676,6 +701,7 @@ class PresenceOut(BaseModel):
 
 class MessagingConfigOut(BaseModel):
     messaging_encrypted_messages_enabled: bool
+    messaging_gallery_enabled: bool
 
 
 class ParticipantOut(BaseModel):
@@ -718,6 +744,21 @@ class CreateFileMessageIn(BaseModel):
     duration_seconds: Optional[int] = Field(default=None, ge=1)
     reply_to_message_id: Optional[str] = None
     preview: Optional[LinkPreviewIn] = None
+    consumption_policy: Literal["none", "view_once", "listen_once"] = "none"
+
+    @model_validator(mode="after")
+    def _validate_consumption_policy(self):
+        if self.consumption_policy == "view_once" and self.kind != "video":
+            raise PydanticCustomError(
+                "invalid_media_kind_for_policy",
+                "view_once is only supported for video file messages",
+            )
+        if self.consumption_policy == "listen_once" and self.kind != "audio":
+            raise PydanticCustomError(
+                "invalid_media_kind_for_policy",
+                "listen_once is only supported for audio file messages",
+            )
+        return self
 
 
 class EditMessageIn(BaseModel):
@@ -761,6 +802,28 @@ class MessageViewOut(BaseModel):
     view_count: int
 
 
+class AttachmentGrantOut(BaseModel):
+    grant_token: str
+    expires_at: int
+    conversation_id: str
+    message_id: str
+
+
+class ConsumeAttachmentIn(BaseModel):
+    consumption_attempt_id: str = Field(min_length=8, max_length=128)
+    trigger: Literal["open", "play"]
+    playback_seconds: Optional[float] = Field(default=None, ge=0)
+
+
+class ConsumeAttachmentOut(BaseModel):
+    ok: bool
+    conversation_id: str
+    message_id: str
+    consumption_state: Literal["consumed"]
+    consumed_at: int
+    consumption_attempt_id: str
+
+
 class EditHistoryOut(BaseModel):
     edited_at: int
     edited_by: str
@@ -794,6 +857,33 @@ class MessageOut(BaseModel):
     my_reactions: Optional[List[str]] = None
     is_encrypted: bool = False
     encryption: Optional[MessageEncryptionEnvelope] = None
+    consumption_policy: Optional[Literal["none", "view_once", "listen_once"]] = None
+    media_kind: Optional[Literal["image", "video", "audio"]] = None
+    consumption_state: Optional[Literal["pending", "consumed", "expired", "failed"]] = None
+    consumed_at: Optional[int] = None
+
+
+GalleryType = Literal["image", "video", "file", "link"]
+GALLERY_TYPES: set[str] = {"image", "video", "file", "link"}
+
+
+class GalleryItemOut(BaseModel):
+    message_id: str
+    conversation_id: str
+    sender_id: str
+    created_at: int
+    type: GalleryType
+    url: str
+    thumbnail_url: Optional[str] = None
+    title: Optional[str] = None
+    file_name: Optional[str] = None
+    content_type: Optional[str] = None
+    size: Optional[int] = None
+
+
+class GalleryPageOut(BaseModel):
+    items: List[GalleryItemOut]
+    next_cursor: Optional[str] = None
 
 
 HELPDESK_MASKED_SENDER_ID = "Helpdesk"
@@ -877,8 +967,260 @@ def _message_search_enabled() -> bool:
     return bool(DDB_MESSAGE_SEARCH) and _aws_credentials_available()
 
 
+def _encode_gallery_cursor(message_id: str) -> str:
+    payload = {"message_id": message_id}
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _gallery_attachment_fallback_url(conversation_id: str, message_id: str) -> str:
+    return f"/messaging/conversations/{conversation_id}/messages/{message_id}/attachment"
+
+
+def _decode_gallery_cursor(cursor: str) -> str:
+    if not isinstance(cursor, str) or not cursor.strip():
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "gallery_cursor_invalid", "message": "Invalid gallery cursor"},
+        )
+    token = cursor.strip()
+    padded = token + "=" * (-len(token) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        payload = json.loads(decoded)
+        message_id = str(payload.get("message_id") or "").strip()
+    except (UnicodeDecodeError, ValueError, TypeError, binascii.Error):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "gallery_cursor_invalid", "message": "Invalid gallery cursor"},
+        )
+    if not message_id:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "gallery_cursor_invalid", "message": "Invalid gallery cursor"},
+        )
+    return message_id
+
+
+def _gallery_item_from_message(message: Dict[str, Any], gallery_type: str) -> Optional[GalleryItemOut]:
+    if message.get("revoked") or message.get("revoked_at"):
+        return None
+
+    is_encrypted = bool(message.get("is_encrypted") or message.get("encryption"))
+    kind = str(message.get("kind") or "").strip().lower()
+    message_id = str(message.get("message_id") or "").strip()
+    conversation_id = str(message.get("conversation_id") or "").strip()
+    sender_id = str(message.get("sender_id") or "").strip()
+    created_at = int(message.get("created_at") or 0)
+    if not message_id or not conversation_id or not sender_id or created_at <= 0:
+        return None
+
+    # Encrypted-content gallery policy:
+    # - Encrypted payloads are excluded from image/video/file tabs.
+    # - For links, only explicit preview.url is exposed; other preview metadata is redacted.
+    if is_encrypted:
+        if gallery_type != "link":
+            return None
+        preview = message.get("preview") if isinstance(message.get("preview"), dict) else {}
+        url = str(preview.get("url") or "").strip()
+        if not url:
+            return None
+        return GalleryItemOut(
+            message_id=message_id,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            created_at=created_at,
+            type="link",
+            url=url,
+            title=None,
+            thumbnail_url=None,
+        )
+
+    if gallery_type == "image" and kind == "image":
+        image = message.get("image") if isinstance(message.get("image"), dict) else {}
+        url = str(image.get("url") or "").strip()
+        if not url:
+            bucket = str(image.get("bucket") or "").strip()
+            key = str(image.get("key") or "").strip()
+            if bucket and key:
+                url = _gallery_attachment_fallback_url(conversation_id, message_id)
+            else:
+                return None
+        return GalleryItemOut(
+            message_id=message_id,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            created_at=created_at,
+            type="image",
+            url=url,
+            content_type=str(image.get("content_type") or "").strip() or None,
+        )
+
+    if gallery_type == "video" and kind == "video":
+        file_payload = message.get("file") if isinstance(message.get("file"), dict) else {}
+        url = str(file_payload.get("url") or "").strip()
+        if not url:
+            path = str(file_payload.get("path") or "").strip()
+            if path:
+                url = _gallery_attachment_fallback_url(conversation_id, message_id)
+            else:
+                return None
+        size = file_payload.get("size")
+        return GalleryItemOut(
+            message_id=message_id,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            created_at=created_at,
+            type="video",
+            url=url,
+            thumbnail_url=str(file_payload.get("thumbnail") or "").strip() or None,
+            file_name=str(file_payload.get("name") or "").strip() or None,
+            content_type=str(file_payload.get("content_type") or "").strip() or None,
+            size=int(size) if isinstance(size, (int, float)) else None,
+        )
+
+    include_audio = os.getenv("MESSAGING_GALLERY_INCLUDE_AUDIO", "0") in ("1", "true", "True")
+    if gallery_type == "file" and (kind == "file" or (include_audio and kind == "audio")):
+        file_payload = message.get("file") if isinstance(message.get("file"), dict) else {}
+        url = str(file_payload.get("url") or "").strip()
+        if not url:
+            path = str(file_payload.get("path") or "").strip()
+            if path:
+                url = _gallery_attachment_fallback_url(conversation_id, message_id)
+            else:
+                return None
+        size = file_payload.get("size")
+        return GalleryItemOut(
+            message_id=message_id,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            created_at=created_at,
+            type="file",
+            url=url,
+            file_name=str(file_payload.get("name") or "").strip() or None,
+            content_type=str(file_payload.get("content_type") or "").strip() or None,
+            size=int(size) if isinstance(size, (int, float)) else None,
+        )
+
+    if gallery_type == "link" and kind == "text":
+        preview = message.get("preview") if isinstance(message.get("preview"), dict) else {}
+        url = str(preview.get("url") or "").strip()
+        if not url:
+            return None
+        return GalleryItemOut(
+            message_id=message_id,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            created_at=created_at,
+            type="link",
+            url=url,
+            thumbnail_url=str(preview.get("image_url") or "").strip() or None,
+            title=str(preview.get("title") or "").strip() or None,
+        )
+
+    return None
+
+
 def _message_receipts_enabled() -> bool:
     return bool(DDB_MESSAGE_RECEIPTS) and _aws_credentials_available()
+
+
+def _messaging_gallery_enabled() -> bool:
+    enabled = os.getenv(
+        "MESSAGING_GALLERY_ENABLED",
+        "true" if S.messaging_gallery_enabled else "false",
+    ) not in ("0", "false", "False")
+    kill_switch = os.getenv(
+        "MESSAGING_GALLERY_KILL_SWITCH",
+        "true" if S.messaging_gallery_kill_switch else "false",
+    ) not in ("0", "false", "False")
+    return enabled and not kill_switch
+
+
+def _messaging_gallery_index_enabled() -> bool:
+    enabled = os.getenv(
+        "MESSAGING_GALLERY_INDEX_ENABLED",
+        "true" if S.messaging_gallery_index_enabled else "false",
+    ) not in ("0", "false", "False")
+    return bool(enabled and tbl_gallery_index is not None and _aws_credentials_available())
+
+
+def _encode_gallery_index_cursor(sort_key: str) -> str:
+    payload = {"gallery_sort": sort_key}
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_gallery_index_cursor(cursor: str) -> str:
+    if not isinstance(cursor, str) or not cursor.strip():
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "gallery_cursor_invalid", "message": "Invalid gallery cursor"},
+        )
+    token = cursor.strip()
+    padded = token + "=" * (-len(token) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        payload = json.loads(decoded)
+        sort_key = str(payload.get("gallery_sort") or "").strip()
+    except (UnicodeDecodeError, ValueError, TypeError, binascii.Error):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "gallery_cursor_invalid", "message": "Invalid gallery cursor"},
+        )
+    if not sort_key:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "gallery_cursor_invalid", "message": "Invalid gallery cursor"},
+        )
+    return sort_key
+
+
+def _gallery_index_entries_from_message(message: Dict[str, Any]) -> list[Dict[str, Any]]:
+    out: list[Dict[str, Any]] = []
+    for gallery_type in GALLERY_TYPES:
+        item = _gallery_item_from_message(message, gallery_type)
+        if item is None:
+            continue
+        row = {
+            "type": item.type,
+            "sender_id": item.sender_id,
+            "created_at": int(item.created_at),
+            "url": item.url,
+            "thumbnail_url": item.thumbnail_url,
+            "title": item.title,
+            "file_name": item.file_name,
+            "content_type": item.content_type,
+            "size": item.size,
+            "deleted_for": list(message.get("deleted_for") or []),
+            "revoked_at": int(message.get("revoked_at") or 0),
+        }
+        out.append(row)
+    return out
+
+
+def _sync_gallery_index_message(message: Dict[str, Any]) -> None:
+    if not _messaging_gallery_index_enabled():
+        return
+    conversation_id = str(message.get("conversation_id") or "").strip()
+    message_id = str(message.get("message_id") or "").strip()
+    created_at = int(message.get("created_at") or 0)
+    if not conversation_id or not message_id or not created_at:
+        return
+    entries = _gallery_index_entries_from_message(message)
+    try:
+        sync_gallery_index_entries(
+            table=tbl_gallery_index,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            created_at=created_at,
+            entries=entries,
+        )
+    except Exception:
+        logger.exception(
+            "messaging gallery index sync failed",
+            extra={"conversation_id": conversation_id, "message_id": message_id},
+        )
 
 
 def _encrypted_messages_enabled() -> bool:
@@ -1116,35 +1458,306 @@ def _rank_messages_by_relevance(items: list[dict], query: str) -> list[dict]:
     return [item for item, _ in scored]
 
 
+def _is_once_consumption_policy(policy: Optional[str]) -> bool:
+    return policy in {"view_once", "listen_once"}
+
+
+def _extract_once_media_cohort(req: Optional[Request]) -> str:
+    if req is None:
+        return "default"
+    raw = req.headers.get(ONCE_MEDIA_COHORT_HEADER, "")
+    cohort = re.sub(r"[^a-zA-Z0-9._-]", "", raw.strip().lower())
+    if not cohort:
+        return "default"
+    return cohort[:32]
+
+
+def _media_kind_for_message_item(message_item: dict) -> Optional[str]:
+    kind = str(message_item.get("kind") or "").lower()
+    if kind == "image":
+        return "image"
+    if kind == "video":
+        return "video"
+    if kind == "audio":
+        return "audio"
+    return None
+
+
+def _consumption_partition_key(user_id: str, message_id: str) -> str:
+    return f"{user_id}#{message_id}"
+
+
+def _put_message_consumption_records(
+    *,
+    conversation_id: str,
+    message_id: str,
+    sender_id: str,
+    participants: Sequence[dict],
+    consumption_policy: Optional[str],
+    media_kind: Optional[str],
+    created_at: int,
+) -> None:
+    if not _is_once_consumption_policy(consumption_policy):
+        return
+    if media_kind not in {"image", "video", "audio"}:
+        return
+    state = CONSUMPTION_STATE_PENDING
+    for participant in participants:
+        recipient_id = participant.get("user_id")
+        if not recipient_id or recipient_id == sender_id:
+            continue
+        item = {
+            "conversation_id": conversation_id,
+            "recipient_message": _consumption_partition_key(str(recipient_id), message_id),
+            "recipient_id": str(recipient_id),
+            "message_id": message_id,
+            "sender_id": sender_id,
+            "created_at": int(created_at),
+            "consumption_policy": consumption_policy,
+            "media_kind": media_kind,
+            "consumption_state": state,
+            "consumed_at": 0,
+            "GSI1PK": f"{conversation_id}#{state}",
+            "GSI1SK": f"{int(created_at):010d}#{message_id}#{recipient_id}",
+            "GSI2SK": f"{int(created_at):010d}#{conversation_id}#{message_id}",
+        }
+        tbl_msg_consumption.put_item(Item=item)
+
+
+def _get_message_consumption_for_user(conversation_id: str, message_id: str, viewer_user_id: str) -> Optional[dict]:
+    try:
+        resp = tbl_msg_consumption.get_item(
+            Key={
+                "conversation_id": conversation_id,
+                "recipient_message": _consumption_partition_key(viewer_user_id, message_id),
+            }
+        )
+    except Exception:
+        return None
+    return resp.get("Item")
+
+
+def _merge_consumption_state(message_item: dict, viewer_user_id: str) -> dict:
+    merged = dict(message_item)
+    policy = merged.get("consumption_policy")
+    if not _is_once_consumption_policy(policy):
+        return merged
+    state_item = _get_message_consumption_for_user(
+        str(merged.get("conversation_id") or ""),
+        str(merged.get("message_id") or ""),
+        viewer_user_id,
+    )
+    if state_item:
+        merged["consumption_state"] = state_item.get("consumption_state")
+        merged["consumed_at"] = int(state_item.get("consumed_at", 0) or 0) or None
+        merged["media_kind"] = state_item.get("media_kind") or merged.get("media_kind")
+    return merged
+
+
+def _once_media_error(status_code: int, code: str, message: str, *, retryable: bool = False) -> None:
+    raise HTTPException(status_code=status_code, detail={"code": code, "message": message, "retryable": retryable})
+
+
+def _once_media_grant_secret() -> str:
+    return os.getenv("MESSAGING_ONCE_MEDIA_GRANT_SECRET", "dev-once-media-grant-secret")
+
+
+def _encode_once_media_grant(*, conversation_id: str, message_id: str, recipient_id: str, expires_at: int) -> str:
+    payload = {
+        "cid": conversation_id,
+        "mid": message_id,
+        "rid": recipient_id,
+        "exp": int(expires_at),
+    }
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    body = base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+    sig = hmac.new(_once_media_grant_secret().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).digest()
+    sig_b64 = base64.urlsafe_b64encode(sig).decode("utf-8").rstrip("=")
+    return f"{body}.{sig_b64}"
+
+
+def _decode_once_media_grant(token: str) -> Optional[dict]:
+    if not token or "." not in token:
+        return None
+    body, sig = token.split(".", 1)
+    expected = hmac.new(_once_media_grant_secret().encode("utf-8"), body.encode("utf-8"), hashlib.sha256).digest()
+    expected_b64 = base64.urlsafe_b64encode(expected).decode("utf-8").rstrip("=")
+    if not hmac.compare_digest(sig, expected_b64):
+        return None
+    padded = body + "=" * ((4 - len(body) % 4) % 4)
+    try:
+        data = json.loads(base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def _validate_once_media_grant(*, token: str, conversation_id: str, message_id: str, recipient_id: str) -> None:
+    data = _decode_once_media_grant(token)
+    if not data:
+        _once_media_error(403, "invalid_grant", "Invalid once-media access grant", retryable=False)
+    exp = int(data.get("exp") or 0)
+    if exp <= now_ts():
+        _once_media_error(410, "grant_expired", "Once-media access grant expired", retryable=True)
+    if data.get("cid") != conversation_id or data.get("mid") != message_id or data.get("rid") != recipient_id:
+        _once_media_error(403, "invalid_grant", "Invalid once-media access grant", retryable=False)
+
+
+def _get_once_media_state_or_error(*, conversation_id: str, message_id: str, recipient_id: str, message_item: dict) -> dict:
+    policy = message_item.get("consumption_policy")
+    if not _is_once_consumption_policy(policy):
+        _once_media_error(422, "invalid_consumption_policy", "Message is not configured for once-media access", retryable=False)
+    if str(message_item.get("sender_id") or "") == recipient_id:
+        _once_media_error(403, "recipient_required", "Sender cannot request once-media recipient grants", retryable=False)
+    state = _get_message_consumption_for_user(conversation_id, message_id, recipient_id)
+    if not state:
+        _once_media_error(404, "consumption_state_missing", "Recipient consumption state not found", retryable=False)
+    if state.get("consumption_state") != CONSUMPTION_STATE_PENDING:
+        _once_media_error(409, "already_consumed", "Message has already been consumed", retryable=False)
+    return state
+
+
+def _validate_consume_trigger_or_error(*, message_item: dict, trigger: str, playback_seconds: Optional[float]) -> None:
+    policy = str(message_item.get("consumption_policy") or "")
+    media_kind = str(message_item.get("media_kind") or _media_kind_for_message_item(message_item) or "")
+
+    if media_kind == "image":
+        if trigger != "open":
+            _once_media_error(422, "invalid_consume_trigger", "Image once-media requires trigger 'open'", retryable=False)
+        return
+
+    if media_kind == "video":
+        if policy != "view_once":
+            _once_media_error(422, "invalid_consumption_policy", "Video once-media must use view_once policy", retryable=False)
+        if trigger != "play":
+            _once_media_error(422, "invalid_consume_trigger", "Video once-media requires trigger 'play'", retryable=False)
+        if playback_seconds is None or float(playback_seconds) < ONCE_MEDIA_VIDEO_CONSUME_THRESHOLD_SEC:
+            _once_media_error(
+                409,
+                "consume_threshold_not_met",
+                "Video consume threshold not met yet",
+                retryable=True,
+            )
+        return
+
+    if media_kind == "audio":
+        if policy != "listen_once":
+            _once_media_error(422, "invalid_consumption_policy", "Audio once-media must use listen_once policy", retryable=False)
+        if trigger != "play":
+            _once_media_error(422, "invalid_consume_trigger", "Audio once-media requires trigger 'play'", retryable=False)
+        if playback_seconds is None or float(playback_seconds) < ONCE_MEDIA_AUDIO_CONSUME_THRESHOLD_SEC:
+            _once_media_error(
+                409,
+                "consume_threshold_not_met",
+                "Audio consume threshold not met yet",
+                retryable=True,
+            )
+        return
+
+    _once_media_error(422, "invalid_media_kind_for_policy", "Unsupported once-media kind for consume", retryable=False)
+
+
+def _consume_once_media_state_atomic(
+    *,
+    conversation_id: str,
+    message_id: str,
+    recipient_id: str,
+    consumption_attempt_id: str,
+    consumed_at: int,
+) -> dict:
+    key = {
+        "conversation_id": conversation_id,
+        "recipient_message": _consumption_partition_key(recipient_id, message_id),
+    }
+    try:
+        tbl_msg_consumption.update_item(
+            Key=key,
+            ConditionExpression=(
+                Attr("consumption_state").eq(CONSUMPTION_STATE_PENDING)
+                | Attr("last_consumption_attempt_id").eq(consumption_attempt_id)
+            ),
+            UpdateExpression=(
+                "SET consumption_state = :consumed, "
+                "consumed_at = if_not_exists(consumed_at, :ts), "
+                "last_consumption_attempt_id = :attempt"
+            ),
+            ExpressionAttributeValues={
+                ":consumed": "consumed",
+                ":ts": int(consumed_at),
+                ":attempt": consumption_attempt_id,
+            },
+        )
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+            raise
+        state = _get_message_consumption_for_user(conversation_id, message_id, recipient_id)
+        if not state:
+            _once_media_error(404, "consumption_state_missing", "Recipient consumption state not found", retryable=False)
+        if state.get("last_consumption_attempt_id") == consumption_attempt_id and state.get("consumption_state") == "consumed":
+            return {
+                "consumption_state": "consumed",
+                "consumed_at": int(state.get("consumed_at", 0) or consumed_at),
+                "consumption_attempt_id": consumption_attempt_id,
+                "idempotent_replay": True,
+            }
+        _once_media_error(409, "already_consumed", "Message has already been consumed", retryable=False)
+
+    state = _get_message_consumption_for_user(conversation_id, message_id, recipient_id) or {}
+    return {
+        "consumption_state": "consumed",
+        "consumed_at": int(state.get("consumed_at", 0) or consumed_at),
+        "consumption_attempt_id": consumption_attempt_id,
+        "idempotent_replay": bool(state.get("last_consumption_attempt_id") == consumption_attempt_id),
+    }
+
+
 def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOut:
-    counts, mine = _reaction_summaries(message_item, viewer_user_id)
-    conversation_id = str(message_item.get("conversation_id") or "")
+    merged_item = _merge_consumption_state(message_item, viewer_user_id)
+
+    counts, mine = _reaction_summaries(merged_item, viewer_user_id)
+
+    # Consumption policy projection (main)
+    raw_policy = merged_item.get("consumption_policy")
+    policy = raw_policy if _is_once_consumption_policy(raw_policy) else None
+    media_kind = merged_item.get("media_kind") if policy else None
+    consumption_state = merged_item.get("consumption_state") if policy else None
+    consumed_at = (int(merged_item.get("consumed_at", 0) or 0) or None) if policy else None
+
+    # Sender projection (feature branch)
+    conversation_id = str(merged_item.get("conversation_id") or "")
     projected_sender_id = _project_message_sender_id(
-        message_item=message_item,
+        message_item=merged_item,
         viewer_user_id=viewer_user_id,
         conversation_id=conversation_id,
     )
+
     return MessageOut(
-        conversation_id=message_item["conversation_id"],
-        message_id=message_item["message_id"],
+        conversation_id=merged_item["conversation_id"],
+        message_id=merged_item["message_id"],
         sender_id=projected_sender_id,
-        created_at=int(message_item["created_at"]),
-        kind=message_item["kind"],
-        text=message_item.get("text"),
-        image=message_item.get("image"),
-        file=message_item.get("file"),
-        preview=message_item.get("preview"),
-        reply_to_message_id=message_item.get("reply_to_message_id"),
-        forwarded_from=message_item.get("forwarded_from"),
-        forward_note=message_item.get("forward_note"),
-        edited_at=int(message_item.get("edited_at", 0)) or None,
-        edited_by=message_item.get("edited_by"),
-        revoked_at=int(message_item.get("revoked_at", 0)) or None,
-        revoked_by=message_item.get("revoked_by"),
+        created_at=int(merged_item["created_at"]),
+        kind=merged_item["kind"],
+        text=merged_item.get("text"),
+        image=merged_item.get("image"),
+        file=merged_item.get("file"),
+        preview=merged_item.get("preview"),
+        reply_to_message_id=merged_item.get("reply_to_message_id"),
+        forwarded_from=merged_item.get("forwarded_from"),
+        forward_note=merged_item.get("forward_note"),
+        edited_at=int(merged_item.get("edited_at", 0)) or None,
+        edited_by=merged_item.get("edited_by"),
+        revoked_at=int(merged_item.get("revoked_at", 0)) or None,
+        revoked_by=merged_item.get("revoked_by"),
         reactions_counts=counts if counts else None,
         my_reactions=mine if mine else None,
-        is_encrypted=bool(message_item.get("is_encrypted")),
-        encryption=message_item.get("encryption"),
+        is_encrypted=bool(merged_item.get("is_encrypted")),
+        encryption=merged_item.get("encryption"),
+        consumption_policy=policy,
+        media_kind=media_kind,
+        consumption_state=consumption_state,
+        consumed_at=consumed_at,
     )
 
 
@@ -3063,6 +3676,94 @@ def search_messages_in_conversation(
     return out
 
 
+@router.get("/conversations/{conversation_id}/gallery", response_model=GalleryPageOut)
+def list_conversation_gallery(
+    conversation_id: str,
+    type: Annotated[str, Query(description="Gallery type: image, video, file, link")],
+    cursor: Annotated[Optional[str], Query(description="Pagination cursor")] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    started = time.perf_counter()
+    gallery_type = (type or "").strip().lower() or "unknown"
+    outcome = "error"
+    try:
+        if not _messaging_gallery_enabled():
+            outcome = "disabled"
+            raise HTTPException(status_code=404, detail="Gallery disabled")
+
+        require_participant_active(user_id, conversation_id)
+        if gallery_type not in GALLERY_TYPES:
+            outcome = "invalid_type"
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "gallery_type_invalid",
+                    "message": "Invalid gallery type",
+                    "allowed": sorted(GALLERY_TYPES),
+                },
+            )
+
+        if _messaging_gallery_index_enabled():
+            cursor_sort_key = _decode_gallery_index_cursor(cursor) if cursor else None
+            raw_items, next_sort_key = fetch_gallery_index_page(
+                table=tbl_gallery_index,
+                conversation_id=conversation_id,
+                gallery_type=gallery_type,
+                limit=limit,
+                cursor_sort_key=cursor_sort_key,
+            )
+            items = [
+                GalleryItemOut(
+                    conversation_id=str(row.get("conversation_id") or conversation_id),
+                    type=str(row.get("type") or gallery_type),
+                    message_id=str(row.get("message_id") or ""),
+                    sender_id=str(row.get("sender_id") or ""),
+                    created_at=int(row.get("created_at") or 0),
+                    url=str(row.get("url") or ""),
+                    thumbnail_url=row.get("thumbnail_url"),
+                    title=row.get("title"),
+                    file_name=row.get("file_name"),
+                    content_type=row.get("content_type"),
+                    size=(int(row.get("size")) if row.get("size") is not None else None),
+                )
+                for row in raw_items
+                if _filter_message_visible(row, user_id)
+            ]
+            next_cursor = _encode_gallery_index_cursor(next_sort_key) if next_sort_key else None
+        else:
+            cursor_message_id = _decode_gallery_cursor(cursor) if cursor else None
+
+            items, next_message_id = fetch_gallery_page(
+                table=tbl_msgs,
+                conversation_id=conversation_id,
+                gallery_type=gallery_type,
+                limit=limit,
+                cursor_message_id=cursor_message_id,
+                is_visible=lambda m: _filter_message_visible(m, user_id),
+                map_item=_gallery_item_from_message,
+            )
+            next_cursor = _encode_gallery_cursor(next_message_id) if next_message_id else None
+
+        record_messaging_gallery_cursor_page_depth(
+            gallery_type=gallery_type,
+            depth=0 if cursor is None else 1,
+        )
+
+        outcome = "success"
+        return GalleryPageOut(items=items, next_cursor=next_cursor)
+    except HTTPException as exc:
+        if outcome == "error":
+            outcome = "http_%s" % exc.status_code
+        raise
+    finally:
+        record_messaging_gallery_request(gallery_type=gallery_type, outcome=outcome)
+        record_messaging_gallery_latency(
+            gallery_type=gallery_type,
+            elapsed_seconds=time.perf_counter() - started,
+        )
+
+
 @router.get("/messages/search", response_model=List[MessageOut])
 def search_messages_all_conversations(
     q: Annotated[str, Query(..., min_length=1, max_length=200)],
@@ -3220,6 +3921,7 @@ def send_text_message(
         item["reply_to_message_id"] = inp.reply_to_message_id
 
     tbl_msgs.put_item(Item=item)
+    _sync_gallery_index_message(item)
     _bump_unread_counts(conversation_id, user_id, participants)
     _record_delivery_receipts(conversation_id, mid, user_id, participants)
     if not is_encrypted:
@@ -3332,10 +4034,23 @@ def create_image_message(
         item["ttl"] = ttl
     if inp.reply_to_message_id:
         item["reply_to_message_id"] = inp.reply_to_message_id
+    if inp.consumption_policy != CONSUMPTION_POLICY_NONE:
+        item["consumption_policy"] = inp.consumption_policy
+        item["media_kind"] = "image"
 
     tbl_msgs.put_item(Item=item)
+    _sync_gallery_index_message(item)
     _bump_unread_counts(conversation_id, user_id, participants)
     _record_delivery_receipts(conversation_id, mid, user_id, participants)
+    _put_message_consumption_records(
+        conversation_id=conversation_id,
+        message_id=mid,
+        sender_id=user_id,
+        participants=participants,
+        consumption_policy=inp.consumption_policy,
+        media_kind="image",
+        created_at=ts,
+    )
 
     tbl_convos.update_item(
         Key={"conversation_id": conversation_id},
@@ -3351,6 +4066,9 @@ def create_image_message(
         kind="image",
         image=item["image"],
         reply_to_message_id=inp.reply_to_message_id,
+        consumption_policy=inp.consumption_policy if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
+        media_kind="image" if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
+        consumption_state=CONSUMPTION_STATE_PENDING if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
     )
     message = _apply_message_receipts(message, item, participants)
     audit_event(
@@ -3371,6 +4089,12 @@ def create_image_message(
         conversation_id=conversation_id,
         message_id=mid,
     )
+    if inp.consumption_policy != CONSUMPTION_POLICY_NONE:
+        record_once_media_send(
+            media_kind="image",
+            consumption_policy=inp.consumption_policy,
+            cohort=_extract_once_media_cohort(req),
+        )
     return message
 
 
@@ -3433,10 +4157,23 @@ def create_file_message(
         item["ttl"] = ttl
     if inp.reply_to_message_id:
         item["reply_to_message_id"] = inp.reply_to_message_id
+    if inp.consumption_policy != CONSUMPTION_POLICY_NONE:
+        item["consumption_policy"] = inp.consumption_policy
+        item["media_kind"] = inp.kind if inp.kind in {"audio", "video"} else None
 
     tbl_msgs.put_item(Item=item)
+    _sync_gallery_index_message(item)
     _bump_unread_counts(conversation_id, user_id, resp.get("Items", []))
     _record_delivery_receipts(conversation_id, mid, user_id, resp.get("Items", []))
+    _put_message_consumption_records(
+        conversation_id=conversation_id,
+        message_id=mid,
+        sender_id=user_id,
+        participants=resp.get("Items", []),
+        consumption_policy=inp.consumption_policy,
+        media_kind=item.get("media_kind"),
+        created_at=ts,
+    )
     if item.get("search_text"):
         index_message_search(conversation_id, mid, user_id, ts, item["search_text"], kind=inp.kind)
 
@@ -3460,6 +4197,9 @@ def create_file_message(
         file=item["file"],
         preview=preview,
         reply_to_message_id=inp.reply_to_message_id,
+        consumption_policy=inp.consumption_policy if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
+        media_kind=item.get("media_kind") if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
+        consumption_state=CONSUMPTION_STATE_PENDING if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
     )
     message = _apply_message_receipts(message, item, resp.get("Items", []))
     audit_event(
@@ -3473,7 +4213,146 @@ def create_file_message(
         reply_to_message_id=inp.reply_to_message_id,
     )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    if inp.consumption_policy != CONSUMPTION_POLICY_NONE and item.get("media_kind"):
+        record_once_media_send(
+            media_kind=str(item.get("media_kind") or "unknown"),
+            consumption_policy=inp.consumption_policy,
+            cohort=_extract_once_media_cohort(req),
+        )
     return message
+
+
+@router.post("/conversations/{conversation_id}/messages/{message_id}/attachment/grant", response_model=AttachmentGrantOut)
+def create_once_media_attachment_grant(
+    conversation_id: str,
+    message_id: str,
+    request: Request,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    started = time.perf_counter()
+    cohort = _extract_once_media_cohort(request)
+    media_kind = "unknown"
+    require_participant_active(user_id, conversation_id)
+    try:
+        msg = _get_message_or_404(conversation_id, message_id)
+        media_kind = str(msg.get("media_kind") or "unknown")
+        _ = _get_once_media_state_or_error(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            recipient_id=user_id,
+            message_item=msg,
+        )
+
+        expires_at = now_ts() + max(1, ONCE_MEDIA_GRANT_TTL_SEC)
+        grant_token = _encode_once_media_grant(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            recipient_id=user_id,
+            expires_at=expires_at,
+        )
+
+        audit_event(
+            "messaging_attachment_grant_issued",
+            user_id,
+            request,
+            outcome="success",
+            conversation_id=conversation_id,
+            message_id=message_id,
+            expires_at=expires_at,
+        )
+        record_once_media_grant(media_kind=media_kind, outcome="success", cohort=cohort)
+        record_once_media_grant_latency(
+            media_kind=media_kind,
+            outcome="success",
+            elapsed_seconds=time.perf_counter() - started,
+            cohort=cohort,
+        )
+        return AttachmentGrantOut(
+            grant_token=grant_token,
+            expires_at=expires_at,
+            conversation_id=conversation_id,
+            message_id=message_id,
+        )
+    except HTTPException as exc:
+        reason = str((exc.detail or {}).get("code") or "http_error") if isinstance(exc.detail, dict) else "http_error"
+        record_once_media_grant(media_kind=media_kind, outcome="error", reason=reason, cohort=cohort)
+        record_once_media_grant_latency(
+            media_kind=media_kind,
+            outcome="error",
+            elapsed_seconds=time.perf_counter() - started,
+            cohort=cohort,
+        )
+        raise
+
+
+@router.post("/conversations/{conversation_id}/messages/{message_id}/attachment/consume", response_model=ConsumeAttachmentOut)
+def consume_once_media_attachment(
+    conversation_id: str,
+    message_id: str,
+    inp: ConsumeAttachmentIn,
+    request: Request,
+    grant_token: str = Query(..., min_length=16),
+    user_id: str = Depends(get_messaging_user_id),
+):
+    cohort = _extract_once_media_cohort(request)
+    media_kind = "unknown"
+    require_participant_active(user_id, conversation_id)
+    try:
+        msg = _get_message_or_404(conversation_id, message_id)
+        media_kind = str(msg.get("media_kind") or "unknown")
+        _ = _get_once_media_state_or_error(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            recipient_id=user_id,
+            message_item=msg,
+        )
+        _validate_once_media_grant(
+            token=grant_token,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            recipient_id=user_id,
+        )
+        _validate_consume_trigger_or_error(
+            message_item=msg,
+            trigger=inp.trigger,
+            playback_seconds=inp.playback_seconds,
+        )
+
+        result = _consume_once_media_state_atomic(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            recipient_id=user_id,
+            consumption_attempt_id=inp.consumption_attempt_id,
+            consumed_at=now_ts(),
+        )
+
+        audit_event(
+            "messaging_attachment_consumed",
+            user_id,
+            request,
+            outcome="success",
+            conversation_id=conversation_id,
+            message_id=message_id,
+            consumption_attempt_id=inp.consumption_attempt_id,
+            consumed_at=result["consumed_at"],
+            idempotent_replay=result.get("idempotent_replay", False),
+        )
+        consume_reason = "idempotent_replay" if result.get("idempotent_replay") else "none"
+        record_once_media_consume(media_kind=media_kind, outcome="success", reason=consume_reason, cohort=cohort)
+        return ConsumeAttachmentOut(
+            ok=True,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            consumption_state="consumed",
+            consumed_at=int(result["consumed_at"]),
+            consumption_attempt_id=inp.consumption_attempt_id,
+        )
+    except HTTPException as exc:
+        reason = str((exc.detail or {}).get("code") or "http_error") if isinstance(exc.detail, dict) else "http_error"
+        record_once_media_consume(media_kind=media_kind, outcome="error", reason=reason, cohort=cohort)
+        if reason == "already_consumed":
+            record_once_media_conflict(media_kind=media_kind, cohort=cohort)
+        raise
 
 
 @router.get("/conversations/{conversation_id}/messages/{message_id}/attachment")
@@ -3481,12 +4360,27 @@ def download_message_attachment(
     conversation_id: str,
     message_id: str,
     request: Request,
+    grant_token: Optional[str] = Query(default=None),
     x_request_id: Optional[str] = Header(default=None, alias="X-Request-Id"),
     user_id: str = Depends(get_messaging_user_id),
 ):
     require_participant_active(user_id, conversation_id)
     msg = _get_message_or_404(conversation_id, message_id)
     kind = str(msg.get("kind") or "")
+
+    if _is_once_consumption_policy(msg.get("consumption_policy")):
+        _ = _get_once_media_state_or_error(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            recipient_id=user_id,
+            message_item=msg,
+        )
+        _validate_once_media_grant(
+            token=grant_token or "",
+            conversation_id=conversation_id,
+            message_id=message_id,
+            recipient_id=user_id,
+        )
 
     if kind == "image":
         image = msg.get("image") or {}
@@ -3541,10 +4435,14 @@ def download_message_attachment(
                 idempotency_operation_id=x_request_id,
             )
 
+    once_media = _is_once_consumption_policy(msg.get("consumption_policy"))
     headers = {
         "Content-Disposition": f'inline; filename="{filename}"',
-        "Cache-Control": "private, max-age=60",
+        "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate" if once_media else "private, max-age=60",
     }
+    if once_media:
+        headers["Pragma"] = "no-cache"
+        headers["Expires"] = "0"
     if content_len > 0:
         headers["Content-Length"] = str(content_len)
 
@@ -3625,6 +4523,8 @@ def delete_message_for_me(
         UpdateExpression="ADD deleted_for :u",
         ExpressionAttributeValues={":u": {user_id}},
     )
+    msg = _get_message_or_404(conversation_id, message_id)
+    _sync_gallery_index_message(msg)
     audit_event(
         "messaging_message_deleted",
         user_id,
@@ -3655,6 +4555,11 @@ def revoke_message_for_all(
     )
     if _is_searchable_kind(msg.get("kind")):
         remove_message_search(conversation_id, message_id, _message_search_text(msg))
+
+    revoked_item = dict(msg)
+    revoked_item["revoked_at"] = ts
+    revoked_item["revoked_by"] = user_id
+    _sync_gallery_index_message(revoked_item)
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,
@@ -3811,6 +4716,7 @@ def edit_message(
     index_message_search(conversation_id, message_id, user_id, int(msg.get("created_at", ts)), new_text)
 
     item = _get_message_or_404(conversation_id, message_id)
+    _sync_gallery_index_message(item)
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,
@@ -3953,6 +4859,7 @@ def forward_message(
         preview = f"[fwd {kind}]"
 
     tbl_msgs.put_item(Item=item)
+    _sync_gallery_index_message(item)
     if _is_searchable_kind(kind) and not bool(item.get("is_encrypted")):
         index_message_search(
             target_conversation_id,
@@ -4272,7 +5179,10 @@ async def events_stream(
 @router.get("/config", response_model=MessagingConfigOut)
 def messaging_config(user_id: str = Depends(get_messaging_user_id)):
     _ = user_id
-    return MessagingConfigOut(messaging_encrypted_messages_enabled=_encrypted_messages_enabled())
+    return MessagingConfigOut(
+        messaging_encrypted_messages_enabled=_encrypted_messages_enabled(),
+        messaging_gallery_enabled=_messaging_gallery_enabled(),
+    )
 
 
 @router.get("/healthz")

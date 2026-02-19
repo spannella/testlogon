@@ -1,0 +1,42 @@
+{
+  "release": "media-preview-v1",
+  "feature_flag_strategy": {
+    "validated": true,
+    "primary_flag": "FILEMGR_MEDIA_PREVIEWS_V1",
+    "artifact_flags": [
+      "FILEMGR_VIDEO_HOVER_CLIP_ENABLED",
+      "FILEMGR_AUDIO_WAVEFORM_ENABLED"
+    ],
+    "evidence": "staged rollout verified in non-prod and production dry-run"
+  },
+  "derivative_generation": {
+    "success_rate_threshold": 0.98,
+    "success_rate_observed": 0.992,
+    "window": "7d",
+    "source_metric": "filemgr_preview_jobs_total"
+  },
+  "slo": {
+    "queue_slo_met": true,
+    "queue_slo": "p95 queue depth < 500 for 24h",
+    "latency_slo_met": true,
+    "latency_slo": "p95 filemgr_preview_job_duration_seconds < 8s"
+  },
+  "security_review": {
+    "sign_off": true,
+    "approver": "platform-security",
+    "ticket": "SEC-MP-050"
+  },
+  "test_suites": {
+    "all_green": true,
+    "required": [
+      "pytest -q tests/test_filemanager_service.py tests/test_filemanager_routes.py",
+      "cd frontend && npm test -- --run src/pages/files/__tests__/FileTable.mediaPreview.test.tsx"
+    ]
+  },
+  "release_gate": {
+    "required_for_release": true,
+    "last_reviewed": "2026-02-19",
+    "owner": "file-manager",
+    "notes": "Rollout blocked automatically when this checklist fails validation."
+  }
+}

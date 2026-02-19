@@ -61,6 +61,8 @@ from app.metrics import (
     record_filemgr_preview_latency,
     record_filemgr_preview_bytes,
     record_filemgr_preview_fallback,
+    record_filemgr_preview_hover_play_start,
+    record_filemgr_preview_hover_play_failure,
 )
 from app.services.purchase_history import record_receipt_download
 from app.services.sessions import require_ui_session
@@ -211,9 +213,9 @@ class MoveCheckpointIn(BaseModel):
 
 
 class FileCryptoTelemetryIn(BaseModel):
-    event: str = Field(..., pattern="^(decrypt_failure|remembered_password_used)$")
+    event: str = Field(..., pattern="^(decrypt_failure|remembered_password_used|hover_play_start|hover_play_failure)$")
     path: Optional[str] = Field(default=None)
-    reason: Optional[str] = Field(default=None, pattern="^(wrong_password|corrupted_metadata|crypto_error)?$")
+    reason: Optional[str] = Field(default=None, pattern="^(wrong_password|corrupted_metadata|crypto_error|playback_error|autoplay_blocked|unsupported_capability|unknown)?$")
     remembered_password_used: bool = Field(default=False)
 
 
@@ -1422,6 +1424,17 @@ def file_crypto_client_telemetry(inp: FileCryptoTelemetryIn, req: Request = None
             remembered_password_used=inp.remembered_password_used,
         )
         record_filemgr_encryption_event("decrypt_failure", encrypted=True, reason=reason)
+        return {"ok": True}
+
+    if inp.event == "hover_play_start":
+        audit_event("filemgr_preview_hover_play_start", user, req, outcome="success", path=inp.path)
+        record_filemgr_preview_hover_play_start()
+        return {"ok": True}
+
+    if inp.event == "hover_play_failure":
+        reason = inp.reason or "unknown"
+        audit_event("filemgr_preview_hover_play_failure", user, req, outcome="failure", reason=reason, path=inp.path)
+        record_filemgr_preview_hover_play_failure(reason=reason)
         return {"ok": True}
 
     audit_event(
