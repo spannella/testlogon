@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from unittest.mock import MagicMock
 
+import pytest
+
 from starlette.requests import Request
 from fastapi import HTTPException
 
@@ -15,6 +17,8 @@ if str(ROOT) not in sys.path:
 
 sys.modules.setdefault("stripe", MagicMock())
 
+from app.auth.deps import AuthenticatedUser
+from app.auth.roles import AdminProfile, AdminProfileType, AdminScope, Role
 from app.core.settings import S
 from app.core.tables import T
 from app.routers import billing as billing_router
@@ -110,6 +114,27 @@ def build_request(
 
     return Request(scope, receive)
 
+
+
+
+def _user_actor(sub: str = "user-123") -> AuthenticatedUser:
+    return AuthenticatedUser(sub=sub, role=Role.USER)
+
+
+def _billing_admin_actor(sub: str = "admin-1") -> AuthenticatedUser:
+    return AuthenticatedUser(
+        sub=sub,
+        role=Role.ADMIN,
+        admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(AdminScope.BILLING_SUPPORT,)),
+    )
+
+
+def _scoped_admin_actor(sub: str, scope: AdminScope) -> AuthenticatedUser:
+    return AuthenticatedUser(
+        sub=sub,
+        role=Role.ADMIN,
+        admin_profile=AdminProfile(type=AdminProfileType.SCOPED, scopes=(scope,)),
+    )
 
 def setup_table(fake_table: FakeTable) -> None:
     object.__setattr__(T, "billing", fake_table)
@@ -294,13 +319,141 @@ def test_billing_payments_and_subscriptions(monkeypatch) -> None:
     assert subs["items"][0]["id"] == "sub_123"
 
 
+def test_billing_read_surfaces_allow_admin_target_override(monkeypatch) -> None:
+    fake_table = FakeTable()
+    setup_table(fake_table)
+    setup_stripe_mocks(monkeypatch)
+    fake_table.put_item(Item={"pk": "USER#target-1", "sk": "BILLING", "autopay_enabled": True, "currency": "usd", "default_payment_method_id": None})
+    fake_table.put_item(Item={"pk": "USER#target-1", "sk": "BALANCE", "owed_settled_cents": 42, "payments_settled_cents": 0})
+    fake_table.put_item(Item={"pk": "USER#target-1", "sk": "LEDGER#10#A", "ts": 10})
+    fake_table.put_item(Item={"pk": "USER#target-1", "sk": "PAY#pi_target", "payment_intent_id": "pi_target", "created_at": 1})
+
+    admin_ctx = {"user_sub": "admin-1", "role": "admin"}
+    settings = billing_router.get_settings(ctx=admin_ctx, actor=_billing_admin_actor(), user_sub="target-1")
+    assert settings["autopay_enabled"] is True
+
+    balance = billing_router.get_balance(ctx=admin_ctx, actor=_billing_admin_actor(), user_sub="target-1")
+    assert balance["owed_settled_cents"] == 42
+
+    ledger = billing_router.list_ledger(ctx=admin_ctx, actor=_billing_admin_actor(), user_sub="target-1")
+    assert ledger["items"][0]["sk"] == "LEDGER#10#A"
+
+    payments = billing_router.list_payments(ctx=admin_ctx, actor=_billing_admin_actor(), user_sub="target-1")
+    assert payments["items"][0]["payment_intent_id"] == "pi_target"
+
+    subs = billing_router.list_subscriptions(ctx=admin_ctx, actor=_billing_admin_actor(), user_sub="target-1")
+    assert subs["items"][0]["id"] == "sub_123"
+
+
+def test_billing_read_surfaces_keep_user_scoped(monkeypatch) -> None:
+    fake_table = FakeTable()
+    setup_table(fake_table)
+    setup_stripe_mocks(monkeypatch)
+
+    user_ctx = {"user_sub": "user-123", "role": "user"}
+
+    try:
+        billing_router.get_balance(ctx=user_ctx, actor=_user_actor(), user_sub="target-1")
+    except HTTPException as exc:
+        assert exc.status_code == 403
+        assert exc.detail["code"] == "role_required"
+    else:
+        raise AssertionError("Expected HTTPException when normal user requests another user's billing")
+
+
 def test_billing_dev_add_charge(monkeypatch) -> None:
     fake_table = FakeTable()
     setup_table(fake_table)
     setup_stripe_mocks(monkeypatch)
 
-    resp = billing_router.dev_add_charge(body=AddChargeReq(amount_cents=500, state="pending", reason="usage"), ctx={"user_sub": "user-123"})
+    resp = billing_router.dev_add_charge(body=AddChargeReq(amount_cents=500, state="pending", reason="usage"), ctx={"user_sub": "user-123"}, actor=_billing_admin_actor("user-123"))
     assert resp["ok"] is True
+
+
+def test_admin_can_write_billing_for_target_with_audit_tags(monkeypatch) -> None:
+    fake_table = FakeTable()
+    setup_table(fake_table)
+    setup_stripe_mocks(monkeypatch)
+    fake_table.put_item(Item={"pk": "USER#target-1", "sk": "PM#pm_123", "payment_method_id": "pm_123", "priority": 0})
+
+    audit_calls: list[dict[str, Any]] = []
+
+    def _capture_audit(_event: str, _user_sub: str, _request=None, **fields: Any) -> None:
+        audit_calls.append(fields)
+
+    monkeypatch.setattr("app.routers.billing.audit_event", _capture_audit)
+
+    resp = billing_router.set_default(
+        body=SetDefaultReq(payment_method_id="pm_123"),
+        req=build_request(),
+        ctx={"user_sub": "admin-1", "role": "admin"},
+        actor=_billing_admin_actor(),
+        user_sub="target-1",
+    )
+    assert resp["ok"] is True
+    assert fake_table.items[("USER#target-1", "BILLING")]["default_payment_method_id"] == "pm_123"
+
+    assert audit_calls
+    fields = audit_calls[-1]
+    assert fields["viewed_as_admin"] is True
+    assert fields["viewed-as-admin"] is True
+    assert fields["actor_sub"] == "admin-1"
+    assert fields["effective_sub"] == "target-1"
+
+
+def test_non_privileged_user_cannot_write_other_users_billing(monkeypatch) -> None:
+    fake_table = FakeTable()
+    setup_table(fake_table)
+    setup_stripe_mocks(monkeypatch)
+
+    try:
+        billing_router.pay_balance(
+            body=PayBalanceReq(),
+            req=build_request(),
+            ctx={"user_sub": "user-123", "role": "user"},
+            actor=_user_actor(),
+            user_sub="target-1",
+        )
+    except HTTPException as exc:
+        assert exc.status_code == 403
+        assert exc.detail["code"] == "role_required"
+    else:
+        raise AssertionError("Expected HTTPException for unauthorized cross-user billing write")
+
+
+def test_admin_checkout_session_and_dev_add_charge_targeted(monkeypatch) -> None:
+    fake_table = FakeTable()
+    setup_table(fake_table)
+    setup_stripe_mocks(monkeypatch)
+
+    audit_calls: list[dict[str, Any]] = []
+
+    def _capture_audit(_event: str, _user_sub: str, _request=None, **fields: Any) -> None:
+        audit_calls.append(fields)
+
+    monkeypatch.setattr("app.routers.billing.audit_event", _capture_audit)
+
+    req = build_request()
+    data = billing_router.create_checkout_session(
+        body=BillingCheckoutReq(amount_cents=1200),
+        req=req,
+        ctx={"user_sub": "admin-1", "role": "admin"},
+        actor=_billing_admin_actor(),
+        user_sub="target-1",
+    )
+    assert data["session_id"] == "cs_123"
+
+    resp = billing_router.dev_add_charge(
+        body=AddChargeReq(amount_cents=500, state="pending", reason="ops"),
+        req=req,
+        ctx={"user_sub": "admin-1", "role": "admin"},
+        actor=_billing_admin_actor(),
+        user_sub="target-1",
+    )
+    assert resp["ok"] is True
+
+    assert any(fields.get("viewed_as_admin") for fields in audit_calls)
+    assert fake_table.items[("USER#target-1", "BALANCE")]["owed_pending_cents"] == 500
 
 
 def test_billing_webhook_handlers(monkeypatch) -> None:
@@ -486,3 +639,20 @@ def test_billing_webhook_allows_missing_signature(monkeypatch) -> None:
     req = build_request(body=b"{}")
     resp = run_async(billing_router.stripe_webhook(req))
     assert resp["received"] is True
+
+
+def test_billing_scoped_admin_denied_for_cross_user_with_non_billing_scope(monkeypatch) -> None:
+    fake_table = FakeTable()
+    setup_table(fake_table)
+    setup_stripe_mocks(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc:
+        billing_router.get_balance(
+            ctx={"user_sub": "admin-auth", "role": "admin"},
+            actor=_scoped_admin_actor("admin-auth", AdminScope.AUTH_SUPPORT),
+            user_sub="target-1",
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail["code"] == "role_required_scope"
+    assert exc.value.detail["required_scope"] == "billing_support"

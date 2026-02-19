@@ -155,6 +155,7 @@ pytest -q
 
 ### Requirements
 
+- **Security release gate**: run `python scripts/check_security_release_gate.py` and require success before release promotion.
 - **AWS resources**: DynamoDB tables for sessions, MFA, recovery, API keys, alerts, and push devices.
 - **Credentials**: Runtime AWS credentials (IAM role, access keys, or environment-based auth) with read/write access to the tables and optional KMS/SES permissions.
 - **Secrets**: `API_KEY_PEPPER` and `WS_TOKEN_SECRET` should be set as secrets in your deployment environment.

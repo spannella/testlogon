@@ -1,8 +1,15 @@
 import { useState } from "react";
-import { MoreHorizontal, Forward, Trash2 } from "lucide-react";
+import { MoreHorizontal, Forward, Trash2, Lock, Loader2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
+import {
+  decryptMessage,
+  isMessageCryptoSupported,
+  MessageCryptoError,
+  type MessageEncryptionEnvelope,
+} from "@/lib/messageEncryption";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -10,6 +17,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { deleteMessage } from "@/api/endpoints/messaging";
 import type { Message } from "@/api/types";
@@ -28,6 +43,11 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
   const queryClient = useQueryClient();
   const [forwardOpen, setForwardOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [decryptOpen, setDecryptOpen] = useState(false);
+  const [decrypting, setDecrypting] = useState(false);
+  const [decryptPassword, setDecryptPassword] = useState("");
+  const [decryptError, setDecryptError] = useState<string | null>(null);
+  const [decryptedText, setDecryptedText] = useState<string | null>(null);
 
   const deleteMut = useMutation({
     mutationFn: () => deleteMessage(conversationId, message.message_id),
@@ -55,6 +75,35 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
   }
 
   const isFileKind = message.kind === "file" || message.kind === "audio" || message.kind === "video";
+
+  const handleDecrypt = async () => {
+    if (!message.encryption || !decryptPassword || decrypting) return;
+
+    setDecryptError(null);
+    setDecrypting(true);
+    try {
+      const decrypted = await decryptMessage(message.encryption as MessageEncryptionEnvelope, decryptPassword);
+      setDecryptedText(decrypted);
+      setDecryptOpen(false);
+      setDecryptPassword("");
+      setDecryptError(null);
+    } catch (err) {
+      if (err instanceof MessageCryptoError && err.code === "wrong_password") {
+        setDecryptError("Wrong password. Please try again.");
+      } else if (err instanceof MessageCryptoError && err.code === "tampered_payload") {
+        setDecryptError("This encrypted message appears corrupted or tampered.");
+      } else {
+        setDecryptError("Unable to decrypt message. Please retry.");
+      }
+    } finally {
+      setDecrypting(false);
+    }
+  };
+
+  const encryptedEnabled = isMessagingEncryptionEnabled();
+  const encryptedSupported = encryptedEnabled && isMessageCryptoSupported();
+  const hasDecryptableEnvelope = Boolean(message.encryption);
+  const showUnsupportedEncryptedState = message.is_encrypted && (!encryptedSupported || !hasDecryptableEnvelope);
 
   return (
     <>
@@ -94,19 +143,57 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
             </DropdownMenu>
           </div>
 
-          {/* Sender name (group chats only) */}
           {showSender && !isOwn && (
             <p className="mb-0.5 text-xs font-semibold text-primary">
               {message.sender_id}
             </p>
           )}
 
-          {/* Text content */}
-          {message.text && (
+          {/* Text / encrypted placeholder */}
+          {message.is_encrypted ? (
+            <div className="space-y-1">
+              <span className="inline-flex items-center gap-1 rounded-full bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
+                <Lock className="h-3 w-3" /> Encrypted
+              </span>
+              {decryptedText ? (
+                <p className="whitespace-pre-wrap break-words text-sm">{decryptedText}</p>
+              ) : (
+                <>
+                  <p className="whitespace-pre-wrap break-words text-sm italic">
+                    {showUnsupportedEncryptedState
+                      ? "Encrypted message unsupported"
+                      : "Encrypted message"}
+                  </p>
+                  {showUnsupportedEncryptedState ? (
+                    <p className="text-xs text-muted-foreground">
+                      Update to a client with encrypted messaging support and verify your environment enables it.
+                    </p>
+                  ) : (
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">
+                        To change content, delete and resend this encrypted message.
+                      </p>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        className="h-7 px-2 text-xs"
+                        onClick={() => {
+                          setDecryptOpen(true);
+                          setDecryptError(null);
+                        }}
+                      >
+                        Decrypt message
+                      </Button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          ) : message.text ? (
             <p className="whitespace-pre-wrap break-words text-sm">{message.text}</p>
-          )}
+          ) : null}
 
-          {/* Image content */}
           {message.kind === "image" && typeof message.image?.url === "string" && (
             <img
               src={message.image.url}
@@ -115,7 +202,6 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
             />
           )}
 
-          {/* File / audio / video attachment */}
           {isFileKind && typeof message.file?.name === "string" && (
             <FileMessageCard
               fileName={message.file.name}
@@ -125,7 +211,6 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
             />
           )}
 
-          {/* Reactions */}
           {message.reactions_counts && Object.keys(message.reactions_counts).length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1">
               {Object.entries(message.reactions_counts).map(([emoji, count]) => (
@@ -139,7 +224,6 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
             </div>
           )}
 
-          {/* Timestamp + edited */}
           <div className={cn(
             "mt-1 flex items-center gap-1 text-[10px]",
             isOwn ? "text-primary-foreground/60 justify-end" : "text-muted-foreground",
@@ -150,21 +234,18 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
         </div>
       </div>
 
-      {/* Read receipts — only on own messages */}
       <ReadReceipts
         conversationId={conversationId}
         messageId={message.message_id}
         isOwn={isOwn}
       />
 
-      {/* Auto-mark viewed for others' messages */}
       <ViewTracker
         conversationId={conversationId}
         messageId={message.message_id}
         isOwn={isOwn}
       />
 
-      {/* Forward dialog */}
       <ForwardDialog
         open={forwardOpen}
         onOpenChange={setForwardOpen}
@@ -172,7 +253,6 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
         sourceConversationId={conversationId}
       />
 
-      {/* Delete confirm */}
       <ConfirmDialog
         open={deleteConfirmOpen}
         onOpenChange={setDeleteConfirmOpen}
@@ -183,6 +263,54 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
         onConfirm={() => deleteMut.mutate()}
         loading={deleteMut.isPending}
       />
+
+      <Dialog
+        open={decryptOpen}
+        onOpenChange={(open) => {
+          setDecryptOpen(open);
+          if (!open) {
+            setDecryptPassword("");
+            setDecryptError(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Decrypt message</DialogTitle>
+            <DialogDescription>
+              Enter the shared password to decrypt this message locally on your device.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <input
+              type="password"
+              value={decryptPassword}
+              onChange={(e) => setDecryptPassword(e.target.value)}
+              placeholder="Password"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              autoComplete="off"
+            />
+            {decryptError && <p className="text-xs text-red-600">{decryptError}</p>}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDecryptOpen(false)}
+              disabled={decrypting}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleDecrypt()}
+              disabled={decrypting || !decryptPassword}
+            >
+              {decrypting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Decrypt"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

@@ -85,6 +85,8 @@ export function adaptMessage(raw: RawMessage): Message {
     read_by_user_ids: raw.read_by_user_ids,
     reactions_counts: raw.reactions_counts,
     my_reactions: raw.my_reactions,
+    is_encrypted: raw.is_encrypted,
+    encryption: raw.encryption,
     edited: Boolean(raw.edited_at),
     revoked: Boolean(raw.revoked_at),
   };

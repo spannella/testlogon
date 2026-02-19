@@ -598,6 +598,16 @@ export interface MessageImage {
   url?: string;
 }
 
+export interface MessageEncryptionEnvelope {
+  version: 1;
+  alg: "AES-256-GCM";
+  kdf: "PBKDF2-SHA256";
+  iterations: number;
+  salt_b64: string;
+  iv_b64: string;
+  ciphertext_b64: string;
+}
+
 export interface MessageFile {
   path?: string;
   name?: string;
@@ -631,6 +641,8 @@ export interface Message {
   read_by_user_ids?: string[];
   reactions_counts?: Record<string, number>;
   my_reactions?: string[];
+  is_encrypted?: boolean;
+  encryption?: MessageEncryptionEnvelope;
   // UI convenience fields (derived client-side)
   edited?: boolean;
   revoked?: boolean;
@@ -645,7 +657,8 @@ export interface LinkPreview {
 }
 
 export interface SendTextMessageReq {
-  text: string;
+  text?: string;
+  encryption?: MessageEncryptionEnvelope;
   reply_to_message_id?: string;
   preview?: LinkPreview;
 }
@@ -702,6 +715,20 @@ export interface UpdateRoleReq {
 
 // ─── Files ───────────────────────────────────────────────────────
 
+export interface FileEncryptionMetadata {
+  version?: number;
+  alg?: string;
+  kdf?: string;
+  iterations?: number;
+  salt_b64?: string;
+  iv_b64?: string;
+  orig_name?: string;
+  orig_size?: number;
+  mime?: string;
+}
+
+export type PreviewKind = "image" | "pdf" | "word" | "csv" | "excel" | "parquet" | "text" | "none";
+
 export interface FileEntry {
   name: string;
   path: string;
@@ -710,6 +737,20 @@ export interface FileEntry {
   content_type?: string;
   updated_at?: string;
   created_at?: string;
+  is_encrypted?: boolean;
+  enc_metadata?: FileEncryptionMetadata | null;
+  enc_version?: number;
+  enc_alg?: string;
+  enc_kdf?: string;
+  enc_kdf_iterations?: number;
+  enc_salt_b64?: string;
+  enc_iv_b64?: string;
+  enc_orig_name?: string;
+  enc_orig_size?: number;
+  enc_orig_content_type?: string;
+  preview_kind?: PreviewKind;
+  preview_supported?: boolean;
+  preview_reason?: string | null;
 }
 
 export interface FileListResp {
@@ -725,12 +766,86 @@ export interface ShareFileReq {
   expires_at?: number;
 }
 
+
+export interface UsageMetricSummary {
+  used_bytes: number;
+  limit_bytes: number;
+  percent_used: number;
+}
+
+export interface UsageUnitMetricSummary {
+  used_count: number;
+  limit_count: number;
+  percent_used: number;
+}
+
+export interface UsageTransferSplitSummary {
+  upload_bytes_total: number;
+  download_bytes_total: number;
+}
+
+export interface UsageSummaryResp {
+  period_id: string;
+  upload: UsageMetricSummary;
+  download: UsageMetricSummary;
+  storage: UsageMetricSummary;
+  message_send?: UsageUnitMetricSummary;
+  post_publish?: UsageUnitMetricSummary;
+  messaging_transfer?: UsageTransferSplitSummary;
+  newsfeed_transfer?: UsageTransferSplitSummary;
+  messaging_upload_bytes_total?: number;
+  messaging_download_bytes_total?: number;
+  newsfeed_upload_bytes_total?: number;
+  newsfeed_download_bytes_total?: number;
+  updated_at?: string;
+}
+
+export interface UsageDailyItem {
+  day_utc: string;
+  upload_bytes_total: number;
+  download_bytes_total: number;
+  storage_bytes_end_of_day: number;
+}
+
+export interface UsageDailyResp {
+  from: string;
+  to: string;
+  items: UsageDailyItem[];
+}
+
+export interface UsageStorageFileItem {
+  path: string;
+  size: number;
+}
+
+export interface UsageStorageResp {
+  storage_bytes_current: number;
+  top_files: UsageStorageFileItem[];
+}
 export interface SharedItem {
   owner: string;
   path: string;
   shared_at: string;
   permission: "read" | "write";
   expires_at?: string | null;
+  name?: string;
+  type?: "file" | "folder";
+  size?: number;
+  content_type?: string;
+  is_encrypted?: boolean;
+  enc_metadata?: FileEncryptionMetadata | null;
+  enc_version?: number;
+  enc_alg?: string;
+  enc_kdf?: string;
+  enc_kdf_iterations?: number;
+  enc_salt_b64?: string;
+  enc_iv_b64?: string;
+  enc_orig_name?: string;
+  enc_orig_size?: number;
+  enc_orig_content_type?: string;
+  preview_kind?: PreviewKind;
+  preview_supported?: boolean;
+  preview_reason?: string | null;
 }
 
 // ─── Calendar ────────────────────────────────────────────────────
@@ -1221,4 +1336,9 @@ export interface StatusResp {
 export interface ChallengeResp {
   challenge_id: string;
   sent_to?: string[];
+}
+
+
+export interface MessagingConfig {
+  messaging_encrypted_messages_enabled: boolean;
 }

@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/authStore";
+import { useImpersonationStore } from "@/stores/impersonationStore";
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
@@ -17,7 +18,35 @@ function getCookie(name: string): string | null {
   return match ? decodeURIComponent(match[1]!) : null;
 }
 
-function normalizeErrorDetail(detail: unknown, fallback: string): string {
+function humanizeScope(scope: unknown): string {
+  if (typeof scope !== "string" || !scope.trim()) return "required scope";
+  if (scope === "auth_support") return "authentication support";
+  if (scope === "billing_support") return "billing support";
+  if (scope === "content_moderation") return "content moderation";
+  return scope.replace(/_/g, " ");
+}
+
+function mapAuthorizationError(detail: Record<string, unknown>): string | null {
+  const code = typeof detail.code === "string" ? detail.code : null;
+  if (!code) return null;
+
+  if (code === "role_required_scope") {
+    const scope = humanizeScope(detail.required_scope);
+    return `You don't currently have ${scope} permission for this action. Request temporary elevation or ask a general admin/root operator to perform it.`;
+  }
+
+  if (code === "role_required_admin_profile_type") {
+    return "This action requires general admin access. Request temporary elevation or ask a general admin/root operator to perform it.";
+  }
+
+  if (code === "role_required") {
+    return "You don't currently have permission for this action. Request temporary elevation or contact a general admin/root operator.";
+  }
+
+  return null;
+}
+
+export function normalizeErrorDetail(detail: unknown, fallback: string): string {
   if (typeof detail === "string") {
     return detail;
   }
@@ -38,6 +67,12 @@ function normalizeErrorDetail(detail: unknown, fallback: string): string {
       .filter(Boolean);
     if (messages.length > 0) {
       return messages.join(", ");
+    }
+  }
+  if (detail && typeof detail === "object") {
+    const mapped = mapAuthorizationError(detail as Record<string, unknown>);
+    if (mapped) {
+      return mapped;
     }
   }
   if (detail && typeof detail === "object" && "msg" in detail) {
@@ -107,6 +142,11 @@ export async function api<T>(
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
 
+  const imp = useImpersonationStore.getState();
+  if (imp.isActive() && imp.token && !headers.has("X-IMPERSONATION-TOKEN")) {
+    headers.set("X-IMPERSONATION-TOKEN", imp.token);
+  }
+
   // CSRF token
   const csrf = getCookie("ui_csrf");
   if (csrf) {
@@ -133,6 +173,7 @@ export async function api<T>(
 
   // Handle 401 — try refreshing the session once
   if (res.status === 401) {
+    useImpersonationStore.getState().clear();
     if (!refreshPromise) {
       refreshPromise = refreshSession().finally(() => {
         refreshPromise = null;

@@ -119,6 +119,141 @@ APP_INFO = Info(
     "app",
     "Application metadata",
 )
+FILEMGR_PURGE_RESULTS = Counter(
+    "filemgr_purge_results_total",
+    "File manager purge outcomes",
+    ["scope", "outcome", "mode"],
+)
+FILEMGR_OPERATION_LATENCY = Histogram(
+    "filemgr_operation_duration_seconds",
+    "File manager operation latency in seconds",
+    ["operation"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+)
+FILEMGR_BYTES = Counter(
+    "filemgr_transfer_bytes_total",
+    "File manager bytes transferred",
+    ["direction", "operation"],
+)
+FILEMGR_SEARCH_PATH = Counter(
+    "filemgr_search_path_total",
+    "File manager search execution path",
+    ["operation", "path"],
+)
+FILEMGR_PURGE_DURATION = Histogram(
+    "filemgr_purge_duration_seconds",
+    "File manager purge run duration in seconds",
+    ["scope", "mode"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60),
+)
+FILEMGR_PURGE_THROUGHPUT = Counter(
+    "filemgr_purge_items_total",
+    "File manager purge processed items",
+    ["scope", "mode", "outcome"],
+)
+FILEMGR_ENCRYPTION_EVENTS = Counter(
+    "filemgr_encryption_events_total",
+    "File manager encryption-related events",
+    ["event", "encrypted", "reason"],
+)
+FILEMGR_SHARED_ENCRYPTED_DOWNLOADS = Counter(
+    "filemgr_shared_encrypted_downloads_total",
+    "File manager shared download attempts split by encryption/outcome",
+    ["encrypted", "outcome"],
+)
+FILEMGR_PREVIEW_ATTEMPTS = Counter(
+    "filemgr_preview_attempts_total",
+    "File manager preview attempts by kind/outcome",
+    ["kind", "outcome", "reason"],
+)
+FILEMGR_PREVIEW_LATENCY = Histogram(
+    "filemgr_preview_latency_seconds",
+    "File manager preview latency by kind",
+    ["kind"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+)
+FILEMGR_PREVIEW_BYTES = Counter(
+    "filemgr_preview_bytes_total",
+    "File manager preview bytes streamed by kind",
+    ["kind"],
+)
+FILEMGR_PREVIEW_FALLBACK = Counter(
+    "filemgr_preview_fallback_total",
+    "File manager preview fallback outcomes by kind/reason",
+    ["kind", "reason"],
+)
+USAGE_METERING_EVENTS = Counter(
+    "usage_metering_events_total",
+    "Usage metering event outcomes",
+    ["event_type", "source", "outcome"],
+)
+USAGE_METERING_BYTES = Counter(
+    "usage_metering_bytes_total",
+    "Usage bytes observed by metering pipeline",
+    ["event_type", "source"],
+)
+USAGE_METERING_EVENTS_BY_PERIOD = Counter(
+    "usage_metering_events_by_period_total",
+    "Usage metering event outcomes split by source and billing period",
+    ["event_type", "source", "outcome", "period_id"],
+)
+USAGE_METERING_BYTES_BY_PERIOD = Counter(
+    "usage_metering_bytes_by_period_total",
+    "Usage bytes observed by metering pipeline split by source and billing period",
+    ["event_type", "source", "period_id"],
+)
+USAGE_SURFACE_UNITS = Counter(
+    "usage_surface_units_total",
+    "Usage unit counters by source family, dimension and billing period",
+    ["source_family", "dimension", "period_id"],
+)
+USAGE_SURFACE_TRANSFER_BYTES = Counter(
+    "usage_surface_transfer_bytes_total",
+    "Usage transfer bytes by source family, direction and billing period",
+    ["source_family", "direction", "period_id"],
+)
+USAGE_METERING_PIPELINE_ERRORS = Counter(
+    "usage_metering_pipeline_errors_total",
+    "Usage metering pipeline errors",
+    ["stage"],
+)
+
+API_USAGE_INGEST_EVENTS = Counter(
+    "api_usage_ingest_events_total",
+    "API usage metering ingest outcomes",
+    ["outcome"],
+)
+API_USAGE_INGEST_LAG = Histogram(
+    "api_usage_ingest_lag_seconds",
+    "Lag from API event timestamp to persistence time",
+    buckets=(0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600),
+)
+API_USAGE_LIMIT_DENY = Counter(
+    "api_usage_limit_deny_total",
+    "API usage quota/limit denials",
+    ["scope", "limit_type"],
+)
+API_USAGE_SNAPSHOT_FINALIZE = Counter(
+    "api_usage_snapshot_finalize_total",
+    "API usage snapshot finalize outcomes",
+    ["outcome"],
+)
+API_USAGE_RECONCILIATION_DRIFT = Gauge(
+    "api_usage_reconciliation_drift_rows",
+    "API usage reconciliation drift rows by area",
+    ["area"],
+)
+USAGE_METERING_PIPELINE_LATENCY = Histogram(
+    "usage_metering_pipeline_duration_seconds",
+    "Usage metering pipeline latency in seconds",
+    ["stage"],
+    buckets=(0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5),
+)
+ADMIN_SCOPE_DENIED = Counter(
+    "admin_scope_denied_total",
+    "Denied admin scope authorization checks by route, required scope, and profile type",
+    ["route", "required_scope", "admin_profile_type"],
+)
 
 _START_TIME = time.monotonic()
 _ACTIVE_SESSIONS_BY_USER: dict[str, int] = {}
@@ -201,9 +336,152 @@ async def metrics_middleware(request: Request, call_next: Callable[[Request], Re
             REQUEST_ERRORS.labels(method=method, path=path, status=str(status_code)).inc()
 
 
+
+def record_usage_metering_event(event_type: str, source: str, outcome: str, *, period_id: Optional[str] = None) -> None:
+    USAGE_METERING_EVENTS.labels(event_type=event_type, source=source, outcome=outcome).inc()
+    if period_id:
+        USAGE_METERING_EVENTS_BY_PERIOD.labels(
+            event_type=event_type,
+            source=source,
+            outcome=outcome,
+            period_id=period_id,
+        ).inc()
+
+
+def record_usage_metering_bytes(event_type: str, source: str, nbytes: int, *, period_id: Optional[str] = None) -> None:
+    if nbytes == 0:
+        return
+    value = float(abs(int(nbytes)))
+    USAGE_METERING_BYTES.labels(event_type=event_type, source=source).inc(value)
+    if period_id:
+        USAGE_METERING_BYTES_BY_PERIOD.labels(event_type=event_type, source=source, period_id=period_id).inc(value)
+
+
+def record_usage_surface_units(source_family: str, dimension: str, count: int, *, period_id: Optional[str] = None) -> None:
+    if count <= 0 or not period_id:
+        return
+    USAGE_SURFACE_UNITS.labels(source_family=source_family, dimension=dimension, period_id=period_id).inc(float(count))
+
+
+def record_usage_surface_transfer_bytes(source_family: str, direction: str, nbytes: int, *, period_id: Optional[str] = None) -> None:
+    if nbytes <= 0 or not period_id:
+        return
+    USAGE_SURFACE_TRANSFER_BYTES.labels(source_family=source_family, direction=direction, period_id=period_id).inc(float(nbytes))
+
+
+def record_usage_metering_pipeline_error(stage: str) -> None:
+    USAGE_METERING_PIPELINE_ERRORS.labels(stage=stage).inc()
+
+
+def record_usage_metering_pipeline_latency(stage: str, elapsed_seconds: float) -> None:
+    USAGE_METERING_PIPELINE_LATENCY.labels(stage=stage).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_api_usage_ingest_event(outcome: str) -> None:
+    API_USAGE_INGEST_EVENTS.labels(outcome=(outcome or "unknown").lower()).inc()
+
+
+def record_api_usage_ingest_lag(elapsed_seconds: float) -> None:
+    API_USAGE_INGEST_LAG.observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_api_usage_limit_deny(scope: str, limit_type: str) -> None:
+    API_USAGE_LIMIT_DENY.labels(
+        scope=(scope or "unknown").lower(),
+        limit_type=(limit_type or "unknown").lower(),
+    ).inc()
+
+
+def record_api_usage_snapshot_finalize(outcome: str) -> None:
+    API_USAGE_SNAPSHOT_FINALIZE.labels(outcome=(outcome or "unknown").lower()).inc()
+
+
+def record_api_usage_reconciliation_drift(*, area: str, rows: int) -> None:
+    API_USAGE_RECONCILIATION_DRIFT.labels(area=(area or "unknown").lower()).set(float(max(0, int(rows))))
+
+
+def record_admin_scope_denied(*, route: str, required_scope: str, admin_profile_type: str) -> None:
+    ADMIN_SCOPE_DENIED.labels(
+        route=route or "unknown",
+        required_scope=required_scope or "unknown",
+        admin_profile_type=admin_profile_type or "unknown",
+    ).inc()
+
 def set_app_info(name: str, version: str) -> None:
     APP_INFO.info({"name": name, "version": version})
 
+
+
+def record_filemgr_operation_latency(operation: str, elapsed_seconds: float) -> None:
+    FILEMGR_OPERATION_LATENCY.labels(operation=operation).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_filemgr_bytes(direction: str, operation: str, nbytes: int) -> None:
+    if nbytes <= 0:
+        return
+    FILEMGR_BYTES.labels(direction=direction, operation=operation).inc(float(nbytes))
+
+
+def record_filemgr_search_path(operation: str, path: str) -> None:
+    FILEMGR_SEARCH_PATH.labels(operation=operation, path=path).inc()
+
+
+def record_filemgr_purge_run(
+    scope: str,
+    mode: str,
+    *,
+    purged: int,
+    skipped: int,
+    errors: int,
+    elapsed_seconds: float,
+) -> None:
+    FILEMGR_PURGE_DURATION.labels(scope=scope, mode=mode).observe(max(0.0, float(elapsed_seconds)))
+    if purged:
+        FILEMGR_PURGE_THROUGHPUT.labels(scope=scope, mode=mode, outcome="purged").inc(float(purged))
+    if skipped:
+        FILEMGR_PURGE_THROUGHPUT.labels(scope=scope, mode=mode, outcome="skipped").inc(float(skipped))
+    if errors:
+        FILEMGR_PURGE_THROUGHPUT.labels(scope=scope, mode=mode, outcome="error").inc(float(errors))
+
+
+def record_filemgr_encryption_event(event: str, *, encrypted: bool, reason: str = "") -> None:
+    FILEMGR_ENCRYPTION_EVENTS.labels(
+        event=event,
+        encrypted="true" if encrypted else "false",
+        reason=reason or "none",
+    ).inc()
+
+
+def record_filemgr_shared_download(*, encrypted: bool, outcome: str = "attempt") -> None:
+    FILEMGR_SHARED_ENCRYPTED_DOWNLOADS.labels(
+        encrypted="true" if encrypted else "false",
+        outcome=outcome or "attempt",
+    ).inc()
+
+
+def record_filemgr_preview_attempt(*, kind: str, outcome: str, reason: str = "none") -> None:
+    FILEMGR_PREVIEW_ATTEMPTS.labels(
+        kind=(kind or "none").lower(),
+        outcome=(outcome or "error").lower(),
+        reason=(reason or "none").lower(),
+    ).inc()
+
+
+def record_filemgr_preview_latency(*, kind: str, elapsed_seconds: float) -> None:
+    FILEMGR_PREVIEW_LATENCY.labels(kind=(kind or "none").lower()).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_filemgr_preview_bytes(*, kind: str, nbytes: int) -> None:
+    if nbytes <= 0:
+        return
+    FILEMGR_PREVIEW_BYTES.labels(kind=(kind or "none").lower()).inc(float(nbytes))
+
+
+def record_filemgr_preview_fallback(*, kind: str, reason: str) -> None:
+    FILEMGR_PREVIEW_FALLBACK.labels(
+        kind=(kind or "none").lower(),
+        reason=(reason or "unknown").lower(),
+    ).inc()
 
 def metrics_endpoint() -> Response:
     UPTIME_SECONDS.set(time.monotonic() - _START_TIME)

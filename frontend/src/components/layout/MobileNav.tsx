@@ -14,6 +14,7 @@ import {
   Shield,
   Bell,
   Settings,
+  UsersRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -24,6 +25,8 @@ import {
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { useAuthStore } from "@/stores/authStore";
+import { canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 
 // ─── Tab config ─────────────────────────────────────────────────
 
@@ -43,6 +46,7 @@ const MORE_LINKS = [
   { label: "Security", path: "/security", icon: Shield },
   { label: "Alerts", path: "/alerts", icon: Bell },
   { label: "Settings", path: "/settings", icon: Settings },
+  { label: "Role Mgmt", path: "/root/roles", icon: UsersRound },
 ];
 
 // ─── MobileNav Component ────────────────────────────────────────
@@ -50,6 +54,10 @@ const MORE_LINKS = [
 export default function MobileNav() {
   const [moreOpen, setMoreOpen] = React.useState(false);
   const navigate = useNavigate();
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const showRootRoleManagement = canSeeRootRoleManagement(accessToken);
+
+  const moreLinks = MORE_LINKS.filter((item) => item.path !== "/root/roles" || showRootRoleManagement);
 
   return (
     <>
@@ -89,7 +97,7 @@ export default function MobileNav() {
           </SheetHeader>
           <Separator className="my-3" />
           <div className="grid grid-cols-4 gap-4 pb-4">
-            {MORE_LINKS.map((link) => (
+            {moreLinks.map((link) => (
               <Button
                 key={link.path}
                 variant="ghost"

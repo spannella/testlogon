@@ -20,6 +20,8 @@ from app.models import (
     AlertSmsRemoveReq,
     AlertToastPrefsReq,
     ApiKeyIpRulesReq,
+    ApiKeyLimitsPatchReq,
+    ApiKeySelfLimitsReq,
     CreateApiKeyReq,
     EmailBeginReq,
     EmailVerifyReq,
@@ -50,7 +52,7 @@ from app.models import (
     UiSessionFinalizeReq,
     UiSessionStartReq,
 )
-from app.routers import alerts, api_keys, misc, mfa_devices, password_recovery, push, recovery, ui_mfa, ui_session
+from app.routers import alerts, api_keys, api_usage, misc, mfa_devices, password_recovery, push, recovery, root_auth, ui_mfa, ui_session
 
 
 def run_async(coro):
@@ -196,6 +198,13 @@ class TestUiSessionRoutes(unittest.TestCase):
 
             resp = run_async(ui_session.ui_session_finalize(req, UiSessionFinalizeReq(challenge_id="chal"), user_sub="user"))
             self.assertEqual(resp["status"], "pending")
+
+    def test_ui_session_start_rejects_root_subject(self):
+        req = build_request()
+        with self.assertRaises(HTTPException) as ctx:
+            run_async(ui_session.ui_session_start(req, UiSessionStartReq(), user_sub=ui_session.S.root_user_sub))
+        self.assertEqual(ctx.exception.status_code, 403)
+
 
 
 class TestUiMfaRoutes(unittest.TestCase):
@@ -394,6 +403,10 @@ class TestApiKeysRoutes(unittest.TestCase):
             stack.enter_context(patch.object(api_keys, "create_api_key", return_value={"key_id": "k2"}))
             stack.enter_context(patch.object(api_keys, "revoke_api_key"))
             stack.enter_context(patch.object(api_keys, "set_api_key_ip_rules", return_value={"allow_cidrs": [], "deny_cidrs": []}))
+            stack.enter_context(patch.object(api_keys, "set_api_key_self_limits", return_value={"key_id": "k1", "monthly_calls_cap": 10, "monthly_spend_cap_micros": 1000, "route_caps": {}}))
+            stack.enter_context(patch.object(api_keys, "get_api_key_item", return_value={"key_id": "k1", "user_sub": "user", "monthly_calls_cap": 10, "monthly_spend_cap_micros": 1000, "route_caps": {}}))
+            stack.enter_context(patch.object(api_keys, "_api_usage_table", return_value="table"))
+            stack.enter_context(patch.object(api_keys, "get_api_key_usage_period_totals", return_value={"user_sub": "user", "api_key_id": "k1", "period_id": "2026-03", "calls_total": 4, "billable_calls_total": 3, "request_units_total": 3, "cost_subtotal_micros": 200}))
             stack.enter_context(patch.object(api_keys, "audit_event"))
 
             list_resp = run_async(api_keys.ui_list_api_keys(ctx=build_ctx()))
@@ -408,6 +421,15 @@ class TestApiKeysRoutes(unittest.TestCase):
             ip_rules = run_async(api_keys.ui_set_api_key_ip_rules(req, ApiKeyIpRulesReq(key_id="k1", allow_cidrs=["10.0.0.0/24"], deny_cidrs=[]), ctx=build_ctx()))
             self.assertEqual(ip_rules["ok"], True)
 
+            self_limits = run_async(api_keys.ui_set_api_key_self_limits(req, ApiKeySelfLimitsReq(key_id="k1", monthly_calls_cap=10, monthly_spend_cap_micros=1000, route_caps={}), ctx=build_ctx()))
+            self.assertEqual(self_limits["ok"], True)
+
+            patched = run_async(api_keys.ui_patch_api_key_limits(req, "k1", ApiKeyLimitsPatchReq(monthly_calls_cap=8, monthly_spend_cap_micros=900, route_caps={}), ctx=build_ctx()))
+            self.assertEqual(patched["key_id"], "k1")
+
+            usage = run_async(api_keys.ui_get_api_key_usage("k1", period="2026-03", ctx=build_ctx()))
+            self.assertEqual(usage["totals"]["calls_total"], 4)
+
     def test_api_keys_empty_label(self):
         req = build_request()
         with ExitStack() as stack:
@@ -415,6 +437,44 @@ class TestApiKeysRoutes(unittest.TestCase):
             stack.enter_context(patch.object(api_keys, "audit_event"))
             resp = run_async(api_keys.ui_create_api_key(req, CreateApiKeyReq(label=None), ctx=build_ctx()))
             self.assertEqual(resp["key_id"], "k3")
+
+
+class TestApiUsageRoutes(unittest.TestCase):
+    def test_api_usage_summary_routes(self):
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(api_usage, "_api_usage_table", return_value="table"))
+            stack.enter_context(patch.object(api_usage, "get_api_usage_summary_for_period", return_value={"period": "2026-03", "totals": {}, "limits": {}, "remaining": {}}))
+
+            resp = run_async(api_usage.ui_api_usage_summary(period="2026-03", ctx=build_ctx()))
+            self.assertEqual(resp["period"], "2026-03")
+            api_usage.get_api_usage_summary_for_period.assert_called_once_with("table", user_sub="user", period_id="2026-03")
+
+    def test_api_usage_breakdowns_routes_and_keys(self):
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(api_usage, "_api_usage_table", return_value="table"))
+            stack.enter_context(patch.object(api_usage, "list_api_usage_route_breakdown", return_value={"items": [{"route_id": "GET:/x"}], "next_cursor": "n1", "count": 1, "total": 10}))
+            stack.enter_context(patch.object(api_usage, "list_api_usage_key_breakdown", return_value={"items": [{"api_key_id": "k1"}], "next_cursor": None, "count": 1, "total": 1}))
+
+            r1 = run_async(api_usage.ui_api_usage_routes(period="2026-03", sort_by="calls_total", order="asc", search="GET", limit=25, cursor="c1", ctx=build_ctx()))
+            self.assertEqual(r1["period"], "2026-03")
+            self.assertEqual(r1["count"], 1)
+            api_usage.list_api_usage_route_breakdown.assert_called_once_with("table", user_sub="user", period_id="2026-03", search="GET", sort_by="calls_total", order="asc", limit=25, cursor="c1")
+
+            r2 = run_async(api_usage.ui_api_usage_keys(period="2026-03", sort_by="cost_subtotal_micros", order="desc", search="k", limit=50, cursor=None, ctx=build_ctx()))
+            self.assertEqual(r2["total"], 1)
+            api_usage.list_api_usage_key_breakdown.assert_called_once_with("table", user_sub="user", period_id="2026-03", search="k", sort_by="cost_subtotal_micros", order="desc", limit=50, cursor=None)
+
+    def test_api_usage_summary_invalid_period(self):
+        with self.assertRaises(HTTPException):
+            run_async(api_usage.ui_api_usage_summary(period="2026-13", ctx=build_ctx()))
+        with self.assertRaises(HTTPException):
+            run_async(api_usage.ui_api_usage_routes(period="bad", ctx=build_ctx()))
+
+
+    def test_api_key_usage_period_invalid(self):
+        with self.assertRaises(HTTPException):
+            run_async(api_keys.ui_get_api_key_usage("k1", period="2026-13", ctx=build_ctx()))
+
 
 
 class TestAlertRoutes(unittest.TestCase):
@@ -794,6 +854,35 @@ class TestPasswordRecoveryRoutes(unittest.TestCase):
                     req,
                     PasswordRecoveryTotpVerifyReq(username="user", challenge_id="chal", totp_code="123456"),
                 ))
+
+
+class TestRootAuthRoutes(unittest.TestCase):
+    def test_root_login_requires_root_subject(self):
+        req = build_request()
+        with self.assertRaises(HTTPException) as ctx:
+            run_async(root_auth.root_login(req, UiSessionStartReq(), user_sub="not-root"))
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_root_login_requires_mfa_configuration(self):
+        req = build_request()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(root_auth, "enforce_root_network_gate", return_value="127.0.0.1"))
+            stack.enter_context(patch.object(root_auth, "compute_required_factors", return_value=[]))
+            with self.assertRaises(HTTPException) as ctx:
+                run_async(root_auth.root_login(req, UiSessionStartReq(), user_sub=root_auth.S.root_user_sub))
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_root_login_creates_stepup_challenge(self):
+        req = build_request()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(root_auth, "enforce_root_network_gate", return_value="127.0.0.1"))
+            stack.enter_context(patch.object(root_auth, "compute_required_factors", return_value=["totp"]))
+            create_stepup = stack.enter_context(patch.object(root_auth, "create_stepup_challenge", return_value="chal-root"))
+            stack.enter_context(patch.object(root_auth, "audit_event"))
+            resp = run_async(root_auth.root_login(req, UiSessionStartReq(), user_sub=root_auth.S.root_user_sub))
+        self.assertTrue(resp.auth_required)
+        self.assertEqual(resp.challenge_id, "chal-root")
+        create_stepup.assert_called_once()
 
 
 class TestMiscRoutes(unittest.TestCase):

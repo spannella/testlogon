@@ -266,6 +266,55 @@
   </div>
 </div>
 
+
+<div class="row" id="apiUsageSection">
+  <div class="card">
+    <h3>API Usage & Billing</h3>
+    <div class="row-inline" style="margin-top:8px; gap:8px; flex-wrap:wrap;">
+      <input id="apiUsagePeriod" class="mono" placeholder="YYYY-MM" style="max-width:130px;" />
+      <button id="apiUsageRefreshBtn">Refresh usage</button>
+      <span id="apiUsageState" class="muted"></span>
+    </div>
+
+    <div class="row-inline" style="margin-top:10px; gap:8px; flex-wrap:wrap;">
+      <span class="pill" id="apiUsageCallsCard">Calls: -</span>
+      <span class="pill" id="apiUsageSpendCard">Spend: -</span>
+      <span class="pill" id="apiUsageLimitCard">Limits: -</span>
+      <span class="pill" id="apiUsageRemainCard">Remaining: -</span>
+    </div>
+
+    <div class="section" style="margin-top:12px;">
+      <h4 style="margin:0 0 6px 0;">Per-route usage/cost</h4>
+      <div class="row-inline" style="gap:8px; flex-wrap:wrap;">
+        <input id="apiUsageRouteSearch" placeholder="Search route" style="max-width:220px;" />
+        <select id="apiUsageRouteSort"><option value="cost_subtotal_micros">Cost</option><option value="calls_total">Calls</option><option value="request_units_total">Units</option></select>
+        <select id="apiUsageRouteOrder"><option value="desc">Desc</option><option value="asc">Asc</option></select>
+        <button id="apiUsageRouteApplyBtn">Apply</button>
+      </div>
+      <table id="apiUsageRoutesTbl">
+        <thead><tr><th>Route</th><th>Calls</th><th>Units</th><th>Cost</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="row-inline" style="margin-top:6px;"><button id="apiUsageRouteMoreBtn" style="display:none;">Load more routes</button></div>
+    </div>
+
+    <div class="section" style="margin-top:12px;">
+      <h4 style="margin:0 0 6px 0;">Per-key usage/cost</h4>
+      <div class="row-inline" style="gap:8px; flex-wrap:wrap;">
+        <input id="apiUsageKeySearch" placeholder="Search key" style="max-width:220px;" />
+        <select id="apiUsageKeySort"><option value="cost_subtotal_micros">Cost</option><option value="calls_total">Calls</option><option value="request_units_total">Units</option></select>
+        <select id="apiUsageKeyOrder"><option value="desc">Desc</option><option value="asc">Asc</option></select>
+        <button id="apiUsageKeyApplyBtn">Apply</button>
+      </div>
+      <table id="apiUsageKeysTbl">
+        <thead><tr><th>API Key</th><th>Calls</th><th>Units</th><th>Cost</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="row-inline" style="margin-top:6px;"><button id="apiUsageKeyMoreBtn" style="display:none;">Load more keys</button></div>
+    </div>
+  </div>
+</div>
+
 <div class="row">
   <div class="card">
     <h3>Account Permanent Closure</h3>
@@ -539,6 +588,7 @@
       <input id="filemgrNewFolder" placeholder="New folder name" />
       <button id="filemgrCreateFolderBtn">Create folder</button>
       <input id="filemgrUploadInput" type="file" multiple />
+      <label class="muted"><input id="filemgrEncryptToggle" type="checkbox" /> Encrypt with password</label>
       <button id="filemgrUploadBtn">Upload</button>
       <input id="filemgrUploadZipInput" type="file" accept=".zip,application/zip" />
       <button id="filemgrUploadZipBtn">Upload zip</button>

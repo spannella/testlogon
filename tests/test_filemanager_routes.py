@@ -1,17 +1,31 @@
+import asyncio
 import io
 import unittest
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from fastapi import UploadFile
+from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from app.routers import filemanager
 
 
 class TestFileManagerRoutes(unittest.TestCase):
+    def test_list_files_rejects_invalid_cursor_payloads(self):
+        bad = filemanager._encode_cursor({"mode": "invalid", "offset": 0})
+        with self.assertRaises(HTTPException) as ctx:
+            filemanager.list_files(path="/", cursor=bad, user="user")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+        bad2 = filemanager._encode_cursor({"mode": "offset", "offset": 0})
+        with self.assertRaises(HTTPException) as ctx2:
+            filemanager.list_files(path="/", cursor=bad2, sort_by="name", user="user")
+        self.assertEqual(ctx2.exception.status_code, 400)
+
     def test_list_and_info(self):
         items = [
             {"path": "/docs/", "type": "folder", "name": "docs", "parent": "/", "updated_at": "t1"},
-            {"path": "/docs/a.txt", "type": "file", "name": "a.txt", "parent": "/docs/", "updated_at": "t2", "size": 12},
+            {"path": "/docs/a.txt", "type": "file", "name": "a.txt", "parent": "/docs/", "updated_at": "t2", "size": 12, "content_type": "text/plain", "is_encrypted": True},
             {"path": "/docs/sub/b.txt", "type": "file", "name": "b.txt", "parent": "/docs/sub/", "updated_at": "t3", "size": 1},
         ]
         with patch.object(filemanager, "list_children", return_value=items), patch.object(
@@ -24,6 +38,18 @@ class TestFileManagerRoutes(unittest.TestCase):
                 "parent": "/docs/",
                 "created_at": "t0",
                 "updated_at": "t2",
+                "is_encrypted": True,
+                "enc_metadata": {
+                    "version": 1,
+                    "alg": "AES-256-GCM",
+                    "kdf": "PBKDF2-SHA256",
+                    "iterations": 600000,
+                    "salt_b64": "c2FsdA==",
+                    "iv_b64": "aXY=",
+                    "orig_name": "a.txt",
+                    "orig_size": 12,
+                    "mime": "text/plain",
+                },
             },
         ):
             resp = filemanager.list_files(path="/docs", user="user")
@@ -31,10 +57,45 @@ class TestFileManagerRoutes(unittest.TestCase):
             self.assertEqual(len(resp["items"]), 1)
             self.assertEqual(resp["items"][0]["path"], "/docs/a.txt")
             self.assertEqual(resp["items"][0]["name"], "a.txt")
+            self.assertEqual(resp["items"][0]["preview_kind"], "text")
+            self.assertFalse(resp["items"][0]["preview_supported"])
+            self.assertEqual(resp["items"][0]["preview_reason"], "encrypted")
 
             info = filemanager.file_info(path="/docs/a.txt", user="user")
             self.assertEqual(info["path"], "/docs/a.txt")
             self.assertEqual(info["type"], "file")
+            self.assertTrue(info["is_encrypted"])
+            self.assertEqual(info["enc_version"], 1)
+            self.assertEqual(info["enc_alg"], "AES-256-GCM")
+            self.assertEqual(info["preview_kind"], "text")
+            self.assertFalse(info["preview_supported"])
+            self.assertEqual(info["preview_reason"], "encrypted")
+
+    def test_file_info_falls_back_to_flattened_encryption_fields(self):
+        with patch.object(
+            filemanager,
+            "get_node",
+            return_value={
+                "path": "/docs/a.txt",
+                "type": "file",
+                "name": "a.txt",
+                "parent": "/docs/",
+                "is_encrypted": True,
+                "enc_version": 1,
+                "enc_alg": "AES-256-GCM",
+                "enc_kdf": "PBKDF2-SHA256",
+                "enc_kdf_iterations": 600000,
+                "enc_salt_b64": "c2FsdA==",
+                "enc_iv_b64": "aXY=",
+                "enc_orig_name": "a.txt",
+                "enc_orig_size": 12,
+                "enc_orig_content_type": "text/plain",
+            },
+        ):
+            info = filemanager.file_info(path="/docs/a.txt", user="user")
+            self.assertIsInstance(info["enc_metadata"], dict)
+            self.assertEqual(info["enc_metadata"]["version"], 1)
+            self.assertEqual(info["enc_metadata"]["orig_name"], "a.txt")
 
     def test_search_and_create(self):
         with patch.object(filemanager, "search_prefix", return_value=[{"path": "/a", "type": "file", "name": "a"}]):
@@ -53,20 +114,271 @@ class TestFileManagerRoutes(unittest.TestCase):
             self.assertTrue(resp["ok"])
             self.assertEqual(resp["path"], "/docs/")
 
+    def test_admin_metadata_list_and_search(self):
+        rows = [{"owner": "u1", "path": "/docs/a.txt", "type": "file", "name": "a.txt"}]
+        with patch.object(filemanager, "admin_search_metadata", return_value=rows) as search_meta:
+            ctx = {"user_sub": "admin1", "role": "admin"}
+            listed = filemanager.admin_list_files(path="/docs", owner=None, limit=50, ctx=ctx)
+            self.assertEqual(len(listed["items"]), 1)
+            self.assertEqual(listed["items"][0]["owner"], "u1")
+
+            searched = filemanager.admin_search_files(q="a", prefix=None, owner=None, limit=50, ctx=ctx)
+            self.assertEqual(len(searched["items"]), 1)
+            self.assertEqual(searched["items"][0]["path"], "/docs/a.txt")
+            self.assertTrue(search_meta.called)
+
+    def test_admin_read_content_policy_tier(self):
+        ctx_admin = {"user_sub": "admin1", "role": "admin"}
+        node = {"path": "/docs/a.txt", "type": "file", "name": "a.txt", "size": 5, "content_type": "text/plain", "updated_at": "t1"}
+        with patch.object(filemanager, "get_node", return_value=node):
+            meta = filemanager.admin_read_file(owner="u1", path="/docs/a.txt", include_content=False, ctx=ctx_admin)
+            self.assertEqual(meta["path"], "/docs/a.txt")
+
+        original_tier = filemanager.S.filemgr_admin_content_access_tier
+        object.__setattr__(filemanager.S, "filemgr_admin_content_access_tier", "none")
+        try:
+            with self.assertRaises(HTTPException) as exc:
+                filemanager.admin_read_file(owner="u1", path="/docs/a.txt", include_content=True, ctx=ctx_admin)
+            self.assertEqual(exc.exception.status_code, 403)
+        finally:
+            object.__setattr__(filemanager.S, "filemgr_admin_content_access_tier", original_tier)
+
+    def test_bulk_operations_emit_correlation_id(self):
+        captured = []
+
+        def _audit(_event, _user, _req=None, **fields):
+            captured.append(fields)
+
+        with patch.object(filemanager, "audit_event", side_effect=_audit), \
+             patch.object(filemanager, "download_zip", return_value=(iter([b"zip"]), 1)):
+            filemanager.download_multiple_as_zip(paths=["/a"], user="user")
+
+        self.assertTrue(captured)
+        self.assertTrue(captured[-1].get("correlation_id"))
+
+    def test_admin_file_audit_query_filters(self):
+        alerts = [
+            {
+                "event": "filemgr_file_downloaded",
+                "ts": 100,
+                "outcome": "success",
+                "details": {"actor_sub": "admin1", "target_user_sub": "u1", "file_path": "/a", "correlation_id": "c1"},
+            },
+            {
+                "event": "billing_charge_once",
+                "ts": 101,
+                "outcome": "success",
+                "details": {"actor_sub": "admin1"},
+            },
+        ]
+        fake_alerts = type("A", (), {"scan": lambda self, **kwargs: {"Items": alerts}})()
+        tables = type("T", (), {"alerts": fake_alerts})()
+        with patch.object(filemanager, "T", tables):
+            resp = filemanager.admin_file_audit(
+                actor_sub="admin1",
+                target_user_sub="u1",
+                file_path="/a",
+                start_ts=90,
+                end_ts=110,
+                limit=10,
+                cursor=None,
+                _ctx={"user_sub": "root", "role": "root"},
+            )
+        self.assertEqual(len(resp["items"]), 1)
+        self.assertEqual(resp["items"][0]["event"], "filemgr_file_downloaded")
+
+    def test_upload_encrypted_file_passes_metadata(self):
+        upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"))
+        enc_meta = '{"version":1,"alg":"AES-256-GCM"}'
+        with (
+            patch.object(filemanager, "upload_file", return_value={"path": "/docs/a.txt", "size": 5}) as upload_file,
+            patch.object(filemanager, "record_filemgr_encryption_event") as record_encryption_event,
+        ):
+            resp = filemanager.upload_fs_file(path="/docs/a.txt", file=upload, encrypted=True, enc_meta=enc_meta, user="user")
+            self.assertTrue(resp["ok"])
+            upload_file.assert_called_once()
+            self.assertEqual(upload_file.call_args.kwargs["encryption_meta"], {"version": 1, "alg": "AES-256-GCM"})
+            record_encryption_event.assert_called_once_with("upload", encrypted=True)
+
     def test_upload_and_download(self):
         upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"))
-        with patch.object(filemanager, "upload_file", return_value={"path": "/docs/a.txt", "size": 5}):
+        with (
+            patch.object(filemanager, "upload_file", return_value={"path": "/docs/a.txt", "size": 5}),
+            patch.object(filemanager, "record_filemgr_encryption_event") as record_encryption_event,
+        ):
             resp = filemanager.upload_fs_file(path="/docs/a.txt", file=upload, user="user")
             self.assertTrue(resp["ok"])
             self.assertEqual(resp["size"], 5)
+            record_encryption_event.assert_called_once_with("upload", encrypted=False)
 
         obj = {"Body": io.BytesIO(b"hello")}
-        node = {"name": "a.txt", "content_type": "text/plain"}
-        with patch.object(filemanager, "download_file", return_value={"node": node, "object": obj}):
+        node = {"name": "a.txt", "content_type": "text/plain", "is_encrypted": True, "path": "/docs/a.txt", "size": 5}
+        with (
+            patch.object(filemanager, "download_file", return_value={"node": node, "object": obj}),
+            patch.object(filemanager, "assert_download_allowed") as assert_download_allowed,
+            patch.object(filemanager, "record_filemgr_encryption_event") as record_encryption_event,
+            patch.object(filemanager, "record_download_usage") as record_download_usage,
+        ):
             resp = filemanager.download_fs_file(path="/docs/a.txt", user="user")
             self.assertIsInstance(resp, StreamingResponse)
             self.assertEqual(resp.media_type, "text/plain")
             self.assertIn("attachment; filename=\"a.txt\"", resp.headers.get("Content-Disposition", ""))
+            async def _consume():
+                async for _ in resp.body_iterator:
+                    pass
+            asyncio.run(_consume())
+            record_encryption_event.assert_called_once_with("download_attempt", encrypted=True)
+            record_download_usage.assert_called_once_with("user", "/docs/a.txt", 5, source="download", request_id=None)
+            assert_download_allowed.assert_called_once_with("user", requested_bytes=5)
+
+    def test_preview_blocks_encrypted_file(self):
+        obj = {"Body": io.BytesIO(b"cipher")}
+        node = {"name": "a.txt", "type": "file", "content_type": "application/octet-stream", "is_encrypted": True, "path": "/docs/a.txt"}
+        with (
+            patch.object(filemanager, "download_file", return_value={"node": node, "object": obj}),
+            patch.object(filemanager, "audit_event") as audit_event,
+            patch.object(filemanager, "record_filemgr_preview_attempt") as preview_attempt,
+            patch.object(filemanager, "record_filemgr_preview_fallback") as preview_fallback,
+            patch.object(filemanager, "record_filemgr_preview_latency") as preview_latency,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.preview_fs_file(path="/docs/a.txt", user="user")
+        self.assertEqual(ctx.exception.status_code, 415)
+        preview_attempt.assert_called_once_with(kind="text", outcome="fallback", reason="encrypted")
+        preview_fallback.assert_called_once_with(kind="text", reason="encrypted")
+        preview_latency.assert_called_once()
+        self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "text")
+        self.assertEqual(audit_event.call_args.kwargs["preview_supported"], False)
+        self.assertEqual(audit_event.call_args.kwargs["preview_reason"], "encrypted")
+        self.assertEqual(audit_event.call_args.kwargs["is_encrypted"], True)
+        self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "text")
+        self.assertEqual(audit_event.call_args.kwargs["preview_supported"], False)
+        self.assertEqual(audit_event.call_args.kwargs["preview_reason"], "encrypted")
+        self.assertEqual(audit_event.call_args.kwargs["is_encrypted"], True)
+        self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "text")
+        self.assertEqual(audit_event.call_args.kwargs["preview_supported"], False)
+        self.assertEqual(audit_event.call_args.kwargs["preview_reason"], "encrypted")
+        self.assertEqual(audit_event.call_args.kwargs["is_encrypted"], True)
+
+    def test_preview_success_emits_metrics(self):
+        obj = {"Body": io.BytesIO(b"hello")}
+        node = {"name": "a.txt", "type": "file", "content_type": "text/plain", "is_encrypted": False, "path": "/docs/a.txt", "size": 5}
+        with (
+            patch.object(filemanager, "download_file", return_value={"node": node, "object": obj}),
+            patch.object(filemanager, "audit_event") as audit_event,
+            patch.object(filemanager, "record_filemgr_preview_attempt") as preview_attempt,
+            patch.object(filemanager, "record_filemgr_preview_bytes") as preview_bytes,
+            patch.object(filemanager, "record_filemgr_preview_latency") as preview_latency,
+        ):
+            resp = filemanager.preview_fs_file(path="/docs/a.txt", user="user")
+            self.assertIsInstance(resp, StreamingResponse)
+            preview_attempt.assert_called_once_with(kind="text", outcome="success", reason="none")
+            preview_bytes.assert_called_once_with(kind="text", nbytes=5)
+            preview_latency.assert_called_once()
+            self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "text")
+            self.assertEqual(audit_event.call_args.kwargs["preview_supported"], True)
+            self.assertEqual(audit_event.call_args.kwargs["preview_reason"], "none")
+            self.assertEqual(audit_event.call_args.kwargs["is_encrypted"], False)
+
+    def test_thumbnail_blocks_encrypted_file(self):
+        obj = {"Body": io.BytesIO(b"thumb")}
+        node = {"name": "a.txt", "type": "file", "content_type": "image/png", "is_encrypted": True, "path": "/docs/a.txt", "thumbnail": {"bucket": "b", "key": "k"}}
+        with (
+            patch.object(filemanager, "download_thumbnail", return_value={"node": node, "thumbnail": node["thumbnail"], "object": obj}),
+            patch.object(filemanager, "audit_event") as audit_event,
+            patch.object(filemanager, "record_filemgr_preview_attempt") as preview_attempt,
+            patch.object(filemanager, "record_filemgr_preview_fallback") as preview_fallback,
+            patch.object(filemanager, "record_filemgr_preview_latency") as preview_latency,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.thumbnail_fs_file(path="/docs/a.txt", user="user")
+        self.assertEqual(ctx.exception.status_code, 415)
+        preview_attempt.assert_called_once_with(kind="text", outcome="fallback", reason="encrypted")
+        preview_fallback.assert_called_once_with(kind="text", reason="encrypted")
+        preview_latency.assert_called_once()
+
+    def test_shared_thumbnail_blocks_encrypted_file(self):
+        obj = {"Body": io.BytesIO(b"thumb")}
+        node = {"name": "a.txt", "type": "file", "content_type": "image/png", "is_encrypted": True, "path": "/docs/a.txt", "thumbnail": {"bucket": "b", "key": "k"}}
+        with (
+            patch.object(filemanager, "require_shared_access"),
+            patch.object(filemanager, "download_thumbnail", return_value={"node": node, "thumbnail": node["thumbnail"], "object": obj}),
+            patch.object(filemanager, "audit_event") as audit_event,
+            patch.object(filemanager, "record_filemgr_preview_attempt") as preview_attempt,
+            patch.object(filemanager, "record_filemgr_preview_fallback") as preview_fallback,
+            patch.object(filemanager, "record_filemgr_preview_latency") as preview_latency,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.shared_thumbnail_fs_file(owner="owner", path="/docs/a.txt", user="user")
+        self.assertEqual(ctx.exception.status_code, 415)
+        preview_attempt.assert_called_once_with(kind="text", outcome="fallback", reason="encrypted")
+        preview_fallback.assert_called_once_with(kind="text", reason="encrypted")
+        preview_latency.assert_called_once()
+
+    def test_file_crypto_client_telemetry_records_metrics(self):
+        with (
+            patch.object(filemanager, "record_filemgr_encryption_event") as record_encryption_event,
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            resp = filemanager.file_crypto_client_telemetry(
+                inp=filemanager.FileCryptoTelemetryIn(
+                    event="decrypt_failure",
+                    path="/docs/a.txt",
+                    reason="wrong_password",
+                    remembered_password_used=True,
+                ),
+                user="user",
+            )
+            self.assertTrue(resp["ok"])
+            record_encryption_event.assert_called_once_with("decrypt_failure", encrypted=True, reason="wrong_password")
+            audit_event.assert_called_once()
+
+    def test_presign_and_complete_upload(self):
+        with patch.object(
+            filemanager,
+            "presign_upload",
+            return_value={
+                "upload_url": "https://example.test/upload",
+                "bucket": "bucket",
+                "key": "user/objects/abc",
+                "ticket_id": "ticket-1",
+                "path": "/docs/a.txt",
+                "content_type": "text/plain",
+            },
+        ):
+            resp = filemanager.presign_fs_upload(
+                inp=filemanager.PresignUploadIn(path="/docs/a.txt", content_type="text/plain"),
+                user="user",
+            )
+            self.assertEqual(resp.ticket_id, "ticket-1")
+
+        with patch.object(filemanager, "register_presigned_upload", return_value={"path": "/docs/a.txt", "size": 5}):
+            resp = filemanager.complete_fs_upload(
+                inp=filemanager.CompleteUploadIn(path="/docs/a.txt", key="user/objects/abc", ticket_id="ticket-1"),
+                user="user",
+            )
+            self.assertTrue(resp["ok"])
+            filemanager.register_presigned_upload.assert_called_once_with(
+                "user",
+                "/docs/a.txt",
+                s3_key="user/objects/abc",
+                ticket_id="ticket-1",
+                content_type=None,
+                encryption_meta=None,
+            )
+
+    def test_complete_upload_bubbles_validation_errors(self):
+        with patch.object(
+            filemanager,
+            "register_presigned_upload",
+            side_effect=HTTPException(status_code=403, detail="invalid upload ticket"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.complete_fs_upload(
+                    inp=filemanager.CompleteUploadIn(path="/docs/a.txt", key="user/objects/abc", ticket_id="bad"),
+                    user="user",
+                )
+        self.assertEqual(ctx.exception.status_code, 403)
 
     def test_delete_and_move(self):
         with patch.object(filemanager, "remove_file") as remove_file:
@@ -82,6 +394,56 @@ class TestFileManagerRoutes(unittest.TestCase):
             resp = filemanager.move_fs_node(src="/a", dst="/b", user="user")
             self.assertEqual(resp["type"], "file")
 
+
+    def test_move_resume_and_rollback(self):
+        with patch.object(filemanager, "resume_move", return_value={"move_id": "m1", "status": "completed", "moved_now": 2, "already_done": 1}):
+            resp = filemanager.resume_fs_move(inp=filemanager.MoveCheckpointIn(move_id="m1"), user="user")
+            self.assertTrue(resp["ok"])
+            self.assertEqual(resp["move_id"], "m1")
+
+        with patch.object(filemanager, "rollback_move", return_value={"move_id": "m1", "status": "rolled_back", "moved_now": 3, "already_done": 0}):
+            resp = filemanager.rollback_fs_move(inp=filemanager.MoveCheckpointIn(move_id="m1"), user="user")
+            self.assertTrue(resp["ok"])
+            self.assertEqual(resp["status"], "rolled_back")
+
+
+
+    def test_shared_preview_records_encrypted_access_dimensions(self):
+        obj = {"Body": io.BytesIO(b"hello")}
+        node = {"name": "a.txt", "type": "file", "content_type": "text/plain", "is_encrypted": False, "path": "/docs/a.txt", "size": 5}
+        with (
+            patch.object(filemanager, "require_shared_access"),
+            patch.object(filemanager, "download_file", return_value={"node": node, "object": obj}),
+            patch.object(filemanager, "audit_event") as audit_event,
+            patch.object(filemanager, "record_filemgr_preview_attempt") as preview_attempt,
+            patch.object(filemanager, "record_filemgr_preview_bytes") as preview_bytes,
+            patch.object(filemanager, "record_filemgr_preview_latency") as preview_latency,
+        ):
+            resp = filemanager.shared_preview_fs_file(owner="owner", path="/docs/a.txt", user="user")
+            self.assertIsInstance(resp, StreamingResponse)
+            self.assertEqual(audit_event.call_args.kwargs["encrypted_shared_access_attempt"], False)
+            self.assertEqual(audit_event.call_args.kwargs["share_scope"], "direct")
+            self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "text")
+            self.assertEqual(audit_event.call_args.kwargs["preview_supported"], True)
+            self.assertEqual(audit_event.call_args.kwargs["preview_reason"], "none")
+            self.assertEqual(audit_event.call_args.kwargs["is_encrypted"], False)
+            preview_attempt.assert_called_once_with(kind="text", outcome="success", reason="none")
+            preview_bytes.assert_called_once_with(kind="text", nbytes=5)
+            preview_latency.assert_called_once()
+
+    def test_upload_archive_routes(self):
+        upload = UploadFile(filename="files.tar", file=io.BytesIO(b"tar"))
+        with patch.object(filemanager, "upload_archive", return_value=["/a.txt"]):
+            resp = filemanager.upload_archive_and_extract(dest_folder="/", archive_file=upload, user="user")
+            self.assertEqual(resp["count"], 1)
+
+        with (
+            patch.object(filemanager, "upload_archive", return_value=["/a.txt"]),
+            patch.object(filemanager, "require_shared_access"),
+        ):
+            resp = filemanager.upload_shared_archive(owner="owner", dest_folder="/", archive_file=upload, user="user")
+            self.assertTrue(resp["ok"])
+
     def test_rename_and_zip(self):
         with patch.object(filemanager, "move_node", return_value={"type": "file", "src": "/a", "dst": "/b"}) as move_node:
             resp = filemanager.rename_file(path="/a", new_name="b", user="user")
@@ -94,10 +456,20 @@ class TestFileManagerRoutes(unittest.TestCase):
             move_node.assert_called_once_with("user", "/a/", "/b/")
 
         zip_stream = iter([b"zipdata"])
-        with patch.object(filemanager, "download_zip", return_value=zip_stream):
+        with (
+            patch.object(filemanager, "download_zip", return_value=zip_stream),
+            patch.object(filemanager, "assert_download_allowed") as assert_download_allowed,
+            patch.object(filemanager, "record_download_usage") as record_download_usage,
+        ):
             resp = filemanager.download_multiple_as_zip(paths=["/a"], user="user")
             self.assertIsInstance(resp, StreamingResponse)
             self.assertEqual(resp.media_type, "application/zip")
+            async def _consume_zip():
+                async for _ in resp.body_iterator:
+                    pass
+            asyncio.run(_consume_zip())
+            record_download_usage.assert_called_once_with("user", "/_zip/download.zip", 7, source="download_zip", request_id=None)
+            assert_download_allowed.assert_called_once_with("user", requested_bytes=0)
 
         upload = UploadFile(filename="files.zip", file=io.BytesIO(b"zipdata"))
         with patch.object(filemanager, "upload_zip", return_value=["/a.txt"]):
@@ -114,6 +486,96 @@ class TestFileManagerRoutes(unittest.TestCase):
             resp = filemanager.list_shared(path="/a", user="user")
             self.assertEqual(resp["shared_with"], ["bob"])
 
-        with patch.object(filemanager, "list_shared_with_me", return_value=[{"owner": "alice", "path": "/a"}]):
+        with patch.object(filemanager, "list_shared_with_me", return_value=[{
+            "owner": "alice",
+            "path": "/a",
+            "is_encrypted": True,
+            "enc_version": 1,
+            "enc_alg": "AES-256-GCM",
+        }]):
             resp = filemanager.list_shared_me(user="user")
             self.assertEqual(resp["items"][0]["owner"], "alice")
+            self.assertTrue(resp["items"][0]["is_encrypted"])
+            self.assertEqual(resp["items"][0]["enc_alg"], "AES-256-GCM")
+
+
+    def test_shared_list_and_info_include_preview_contract(self):
+        shared_node = {
+            "path": "/docs/table.csv",
+            "type": "file",
+            "name": "table.csv",
+            "parent": "/docs/",
+            "content_type": "text/csv",
+            "is_encrypted": False,
+            "size": 100,
+        }
+        with (
+            patch.object(filemanager, "require_shared_access"),
+            patch.object(filemanager, "list_children_page", return_value=([shared_node], None)),
+            patch.object(filemanager, "get_node", return_value=shared_node),
+        ):
+            listed = filemanager.list_shared_files(owner="owner", path="/docs", sort_by="name", user="user")
+            self.assertEqual(listed["items"][0]["preview_kind"], "csv")
+            self.assertTrue(listed["items"][0]["preview_supported"])
+            self.assertIsNone(listed["items"][0]["preview_reason"])
+
+            info = filemanager.shared_file_info(owner="owner", path="/docs/table.csv", user="user")
+            self.assertEqual(info["preview_kind"], "csv")
+            self.assertTrue(info["preview_supported"])
+            self.assertIsNone(info["preview_reason"])
+
+    def test_shared_download_and_shared_zip_metering(self):
+        obj = {"Body": io.BytesIO(b"hello")}
+        node = {"name": "a.txt", "type": "file", "content_type": "text/plain", "is_encrypted": False, "path": "/docs/a.txt", "size": 5}
+        with (
+            patch.object(filemanager, "require_shared_access"),
+            patch.object(filemanager, "download_file", return_value={"node": node, "object": obj}),
+            patch.object(filemanager, "assert_download_allowed") as assert_download_allowed,
+            patch.object(filemanager, "record_download_usage") as record_download_usage,
+            patch.object(filemanager, "record_filemgr_encryption_event") as record_encryption_event,
+            patch.object(filemanager, "record_filemgr_shared_download") as record_shared_download,
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            resp = filemanager.shared_download_fs_file(owner="owner", path="/docs/a.txt", user="user")
+            self.assertIsInstance(resp, StreamingResponse)
+            async def _consume():
+                async for _ in resp.body_iterator:
+                    pass
+            asyncio.run(_consume())
+            record_download_usage.assert_called_once_with("user", "/docs/a.txt", 5, source="shared_download", request_id=None)
+            assert_download_allowed.assert_called_once_with("user", requested_bytes=5)
+            record_encryption_event.assert_called_once_with("download_attempt", encrypted=False)
+            record_shared_download.assert_called_once_with(encrypted=False, outcome="attempt")
+            self.assertEqual(audit_event.call_args.kwargs["encrypted_shared_access_attempt"], False)
+            self.assertEqual(audit_event.call_args.kwargs["share_scope"], "direct")
+
+        with (
+            patch.object(filemanager, "require_shared_access"),
+            patch.object(filemanager, "download_zip", return_value=(iter([b"ab", b"cd"]), 2)),
+            patch.object(filemanager, "assert_download_allowed") as assert_download_allowed,
+            patch.object(filemanager, "record_download_usage") as record_download_usage,
+        ):
+            resp = filemanager.shared_download_zip(owner="owner", paths=["/docs/a.txt"], user="user")
+            self.assertIsInstance(resp, StreamingResponse)
+            async def _consume_zip():
+                async for _ in resp.body_iterator:
+                    pass
+            asyncio.run(_consume_zip())
+            record_download_usage.assert_called_once_with("user", "/_zip/shared-download.zip", 4, source="shared_download_zip", request_id=None)
+            assert_download_allowed.assert_called_once_with("user", requested_bytes=0)
+
+    def test_usage_endpoints(self):
+        with patch.object(filemanager, "get_usage_summary", return_value={"period_id": "2026-02"}) as summary:
+            resp = filemanager.usage_summary(period="2026-02", user="user")
+            self.assertEqual(resp["period_id"], "2026-02")
+            summary.assert_called_once_with("user", period_id="2026-02")
+
+        with patch.object(filemanager, "get_usage_daily", return_value={"items": []}) as daily:
+            resp = filemanager.usage_daily(from_day="2026-02-01", to_day="2026-02-28", user="user")
+            self.assertEqual(resp["items"], [])
+            daily.assert_called_once_with("user", from_day="2026-02-01", to_day="2026-02-28")
+
+        with patch.object(filemanager, "get_usage_storage", return_value={"storage_bytes_current": 123}) as storage:
+            resp = filemanager.usage_storage(top_n=5, user="user")
+            self.assertEqual(resp["storage_bytes_current"], 123)
+            storage.assert_called_once_with("user", top_n=5)

@@ -6,6 +6,7 @@ import { TrustedDevices } from "./TrustedDevices";
 import { ApiKeys } from "./ApiKeys";
 import { Recovery } from "./Recovery";
 import { WebAuthnDevices } from "./WebAuthnDevices";
+import { RememberedFilePasswords } from "./RememberedFilePasswords";
 
 export default function SecurityPage() {
   return (
@@ -21,6 +22,7 @@ export default function SecurityPage() {
           <TabsTrigger value="webauthn">Security Keys</TabsTrigger>
           <TabsTrigger value="sessions">Sessions</TabsTrigger>
           <TabsTrigger value="devices">Trusted Devices</TabsTrigger>
+          <TabsTrigger value="file-passwords">File Passwords</TabsTrigger>
           <TabsTrigger value="apikeys">API Keys</TabsTrigger>
           <TabsTrigger value="recovery">Recovery</TabsTrigger>
         </TabsList>
@@ -35,6 +37,9 @@ export default function SecurityPage() {
         </TabsContent>
         <TabsContent value="devices">
           <TrustedDevices />
+        </TabsContent>
+        <TabsContent value="file-passwords">
+          <RememberedFilePasswords />
         </TabsContent>
         <TabsContent value="apikeys">
           <ApiKeys />

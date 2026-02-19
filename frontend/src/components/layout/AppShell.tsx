@@ -3,6 +3,7 @@ import { Outlet } from "react-router-dom";
 import Sidebar from "./Sidebar";
 import Header from "./Header";
 import MobileNav from "./MobileNav";
+import ImpersonationBanner from "@/components/shared/ImpersonationBanner";
 import { PageTransition } from "@/components/shared/PageTransition";
 import { OfflineBanner } from "@/components/shared/OfflineBanner";
 import {
@@ -42,6 +43,7 @@ export default function AppShell() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <OfflineBanner />
         <Header onMobileMenuToggle={() => setMobileMenuOpen(true)} />
+        <ImpersonationBanner />
 
         <main id="main-content" className="flex-1 overflow-y-auto pb-16 md:pb-0">
           <PageTransition>
@@ -74,9 +76,12 @@ import {
   Shield,
   Settings,
   Bell,
+  UsersRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
+import { useAuthStore } from "@/stores/authStore";
+import { canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 
 const MOBILE_NAV_GROUPS = [
   {
@@ -111,12 +116,15 @@ const MOBILE_NAV_GROUPS = [
       { label: "Security", path: "/security", icon: Shield },
       { label: "Alerts", path: "/alerts", icon: Bell },
       { label: "Settings", path: "/settings", icon: Settings },
+      { label: "Role Mgmt", path: "/root/roles", icon: UsersRound },
     ],
   },
 ];
 
 function MobileSidebar({ onNavigate }: { onNavigate: () => void }) {
   const location = useLocation();
+  const accessToken = useAuthStore((s) => s.accessToken);
+  const showRootRoleManagement = canSeeRootRoleManagement(accessToken);
 
   const isActive = (path: string) => {
     if (path === "/") return location.pathname === "/";
@@ -137,14 +145,17 @@ function MobileSidebar({ onNavigate }: { onNavigate: () => void }) {
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-2 py-3">
-        {MOBILE_NAV_GROUPS.map((group, gi) => (
+        {MOBILE_NAV_GROUPS.map((group, gi) => {
+          const items = group.items.filter((item) => item.path !== "/root/roles" || showRootRoleManagement);
+          if (items.length === 0) return null;
+          return (
           <div key={group.title}>
             {gi > 0 && <Separator className="my-2" />}
             <span className="mb-1 block px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               {group.title}
             </span>
             <ul className="space-y-0.5">
-              {group.items.map((item) => {
+              {items.map((item) => {
                 const active = isActive(item.path);
                 return (
                   <li key={item.path}>
@@ -166,7 +177,8 @@ function MobileSidebar({ onNavigate }: { onNavigate: () => void }) {
               })}
             </ul>
           </div>
-        ))}
+          );
+        })}
       </nav>
     </div>
   );
