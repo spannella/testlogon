@@ -5,7 +5,7 @@ from typing import Any, Dict, Literal, Mapping, Optional
 
 RoutingMode = Literal["standard", "helpdesk_bridge"]
 RoutingState = Literal["none", "awaiting_agent", "assigned", "paused_no_agents_online", "closed"]
-RoutingAction = Literal["assign_agent", "release_agent", "pause_no_agents", "resume_awaiting", "close"]
+RoutingAction = Literal["assign_agent", "release_agent", "pause_no_agents", "resume_awaiting", "alert_awaiting", "close"]
 
 
 @dataclass(frozen=True)
@@ -200,6 +200,21 @@ def transition_helpdesk_routing(
                 "routing_state_group_pk": _state_group_pk(to_state, group_id),
                 "routing_state_group_sk": str(conversation.get("conversation_id") or ""),
             },
+        )
+
+
+    if cmd.action == "alert_awaiting":
+        if from_state != "awaiting_agent":
+            raise RoutingTransitionError(
+                code="routing_alert_invalid_state",
+                message="conversation can only be alerted from awaiting_agent state",
+            )
+        return RoutingTransitionResult(
+            from_state=from_state,
+            to_state="awaiting_agent",
+            changed=False,
+            event_type="helpdesk.conversation.alerted",
+            patch={},
         )
 
     if cmd.action == "close":

@@ -260,6 +260,30 @@ HELPDESK_CLAIMS_TOTAL = Counter(
     ["outcome"],
 )
 
+HELPDESK_CLAIM_SUCCESS_TOTAL = Counter(
+    "helpdesk_claim_success_total",
+    "Helpdesk claim successes",
+)
+HELPDESK_CLAIM_CONFLICT_TOTAL = Counter(
+    "helpdesk_claim_conflict_total",
+    "Helpdesk claim conflicts",
+)
+HELPDESK_FAILOVER_TOTAL = Counter(
+    "helpdesk_failover_total",
+    "Helpdesk assignment failovers triggered by assignee disconnect/unavailable",
+    ["reason"],
+)
+HELPDESK_NO_AGENTS_NOTICE_TOTAL = Counter(
+    "helpdesk_no_agents_notice_total",
+    "Helpdesk no-agents-online notice outcomes",
+    ["outcome"],
+)
+HELPDESK_TIME_TO_FIRST_CLAIM_MS = Histogram(
+    "helpdesk_time_to_first_claim_ms",
+    "Milliseconds from conversation creation to first successful helpdesk claim",
+    buckets=(100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000, 120000, 300000),
+)
+
 ADMIN_SCOPE_DENIED = Counter(
     "admin_scope_denied_total",
     "Denied admin scope authorization checks by route, required scope, and profile type",
@@ -417,6 +441,28 @@ def record_helpdesk_alert_sent(outcome: str) -> None:
 
 def record_helpdesk_claim(outcome: str) -> None:
     HELPDESK_CLAIMS_TOTAL.labels(outcome=(outcome or "unknown").lower()).inc()
+
+
+
+
+def record_helpdesk_claim_success() -> None:
+    HELPDESK_CLAIM_SUCCESS_TOTAL.inc()
+
+
+def record_helpdesk_claim_conflict() -> None:
+    HELPDESK_CLAIM_CONFLICT_TOTAL.inc()
+
+
+def record_helpdesk_failover(reason: str) -> None:
+    HELPDESK_FAILOVER_TOTAL.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def record_helpdesk_no_agents_notice(outcome: str) -> None:
+    HELPDESK_NO_AGENTS_NOTICE_TOTAL.labels(outcome=(outcome or "unknown").lower()).inc()
+
+
+def record_helpdesk_time_to_first_claim_ms(elapsed_ms: float) -> None:
+    HELPDESK_TIME_TO_FIRST_CLAIM_MS.observe(max(0.0, float(elapsed_ms)))
 
 
 def record_admin_scope_denied(*, route: str, required_scope: str, admin_profile_type: str) -> None:

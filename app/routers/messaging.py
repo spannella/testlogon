@@ -27,7 +27,15 @@ from pydantic import BaseModel, Field, model_validator
 from pydantic_core import PydanticCustomError
 
 from app.auth.deps import extract_bearer_token, get_authenticated_user_sub
-from app.metrics import record_helpdesk_alert_sent, record_helpdesk_claim
+from app.metrics import (
+    record_helpdesk_alert_sent,
+    record_helpdesk_claim,
+    record_helpdesk_claim_conflict,
+    record_helpdesk_claim_success,
+    record_helpdesk_failover,
+    record_helpdesk_no_agents_notice,
+    record_helpdesk_time_to_first_claim_ms,
+)
 from app.core.settings import S
 from app.core.aws import ddb
 from app.core.aws_clients import s3_client
@@ -110,6 +118,14 @@ ENCRYPTED_EDIT_ERROR_CODE = "encrypted_message_edit_unsupported"
 NO_AGENTS_ONLINE_NOTICE_TEXT = "No helpdesk agents are online right now. Please try again later."
 NO_AGENTS_NOTICE_THROTTLE_SEC = int(os.getenv("NO_AGENTS_NOTICE_THROTTLE_SEC", "600"))
 HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED = os.getenv("HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+HELPDESK_ROUTING_EVENT_SCHEMA_VERSION = 1
+HELPDESK_ROUTING_LIFECYCLE_EVENT_TYPES = {
+    "helpdesk.conversation.alerted",
+    "helpdesk.conversation.assigned",
+    "helpdesk.conversation.released",
+    "helpdesk.conversation.no_agents_online",
+}
 
 
 # -------------------------
@@ -345,6 +361,43 @@ async def get_messaging_user_id(
     return get_current_user_id(authorization)
 
 
+
+
+def _csv_env_set(name: str, *, default: str = "") -> set[str]:
+    raw = os.getenv(name, default)
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+def _resolve_user_tenant_id(user_id: str) -> str:
+    uid = str(user_id or "").strip()
+    if not uid:
+        return ""
+    try:
+        user = tbl_users.get_item(Key={"user_id": uid}).get("Item") or {}
+    except Exception:
+        return ""
+    return str(user.get("tenant_id") or user.get("tenant") or "").strip()
+
+
+def _is_helpdesk_bridge_mode_enabled_for(*, user_id: str, group_id: str) -> bool:
+    mode = os.getenv("HELPDESK_BRIDGE_MODE", "enabled").strip().lower()
+    gid = str(group_id or "").strip()
+    if mode in {"enabled", "on", "true", "1"}:
+        return True
+    if mode in {"disabled", "off", "false", "0", ""}:
+        return False
+    if mode in {"internal", "pilot_internal"}:
+        internal_group_ids = _csv_env_set("HELPDESK_BRIDGE_INTERNAL_GROUP_IDS", default="helpdesk-internal")
+        return gid in internal_group_ids
+    if mode in {"selective", "tenant_group"}:
+        enabled_group_ids = _csv_env_set("HELPDESK_BRIDGE_ENABLED_GROUP_IDS")
+        if gid in enabled_group_ids:
+            return True
+        tenant_id = _resolve_user_tenant_id(user_id)
+        enabled_tenant_ids = _csv_env_set("HELPDESK_BRIDGE_ENABLED_TENANT_IDS")
+        return bool(tenant_id and tenant_id in enabled_tenant_ids)
+    return False
+
 def _helpdesk_virtual_participant_id(group_id: str) -> str:
     return f"helpdesk_group:{group_id}"
 
@@ -429,6 +482,12 @@ class ConversationOut(BaseModel):
     muted_until: int = 0
     last_read_at: int = 0
     unread_count: int = 0
+    routing_mode: Optional[str] = None
+    routing_group_id: Optional[str] = None
+    routing_state: Optional[str] = None
+    active_agent_user_id: Optional[str] = None
+    active_agent_claimed_at: Optional[int] = None
+    assignment_version: Optional[int] = None
 
 
 class RoutingEventOut(BaseModel):
@@ -627,6 +686,9 @@ class ParticipantOut(BaseModel):
     last_read_at: int = 0
     joined_at: int = 0
     left_at: int = 0
+    assignment_state: Optional[str] = None
+    assignment_owner_user_id: Optional[str] = None
+    is_assignment_owner: Optional[bool] = None
 
 
 class ReactIn(BaseModel):
@@ -732,6 +794,9 @@ class MessageOut(BaseModel):
     my_reactions: Optional[List[str]] = None
     is_encrypted: bool = False
     encryption: Optional[MessageEncryptionEnvelope] = None
+
+
+HELPDESK_MASKED_SENDER_ID = "Helpdesk"
 
 
 # -------------------------
@@ -1053,10 +1118,16 @@ def _rank_messages_by_relevance(items: list[dict], query: str) -> list[dict]:
 
 def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOut:
     counts, mine = _reaction_summaries(message_item, viewer_user_id)
+    conversation_id = str(message_item.get("conversation_id") or "")
+    projected_sender_id = _project_message_sender_id(
+        message_item=message_item,
+        viewer_user_id=viewer_user_id,
+        conversation_id=conversation_id,
+    )
     return MessageOut(
         conversation_id=message_item["conversation_id"],
         message_id=message_item["message_id"],
-        sender_id=message_item["sender_id"],
+        sender_id=projected_sender_id,
         created_at=int(message_item["created_at"]),
         kind=message_item["kind"],
         text=message_item.get("text"),
@@ -1080,6 +1151,69 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
 def _serialize_message_event_payload(message_item: dict, viewer_user_id: str) -> dict:
     """Serialize a message item to a JSON-safe event payload."""
     return _message_out_from_item(message_item, viewer_user_id).model_dump(exclude_none=True)
+
+
+def _project_message_sender_id(*, message_item: dict, viewer_user_id: str, conversation_id: str) -> str:
+    sender_id = str(message_item.get("sender_id") or "")
+    if not sender_id:
+        return sender_id
+    try:
+        convo = _get_conversation_or_404(conversation_id)
+    except Exception:
+        return sender_id
+    if str(convo.get("routing_mode") or "") != "helpdesk_bridge":
+        return sender_id
+    group_id = str(convo.get("routing_group_id") or "")
+    if not group_id:
+        return sender_id
+    viewer_is_helpdesk_agent = _is_helpdesk_group_member(group_id, viewer_user_id)
+    if viewer_is_helpdesk_agent:
+        return sender_id
+    sender_is_helpdesk_agent = _is_helpdesk_group_member(group_id, sender_id)
+    if sender_is_helpdesk_agent:
+        return HELPDESK_MASKED_SENDER_ID
+    return sender_id
+
+
+def _project_event_for_user(event_item: dict, user_id: str) -> dict:
+    out = dict(event_item or {})
+    event_type = str(out.get("type") or "")
+    if event_type in HELPDESK_ROUTING_LIFECYCLE_EVENT_TYPES:
+        payload = out.get("payload")
+        if isinstance(payload, dict):
+            convo_id = str(payload.get("conversation_id") or out.get("conversation_id") or "")
+            if convo_id:
+                try:
+                    convo = _get_conversation_or_404(convo_id)
+                    out_payload = _project_helpdesk_lifecycle_payload_for_user(
+                        payload=payload,
+                        conversation=convo,
+                        user_id=user_id,
+                    )
+                    out["payload"] = out_payload
+                except Exception:
+                    return out
+        return out
+    if event_type != "message:new":
+        return out
+    payload = out.get("payload")
+    if not isinstance(payload, dict):
+        return out
+    message_payload = payload.get("message")
+    if not isinstance(message_payload, dict):
+        return out
+    conversation_id = str(message_payload.get("conversation_id") or out.get("conversation_id") or "")
+    message_id = str(message_payload.get("message_id") or "")
+    if not conversation_id or not message_id:
+        return out
+    try:
+        message_item = _get_message_or_404(conversation_id, message_id)
+    except Exception:
+        return out
+    payload_out = dict(payload)
+    payload_out["message"] = _serialize_message_event_payload(message_item, user_id)
+    out["payload"] = payload_out
+    return out
 
 
 def _fetch_message_items(message_keys: Iterable[str]) -> list[dict]:
@@ -1213,6 +1347,135 @@ def _get_conversation_or_404(conversation_id: str) -> dict:
     return convo
 
 
+def _is_helpdesk_agent_viewer(convo: dict, user_id: str) -> bool:
+    if str(convo.get("routing_mode") or "") != "helpdesk_bridge":
+        return False
+    group_id = str(convo.get("routing_group_id") or "")
+    if not group_id:
+        return False
+    return _is_helpdesk_group_member(group_id, user_id)
+
+
+def _conversation_out_from_items(*, conversation_id: str, convo: dict, participant: dict, viewer_user_id: str) -> ConversationOut:
+    out = ConversationOut(
+        conversation_id=conversation_id,
+        type=convo.get("type", "dm"),
+        title=convo.get("title"),
+        description=convo.get("description"),
+        icon=convo.get("icon"),
+        topic=convo.get("topic"),
+        retention_days=convo.get("retention_days"),
+        created_at=int(convo.get("created_at", 0)),
+        created_by=convo.get("created_by", ""),
+        participant_count=int(convo.get("participant_count", 0)),
+        last_message_at=int(convo.get("last_message_at", 0)) or None,
+        last_message_preview=convo.get("last_message_preview") or None,
+        status=participant.get("status", "pending"),
+        muted_until=int(participant.get("muted_until", 0) or 0),
+        last_read_at=int(participant.get("last_read_at", 0) or 0),
+        unread_count=int(participant.get("unread_count", 0) or 0),
+    )
+    if _is_helpdesk_agent_viewer(convo, viewer_user_id):
+        out.routing_mode = str(convo.get("routing_mode") or "")
+        out.routing_group_id = str(convo.get("routing_group_id") or "")
+        out.routing_state = str(convo.get("routing_state") or "")
+        out.active_agent_user_id = str(convo.get("active_agent_user_id") or "")
+        out.active_agent_claimed_at = int(convo.get("active_agent_claimed_at", 0) or 0)
+        out.assignment_version = int(convo.get("assignment_version", 0) or 0)
+    return out
+
+
+
+
+def _helpdesk_lifecycle_event_payload(*, conversation: Mapping[str, Any], event_item: Mapping[str, Any]) -> dict:
+    return {
+        "schema_version": HELPDESK_ROUTING_EVENT_SCHEMA_VERSION,
+        "conversation_id": str(event_item.get("conversation_id") or conversation.get("conversation_id") or ""),
+        "event_id": str(event_item.get("event_id") or ""),
+        "event_type": str(event_item.get("event_type") or ""),
+        "occurred_at": int(event_item.get("created_at", 0) or 0),
+        "routing_group_id": str(event_item.get("routing_group_id") or conversation.get("routing_group_id") or ""),
+        "from_state": str(event_item.get("from_state") or ""),
+        "to_state": str(event_item.get("to_state") or ""),
+        "routing_state": str(conversation.get("routing_state") or ""),
+        "assignment_version": int(event_item.get("assignment_version", 0) or conversation.get("assignment_version", 0) or 0),
+        "active_agent_user_id": str(conversation.get("active_agent_user_id") or event_item.get("active_agent_user_id") or ""),
+        "metadata": event_item.get("metadata", {}) if isinstance(event_item.get("metadata"), dict) else {},
+    }
+
+
+
+
+def _is_helpdesk_authorized_for_conversation(conversation: Mapping[str, Any], user_id: str) -> bool:
+    if str(conversation.get("routing_mode") or "") != "helpdesk_bridge":
+        return False
+    group_id = str(conversation.get("routing_group_id") or "")
+    if not group_id:
+        return False
+    return _is_helpdesk_group_member(group_id, user_id)
+
+
+def _project_helpdesk_lifecycle_payload_for_user(*, payload: Mapping[str, Any], conversation: Mapping[str, Any], user_id: str) -> dict:
+    out = dict(payload or {})
+    if _is_helpdesk_authorized_for_conversation(conversation, user_id):
+        return out
+    out["active_agent_user_id"] = ""
+    out["metadata"] = {}
+    return out
+
+def _helpdesk_lifecycle_recipients(conversation_id: str, actor_user_id: str) -> list[str]:
+    recipients: list[str] = []
+    try:
+        participants = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id), Limit=500).get("Items", [])
+    except Exception:
+        participants = []
+    for part in participants:
+        if part.get("status") == "active":
+            uid = str(part.get("user_id") or "")
+            if uid and not uid.startswith("helpdesk_group:"):
+                recipients.append(uid)
+    if actor_user_id:
+        recipients.append(str(actor_user_id))
+    return list(dict.fromkeys(recipients))
+
+
+def _fanout_helpdesk_lifecycle_event(*, conversation: Mapping[str, Any], event_item: Mapping[str, Any], actor_user_id: str) -> None:
+    event_type = str(event_item.get("event_type") or "")
+    if event_type not in HELPDESK_ROUTING_LIFECYCLE_EVENT_TYPES:
+        return
+    conversation_id = str(conversation.get("conversation_id") or event_item.get("conversation_id") or "")
+    if not conversation_id:
+        return
+    payload = _helpdesk_lifecycle_event_payload(conversation=conversation, event_item=event_item)
+    ts = int(event_item.get("created_at", now_ts()) or now_ts())
+    ttl = ts + 7 * 24 * 3600
+    recipients = _helpdesk_lifecycle_recipients(conversation_id, actor_user_id)
+    for uid in recipients:
+        projected_payload = _project_helpdesk_lifecycle_payload_for_user(
+            payload=payload,
+            conversation=conversation,
+            user_id=uid,
+        )
+        try:
+            tbl_events.put_item(
+                Item={
+                    "user_id": uid,
+                    "event_id": f"routing#{conversation_id}#{event_item.get('event_id','')}#{uid}",
+                    "type": event_type,
+                    "created_at": ts,
+                    "conversation_id": conversation_id,
+                    "payload": projected_payload,
+                    "ttl": ttl,
+                },
+                ConditionExpression="attribute_not_exists(event_id)",
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
+                continue
+            logger.exception("failed to fanout helpdesk lifecycle event", extra={"conversation_id": conversation_id, "event_type": event_type, "user_id": uid})
+        except Exception:
+            logger.exception("failed to fanout helpdesk lifecycle event", extra={"conversation_id": conversation_id, "event_type": event_type, "user_id": uid})
+
 def _routing_event_id(ts: int) -> str:
     return f"{int(ts):010d}#{new_id()}"
 
@@ -1256,6 +1519,7 @@ def _apply_helpdesk_routing_transition(
         metadata=metadata or {},
     )
     tbl_routing_events.put_item(Item=event_item, ConditionExpression="attribute_not_exists(event_id)")
+    _fanout_helpdesk_lifecycle_event(conversation=convo, event_item=event_item, actor_user_id=actor_user_id)
     return {"transition": result, "event": event_item, "conversation": convo}
 
 
@@ -1565,6 +1829,185 @@ def _resolve_online_helpdesk_members(group_id: str, ts: int) -> list[str]:
     return out
 
 
+
+
+def _normalize_presence_status(status: Optional[str]) -> str:
+    value = str(status or "online").strip().lower()
+    if value in {"online", "available", "offline", "unavailable"}:
+        return value
+    return "online"
+
+
+def _assigned_helpdesk_conversations_for_agent(user_id: str) -> list[dict]:
+    try:
+        parts = tbl_parts.query(KeyConditionExpression=Key("user_id").eq(user_id), Limit=500).get("Items", [])
+    except Exception:
+        return []
+    out: list[dict] = []
+    for part in parts:
+        cid = str(part.get("conversation_id") or "")
+        if not cid:
+            continue
+        try:
+            convo = _get_conversation_or_404(cid)
+        except HTTPException:
+            continue
+        if str(convo.get("routing_mode") or "") != "helpdesk_bridge":
+            continue
+        if str(convo.get("routing_state") or "") != "assigned":
+            continue
+        if str(convo.get("active_agent_user_id") or "") != user_id:
+            continue
+        out.append(convo)
+    return out
+
+
+
+
+def _helpdesk_groups_for_agent(user_id: str) -> list[str]:
+    uid = str(user_id or "").strip()
+    if not uid:
+        return []
+    groups: list[str] = []
+    if HELPDESK_GROUP_MEMBERS_JSON:
+        try:
+            raw = json.loads(HELPDESK_GROUP_MEMBERS_JSON)
+            if isinstance(raw, dict):
+                for gid, members in raw.items():
+                    if not isinstance(members, list):
+                        continue
+                    if uid in {str(v).strip() for v in members}:
+                        groups.append(str(gid).strip())
+        except Exception:
+            logger.exception("failed to parse HELPDESK_GROUP_MEMBERS_JSON")
+
+    try:
+        user = tbl_users.get_item(Key={"user_id": uid}).get("Item") or {}
+    except Exception:
+        user = {}
+    declared_groups = user.get("helpdesk_groups")
+    if isinstance(declared_groups, list):
+        groups.extend(str(v).strip() for v in declared_groups if str(v).strip())
+
+    return list(dict.fromkeys([g for g in groups if g]))
+
+
+def _paused_helpdesk_conversations_for_groups(group_ids: Sequence[str]) -> list[dict]:
+    groups = [str(g).strip() for g in group_ids if str(g).strip()]
+    if not groups:
+        return []
+    items: list[dict] = []
+    for gid in groups:
+        pk = f"paused_no_agents_online#{gid}"
+        try:
+            resp = tbl_convos.scan(FilterExpression=Attr("routing_state_group_pk").eq(pk), Limit=200)
+            items.extend(resp.get("Items", []))
+            while resp.get("LastEvaluatedKey"):
+                resp = tbl_convos.scan(
+                    FilterExpression=Attr("routing_state_group_pk").eq(pk),
+                    Limit=200,
+                    ExclusiveStartKey=resp["LastEvaluatedKey"],
+                )
+                items.extend(resp.get("Items", []))
+        except Exception:
+            logger.exception("failed to scan paused helpdesk conversations", extra={"group_id": gid})
+    dedup: dict[str, dict] = {}
+    for item in items:
+        cid = str(item.get("conversation_id") or "")
+        if cid:
+            dedup[cid] = item
+    return list(dedup.values())
+
+def _handle_helpdesk_presence_event(*, user_id: str, status: str, ts: int) -> dict:
+    processed = 0
+    transitioned = 0
+    failed = 0
+    action = "none"
+    if status in {"offline", "unavailable"}:
+        action = "release_assigned"
+        conversations = _assigned_helpdesk_conversations_for_agent(user_id)
+        processed = len(conversations)
+        for convo in conversations:
+            record_helpdesk_failover("assignee_disconnect")
+            cid = str(convo.get("conversation_id") or "")
+            version = int(convo.get("assignment_version") or 0)
+            try:
+                release_result = _apply_helpdesk_routing_transition(
+                    conversation_id=cid,
+                    cmd=RoutingTransitionInput(
+                        action="release_agent",
+                        now_ts=ts,
+                        agent_user_id=user_id,
+                        expected_assignment_version=version,
+                    ),
+                    actor_user_id=user_id,
+                    metadata={"reason": "presence_status_change", "status": status},
+                )
+                transitioned += 1
+                released_convo = release_result.get("conversation", {}) if isinstance(release_result, dict) else {}
+                group_id = str(released_convo.get("routing_group_id") or convo.get("routing_group_id") or "")
+                if group_id:
+                    delivered = fanout_helpdesk_alert(conversation_id=cid, group_id=group_id, created_by=user_id)
+                    if delivered > 0:
+                        _apply_helpdesk_routing_transition(
+                            conversation_id=cid,
+                            cmd=RoutingTransitionInput(
+                                action="alert_awaiting",
+                                now_ts=ts,
+                                expected_assignment_version=int(released_convo.get("assignment_version") or 0),
+                            ),
+                            actor_user_id=user_id,
+                            metadata={"reason": "presence_realert", "status": status, "delivered": delivered},
+                        )
+                    else:
+                        _emit_no_agents_online_notice(conversation_id=cid, user_id=user_id, now=ts)
+            except RoutingTransitionError as exc:
+                if exc.code in {"routing_release_invalid_state", "routing_assignment_version_conflict", "routing_release_agent_mismatch"}:
+                    continue
+                failed += 1
+            except Exception:
+                failed += 1
+                logger.exception("helpdesk presence routing transition failed", extra={"conversation_id": cid, "user_id": user_id, "status": status})
+
+    elif status in {"online", "available"}:
+        action = "resume_paused"
+        groups = _helpdesk_groups_for_agent(user_id)
+        paused = _paused_helpdesk_conversations_for_groups(groups)
+        processed = len(paused)
+        for convo in paused:
+            cid = str(convo.get("conversation_id") or "")
+            version = int(convo.get("assignment_version") or 0)
+            gid = str(convo.get("routing_group_id") or "")
+            try:
+                _apply_helpdesk_routing_transition(
+                    conversation_id=cid,
+                    cmd=RoutingTransitionInput(
+                        action="resume_awaiting",
+                        now_ts=ts,
+                        expected_assignment_version=version,
+                    ),
+                    actor_user_id=user_id,
+                    metadata={"reason": "presence_available", "status": status},
+                )
+                transitioned += 1
+                if gid:
+                    fanout_helpdesk_alert(conversation_id=cid, group_id=gid, created_by=user_id)
+            except RoutingTransitionError as exc:
+                if exc.code in {"routing_resume_invalid_state", "routing_assignment_version_conflict"}:
+                    continue
+                failed += 1
+            except Exception:
+                failed += 1
+                logger.exception("helpdesk presence resume transition failed", extra={"conversation_id": cid, "user_id": user_id, "status": status})
+
+    return {
+        "action": action,
+        "processed": processed,
+        "transitioned": transitioned,
+        "failed": failed,
+    }
+
+
 def fanout_helpdesk_alert(conversation_id: str, group_id: str, created_by: str) -> int:
     ts = now_ts()
     online_members = _resolve_online_helpdesk_members(group_id, ts)
@@ -1581,10 +2024,18 @@ def fanout_helpdesk_alert(conversation_id: str, group_id: str, created_by: str) 
             "created_at": ts,
             "conversation_id": conversation_id,
             "payload": {
+                "schema_version": HELPDESK_ROUTING_EVENT_SCHEMA_VERSION,
                 "conversation_id": conversation_id,
-                "group_id": group_id,
-                "created_by": created_by,
+                "event_id": _helpdesk_alert_event_id(conversation_id, uid),
+                "event_type": "helpdesk.conversation.alerted",
+                "occurred_at": ts,
+                "routing_group_id": group_id,
+                "from_state": "awaiting_agent",
+                "to_state": "awaiting_agent",
                 "routing_state": "awaiting_agent",
+                "assignment_version": 0,
+                "active_agent_user_id": "",
+                "metadata": {"created_by": created_by},
             },
             "ttl": ttl,
         }
@@ -1608,6 +2059,7 @@ def _emit_no_agents_online_notice(*, conversation_id: str, user_id: str, now: in
     convo = _get_conversation_or_404(conversation_id)
     last_notice_at = int(convo.get("no_agents_notice_sent_at", 0) or 0)
     if last_notice_at and (now - last_notice_at) < NO_AGENTS_NOTICE_THROTTLE_SEC:
+        record_helpdesk_no_agents_notice("throttled")
         return False
 
     try:
@@ -1649,6 +2101,7 @@ def _emit_no_agents_online_notice(*, conversation_id: str, user_id: str, now: in
             ":preview": NO_AGENTS_ONLINE_NOTICE_TEXT,
         },
     )
+    record_helpdesk_no_agents_notice("sent")
     return True
 
 
@@ -1812,6 +2265,14 @@ def start_conversation(
     group_id = inp.helpdesk_group_id if routing_mode == "helpdesk_bridge" else ""
 
     if routing_mode == "helpdesk_bridge":
+        if not _is_helpdesk_bridge_mode_enabled_for(user_id=user_id, group_id=group_id):
+            raise HTTPException(
+                403,
+                detail={
+                    "code": "helpdesk_bridge_mode_disabled",
+                    "message": "helpdesk bridge mode is not enabled for this group/tenant",
+                },
+            )
         participant_ids = [user_id, _helpdesk_virtual_participant_id(group_id)]
     else:
         participant_ids = list(dict.fromkeys([user_id] + inp.participant_ids))
@@ -1963,26 +2424,7 @@ def list_conversations(user_id: str = Depends(get_messaging_user_id)):
         convo = tbl_convos.get_item(Key={"conversation_id": cid}).get("Item")
         if not convo:
             continue
-        out.append(
-            ConversationOut(
-                conversation_id=cid,
-                type=convo.get("type", "dm"),
-                title=convo.get("title"),
-                description=convo.get("description"),
-                icon=convo.get("icon"),
-                topic=convo.get("topic"),
-                retention_days=convo.get("retention_days"),
-                created_at=int(convo.get("created_at", 0)),
-                created_by=convo.get("created_by", ""),
-                participant_count=int(convo.get("participant_count", 0)),
-                last_message_at=int(convo.get("last_message_at", 0)) or None,
-                last_message_preview=convo.get("last_message_preview") or None,
-                status=p.get("status", "pending"),
-                muted_until=int(p.get("muted_until", 0) or 0),
-                last_read_at=int(p.get("last_read_at", 0) or 0),
-                unread_count=int(p.get("unread_count", 0) or 0),
-            )
-        )
+        out.append(_conversation_out_from_items(conversation_id=cid, convo=convo, participant=p, viewer_user_id=user_id))
 
     out.sort(key=lambda x: (x.last_message_at or 0, x.created_at), reverse=True)
     return out
@@ -2059,23 +2501,11 @@ def update_conversation(
         raise HTTPException(404, "Conversation not found")
 
     part = get_participant_any(user_id, conversation_id)
-    out = ConversationOut(
+    out = _conversation_out_from_items(
         conversation_id=conversation_id,
-        type=convo.get("type", "dm"),
-        title=convo.get("title"),
-        description=convo.get("description"),
-        icon=convo.get("icon"),
-        topic=convo.get("topic"),
-        retention_days=convo.get("retention_days"),
-        created_at=int(convo.get("created_at", 0)),
-        created_by=convo.get("created_by", ""),
-        participant_count=int(convo.get("participant_count", 0)),
-        last_message_at=int(convo.get("last_message_at", 0)) or None,
-        last_message_preview=convo.get("last_message_preview") or None,
-        status="active",
-        muted_until=int((part or {}).get("muted_until", 0) or 0),
-        last_read_at=int((part or {}).get("last_read_at", 0) or 0),
-        unread_count=int((part or {}).get("unread_count", 0) or 0),
+        convo=convo,
+        participant=part or {"status": "active"},
+        viewer_user_id=user_id,
     )
     audit_event(
         "messaging_conversation_updated",
@@ -2310,10 +2740,12 @@ def _claim_helpdesk_conversation_internal(
         if current_agent == user_id:
             return _idempotent_success(convo)
         record_helpdesk_claim("conflict")
+        record_helpdesk_claim_conflict()
         raise HTTPException(409, detail={"code": "helpdesk_claim_already_assigned", "message": "conversation already assigned"})
 
     if current_state != "awaiting_agent":
         record_helpdesk_claim("conflict")
+        record_helpdesk_claim_conflict()
         raise HTTPException(409, detail={"code": "helpdesk_claim_invalid_state", "message": f"cannot claim from state: {current_state}"})
 
     try:
@@ -2334,6 +2766,7 @@ def _claim_helpdesk_conversation_internal(
             if str(latest.get("routing_state") or "") == "assigned" and str(latest.get("active_agent_user_id") or "") == user_id:
                 return _idempotent_success(latest)
             record_helpdesk_claim("conflict")
+            record_helpdesk_claim_conflict()
             raise HTTPException(409, detail={"code": "helpdesk_claim_conflict", "message": "conversation claim conflict"})
         raise HTTPException(400, detail={"code": exc.code, "message": exc.message})
     except ClientError as exc:
@@ -2342,6 +2775,7 @@ def _claim_helpdesk_conversation_internal(
             if str(latest.get("routing_state") or "") == "assigned" and str(latest.get("active_agent_user_id") or "") == user_id:
                 return _idempotent_success(latest)
             record_helpdesk_claim("conflict")
+            record_helpdesk_claim_conflict()
             raise HTTPException(409, detail={"code": "helpdesk_claim_conflict", "message": "conversation claim conflict"})
         raise
 
@@ -2355,6 +2789,10 @@ def _claim_helpdesk_conversation_internal(
         routing_group_id=group_id,
     )
     record_helpdesk_claim("success")
+    record_helpdesk_claim_success()
+    created_at = int(convo.get("created_at", 0) or 0)
+    if created_at > 0:
+        record_helpdesk_time_to_first_claim_ms(max(0, ts - created_at) * 1000.0)
     return HelpdeskClaimOut(
         ok=True,
         conversation_id=conversation_id,
@@ -2374,7 +2812,7 @@ def claim_helpdesk_conversation(
     return _claim_helpdesk_conversation_internal(conversation_id=conversation_id, user_id=user_id, req=req)
 
 
-def _auto_claim_helpdesk_on_first_reply(*, conversation_id: str, convo: dict, user_id: str, req: Optional[Request] = None) -> None:
+def _enforce_helpdesk_send_constraints(*, conversation_id: str, convo: dict, user_id: str, req: Optional[Request] = None) -> None:
     if str(convo.get("routing_mode") or "") != "helpdesk_bridge":
         return
     group_id = str(convo.get("routing_group_id") or "")
@@ -2383,14 +2821,39 @@ def _auto_claim_helpdesk_on_first_reply(*, conversation_id: str, convo: dict, us
 
     state = str(convo.get("routing_state") or "none")
     assigned_agent = str(convo.get("active_agent_user_id") or "")
-    if state == "assigned" and assigned_agent and assigned_agent != user_id:
-        raise HTTPException(409, detail={"code": "helpdesk_claim_already_assigned", "message": "conversation already assigned"})
-    if state != "awaiting_agent":
+    if state == "assigned":
+        if assigned_agent and assigned_agent != user_id:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "helpdesk_assignee_required",
+                    "message": "only the assigned helpdesk agent can reply",
+                },
+            )
         return
-    if not HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED:
-        raise HTTPException(409, detail={"code": "helpdesk_claim_required", "message": "explicit claim required before replying"})
 
-    _claim_helpdesk_conversation_internal(conversation_id=conversation_id, user_id=user_id, req=req)
+    if state == "awaiting_agent":
+        if not HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED:
+            raise HTTPException(409, detail={"code": "helpdesk_claim_required", "message": "explicit claim required before replying"})
+        claim = _claim_helpdesk_conversation_internal(conversation_id=conversation_id, user_id=user_id, req=req)
+        claimed_agent = str(getattr(claim, "assigned_agent_user_id", "") or "")
+        if claimed_agent and claimed_agent != user_id:
+            raise HTTPException(
+                409,
+                detail={
+                    "code": "helpdesk_assignee_required",
+                    "message": "only the assigned helpdesk agent can reply",
+                },
+            )
+        return
+
+    raise HTTPException(
+        409,
+        detail={
+            "code": "helpdesk_claim_invalid_state",
+            "message": f"cannot send while routing_state={state}",
+        },
+    )
 
 
 @router.get("/conversations/{conversation_id}/routing-events", response_model=List[RoutingEventOut])
@@ -2430,22 +2893,53 @@ def list_participants(conversation_id: str, user_id: str = Depends(get_messaging
     if not part:
         raise HTTPException(403, "Not a participant")
 
+    convo = _get_conversation_or_404(conversation_id)
+    helpdesk_agent_view = _is_helpdesk_agent_viewer(convo, user_id)
+
     resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id), Limit=500)
     items = resp.get("Items", [])
 
     out: List[ParticipantOut] = []
-    for p in items:
+    if str(convo.get("routing_mode") or "") == "helpdesk_bridge" and not helpdesk_agent_view:
+        requester = next((p for p in items if p.get("user_id") == user_id), part)
         out.append(
             ParticipantOut(
-                user_id=p["user_id"],
-                status=p.get("status", "pending"),
-                role=p.get("role", "member"),
-                muted_until=int(p.get("muted_until", 0) or 0),
-                last_read_at=int(p.get("last_read_at", 0) or 0),
-                joined_at=int(p.get("joined_at", 0) or 0),
-                left_at=int(p.get("left_at", 0) or 0),
+                user_id=user_id,
+                status=requester.get("status", "active"),
+                role=requester.get("role", "member"),
+                muted_until=int(requester.get("muted_until", 0) or 0),
+                last_read_at=int(requester.get("last_read_at", 0) or 0),
+                joined_at=int(requester.get("joined_at", 0) or 0),
+                left_at=int(requester.get("left_at", 0) or 0),
             )
         )
+        helpdesk_status = "active" if str(convo.get("routing_state") or "") == "assigned" else "pending"
+        out.append(
+            ParticipantOut(
+                user_id=HELPDESK_MASKED_SENDER_ID,
+                status=helpdesk_status,
+                role="member",
+            )
+        )
+        return out
+
+    assignment_state = str(convo.get("routing_state") or "") if str(convo.get("routing_mode") or "") == "helpdesk_bridge" else ""
+    assignment_owner = str(convo.get("active_agent_user_id") or "") if assignment_state else ""
+    for p in items:
+        participant_out = ParticipantOut(
+            user_id=p["user_id"],
+            status=p.get("status", "pending"),
+            role=p.get("role", "member"),
+            muted_until=int(p.get("muted_until", 0) or 0),
+            last_read_at=int(p.get("last_read_at", 0) or 0),
+            joined_at=int(p.get("joined_at", 0) or 0),
+            left_at=int(p.get("left_at", 0) or 0),
+        )
+        if helpdesk_agent_view and assignment_state:
+            participant_out.assignment_state = assignment_state
+            participant_out.assignment_owner_user_id = assignment_owner
+            participant_out.is_assignment_owner = bool(assignment_owner and p.get("user_id") == assignment_owner)
+        out.append(participant_out)
 
     order = {"active": 0, "pending": 1, "left": 2}
     out.sort(key=lambda x: (order.get(x.status, 9), x.user_id))
@@ -2680,7 +3174,7 @@ def send_text_message(
     if inp.encryption and not _encrypted_messages_enabled():
         raise HTTPException(status_code=403, detail="Encrypted messaging is disabled")
     convo = _get_conversation_or_404(conversation_id)
-    _auto_claim_helpdesk_on_first_reply(conversation_id=conversation_id, convo=convo, user_id=user_id, req=req)
+    _enforce_helpdesk_send_constraints(conversation_id=conversation_id, convo=convo, user_id=user_id, req=req)
     try:
         resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
         participants = resp.get("Items", [])
@@ -2800,6 +3294,7 @@ def create_image_message(
 ):
     require_participant_active(user_id, conversation_id)
     convo = _get_conversation_or_404(conversation_id)
+    _enforce_helpdesk_send_constraints(conversation_id=conversation_id, convo=convo, user_id=user_id, req=req)
     try:
         resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
         participants = resp.get("Items", [])
@@ -2888,6 +3383,7 @@ def create_file_message(
 ):
     require_participant_active(user_id, conversation_id)
     convo = _get_conversation_or_404(conversation_id)
+    _enforce_helpdesk_send_constraints(conversation_id=conversation_id, convo=convo, user_id=user_id, req=req)
     resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
     for participant in resp.get("Items", []):
         pid = participant.get("user_id")
@@ -3385,6 +3881,7 @@ def forward_message(
     require_participant_active(user_id, target_conversation_id)
     require_participant_active(user_id, inp.source_conversation_id)
     convo = _get_conversation_or_404(target_conversation_id)
+    _enforce_helpdesk_send_constraints(conversation_id=target_conversation_id, convo=convo, user_id=user_id, req=req)
 
     _validate_reply_target(target_conversation_id, inp.reply_to_message_id)
 
@@ -3671,16 +4168,36 @@ def get_typing(conversation_id: str, user_id: str = Depends(get_messaging_user_i
 @router.post("/presence/heartbeat")
 def presence_heartbeat(inp: PresenceHeartbeatIn, user_id: str = Depends(get_messaging_user_id)):
     ts = now_ts()
+    status = _normalize_presence_status(inp.status)
     tbl_presence.put_item(
         Item={
             "user_id": user_id,
             "last_seen_at": ts,
             "device": inp.device or "",
-            "status": inp.status or "online",
+            "status": status,
             "ttl": ts + PRESENCE_TTL_SEC,
         }
     )
-    return {"ok": True, "user_id": user_id, "online": True, "last_seen_at": ts}
+    routing = _handle_helpdesk_presence_event(user_id=user_id, status=status, ts=ts)
+    audit_event(
+        "messaging_presence_heartbeat_processed",
+        user_id,
+        None,
+        outcome="success",
+        presence_status=status,
+        routing_action=routing.get("action"),
+        routing_processed=int(routing.get("processed", 0) or 0),
+        routing_transitioned=int(routing.get("transitioned", 0) or 0),
+        routing_failed=int(routing.get("failed", 0) or 0),
+    )
+    return {
+        "ok": True,
+        "user_id": user_id,
+        "online": status in {"online", "available"},
+        "last_seen_at": ts,
+        "status": status,
+        "routing": routing,
+    }
 
 
 @router.get("/presence", response_model=List[PresenceOut])
@@ -3716,7 +4233,8 @@ def fetch_events(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     user_id: str = Depends(get_messaging_user_id),
 ):
-    items = _ddb_fetch_events(user_id, after, limit)
+    raw_items = _ddb_fetch_events(user_id, after, limit)
+    items = [_project_event_for_user(item, user_id) for item in raw_items]
     return {"events": items, "next_after": items[-1]["event_id"] if items else after}
 
 
@@ -3738,7 +4256,8 @@ async def events_stream(
                 yield ": ping\n\n"
                 last_ping = now
 
-            events = await anyio.to_thread.run_sync(_ddb_fetch_events, user_id, cursor, limit)
+            raw_events = await anyio.to_thread.run_sync(_ddb_fetch_events, user_id, cursor, limit)
+            events = [_project_event_for_user(ev, user_id) for ev in raw_events]
             if events:
                 for ev in events:
                     cursor = ev["event_id"]

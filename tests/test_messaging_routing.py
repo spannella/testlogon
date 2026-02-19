@@ -153,3 +153,54 @@ def test_build_routing_event_item_contains_timeline_fields():
     assert event["to_state"] == "assigned"
     assert event["assignment_version"] == 1
     assert event["metadata"]["source"] == "claim"
+
+
+def test_alert_awaiting_emits_alert_event_without_state_change():
+    out = transition_helpdesk_routing(
+        _base_conversation(routing_state="awaiting_agent", assignment_version=2),
+        RoutingTransitionInput(action="alert_awaiting", now_ts=445, expected_assignment_version=2),
+    )
+    assert out.changed is False
+    assert out.to_state == "awaiting_agent"
+    assert out.event_type == "helpdesk.conversation.alerted"
+
+
+def test_alert_awaiting_invalid_state_fails():
+    try:
+        transition_helpdesk_routing(
+            _base_conversation(routing_state="assigned", assignment_version=2),
+            RoutingTransitionInput(action="alert_awaiting", now_ts=445, expected_assignment_version=2),
+        )
+        assert False, "expected RoutingTransitionError"
+    except RoutingTransitionError as exc:
+        assert exc.code == "routing_alert_invalid_state"
+
+
+def test_release_agent_sets_failover_fields_for_disconnect_recovery():
+    out = transition_helpdesk_routing(
+        _base_conversation(routing_state="assigned", active_agent_user_id="agent-1", assignment_version=9),
+        RoutingTransitionInput(action="release_agent", now_ts=555, agent_user_id="agent-1", expected_assignment_version=9),
+    )
+    assert out.to_state == "awaiting_agent"
+    assert out.patch["active_agent_user_id"] == ""
+    assert out.patch["last_failover_at"] == 555
+
+
+def test_unit_race_dual_assignment_blocked_by_version_conflict():
+    convo = _base_conversation(routing_state="awaiting_agent", assignment_version=10)
+    # first claimant uses latest version and succeeds
+    first = transition_helpdesk_routing(
+        convo,
+        RoutingTransitionInput(action="assign_agent", now_ts=1000, agent_user_id="agent-1", expected_assignment_version=10),
+    )
+    assert first.patch["assignment_version"] == 11
+
+    # second claimant with stale expected version is rejected deterministically
+    try:
+        transition_helpdesk_routing(
+            _base_conversation(routing_state="awaiting_agent", assignment_version=11),
+            RoutingTransitionInput(action="assign_agent", now_ts=1001, agent_user_id="agent-2", expected_assignment_version=10),
+        )
+        assert False, "expected RoutingTransitionError"
+    except RoutingTransitionError as exc:
+        assert exc.code == "routing_assignment_version_conflict"

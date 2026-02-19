@@ -1,0 +1,45 @@
+{
+  "title": "Helpdesk Routing Health",
+  "timezone": "browser",
+  "panels": [
+    {
+      "title": "Alerts Sent",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum(rate(helpdesk_alerts_sent_total[5m])) by (outcome)", "legendFormat": "{{outcome}}"}
+      ]
+    },
+    {
+      "title": "Claim Success / Conflict",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum(rate(helpdesk_claim_success_total[5m]))", "legendFormat": "success"},
+        {"expr": "sum(rate(helpdesk_claim_conflict_total[5m]))", "legendFormat": "conflict"}
+      ]
+    },
+    {
+      "title": "Failover Count",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum(rate(helpdesk_failover_total[5m])) by (reason)", "legendFormat": "{{reason}}"}
+      ],
+      "thresholds": [{"op": "gt", "value": 0.2, "color": "yellow"}, {"op": "gt", "value": 1.0, "color": "red"}]
+    },
+    {
+      "title": "No-Agents Notices",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum(rate(helpdesk_no_agents_notice_total[5m])) by (outcome)", "legendFormat": "{{outcome}}"}
+      ],
+      "thresholds": [{"op": "gt", "value": 0.05, "color": "yellow"}, {"op": "gt", "value": 0.2, "color": "red"}]
+    },
+    {
+      "title": "Time to First Claim (p95)",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum(rate(helpdesk_time_to_first_claim_ms_bucket[5m])) by (le))", "legendFormat": "p95 ms"}
+      ],
+      "thresholds": [{"op": "gt", "value": 30000, "color": "yellow"}, {"op": "gt", "value": 120000, "color": "red"}]
+    }
+  ]
+}
