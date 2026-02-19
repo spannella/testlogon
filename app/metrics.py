@@ -249,6 +249,17 @@ USAGE_METERING_PIPELINE_LATENCY = Histogram(
     ["stage"],
     buckets=(0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5),
 )
+HELPDESK_ALERTS_SENT = Counter(
+    "helpdesk_alerts_sent_total",
+    "Helpdesk alerted-agent fanout outcomes",
+    ["outcome"],
+)
+HELPDESK_CLAIMS_TOTAL = Counter(
+    "helpdesk_claims_total",
+    "Helpdesk claim outcomes",
+    ["outcome"],
+)
+
 ADMIN_SCOPE_DENIED = Counter(
     "admin_scope_denied_total",
     "Denied admin scope authorization checks by route, required scope, and profile type",
@@ -398,6 +409,14 @@ def record_api_usage_snapshot_finalize(outcome: str) -> None:
 
 def record_api_usage_reconciliation_drift(*, area: str, rows: int) -> None:
     API_USAGE_RECONCILIATION_DRIFT.labels(area=(area or "unknown").lower()).set(float(max(0, int(rows))))
+
+
+def record_helpdesk_alert_sent(outcome: str) -> None:
+    HELPDESK_ALERTS_SENT.labels(outcome=(outcome or "unknown").lower()).inc()
+
+
+def record_helpdesk_claim(outcome: str) -> None:
+    HELPDESK_CLAIMS_TOTAL.labels(outcome=(outcome or "unknown").lower()).inc()
 
 
 def record_admin_scope_denied(*, route: str, required_scope: str, admin_profile_type: str) -> None:

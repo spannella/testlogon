@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import ValidationError
 
 from app.routers import messaging
 
@@ -51,11 +52,59 @@ class TestMessagingRoutes(unittest.TestCase):
             )
 
         tbl_convos.put_item.assert_called_once()
+        convo_item = tbl_convos.put_item.call_args.kwargs["Item"]
+        self.assertEqual(convo_item["routing_mode"], "standard")
+        self.assertEqual(convo_item["routing_state"], "none")
+        self.assertEqual(convo_item["assignment_version"], 0)
         self.assertEqual(tbl_parts.put_item.call_count, 2)
         self.assertEqual(resp.conversation_id, "c_abc")
         self.assertEqual(resp.created_at, 123)
         self.assertEqual(resp.participant_count, 2)
         self.assertEqual(resp.status, "active")
+
+    def test_start_conversation_helpdesk_routing_metadata(self):
+        with (
+            patch.object(messaging, "now_ts", return_value=123),
+            patch.object(messaging, "new_id", return_value="abc"),
+            patch.object(messaging, "tbl_convos") as tbl_convos,
+            patch.object(messaging, "tbl_parts") as tbl_parts,
+        ):
+            messaging.start_conversation(
+                messaging.StartConversationIn(
+                    participant_ids=[],
+                    type="dm",
+                    routing_mode="helpdesk_bridge",
+                    helpdesk_group_id="helpdesk-l1",
+                ),
+                user_id="user-1",
+            )
+
+        self.assertEqual(tbl_parts.put_item.call_count, 2)
+        participant_items = [c.kwargs["Item"] for c in tbl_parts.put_item.call_args_list]
+        self.assertIn("helpdesk_group:helpdesk-l1", {i["user_id"] for i in participant_items})
+        convo_item = tbl_convos.put_item.call_args.kwargs["Item"]
+        self.assertEqual(convo_item["routing_mode"], "helpdesk_bridge")
+        self.assertEqual(convo_item["routing_group_id"], "helpdesk-l1")
+        self.assertEqual(convo_item["routing_state"], "awaiting_agent")
+        self.assertEqual(convo_item["routing_state_group_pk"], "awaiting_agent#helpdesk-l1")
+        self.assertEqual(convo_item["routing_state_group_sk"], "c_abc")
+
+
+    def test_start_conversation_standard_requires_participant(self):
+        with self.assertRaises(ValidationError):
+            messaging.StartConversationIn(
+                participant_ids=[],
+                type="dm",
+                routing_mode="standard",
+            )
+
+    def test_start_conversation_helpdesk_requires_group(self):
+        with self.assertRaises(ValidationError):
+            messaging.StartConversationIn(
+                participant_ids=["user-2"],
+                type="dm",
+                routing_mode="helpdesk_bridge",
+            )
 
     def test_list_messages_filters_deleted_and_sets_reactions(self):
         tbl_parts = Mock()
@@ -109,6 +158,8 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "new_id", return_value="xyz"),
             patch.object(messaging, "require_participant_active"),
             patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "fanout_event_to_conversation"),
+            patch.object(messaging, "audit_event"),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
             patch.object(messaging, "tbl_convos", tbl_convos),
         ):
@@ -181,6 +232,43 @@ class TestMessagingRoutes(unittest.TestCase):
         self.assertEqual(payload["message"]["message_id"], "m_xyz")
         self.assertEqual(payload["message"]["text"], "Hello world")
         self.assertNotIn("encryption", payload["message"])
+
+
+    def test_send_text_message_helpdesk_auto_claim_on_first_reply_when_enabled(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        with (
+            patch.object(messaging, "HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED", True),
+            patch.object(messaging, "now_ts", return_value=55),
+            patch.object(messaging, "new_id", return_value="xyz"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "_is_helpdesk_group_member", return_value=True),
+            patch.object(messaging, "_claim_helpdesk_conversation_internal") as claim_internal,
+            patch.object(messaging, "_get_conversation_or_404", return_value={"routing_mode": "helpdesk_bridge", "routing_group_id": "helpdesk-l1", "routing_state": "awaiting_agent"}),
+            patch.object(messaging, "fanout_event_to_conversation"),
+            patch.object(messaging, "_meter_message_send"),
+            patch.object(messaging, "audit_event"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+        ):
+            messaging.send_text_message("c1", messaging.SendTextMessageIn(text="Hello world"), user_id="agent-1")
+
+        claim_internal.assert_called_once_with(conversation_id="c1", user_id="agent-1", req=None)
+
+    def test_send_text_message_helpdesk_requires_explicit_claim_when_auto_claim_disabled(self):
+        with (
+            patch.object(messaging, "HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED", False),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_is_helpdesk_group_member", return_value=True),
+            patch.object(messaging, "_get_conversation_or_404", return_value={"routing_mode": "helpdesk_bridge", "routing_group_id": "helpdesk-l1", "routing_state": "awaiting_agent"}),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.send_text_message("c1", messaging.SendTextMessageIn(text="Hello world"), user_id="agent-1")
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "helpdesk_claim_required")
+
 
 
 
@@ -1406,3 +1494,325 @@ class TestMessagingRoutes(unittest.TestCase):
             resp = messaging.mute_conversation("c1", messaging.MuteIn(muted=False), user_id="u1")
         self.assertEqual(resp["muted_until"], 0)
         tbl_parts.update_item.assert_called_once()
+
+
+    def test_list_conversation_routing_events_returns_items(self):
+        tbl_events = Mock()
+        tbl_events.query.return_value = {
+            "Items": [
+                {
+                    "conversation_id": "c1",
+                    "event_id": "00001#e1",
+                    "event_type": "helpdesk.conversation.assigned",
+                    "actor_user_id": "agent-1",
+                    "from_state": "awaiting_agent",
+                    "to_state": "assigned",
+                    "created_at": 1,
+                    "assignment_version": 1,
+                    "routing_group_id": "helpdesk-l1",
+                    "active_agent_user_id": "agent-1",
+                    "metadata": {"source": "claim"},
+                }
+            ]
+        }
+        with (
+            patch.object(messaging, "require_participant_role"),
+            patch.object(messaging, "tbl_routing_events", tbl_events),
+        ):
+            out = messaging.list_conversation_routing_events("c1", user_id="u1")
+
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].event_type, "helpdesk.conversation.assigned")
+        self.assertEqual(out[0].metadata["source"], "claim")
+
+    def test_apply_helpdesk_routing_transition_writes_event(self):
+        tbl_convos = Mock()
+        tbl_events = Mock()
+        tbl_convos.get_item.return_value = {
+            "Item": {
+                "conversation_id": "c1",
+                "routing_mode": "helpdesk_bridge",
+                "routing_group_id": "helpdesk-l1",
+                "routing_state": "awaiting_agent",
+                "assignment_version": 0,
+            }
+        }
+        with (
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "tbl_routing_events", tbl_events),
+            patch.object(messaging, "new_id", return_value="evt1"),
+        ):
+            result = messaging._apply_helpdesk_routing_transition(
+                conversation_id="c1",
+                cmd=messaging.RoutingTransitionInput(action="assign_agent", now_ts=10, agent_user_id="a1"),
+                actor_user_id="a1",
+                metadata={"reason": "claim"},
+            )
+
+        tbl_convos.update_item.assert_called_once()
+        tbl_events.put_item.assert_called_once()
+        self.assertEqual(result["event"]["event_type"], "helpdesk.conversation.assigned")
+        self.assertEqual(result["event"]["metadata"]["reason"], "claim")
+
+
+    def test_fanout_helpdesk_alert_targets_online_group_members(self):
+        tbl_events = Mock()
+        ddb = Mock()
+        ddb.meta.client.batch_get_item.return_value = {
+            "Responses": {
+                messaging.DDB_PRESENCE: [
+                    {"user_id": "a1", "last_seen_at": 100, "status": "online"},
+                    {"user_id": "a2", "last_seen_at": 20, "status": "online"},
+                    {"user_id": "a3", "last_seen_at": 100, "status": "offline"},
+                ]
+            }
+        }
+        with (
+            patch.object(messaging, "_resolve_helpdesk_group_members", return_value=["a1", "a2", "a3"]),
+            patch.object(messaging, "tbl_events", tbl_events),
+            patch.object(messaging, "ddb", ddb),
+            patch.object(messaging, "now_ts", return_value=110),
+            patch.object(messaging, "record_helpdesk_alert_sent") as rec_metric,
+        ):
+            delivered = messaging.fanout_helpdesk_alert("c1", "helpdesk-l1", "u1")
+
+        self.assertEqual(delivered, 1)
+        tbl_events.put_item.assert_called_once()
+        rec_metric.assert_called_once_with("delivered")
+
+    def test_start_conversation_helpdesk_fanout_called(self):
+        with (
+            patch.object(messaging, "now_ts", return_value=123),
+            patch.object(messaging, "new_id", return_value="abc"),
+            patch.object(messaging, "tbl_convos") as tbl_convos,
+            patch.object(messaging, "tbl_parts") as tbl_parts,
+            patch.object(messaging, "fanout_helpdesk_alert") as fanout,
+        ):
+            messaging.start_conversation(
+                messaging.StartConversationIn(
+                    participant_ids=[],
+                    type="dm",
+                    routing_mode="helpdesk_bridge",
+                    helpdesk_group_id="helpdesk-l1",
+                ),
+                user_id="user-1",
+            )
+
+        tbl_convos.put_item.assert_called_once()
+        self.assertEqual(tbl_parts.put_item.call_count, 2)
+        fanout.assert_called_once_with(conversation_id="c_abc", group_id="helpdesk-l1", created_by="user-1")
+
+
+    def test_start_conversation_helpdesk_no_agents_emits_notice(self):
+        with (
+            patch.object(messaging, "now_ts", return_value=123),
+            patch.object(messaging, "new_id", return_value="abc"),
+            patch.object(messaging, "tbl_convos") as tbl_convos,
+            patch.object(messaging, "tbl_parts") as tbl_parts,
+            patch.object(messaging, "fanout_helpdesk_alert", return_value=0),
+            patch.object(messaging, "_emit_no_agents_online_notice") as emit_notice,
+        ):
+            messaging.start_conversation(
+                messaging.StartConversationIn(
+                    participant_ids=[],
+                    type="dm",
+                    routing_mode="helpdesk_bridge",
+                    helpdesk_group_id="helpdesk-l1",
+                ),
+                user_id="user-1",
+            )
+
+        tbl_convos.put_item.assert_called_once()
+        self.assertEqual(tbl_parts.put_item.call_count, 2)
+        emit_notice.assert_called_once_with(conversation_id="c_abc", user_id="user-1", now=123)
+
+    def test_emit_no_agents_online_notice_throttled(self):
+        with (
+            patch.object(messaging, "_get_conversation_or_404", return_value={"no_agents_notice_sent_at": 100}),
+            patch.object(messaging, "NO_AGENTS_NOTICE_THROTTLE_SEC", 600),
+        ):
+            out = messaging._emit_no_agents_online_notice(conversation_id="c1", user_id="u1", now=200)
+        self.assertFalse(out)
+
+    def test_emit_no_agents_online_notice_writes_message_and_updates_convo(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        with (
+            patch.object(messaging, "_get_conversation_or_404", return_value={"no_agents_notice_sent_at": 0}),
+            patch.object(messaging, "_apply_helpdesk_routing_transition"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+        ):
+            out = messaging._emit_no_agents_online_notice(conversation_id="c1", user_id="u1", now=200)
+
+        self.assertTrue(out)
+        tbl_msgs.put_item.assert_called_once()
+        tbl_convos.update_item.assert_called_once()
+
+
+    def test_claim_helpdesk_conversation_success(self):
+        with (
+            patch.object(messaging, "_get_conversation_or_404", return_value={
+                "conversation_id": "c1",
+                "routing_mode": "helpdesk_bridge",
+                "routing_group_id": "helpdesk-l1",
+                "routing_state": "awaiting_agent",
+                "assignment_version": 2,
+            }),
+            patch.object(messaging, "_is_helpdesk_group_member", return_value=True),
+            patch.object(messaging, "_is_user_online_available", return_value=True),
+            patch.object(messaging, "now_ts", return_value=50),
+            patch.object(messaging, "_apply_helpdesk_routing_transition", return_value={
+                "conversation": {"routing_state": "assigned", "active_agent_user_id": "a1", "assignment_version": 3}
+            }),
+            patch.object(messaging, "audit_event"),
+            patch.object(messaging, "record_helpdesk_claim") as record_claim,
+        ):
+            out = messaging.claim_helpdesk_conversation("c1", user_id="a1")
+
+        self.assertTrue(out.ok)
+        self.assertEqual(out.state, "assigned")
+        self.assertEqual(out.assigned_agent_user_id, "a1")
+        self.assertEqual(out.assignment_version, 3)
+        record_claim.assert_called_once_with("success")
+
+    def test_claim_helpdesk_conversation_rejects_non_member(self):
+        with (
+            patch.object(messaging, "_get_conversation_or_404", return_value={
+                "conversation_id": "c1",
+                "routing_mode": "helpdesk_bridge",
+                "routing_group_id": "helpdesk-l1",
+                "routing_state": "awaiting_agent",
+                "assignment_version": 0,
+            }),
+            patch.object(messaging, "_is_helpdesk_group_member", return_value=False),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.claim_helpdesk_conversation("c1", user_id="a1")
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_claim_helpdesk_conversation_rejects_unavailable(self):
+        with (
+            patch.object(messaging, "_get_conversation_or_404", return_value={
+                "conversation_id": "c1",
+                "routing_mode": "helpdesk_bridge",
+                "routing_group_id": "helpdesk-l1",
+                "routing_state": "awaiting_agent",
+                "assignment_version": 0,
+            }),
+            patch.object(messaging, "_is_helpdesk_group_member", return_value=True),
+            patch.object(messaging, "now_ts", return_value=50),
+            patch.object(messaging, "_is_user_online_available", return_value=False),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.claim_helpdesk_conversation("c1", user_id="a1")
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_claim_helpdesk_conversation_conflict_when_assigned_to_other(self):
+        with (
+            patch.object(messaging, "_get_conversation_or_404", return_value={
+                "conversation_id": "c1",
+                "routing_mode": "helpdesk_bridge",
+                "routing_group_id": "helpdesk-l1",
+                "routing_state": "assigned",
+                "active_agent_user_id": "a2",
+                "assignment_version": 4,
+            }),
+            patch.object(messaging, "_is_helpdesk_group_member", return_value=True),
+            patch.object(messaging, "now_ts", return_value=50),
+            patch.object(messaging, "_is_user_online_available", return_value=True),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.claim_helpdesk_conversation("c1", user_id="a1")
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_claim_helpdesk_conversation_idempotent_for_same_agent(self):
+        with (
+            patch.object(messaging, "_get_conversation_or_404", return_value={
+                "conversation_id": "c1",
+                "routing_mode": "helpdesk_bridge",
+                "routing_group_id": "helpdesk-l1",
+                "routing_state": "assigned",
+                "active_agent_user_id": "a1",
+                "assignment_version": 4,
+            }),
+            patch.object(messaging, "_is_helpdesk_group_member", return_value=True),
+            patch.object(messaging, "now_ts", return_value=50),
+            patch.object(messaging, "_is_user_online_available", return_value=True),
+            patch.object(messaging, "record_helpdesk_claim") as record_claim,
+        ):
+            out = messaging.claim_helpdesk_conversation("c1", user_id="a1")
+        self.assertTrue(out.idempotent)
+        self.assertEqual(out.assignment_version, 4)
+        record_claim.assert_called_once_with("idempotent")
+
+    def test_claim_helpdesk_conversation_cas_conflict_returns_idempotent_for_winner_retry(self):
+        with (
+            patch.object(
+                messaging,
+                "_get_conversation_or_404",
+                side_effect=[
+                    {
+                        "conversation_id": "c1",
+                        "routing_mode": "helpdesk_bridge",
+                        "routing_group_id": "helpdesk-l1",
+                        "routing_state": "awaiting_agent",
+                        "assignment_version": 2,
+                    },
+                    {
+                        "conversation_id": "c1",
+                        "routing_mode": "helpdesk_bridge",
+                        "routing_group_id": "helpdesk-l1",
+                        "routing_state": "assigned",
+                        "active_agent_user_id": "a1",
+                        "assignment_version": 3,
+                    },
+                ],
+            ),
+            patch.object(messaging, "_is_helpdesk_group_member", return_value=True),
+            patch.object(messaging, "_is_user_online_available", return_value=True),
+            patch.object(messaging, "now_ts", return_value=50),
+            patch.object(messaging, "_apply_helpdesk_routing_transition", side_effect=messaging.RoutingTransitionError(code="routing_assignment_version_conflict", message="stale")),
+            patch.object(messaging, "record_helpdesk_claim") as record_claim,
+        ):
+            out = messaging.claim_helpdesk_conversation("c1", user_id="a1")
+
+        self.assertTrue(out.ok)
+        self.assertTrue(out.idempotent)
+        self.assertEqual(out.assignment_version, 3)
+        record_claim.assert_called_once_with("idempotent")
+
+    def test_claim_helpdesk_conversation_cas_conflict_records_conflict_metric(self):
+        with (
+            patch.object(
+                messaging,
+                "_get_conversation_or_404",
+                side_effect=[
+                    {
+                        "conversation_id": "c1",
+                        "routing_mode": "helpdesk_bridge",
+                        "routing_group_id": "helpdesk-l1",
+                        "routing_state": "awaiting_agent",
+                        "assignment_version": 2,
+                    },
+                    {
+                        "conversation_id": "c1",
+                        "routing_mode": "helpdesk_bridge",
+                        "routing_group_id": "helpdesk-l1",
+                        "routing_state": "assigned",
+                        "active_agent_user_id": "a2",
+                        "assignment_version": 3,
+                    },
+                ],
+            ),
+            patch.object(messaging, "_is_helpdesk_group_member", return_value=True),
+            patch.object(messaging, "_is_user_online_available", return_value=True),
+            patch.object(messaging, "now_ts", return_value=50),
+            patch.object(messaging, "_apply_helpdesk_routing_transition", side_effect=messaging.RoutingTransitionError(code="routing_assignment_version_conflict", message="stale")),
+            patch.object(messaging, "record_helpdesk_claim") as record_claim,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.claim_helpdesk_conversation("c1", user_id="a1")
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        record_claim.assert_called_once_with("conflict")
