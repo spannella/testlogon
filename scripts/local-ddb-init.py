@@ -83,7 +83,17 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
             ],
         ),
-        TableDef(os.getenv("DDB_CONVERSATIONS", "Conversations"), "conversation_id"),
+        TableDef(
+            os.getenv("DDB_CONVERSATIONS", "Conversations"),
+            "conversation_id",
+            gsi=[
+                {
+                    "index_name": "RoutingStateGroupIndex",
+                    "partition_key": "routing_state_group_pk",
+                    "sort_key": "routing_state_group_sk",
+                }
+            ],
+        ),
         TableDef(
             os.getenv("DDB_PARTICIPANTS", "Participants"),
             "user_id",
@@ -100,6 +110,7 @@ def _table_defs() -> List[TableDef]:
         TableDef(os.getenv("DDB_MESSAGE_EDITS", "MessageEdits"), "message_key", "edited_at"),
         TableDef(os.getenv("DDB_MESSAGE_VIEWS", "MessageViews"), "conversation_id", "message_user"),
         TableDef(os.getenv("DDB_MESSAGE_RECEIPTS", "MessageReceipts"), "conversation_id", "message_user"),
+        TableDef(os.getenv("DDB_CONVERSATION_ROUTING_EVENTS", "ConversationRoutingEvents"), "conversation_id", "event_id"),
     ]
 
 
