@@ -6,15 +6,21 @@ from pydantic import ValidationError
 from pathlib import Path
 
 from app.routers.messaging import (
+    ConsumeAttachmentIn,
     EditMessageIn,
     MarkReadIn,
+    MessageOut,
     MuteIn,
     SendTextMessageIn,
     StartConversationIn,
+    _decode_gallery_cursor,
+    _encode_gallery_cursor,
 )
 
 
 SWAGGER_PATH = Path("docs/swagger.json")
+FRONTEND_TYPES_PATH = Path("frontend/src/api/types.ts")
+ONCE_SCHEMA_PATH = Path("docs/messaging-once-media-schema-v1.json")
 
 
 def test_canonical_contract_source_exists_and_contains_messaging_models():
@@ -155,3 +161,83 @@ def test_send_text_rejects_empty_payload_without_text_or_encryption():
         SendTextMessageIn()
     errors = exc.value.errors()
     assert errors[0]["type"] == "message_text_required"
+
+
+def test_gallery_contract_is_present_in_swagger():
+    spec = json.loads(SWAGGER_PATH.read_text())
+    paths = spec.get("paths", {})
+    schemas = spec.get("components", {}).get("schemas", {})
+
+    assert "/messaging/conversations/{conversation_id}/gallery" in paths
+    assert "GalleryPageOut" in schemas
+    assert "GalleryItemOut" in schemas
+
+
+def test_gallery_cursor_roundtrip_is_stable():
+    cursor = _encode_gallery_cursor("m_123")
+    assert _decode_gallery_cursor(cursor) == "m_123"
+
+
+
+def test_gallery_contract_parameters_and_response_shape_are_stable():
+    spec = json.loads(SWAGGER_PATH.read_text())
+    path_item = spec["paths"]["/messaging/conversations/{conversation_id}/gallery"]["get"]
+
+    params = {p["name"]: p for p in path_item.get("parameters", [])}
+    assert "type" in params
+    assert "cursor" in params
+    assert "limit" in params
+
+    type_schema = params["type"]["schema"]
+    assert type_schema.get("type") == "string"
+
+    response_schema = path_item["responses"]["200"]["content"]["application/json"]["schema"]
+    assert response_schema == {"$ref": "#/components/schemas/GalleryPageOut"}
+
+
+def test_gallery_contract_frontend_type_alignment():
+    spec = json.loads(SWAGGER_PATH.read_text())
+    schemas = spec.get("components", {}).get("schemas", {})
+
+    assert "GalleryItemOut" in schemas
+    assert "GalleryPageOut" in schemas
+
+    frontend_types = FRONTEND_TYPES_PATH.read_text()
+    assert "export type MessageGalleryType" in frontend_types
+    assert "export interface ConversationGalleryItem" in frontend_types
+    assert "export interface ConversationGalleryResp" in frontend_types
+
+def test_once_media_schema_exists_and_matches_model_enums_and_types():
+    assert ONCE_SCHEMA_PATH.exists(), "Once-media schema missing: docs/messaging-once-media-schema-v1.json"
+    schema = json.loads(ONCE_SCHEMA_PATH.read_text())
+
+    consumption_policy_enum = set(schema["properties"]["consumption_policy"]["enum"])
+    media_kind_enum = set(schema["properties"]["media_kind"]["enum"])
+    consumption_state_enum = set(schema["properties"]["consumption_state"]["enum"])
+
+    message_schema = MessageOut.model_json_schema()
+    props = message_schema["properties"]
+
+    assert set(props["consumption_policy"]["anyOf"][0]["enum"]) == consumption_policy_enum
+    assert set(props["media_kind"]["anyOf"][0]["enum"]) == media_kind_enum
+    assert set(props["consumption_state"]["anyOf"][0]["enum"]) == consumption_state_enum
+
+    consumed_at_any = props["consumed_at"]["anyOf"]
+    assert any(item.get("type") == "integer" for item in consumed_at_any)
+    assert schema["properties"]["consumed_at"]["oneOf"][0]["type"] == "integer"
+
+
+def test_once_media_consume_request_contract_shape_is_stable():
+    req = ConsumeAttachmentIn(
+        consumption_attempt_id="attempt-1234",
+        trigger="play",
+        playback_seconds=1.2,
+    )
+    payload = req.model_dump(exclude_none=True)
+    assert set(payload.keys()) == {"consumption_attempt_id", "trigger", "playback_seconds"}
+    assert payload["trigger"] == "play"
+
+
+def test_once_media_contract_version_stable_in_schema():
+    schema = json.loads(ONCE_SCHEMA_PATH.read_text())
+    assert schema["properties"]["messaging_contract_version"]["const"] == "2026-02-once-media-v1"

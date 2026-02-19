@@ -64,6 +64,16 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(
+            _resolve_table_name(S.api_usage_table_name, "api_usage_events"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI_PERIOD", "partition_key": "GSI_PERIOD_PK", "sort_key": "GSI_PERIOD_SK"},
+                {"index_name": "GSI_API_KEY", "partition_key": "GSI_API_KEY_PK", "sort_key": "GSI_API_KEY_SK"},
+                {"index_name": "GSI_ROUTE", "partition_key": "GSI_ROUTE_PK", "sort_key": "GSI_ROUTE_SK"},
+            ],
+        ),
+        TableDef(
             os.getenv("APP_TABLE", "app_single_table"),
             "pk",
             "sk",
@@ -73,7 +83,17 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
             ],
         ),
-        TableDef(os.getenv("DDB_CONVERSATIONS", "Conversations"), "conversation_id"),
+        TableDef(
+            os.getenv("DDB_CONVERSATIONS", "Conversations"),
+            "conversation_id",
+            gsi=[
+                {
+                    "index_name": "RoutingStateGroupIndex",
+                    "partition_key": "routing_state_group_pk",
+                    "sort_key": "routing_state_group_sk",
+                }
+            ],
+        ),
         TableDef(
             os.getenv("DDB_PARTICIPANTS", "Participants"),
             "user_id",
@@ -90,6 +110,16 @@ def _table_defs() -> List[TableDef]:
         TableDef(os.getenv("DDB_MESSAGE_EDITS", "MessageEdits"), "message_key", "edited_at"),
         TableDef(os.getenv("DDB_MESSAGE_VIEWS", "MessageViews"), "conversation_id", "message_user"),
         TableDef(os.getenv("DDB_MESSAGE_RECEIPTS", "MessageReceipts"), "conversation_id", "message_user"),
+        TableDef(
+            os.getenv("DDB_MESSAGE_CONSUMPTION", "MessageConsumption"),
+            "conversation_id",
+            "recipient_message",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "recipient_id", "sort_key": "GSI2SK"},
+            ],
+        ),
+        TableDef(os.getenv("DDB_CONVERSATION_ROUTING_EVENTS", "ConversationRoutingEvents"), "conversation_id", "event_id"),
     ]
 
 
@@ -229,6 +259,31 @@ def _ddb_resource_for_local_bootstrap():
     )
 
 
+def _enable_ttl_if_needed(ddb, table_name: str) -> None:
+    if not table_name:
+        return
+    client = ddb.meta.client
+    attr = getattr(S, "ddb_ttl_attr", "ttl_epoch") or "ttl_epoch"
+    try:
+        desc = _retry_transient_ddb_call(client.describe_time_to_live, TableName=table_name)
+        ttl_desc = desc.get("TimeToLiveDescription", {})
+        status = ttl_desc.get("TimeToLiveStatus")
+        existing_attr = ttl_desc.get("AttributeName")
+        if status in {"ENABLED", "ENABLING"} and existing_attr == attr:
+            return
+    except ClientError:
+        pass
+    try:
+        _retry_transient_ddb_call(
+            client.update_time_to_live,
+            TableName=table_name,
+            TimeToLiveSpecification={"Enabled": True, "AttributeName": attr},
+        )
+    except ClientError:
+        # DynamoDB Local may not fully emulate TTL APIs; table writes still include ttl attr.
+        pass
+
+
 def main() -> None:
     ddb = _ddb_resource_for_local_bootstrap()
     tables = _table_defs()
@@ -237,6 +292,7 @@ def main() -> None:
         _ensure_table(ddb, table)
         created.append(table.name)
     _wait_for_tables(ddb, created)
+    _enable_ttl_if_needed(ddb, _resolve_table_name(S.api_usage_table_name, "api_usage_events"))
     print(f"Ensured {len(created)} DynamoDB tables exist.")
 
 

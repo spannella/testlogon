@@ -15,6 +15,7 @@ This service uses multiple DynamoDB tables to store sessions, MFA devices, recov
 | Alerts | `ALERTS_TABLE_NAME` | Default: `alerts`. |
 | Alert preferences | `ALERT_PREFS_TABLE_NAME` | Default: `alert_prefs`. |
 | Billing data | `BILLING_TABLE_NAME` | Required for Stripe/PayPal/CCBill billing features. |
+| API usage events | `API_USAGE_TABLE_NAME` | Append-only API metering events + GSIs for period/key/route queries. |
 | Newsfeed (single-table) | `APP_TABLE` | Required for the newsfeed demo endpoints; default: `app_single_table`. |
 
 ## Table schema overview
@@ -51,3 +52,11 @@ API keys are stored by user and often rely on a secondary index for user lookup 
 - For local testing, you can use DynamoDB Local and point your AWS SDK config at the local endpoint.
 - Keep table name env vars in the same `.env` used for other secrets.
 - Use `DDB_ENDPOINT_URL` (or `AWS_ENDPOINT_URL`) to force all DynamoDB calls to the local emulator.
+
+
+### API usage events table
+- **Primary key**: `PK` / `SK` (`USER#<user_sub>` + `API_USAGE#EVENT#<event_id>`).
+- **GSI_PERIOD**: query by billing period.
+- **GSI_API_KEY**: query by API key across period windows.
+- **GSI_ROUTE**: query by route-level usage.
+- **TTL**: event rows carry `ttl_epoch`; configure `API_USAGE_EVENT_RETENTION_DAYS` and enable TTL on `DDB_TTL_ATTR` (default `ttl_epoch`).

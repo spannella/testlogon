@@ -26,7 +26,11 @@ const registerSchema = z.object({
   email: z.string().trim().email("Enter a valid email"),
   password: z.string()
     .min(12, "Password must be at least 12 characters")
-    .max(128, "Password must be 128 characters or fewer"),
+    .max(128, "Password must be 128 characters or fewer")
+    .regex(/[a-z]/, "Password must contain a lowercase letter")
+    .regex(/[A-Z]/, "Password must contain an uppercase letter")
+    .regex(/\d/, "Password must contain a number")
+    .regex(/[^A-Za-z0-9]/, "Password must contain a special character"),
   confirm_password: z.string().min(1, "Please confirm your password"),
   phone: z.string().trim().optional(),
   enable_sms_mfa: z.boolean().optional(),
@@ -125,7 +129,10 @@ export default function Register() {
   const passwordRequirements = [
     { id: "length", label: "At least 12 characters", met: passwordValue.length >= 12 },
     { id: "max", label: "No more than 128 characters", met: passwordValue.length <= 128 },
-    { id: "variety", label: "Use a varied passphrase", met: new Set(passwordValue).size >= 4 },
+    { id: "lower", label: "One lowercase letter (a–z)", met: /[a-z]/.test(passwordValue) },
+    { id: "upper", label: "One uppercase letter (A–Z)", met: /[A-Z]/.test(passwordValue) },
+    { id: "digit", label: "One number (0–9)", met: /\d/.test(passwordValue) },
+    { id: "symbol", label: "One special character (!@#$ …)", met: /[^A-Za-z0-9]/.test(passwordValue) },
   ];
   const passwordClassesUsed = [
     /[a-z]/.test(passwordValue),

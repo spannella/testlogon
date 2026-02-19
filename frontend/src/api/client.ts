@@ -239,9 +239,10 @@ export async function api<T>(
 api.get = <T>(path: string, params?: Record<string, string>) =>
   api<T>(path, { method: "GET", params });
 
-api.post = <T>(path: string, body?: unknown) =>
+api.post = <T>(path: string, body?: unknown, params?: Record<string, string>) =>
   api<T>(path, {
     method: "POST",
+    params,
     body: body != null ? JSON.stringify(body) : undefined,
   });
 

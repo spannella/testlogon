@@ -213,6 +213,23 @@ FILEMGR_PREVIEW_QUEUE_DEPTH = Gauge(
     "Approximate in-flight preview jobs in this worker process",
 )
 
+MESSAGING_GALLERY_REQUESTS = Counter(
+    "messaging_gallery_requests_total",
+    "Messaging gallery request outcomes by type/outcome",
+    ["type", "outcome"],
+)
+MESSAGING_GALLERY_LATENCY = Histogram(
+    "messaging_gallery_latency_seconds",
+    "Messaging gallery request latency by type",
+    ["type"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+)
+MESSAGING_GALLERY_CURSOR_PAGE_DEPTH = Histogram(
+    "messaging_gallery_cursor_page_depth",
+    "Messaging gallery cursor page depth by type",
+    ["type"],
+    buckets=(0, 1, 2, 3, 5, 8, 13, 21, 34),
+)
 USAGE_METERING_EVENTS = Counter(
     "usage_metering_events_total",
     "Usage metering event outcomes",
@@ -248,16 +265,79 @@ USAGE_METERING_PIPELINE_ERRORS = Counter(
     "Usage metering pipeline errors",
     ["stage"],
 )
+
+API_USAGE_INGEST_EVENTS = Counter(
+    "api_usage_ingest_events_total",
+    "API usage metering ingest outcomes",
+    ["outcome"],
+)
+API_USAGE_INGEST_LAG = Histogram(
+    "api_usage_ingest_lag_seconds",
+    "Lag from API event timestamp to persistence time",
+    buckets=(0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600),
+)
+API_USAGE_LIMIT_DENY = Counter(
+    "api_usage_limit_deny_total",
+    "API usage quota/limit denials",
+    ["scope", "limit_type"],
+)
+API_USAGE_SNAPSHOT_FINALIZE = Counter(
+    "api_usage_snapshot_finalize_total",
+    "API usage snapshot finalize outcomes",
+    ["outcome"],
+)
+API_USAGE_RECONCILIATION_DRIFT = Gauge(
+    "api_usage_reconciliation_drift_rows",
+    "API usage reconciliation drift rows by area",
+    ["area"],
+)
 USAGE_METERING_PIPELINE_LATENCY = Histogram(
     "usage_metering_pipeline_duration_seconds",
     "Usage metering pipeline latency in seconds",
     ["stage"],
     buckets=(0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5),
 )
+HELPDESK_ALERTS_SENT = Counter(
+    "helpdesk_alerts_sent_total",
+    "Helpdesk alerted-agent fanout outcomes",
+    ["outcome"],
+)
+HELPDESK_CLAIMS_TOTAL = Counter(
+    "helpdesk_claims_total",
+    "Helpdesk claim outcomes",
+    ["outcome"],
+)
+
 ADMIN_SCOPE_DENIED = Counter(
     "admin_scope_denied_total",
     "Denied admin scope authorization checks by route, required scope, and profile type",
     ["route", "required_scope", "admin_profile_type"],
+)
+ONCE_MEDIA_SEND_EVENTS = Counter(
+    "messaging_once_media_send_total",
+    "Once-media send events by media kind/policy and rollout cohort",
+    ["media_kind", "consumption_policy", "cohort"],
+)
+ONCE_MEDIA_GRANT_EVENTS = Counter(
+    "messaging_once_media_grant_total",
+    "Once-media grant endpoint outcomes by media kind/reason/cohort",
+    ["media_kind", "outcome", "reason", "cohort"],
+)
+ONCE_MEDIA_GRANT_LATENCY = Histogram(
+    "messaging_once_media_grant_latency_seconds",
+    "Once-media attachment grant issuance latency",
+    ["media_kind", "outcome", "cohort"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
+)
+ONCE_MEDIA_CONSUME_EVENTS = Counter(
+    "messaging_once_media_consume_total",
+    "Once-media consume outcomes by media kind/reason/cohort",
+    ["media_kind", "outcome", "reason", "cohort"],
+)
+ONCE_MEDIA_CONFLICT_EVENTS = Counter(
+    "messaging_once_media_conflicts_total",
+    "Once-media consume conflict/race outcomes by media kind/cohort",
+    ["media_kind", "cohort"],
 )
 
 _START_TIME = time.monotonic()
@@ -382,11 +462,112 @@ def record_usage_metering_pipeline_latency(stage: str, elapsed_seconds: float) -
     USAGE_METERING_PIPELINE_LATENCY.labels(stage=stage).observe(max(0.0, float(elapsed_seconds)))
 
 
+def record_api_usage_ingest_event(outcome: str) -> None:
+    API_USAGE_INGEST_EVENTS.labels(outcome=(outcome or "unknown").lower()).inc()
+
+
+def record_api_usage_ingest_lag(elapsed_seconds: float) -> None:
+    API_USAGE_INGEST_LAG.observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_api_usage_limit_deny(scope: str, limit_type: str) -> None:
+    API_USAGE_LIMIT_DENY.labels(
+        scope=(scope or "unknown").lower(),
+        limit_type=(limit_type or "unknown").lower(),
+    ).inc()
+
+
+def record_api_usage_snapshot_finalize(outcome: str) -> None:
+    API_USAGE_SNAPSHOT_FINALIZE.labels(outcome=(outcome or "unknown").lower()).inc()
+
+
+def record_api_usage_reconciliation_drift(*, area: str, rows: int) -> None:
+    API_USAGE_RECONCILIATION_DRIFT.labels(area=(area or "unknown").lower()).set(float(max(0, int(rows))))
+
+
+def record_helpdesk_alert_sent(outcome: str) -> None:
+    HELPDESK_ALERTS_SENT.labels(outcome=(outcome or "unknown").lower()).inc()
+
+
+def record_helpdesk_claim(outcome: str) -> None:
+    HELPDESK_CLAIMS_TOTAL.labels(outcome=(outcome or "unknown").lower()).inc()
+
+
 def record_admin_scope_denied(*, route: str, required_scope: str, admin_profile_type: str) -> None:
     ADMIN_SCOPE_DENIED.labels(
         route=route or "unknown",
         required_scope=required_scope or "unknown",
         admin_profile_type=admin_profile_type or "unknown",
+    ).inc()
+
+
+def _normalize_once_media_kind(media_kind: str) -> str:
+    kind = (media_kind or "unknown").strip().lower()
+    return kind if kind in {"image", "video", "audio"} else "unknown"
+
+
+def _normalize_once_media_policy(consumption_policy: str) -> str:
+    policy = (consumption_policy or "unknown").strip().lower()
+    return policy if policy in {"view_once", "listen_once"} else "unknown"
+
+
+def _normalize_once_media_outcome(outcome: str) -> str:
+    value = (outcome or "error").strip().lower()
+    return value if value in {"success", "error"} else "error"
+
+
+def _normalize_cohort(cohort: str) -> str:
+    value = (cohort or "default").strip().lower()
+    if not value:
+        return "default"
+    return value[:32]
+
+
+def _normalize_reason(reason: str) -> str:
+    value = (reason or "none").strip().lower()
+    if not value:
+        return "none"
+    return value[:48]
+
+
+def record_once_media_send(*, media_kind: str, consumption_policy: str, cohort: str = "default") -> None:
+    ONCE_MEDIA_SEND_EVENTS.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        consumption_policy=_normalize_once_media_policy(consumption_policy),
+        cohort=_normalize_cohort(cohort),
+    ).inc()
+
+
+def record_once_media_grant(*, media_kind: str, outcome: str, reason: str = "none", cohort: str = "default") -> None:
+    ONCE_MEDIA_GRANT_EVENTS.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        outcome=_normalize_once_media_outcome(outcome),
+        reason=_normalize_reason(reason),
+        cohort=_normalize_cohort(cohort),
+    ).inc()
+
+
+def record_once_media_grant_latency(*, media_kind: str, outcome: str, elapsed_seconds: float, cohort: str = "default") -> None:
+    ONCE_MEDIA_GRANT_LATENCY.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        outcome=_normalize_once_media_outcome(outcome),
+        cohort=_normalize_cohort(cohort),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_once_media_consume(*, media_kind: str, outcome: str, reason: str = "none", cohort: str = "default") -> None:
+    ONCE_MEDIA_CONSUME_EVENTS.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        outcome=_normalize_once_media_outcome(outcome),
+        reason=_normalize_reason(reason),
+        cohort=_normalize_cohort(cohort),
+    ).inc()
+
+
+def record_once_media_conflict(*, media_kind: str, cohort: str = "default") -> None:
+    ONCE_MEDIA_CONFLICT_EVENTS.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        cohort=_normalize_cohort(cohort),
     ).inc()
 
 def set_app_info(name: str, version: str) -> None:
@@ -498,6 +679,23 @@ def record_filemgr_preview_queue_depth_delta(delta: int) -> None:
     if delta == 0:
         return
     FILEMGR_PREVIEW_QUEUE_DEPTH.inc(float(delta))
+def record_messaging_gallery_request(*, gallery_type: str, outcome: str) -> None:
+    MESSAGING_GALLERY_REQUESTS.labels(
+        type=(gallery_type or "unknown").lower(),
+        outcome=(outcome or "error").lower(),
+    ).inc()
+
+
+def record_messaging_gallery_latency(*, gallery_type: str, elapsed_seconds: float) -> None:
+    MESSAGING_GALLERY_LATENCY.labels(type=(gallery_type or "unknown").lower()).observe(
+        max(0.0, float(elapsed_seconds))
+    )
+
+
+def record_messaging_gallery_cursor_page_depth(*, gallery_type: str, depth: int) -> None:
+    MESSAGING_GALLERY_CURSOR_PAGE_DEPTH.labels(type=(gallery_type or "unknown").lower()).observe(
+        max(0.0, float(depth))
+    )
 
 
 def metrics_endpoint() -> Response:
