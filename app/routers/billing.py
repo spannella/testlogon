@@ -1150,6 +1150,8 @@ def list_payments(ctx=Depends(require_ui_session), actor: AuthenticatedUser = De
 
 @dual_route("GET", "/billing/subscriptions")
 def list_subscriptions(ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), limit: int = 50, user_sub: Optional[str] = None) -> Dict[str, Any]:
+    if S.dev_mode:
+        return {"items": []}
     ensure_stripe_configured()
     user_id = _billing_read_user_sub(ctx, user_sub, actor)
     customer_id = get_or_create_customer(user_id)

@@ -100,12 +100,14 @@ async def list_alerts(
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
     eks = decode_cursor(cursor)
-    r = T.alerts.query(
-        KeyConditionExpression=Key("user_sub").eq(ctx["user_sub"]),
-        ScanIndexForward=False,
-        Limit=max(1, min(int(limit), 200)),
-        ExclusiveStartKey=eks or None,
-    )
+    query_kwargs = {
+        "KeyConditionExpression": Key("user_sub").eq(ctx["user_sub"]),
+        "ScanIndexForward": False,
+        "Limit": max(1, min(int(limit), 200)),
+    }
+    if eks:
+        query_kwargs["ExclusiveStartKey"] = eks
+    r = T.alerts.query(**query_kwargs)
     items = r.get("Items", [])
     next_cursor = encode_cursor(r.get("LastEvaluatedKey"))
     out = []
