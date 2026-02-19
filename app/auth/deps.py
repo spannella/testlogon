@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac as _hmac
 import json
 import time
 from dataclasses import dataclass
@@ -135,27 +137,73 @@ def extract_bearer_token(auth_header: Optional[str]) -> str:
     return token.strip()
 
 
-async def get_authenticated_user_sub(request: Request) -> str:
-    user = await get_authenticated_user(request)
-    return user.sub
-
-
-async def get_authenticated_user_role(request: Request) -> Role:
-    user = await get_authenticated_user(request)
-    return user.role
-
-
 def _extract_admin_profile_from_claims(claims: Dict[str, Any]) -> AdminProfile:
     return normalize_admin_profile(claims.get("admin_profile"))
 
 
-async def get_authenticated_user(request: Request) -> AuthenticatedUser:
-    """
-    Wire this into your real authentication (Cognito JWT validation, cookies, etc.)
+def _verify_local_password(username: str, password: str) -> Optional[str]:
+    """Verify username/password against the local DDB users table.
 
-    Dev fallback: Authorization: Bearer <user_id>
+    Returns the user_sub on success, None on failure.  Deliberately swallows
+    all exceptions so that a misconfigured table never leaks details.
     """
-    if _cognito_enabled() and isinstance(request, Request):
+    from app.core.normalize import normalize_email
+    from app.core.tables import T
+
+    try:
+        user_sub = normalize_email(username)
+        item = T.users.get_item(Key={"user_sub": user_sub}).get("Item")
+        if not item:
+            return None
+        ph = item.get("password_hash") or {}
+        if not isinstance(ph, dict):
+            return None
+        stored_hash_b64 = ph.get("hash_b64", "")
+        salt_b64 = ph.get("salt_b64", "")
+        iterations = int(ph.get("iterations", 0) or 0)
+        if not stored_hash_b64 or not salt_b64 or not iterations:
+            return None
+        salt = base64.b64decode(salt_b64)
+        stored_hash = base64.b64decode(stored_hash_b64)
+        candidate = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+        if not _hmac.compare_digest(candidate, stored_hash):
+            return None
+        return user_sub
+    except Exception:
+        return None
+
+
+async def get_authenticated_user(request: Request) -> AuthenticatedUser:
+    """Resolve the authenticated user from the incoming request.
+
+    Check order:
+    1. HMAC-signed access token cookie (browser / cookie-based flow).
+       Expiry is NOT enforced here so that the refresh endpoint can still
+       identify the user with an expired token; require_ui_session handles it.
+    2. Cognito JWT Bearer token (API clients / production SPA).
+    3. Dev-mode fallbacks (x-user-sub header, bare Bearer token).
+    """
+    # 1. Cookie-based path (browser flow)
+    access_cookie_name = getattr(S, "ui_access_token_cookie_name", "")
+    access_secret = getattr(S, "ui_access_token_secret", "")
+    if access_cookie_name and access_secret:
+        access_cookie = request.cookies.get(access_cookie_name, "")
+        if access_cookie:
+            try:
+                payload = jwt.decode(
+                    access_cookie,
+                    access_secret,
+                    algorithms=["HS256"],
+                    options={"verify_exp": False},
+                )
+                user_sub = payload.get("sub")
+                if user_sub:
+                    return AuthenticatedUser(sub=str(user_sub))
+            except jwt.PyJWTError:
+                pass
+
+    # 2. Cognito JWT Bearer token
+    if _cognito_enabled():
         auth_header = request.headers.get("authorization", "")
         if not auth_header.lower().startswith("bearer "):
             raise HTTPException(401, "Missing bearer token")
@@ -169,6 +217,7 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
         admin_profile = _extract_admin_profile_from_claims(payload)
         return AuthenticatedUser(sub=str(user_sub), role=role, admin_profile=admin_profile)
 
+    # 3. Dev-mode fallbacks
     if not S.dev_mode:
         raise HTTPException(401, "Authentication not configured")
 
@@ -189,14 +238,31 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
     return AuthenticatedUser(sub=sub, role=role, admin_profile=admin_profile)
 
 
+async def get_authenticated_user_sub(request: Request) -> str:
+    user = await get_authenticated_user(request)
+    return user.sub
+
+
+async def get_authenticated_user_role(request: Request) -> Role:
+    user = await get_authenticated_user(request)
+    return user.role
+
+
 async def resolve_dev_or_authenticated_user_sub(
     request: Request,
     body: UiSessionStartReq,
 ) -> str:
-    if S.dev_mode and S.dev_test_user and S.dev_test_password:
+    if S.dev_mode:
         context = body.challenge_context or {}
-        username = context.get("username")
-        password = context.get("password")
-        if username == S.dev_test_user and password == S.dev_test_password:
-            return S.dev_test_user
+        username = str(context.get("username") or "").strip()
+        password = str(context.get("password") or "").strip()
+        if username and password:
+            # Legacy DEV_TEST_USER shortcut (if configured)
+            if S.dev_test_user and username == S.dev_test_user and S.dev_test_password and password == S.dev_test_password:
+                return S.dev_test_user
+            # Verify against real DDB password hash
+            user_sub = _verify_local_password(username, password)
+            if user_sub:
+                return user_sub
+            raise HTTPException(401, "Invalid credentials")
     return await get_authenticated_user_sub(request)
