@@ -196,3 +196,10 @@ export const emitFileCryptoTelemetry = (body: {
   reason?: "wrong_password" | "corrupted_metadata" | "crypto_error";
   remembered_password_used?: boolean;
 }) => api.post<{ ok: boolean }>("/v1/fs/client-telemetry", body);
+
+
+export const emitFilePreviewTelemetry = (body: {
+  event: "hover_play_start" | "hover_play_failure";
+  path?: string;
+  reason?: "playback_error" | "autoplay_blocked" | "unsupported_capability" | "unknown";
+}) => api.post<{ ok: boolean }>("/v1/fs/client-telemetry", body);

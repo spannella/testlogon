@@ -182,6 +182,37 @@ FILEMGR_PREVIEW_FALLBACK = Counter(
     "File manager preview fallback outcomes by kind/reason",
     ["kind", "reason"],
 )
+
+FILEMGR_PREVIEW_JOBS = Counter(
+    "filemgr_preview_jobs_total",
+    "File manager preview job outcomes by media/artifact/outcome/reason",
+    ["media_type", "artifact", "outcome", "reason"],
+)
+FILEMGR_PREVIEW_JOB_DURATION = Histogram(
+    "filemgr_preview_job_duration_seconds",
+    "File manager preview artifact generation/upload duration in seconds",
+    ["artifact"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60),
+)
+FILEMGR_PREVIEW_ARTIFACT_BYTES = Counter(
+    "filemgr_preview_artifact_bytes",
+    "File manager preview artifact bytes produced",
+    ["artifact"],
+)
+FILEMGR_PREVIEW_HOVER_PLAY_STARTS = Counter(
+    "filemgr_preview_hover_play_starts_total",
+    "Client hover/tap preview play starts",
+)
+FILEMGR_PREVIEW_HOVER_PLAY_FAILURES = Counter(
+    "filemgr_preview_hover_play_failures_total",
+    "Client hover/tap preview play failures",
+    ["reason"],
+)
+FILEMGR_PREVIEW_QUEUE_DEPTH = Gauge(
+    "filemgr_preview_queue_depth",
+    "Approximate in-flight preview jobs in this worker process",
+)
+
 MESSAGING_GALLERY_REQUESTS = Counter(
     "messaging_gallery_requests_total",
     "Messaging gallery request outcomes by type/outcome",
@@ -615,6 +646,39 @@ def record_filemgr_preview_fallback(*, kind: str, reason: str) -> None:
         reason=(reason or "unknown").lower(),
     ).inc()
 
+
+
+def record_filemgr_preview_job(*, media_type: str, artifact: str, outcome: str, reason: str = "none") -> None:
+    FILEMGR_PREVIEW_JOBS.labels(
+        media_type=(media_type or "unknown").lower(),
+        artifact=(artifact or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+        reason=(reason or "none").lower(),
+    ).inc()
+
+
+def record_filemgr_preview_job_duration(*, artifact: str, elapsed_seconds: float) -> None:
+    FILEMGR_PREVIEW_JOB_DURATION.labels(artifact=(artifact or "unknown").lower()).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_filemgr_preview_artifact_bytes(*, artifact: str, nbytes: int) -> None:
+    if nbytes <= 0:
+        return
+    FILEMGR_PREVIEW_ARTIFACT_BYTES.labels(artifact=(artifact or "unknown").lower()).inc(float(nbytes))
+
+
+def record_filemgr_preview_hover_play_start() -> None:
+    FILEMGR_PREVIEW_HOVER_PLAY_STARTS.inc()
+
+
+def record_filemgr_preview_hover_play_failure(*, reason: str) -> None:
+    FILEMGR_PREVIEW_HOVER_PLAY_FAILURES.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def record_filemgr_preview_queue_depth_delta(delta: int) -> None:
+    if delta == 0:
+        return
+    FILEMGR_PREVIEW_QUEUE_DEPTH.inc(float(delta))
 def record_messaging_gallery_request(*, gallery_type: str, outcome: str) -> None:
     MESSAGING_GALLERY_REQUESTS.labels(
         type=(gallery_type or "unknown").lower(),

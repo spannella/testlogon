@@ -297,6 +297,10 @@ export default function FilesPage() {
       enc_orig_size: _item.enc_orig_size,
       enc_orig_content_type: _item.enc_orig_content_type,
       preview_kind: _item.preview_kind,
+      preview_status: _item.preview_status,
+      poster_url: _item.poster_url,
+      hover_preview_url: _item.hover_preview_url,
+      waveform_url: _item.waveform_url,
       preview_supported: _item.preview_supported,
       preview_reason: _item.preview_reason,
     };

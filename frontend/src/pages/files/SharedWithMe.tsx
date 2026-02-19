@@ -7,6 +7,7 @@ import { DataTable, type ColumnDef } from "@/components/shared/DataTable";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { getSharedWithMe } from "@/api/endpoints/files";
 import type { SharedItem } from "@/api/types";
+import { MediaPreviewThumb } from "./MediaPreviewThumb";
 
 function nameFromPath(path: string): string {
   const segments = path.split("/").filter(Boolean);
@@ -24,6 +25,7 @@ function formatDate(iso: string): string {
     year: "numeric",
   });
 }
+
 
 interface SharedWithMeProps {
   onPreviewShared: (item: SharedItem) => void;
@@ -46,6 +48,8 @@ export function SharedWithMe({ onPreviewShared, onDownloadShared }: SharedWithMe
         <div className="flex items-center gap-2">
           {isFolder(row.path) ? (
             <FolderOpen className="h-4 w-4 shrink-0 text-primary" />
+          ) : row.preview_kind === "video" || row.preview_kind === "audio" ? (
+            <MediaPreviewThumb item={row} />
           ) : (
             <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
           )}

@@ -804,7 +804,8 @@ export interface FileEncryptionMetadata {
   mime?: string;
 }
 
-export type PreviewKind = "image" | "pdf" | "word" | "csv" | "excel" | "parquet" | "text" | "none";
+export type PreviewKind = "image" | "document" | "video" | "audio" | "none" | "pdf" | "word" | "csv" | "excel" | "parquet" | "text";
+export type PreviewStatus = "pending" | "ready" | "failed" | "unsupported";
 
 export interface FileEntry {
   name: string;
@@ -826,6 +827,10 @@ export interface FileEntry {
   enc_orig_size?: number;
   enc_orig_content_type?: string;
   preview_kind?: PreviewKind;
+  preview_status?: PreviewStatus;
+  poster_url?: string | null;
+  hover_preview_url?: string | null;
+  waveform_url?: string | null;
   preview_supported?: boolean;
   preview_reason?: string | null;
 }
@@ -921,6 +926,10 @@ export interface SharedItem {
   enc_orig_size?: number;
   enc_orig_content_type?: string;
   preview_kind?: PreviewKind;
+  preview_status?: PreviewStatus;
+  poster_url?: string | null;
+  hover_preview_url?: string | null;
+  waveform_url?: string | null;
   preview_supported?: boolean;
   preview_reason?: string | null;
 }
