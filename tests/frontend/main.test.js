@@ -96,4 +96,63 @@ test('_fileMgrEditorNormalizeRect creates positive bounded rectangles', () => {
     JSON.stringify(_fileMgrEditorNormalizeRect({ x: -20, y: -5 }, { x: 120, y: 90 }, 100, 80)),
     JSON.stringify({ x: 0, y: 0, w: 100, h: 80 })
   );
+test('renderFileMgrList shows video poster when preview is ready', () => {
+  const dom = loadUiDom();
+  const { renderFileMgrList, document } = dom.window;
+  renderFileMgrList([
+    {
+      type: 'file',
+      name: 'clip.mp4',
+      path: '/clip.mp4',
+      size: 1024,
+      preview_kind: 'video',
+      preview_status: 'ready',
+      poster_url: 'https://cdn.example/clip.webp',
+    },
+  ]);
+
+  const img = document.querySelector('#filemgrTable tbody .filemgr-preview img');
+  assert.ok(img);
+  assert.equal(img.getAttribute('src'), 'https://cdn.example/clip.webp');
+  assert.equal(img.getAttribute('alt'), 'Video preview poster');
+});
+
+test('renderFileMgrList shows audio waveform when preview is ready', () => {
+  const dom = loadUiDom();
+  const { renderFileMgrList, document } = dom.window;
+  renderFileMgrList([
+    {
+      type: 'file',
+      name: 'audio.mp3',
+      path: '/audio.mp3',
+      size: 1024,
+      preview_kind: 'audio',
+      preview_status: 'ready',
+      waveform_url: 'https://cdn.example/audio.png',
+    },
+  ]);
+
+  const img = document.querySelector('#filemgrTable tbody .filemgr-preview img');
+  assert.ok(img);
+  assert.equal(img.getAttribute('src'), 'https://cdn.example/audio.png');
+  assert.equal(img.getAttribute('alt'), 'Audio waveform preview');
+});
+
+test('renderFileMgrList shows deterministic fallback for non-ready media preview states', () => {
+  const dom = loadUiDom();
+  const { renderFileMgrList, document } = dom.window;
+  renderFileMgrList([
+    {
+      type: 'file',
+      name: 'audio.mp3',
+      path: '/audio.mp3',
+      size: 1024,
+      preview_kind: 'audio',
+      preview_status: 'unsupported',
+    },
+  ]);
+
+  const fallback = document.querySelector('#filemgrTable tbody .filemgr-preview-fallback');
+  assert.ok(fallback);
+  assert.equal(fallback.textContent.trim(), 'Audio preview unsupported');
 });

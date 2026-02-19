@@ -147,6 +147,534 @@ class TestMessagingRoutes(unittest.TestCase):
         self.assertEqual(msg.reactions_counts, {"👍": 2})
         self.assertEqual(msg.my_reactions, ["👍"])
 
+
+    def test_list_conversation_gallery_filters_by_type_and_returns_cursor(self):
+        tbl_parts = Mock()
+        tbl_msgs = Mock()
+        tbl_parts.get_item.return_value = {"Item": {"status": "active"}}
+        tbl_msgs.query.side_effect = [
+            {
+                "Items": [
+                    {
+                        "conversation_id": "c1",
+                        "message_id": "m3",
+                        "sender_id": "user-2",
+                        "created_at": 100,
+                        "kind": "image",
+                        "image": {"url": "https://cdn.example.com/a.jpg", "content_type": "image/jpeg"},
+                    },
+                    {
+                        "conversation_id": "c1",
+                        "message_id": "m2",
+                        "sender_id": "user-3",
+                        "created_at": 90,
+                        "kind": "text",
+                        "preview": {"url": "https://example.com", "title": "Example"},
+                    },
+                ],
+                "LastEvaluatedKey": {"conversation_id": "c1", "message_id": "m2"},
+            },
+            {"Items": []},
+        ]
+
+        with (
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+        ):
+            page = messaging.list_conversation_gallery("c1", type="image", user_id="user-1")
+
+        self.assertEqual(len(page.items), 1)
+        self.assertEqual(page.items[0].type, "image")
+        self.assertEqual(page.items[0].message_id, "m3")
+        self.assertIsNone(page.next_cursor)
+
+
+    def test_list_conversation_gallery_paginates_across_sparse_matches(self):
+        tbl_parts = Mock()
+        tbl_msgs = Mock()
+        tbl_parts.get_item.return_value = {"Item": {"status": "active"}}
+        tbl_msgs.query.side_effect = [
+            {
+                "Items": [
+                    {
+                        "conversation_id": "c1",
+                        "message_id": "m3",
+                        "sender_id": "user-2",
+                        "created_at": 103,
+                        "kind": "text",
+                        "text": "hello",
+                    },
+                    {
+                        "conversation_id": "c1",
+                        "message_id": "m2",
+                        "sender_id": "user-2",
+                        "created_at": 102,
+                        "kind": "image",
+                        "image": {"url": "https://cdn.example.com/2.jpg"},
+                    },
+                ],
+                "LastEvaluatedKey": {"conversation_id": "c1", "message_id": "m2"},
+            },
+            {
+                "Items": [
+                    {
+                        "conversation_id": "c1",
+                        "message_id": "m1",
+                        "sender_id": "user-3",
+                        "created_at": 101,
+                        "kind": "image",
+                        "image": {"url": "https://cdn.example.com/1.jpg"},
+                    },
+                ]
+            },
+        ]
+
+        with (
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+        ):
+            page = messaging.list_conversation_gallery("c1", type="image", limit=2, user_id="user-1")
+
+        self.assertEqual([item.message_id for item in page.items], ["m2", "m1"])
+        self.assertIsNone(page.next_cursor)
+
+
+
+
+
+    def test_list_conversation_gallery_type_filters_cover_all_tabs(self):
+        base = {
+            "conversation_id": "c1",
+            "sender_id": "user-2",
+            "created_at": 100,
+        }
+        items = [
+            {**base, "message_id": "i1", "kind": "image", "image": {"url": "https://cdn/i1.jpg"}},
+            {**base, "message_id": "v1", "kind": "video", "file": {"url": "https://cdn/v1.mp4", "name": "v1.mp4"}},
+            {**base, "message_id": "f1", "kind": "file", "file": {"url": "https://cdn/f1.pdf", "name": "f1.pdf"}},
+            {**base, "message_id": "l1", "kind": "text", "preview": {"url": "https://example.com", "title": "Example"}},
+        ]
+        tbl_msgs = Mock()
+        tbl_msgs.query.return_value = {"Items": items}
+
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+        ):
+            images = messaging.list_conversation_gallery("c1", type="image", user_id="user-1")
+            videos = messaging.list_conversation_gallery("c1", type="video", user_id="user-1")
+            files = messaging.list_conversation_gallery("c1", type="file", user_id="user-1")
+            links = messaging.list_conversation_gallery("c1", type="link", user_id="user-1")
+
+        self.assertEqual([x.message_id for x in images.items], ["i1"])
+        self.assertEqual([x.message_id for x in videos.items], ["v1"])
+        self.assertEqual([x.message_id for x in files.items], ["f1"])
+        self.assertEqual([x.message_id for x in links.items], ["l1"])
+
+    def test_list_conversation_gallery_returns_next_cursor_and_accepts_cursor(self):
+        tbl_msgs = Mock()
+        tbl_msgs.query.side_effect = [
+            {
+                "Items": [
+                    {"conversation_id": "c1", "message_id": "m3", "sender_id": "u1", "created_at": 103, "kind": "image", "image": {"url": "https://cdn/m3.jpg"}},
+                    {"conversation_id": "c1", "message_id": "m2", "sender_id": "u1", "created_at": 102, "kind": "image", "image": {"url": "https://cdn/m2.jpg"}},
+                ],
+                "LastEvaluatedKey": {"conversation_id": "c1", "message_id": "m2"},
+            },
+            {
+                "Items": [
+                    {"conversation_id": "c1", "message_id": "m1", "sender_id": "u1", "created_at": 101, "kind": "image", "image": {"url": "https://cdn/m1.jpg"}},
+                ]
+            },
+        ]
+
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+        ):
+            first = messaging.list_conversation_gallery("c1", type="image", limit=1, user_id="user-1")
+            self.assertIsInstance(first.next_cursor, str)
+            second = messaging.list_conversation_gallery("c1", type="image", cursor=first.next_cursor, user_id="user-1")
+
+        self.assertEqual([x.message_id for x in first.items], ["m3"])
+        self.assertEqual([x.message_id for x in second.items], ["m1"])
+
+    def test_gallery_policy_encrypted_without_preview_is_omitted(self):
+        encrypted_message = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "user-2",
+            "created_at": 100,
+            "kind": "text",
+            "is_encrypted": True,
+            "encryption": {"version": 1},
+        }
+
+        self.assertIsNone(messaging._gallery_item_from_message(encrypted_message, "link"))
+        self.assertIsNone(messaging._gallery_item_from_message(encrypted_message, "image"))
+        self.assertIsNone(messaging._gallery_item_from_message(encrypted_message, "file"))
+        self.assertIsNone(messaging._gallery_item_from_message(encrypted_message, "video"))
+
+    def test_gallery_policy_encrypted_link_redacts_preview_metadata(self):
+        encrypted_message = {
+            "conversation_id": "c1",
+            "message_id": "m2",
+            "sender_id": "user-2",
+            "created_at": 101,
+            "kind": "text",
+            "is_encrypted": True,
+            "preview": {
+                "url": "https://example.com/secure",
+                "title": "Secret title",
+                "image_url": "https://example.com/thumb.jpg",
+            },
+        }
+
+        item = messaging._gallery_item_from_message(encrypted_message, "link")
+        self.assertIsNotNone(item)
+        self.assertEqual(item.type, "link")
+        self.assertEqual(item.url, "https://example.com/secure")
+        self.assertIsNone(item.title)
+        self.assertIsNone(item.thumbnail_url)
+
+
+    def test_gallery_policy_backend_uses_attachment_fallback_url_when_asset_url_missing(self):
+        image_message = {
+            "conversation_id": "c1",
+            "message_id": "m10",
+            "sender_id": "user-2",
+            "created_at": 200,
+            "kind": "image",
+            "image": {"bucket": "b", "key": "k", "content_type": "image/png"},
+        }
+        item = messaging._gallery_item_from_message(image_message, "image")
+        self.assertIsNotNone(item)
+        self.assertEqual(item.url, "/messaging/conversations/c1/messages/m10/attachment")
+
+        file_message = {
+            "conversation_id": "c1",
+            "message_id": "m11",
+            "sender_id": "user-2",
+            "created_at": 201,
+            "kind": "file",
+            "file": {"path": "/docs/a.pdf", "name": "a.pdf"},
+        }
+        fitem = messaging._gallery_item_from_message(file_message, "file")
+        self.assertIsNotNone(fitem)
+        self.assertEqual(fitem.url, "/messaging/conversations/c1/messages/m11/attachment")
+
+    def test_gallery_classification_link_requires_text_kind(self):
+        message = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "user-2",
+            "created_at": 100,
+            "kind": "video",
+            "file": {"url": "https://cdn.example.com/v.mp4", "name": "v.mp4"},
+            "preview": {"url": "https://example.com/watch?v=1", "title": "Watch"},
+        }
+
+        self.assertIsNone(messaging._gallery_item_from_message(message, "link"))
+        video_item = messaging._gallery_item_from_message(message, "video")
+        self.assertIsNotNone(video_item)
+        self.assertEqual(video_item.type, "video")
+
+    def test_gallery_classification_file_can_optionally_include_audio(self):
+        message = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "user-2",
+            "created_at": 100,
+            "kind": "audio",
+            "file": {"url": "https://cdn.example.com/a.mp3", "name": "a.mp3", "content_type": "audio/mpeg"},
+        }
+
+        with patch.dict(os.environ, {"MESSAGING_GALLERY_INCLUDE_AUDIO": "0"}, clear=False):
+            self.assertIsNone(messaging._gallery_item_from_message(message, "file"))
+
+        with patch.dict(os.environ, {"MESSAGING_GALLERY_INCLUDE_AUDIO": "1"}, clear=False):
+            file_item = messaging._gallery_item_from_message(message, "file")
+
+        self.assertIsNotNone(file_item)
+        self.assertEqual(file_item.type, "file")
+        self.assertEqual(file_item.file_name, "a.mp3")
+
+    def test_gallery_classification_normalizes_metadata_fields(self):
+        message = {
+            "conversation_id": "c1",
+            "message_id": "m5",
+            "sender_id": "user-2",
+            "created_at": 111,
+            "kind": "video",
+            "file": {
+                "url": "https://cdn.example.com/v.mp4",
+                "thumbnail": "https://cdn.example.com/v.jpg",
+                "name": "video.mp4",
+                "content_type": "video/mp4",
+                "size": 4321,
+            },
+        }
+
+        item = messaging._gallery_item_from_message(message, "video")
+        self.assertIsNotNone(item)
+        self.assertEqual(item.url, "https://cdn.example.com/v.mp4")
+        self.assertEqual(item.thumbnail_url, "https://cdn.example.com/v.jpg")
+        self.assertEqual(item.file_name, "video.mp4")
+        self.assertEqual(item.content_type, "video/mp4")
+        self.assertEqual(item.size, 4321)
+
+    def test_list_conversation_gallery_non_participant_forbidden(self):
+        with patch.object(messaging, "require_participant_active", side_effect=HTTPException(403, "Not a participant")):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.list_conversation_gallery("c1", type="image", user_id="user-9")
+
+        self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_list_conversation_gallery_suppresses_revoked_and_deleted(self):
+        tbl_msgs = Mock()
+        tbl_msgs.query.return_value = {
+            "Items": [
+                {
+                    "conversation_id": "c1",
+                    "message_id": "m3",
+                    "sender_id": "user-2",
+                    "created_at": 103,
+                    "kind": "image",
+                    "image": {"url": "https://cdn.example.com/3.jpg"},
+                    "revoked_at": 101,
+                },
+                {
+                    "conversation_id": "c1",
+                    "message_id": "m2",
+                    "sender_id": "user-2",
+                    "created_at": 102,
+                    "kind": "image",
+                    "image": {"url": "https://cdn.example.com/2.jpg"},
+                    "deleted_for": ["user-1"],
+                },
+                {
+                    "conversation_id": "c1",
+                    "message_id": "m1",
+                    "sender_id": "user-2",
+                    "created_at": 101,
+                    "kind": "image",
+                    "image": {"url": "https://cdn.example.com/1.jpg"},
+                },
+            ]
+        }
+
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+        ):
+            page = messaging.list_conversation_gallery("c1", type="image", user_id="user-1")
+
+        self.assertEqual([item.message_id for item in page.items], ["m1"])
+
+    def test_list_conversation_gallery_rejects_invalid_type_with_stable_code(self):
+        tbl_parts = Mock()
+        tbl_parts.get_item.return_value = {"Item": {"status": "active"}}
+        with patch.object(messaging, "tbl_parts", tbl_parts):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.list_conversation_gallery("c1", type="invalid", user_id="user-1")
+
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertEqual(ctx.exception.detail["code"], "gallery_type_invalid")
+
+    def test_list_conversation_gallery_rejects_malformed_cursor_with_stable_code(self):
+        tbl_parts = Mock()
+        tbl_parts.get_item.return_value = {"Item": {"status": "active"}}
+        with patch.object(messaging, "tbl_parts", tbl_parts):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.list_conversation_gallery("c1", type="image", cursor="not-a-cursor", user_id="user-1")
+
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertEqual(ctx.exception.detail["code"], "gallery_cursor_invalid")
+
+    def test_list_conversation_gallery_returns_404_when_flag_disabled(self):
+        with patch.dict(
+            os.environ,
+            {"MESSAGING_GALLERY_ENABLED": "0", "MESSAGING_GALLERY_KILL_SWITCH": "0"},
+            clear=False,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.list_conversation_gallery("c1", type="image", user_id="user-1")
+
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(ctx.exception.detail, "Gallery disabled")
+
+    def test_list_conversation_gallery_returns_404_when_kill_switch_enabled(self):
+        with patch.dict(
+            os.environ,
+            {"MESSAGING_GALLERY_ENABLED": "1", "MESSAGING_GALLERY_KILL_SWITCH": "1"},
+            clear=False,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.list_conversation_gallery("c1", type="image", user_id="user-1")
+
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(ctx.exception.detail, "Gallery disabled")
+
+    def test_list_conversation_gallery_allows_reads_when_flag_enabled_and_kill_switch_off(self):
+        tbl_msgs = Mock()
+        tbl_msgs.query.return_value = {
+            "Items": [
+                {
+                    "conversation_id": "c1",
+                    "message_id": "m1",
+                    "sender_id": "u1",
+                    "created_at": 100,
+                    "kind": "image",
+                    "image": {"url": "https://cdn/m1.jpg"},
+                }
+            ]
+        }
+        with (
+            patch.dict(
+                os.environ,
+                {"MESSAGING_GALLERY_ENABLED": "1", "MESSAGING_GALLERY_KILL_SWITCH": "0"},
+                clear=False,
+            ),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+        ):
+            page = messaging.list_conversation_gallery("c1", type="image", user_id="user-1")
+
+        self.assertEqual([item.message_id for item in page.items], ["m1"])
+
+    def test_list_conversation_gallery_records_observability_metrics_on_success(self):
+        tbl_msgs = Mock()
+        tbl_msgs.query.return_value = {
+            "Items": [
+                {
+                    "conversation_id": "c1",
+                    "message_id": "m1",
+                    "sender_id": "u1",
+                    "created_at": 100,
+                    "kind": "image",
+                    "image": {"url": "https://cdn/m1.jpg"},
+                }
+            ]
+        }
+        with (
+            patch.dict(
+                os.environ,
+                {"MESSAGING_GALLERY_ENABLED": "1", "MESSAGING_GALLERY_KILL_SWITCH": "0"},
+                clear=False,
+            ),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "record_messaging_gallery_request") as record_request,
+            patch.object(messaging, "record_messaging_gallery_latency") as record_latency,
+            patch.object(messaging, "record_messaging_gallery_cursor_page_depth") as record_depth,
+        ):
+            messaging.list_conversation_gallery("c1", type="image", user_id="user-1")
+
+        record_request.assert_called_once_with(gallery_type="image", outcome="success")
+        record_latency.assert_called_once()
+        record_depth.assert_called_once_with(gallery_type="image", depth=0)
+
+    def test_list_conversation_gallery_records_observability_metrics_when_disabled(self):
+        with (
+            patch.dict(
+                os.environ,
+                {"MESSAGING_GALLERY_ENABLED": "0", "MESSAGING_GALLERY_KILL_SWITCH": "0"},
+                clear=False,
+            ),
+            patch.object(messaging, "record_messaging_gallery_request") as record_request,
+            patch.object(messaging, "record_messaging_gallery_latency") as record_latency,
+            patch.object(messaging, "record_messaging_gallery_cursor_page_depth") as record_depth,
+        ):
+            with self.assertRaises(HTTPException):
+                messaging.list_conversation_gallery("c1", type="image", user_id="user-1")
+
+        record_request.assert_called_once_with(gallery_type="image", outcome="disabled")
+        record_latency.assert_called_once()
+        record_depth.assert_not_called()
+
+    def test_list_conversation_gallery_uses_materialized_index_when_enabled(self):
+        tbl_index = Mock()
+        tbl_index.query.return_value = {
+            "Items": [
+                {
+                    "type": "image",
+                    "conversation_id": "c1",
+                    "message_id": "m9",
+                    "sender_id": "u2",
+                    "created_at": 109,
+                    "url": "https://cdn.example.com/9.jpg",
+                    "gallery_partition": "c1#image",
+                    "gallery_sort": "0000000000109#m9",
+                }
+            ]
+        }
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "MESSAGING_GALLERY_ENABLED": "1",
+                    "MESSAGING_GALLERY_KILL_SWITCH": "0",
+                    "MESSAGING_GALLERY_INDEX_ENABLED": "1",
+                },
+                clear=False,
+            ),
+            patch.object(messaging, "tbl_gallery_index", tbl_index),
+            patch.object(messaging, "_aws_credentials_available", return_value=True),
+            patch.object(messaging, "require_participant_active"),
+        ):
+            page = messaging.list_conversation_gallery("c1", type="image", user_id="user-1")
+
+        self.assertEqual([item.message_id for item in page.items], ["m9"])
+        self.assertIsNone(page.next_cursor)
+        tbl_index.query.assert_called_once()
+
+    def test_send_text_message_syncs_materialized_gallery_index(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        with (
+            patch.object(messaging, "now_ts", return_value=55),
+            patch.object(messaging, "new_id", return_value="xyz"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "tbl_parts", Mock(query=Mock(return_value={"Items": []}))),
+            patch.object(messaging, "fanout_event_to_conversation"),
+            patch.object(messaging, "_meter_message_send"),
+            patch.object(messaging, "record_usage_event_and_aggregates", return_value=True),
+            patch.object(messaging, "ddb") as ddb,
+            patch.object(messaging, "S") as settings,
+            patch.object(messaging, "_sync_gallery_index_message") as sync_index,
+        ):
+            settings.filemgr_table_name = "FileManager"
+            ddb.Table.return_value = Mock()
+            messaging.send_text_message("c1", messaging.SendTextMessageIn(text="hello"), user_id="u1")
+
+        sync_index.assert_called_once()
+
+    def test_revoke_message_syncs_materialized_gallery_index(self):
+        msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u1",
+            "created_at": 100,
+            "kind": "image",
+            "image": {"url": "https://cdn.example.com/1.jpg"},
+            "deleted_for": set(),
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_ensure_can_revoke_message"),
+            patch.object(messaging, "_get_message_or_404", side_effect=[msg, {**msg, "revoked_at": 101}]),
+            patch.object(messaging, "tbl_msgs", Mock(update_item=Mock())),
+            patch.object(messaging, "now_ts", return_value=101),
+            patch.object(messaging, "fanout_event_to_conversation"),
+            patch.object(messaging, "_sync_gallery_index_message") as sync_index,
+        ):
+            messaging.revoke_message_for_all("c1", "m1", user_id="u1")
+
+        sync_index.assert_called_once()
+
     def test_send_text_message_success_records_usage_once(self):
         tbl_msgs = Mock()
         tbl_convos = Mock()
@@ -162,6 +690,7 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "audit_event"),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
             patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "fanout_event_to_conversation"),
         ):
             settings.filemgr_table_name = "FileManager"
             ddb.Table.return_value = Mock()
@@ -306,6 +835,18 @@ class TestMessagingRoutes(unittest.TestCase):
         ):
             resp = messaging.messaging_config(user_id="user-1")
         self.assertFalse(resp.messaging_encrypted_messages_enabled)
+
+    def test_messaging_config_reflects_gallery_kill_switch(self):
+        with patch.dict(
+            os.environ,
+            {
+                "MESSAGING_GALLERY_ENABLED": "1",
+                "MESSAGING_GALLERY_KILL_SWITCH": "1",
+            },
+            clear=False,
+        ):
+            resp = messaging.messaging_config(user_id="user-1")
+        self.assertFalse(resp.messaging_gallery_enabled)
 
 
     def test_plaintext_send_works_when_encryption_feature_flag_off(self):
@@ -604,6 +1145,294 @@ class TestMessagingRoutes(unittest.TestCase):
         self.assertEqual(event["source"], "messaging_attachment_download")
         self.assertEqual(event["bytes"], 77)
         self.assertEqual(event["idempotency_key"], "u1|messaging_attachment_download|b/k.png|req-1")
+
+
+    def test_create_once_media_attachment_grant_success(self):
+        msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "kind": "image",
+            "consumption_policy": "view_once",
+            "media_kind": "image",
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_message_or_404", return_value=msg),
+            patch.object(messaging, "tbl_msg_consumption") as tbl_consumption,
+            patch.object(messaging, "now_ts", return_value=100),
+            patch.object(messaging, "audit_event"),
+        ):
+            tbl_consumption.get_item.return_value = {"Item": {"consumption_state": "pending"}}
+            out = messaging.create_once_media_attachment_grant("c1", "m1", SimpleNamespace(headers={}), user_id="u1")
+
+        self.assertEqual(out.conversation_id, "c1")
+        self.assertEqual(out.message_id, "m1")
+        self.assertTrue(out.grant_token)
+        self.assertEqual(out.expires_at, 220)
+
+    def test_create_once_media_attachment_grant_rejects_consumed(self):
+        msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "kind": "video",
+            "consumption_policy": "view_once",
+            "media_kind": "video",
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_message_or_404", return_value=msg),
+            patch.object(messaging, "tbl_msg_consumption") as tbl_consumption,
+        ):
+            tbl_consumption.get_item.return_value = {"Item": {"consumption_state": "consumed"}}
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.create_once_media_attachment_grant("c1", "m1", SimpleNamespace(headers={}), user_id="u1")
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "already_consumed")
+
+
+    def test_consume_once_media_attachment_success(self):
+        msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "kind": "image",
+            "consumption_policy": "view_once",
+            "media_kind": "image",
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_message_or_404", return_value=msg),
+            patch.object(messaging, "tbl_msg_consumption") as tbl_consumption,
+            patch.object(messaging, "now_ts", return_value=100),
+            patch.object(messaging, "audit_event"),
+        ):
+            tbl_consumption.get_item.side_effect = [
+                {"Item": {"consumption_state": "pending"}},
+                {"Item": {"consumption_state": "consumed", "consumed_at": 100, "last_consumption_attempt_id": "attempt-1"}},
+            ]
+            grant = messaging._encode_once_media_grant(
+                conversation_id="c1", message_id="m1", recipient_id="u1", expires_at=200
+            )
+            out = messaging.consume_once_media_attachment(
+                "c1",
+                "m1",
+                messaging.ConsumeAttachmentIn(consumption_attempt_id="attempt-1", trigger="open"),
+                SimpleNamespace(headers={}),
+                grant_token=grant,
+                user_id="u1",
+            )
+
+        self.assertTrue(out.ok)
+        self.assertEqual(out.consumption_state, "consumed")
+        self.assertEqual(out.consumed_at, 100)
+
+    def test_consume_once_media_attachment_idempotent_retry(self):
+        msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "kind": "audio",
+            "consumption_policy": "listen_once",
+            "media_kind": "audio",
+        }
+
+        err = messaging.ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "failed"}},
+            "UpdateItem",
+        )
+
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_message_or_404", return_value=msg),
+            patch.object(messaging, "tbl_msg_consumption") as tbl_consumption,
+            patch.object(messaging, "now_ts", return_value=100),
+            patch.object(messaging, "audit_event"),
+        ):
+            tbl_consumption.update_item.side_effect = err
+            tbl_consumption.get_item.side_effect = [
+                {"Item": {"consumption_state": "pending"}},
+                {
+                    "Item": {
+                        "consumption_state": "consumed",
+                        "consumed_at": 101,
+                        "last_consumption_attempt_id": "attempt-77",
+                    }
+                },
+            ]
+            grant = messaging._encode_once_media_grant(
+                conversation_id="c1", message_id="m1", recipient_id="u1", expires_at=200
+            )
+            out = messaging.consume_once_media_attachment(
+                "c1",
+                "m1",
+                messaging.ConsumeAttachmentIn(consumption_attempt_id="attempt-77", trigger="play", playback_seconds=2.0),
+                SimpleNamespace(headers={}),
+                grant_token=grant,
+                user_id="u1",
+            )
+
+        self.assertTrue(out.ok)
+        self.assertEqual(out.consumed_at, 101)
+
+    def test_consume_once_media_attachment_rejects_other_attempt_after_consumed(self):
+        msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "kind": "video",
+            "consumption_policy": "view_once",
+            "media_kind": "video",
+        }
+
+        err = messaging.ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "failed"}},
+            "UpdateItem",
+        )
+
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_message_or_404", return_value=msg),
+            patch.object(messaging, "tbl_msg_consumption") as tbl_consumption,
+            patch.object(messaging, "now_ts", return_value=100),
+        ):
+            tbl_consumption.update_item.side_effect = err
+            tbl_consumption.get_item.side_effect = [
+                {"Item": {"consumption_state": "pending"}},
+                {
+                    "Item": {
+                        "consumption_state": "consumed",
+                        "consumed_at": 101,
+                        "last_consumption_attempt_id": "attempt-A",
+                    }
+                },
+            ]
+            grant = messaging._encode_once_media_grant(
+                conversation_id="c1", message_id="m1", recipient_id="u1", expires_at=200
+            )
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.consume_once_media_attachment(
+                    "c1",
+                    "m1",
+                    messaging.ConsumeAttachmentIn(consumption_attempt_id="attempt-B", trigger="play", playback_seconds=3.0),
+                    SimpleNamespace(headers={}),
+                    grant_token=grant,
+                    user_id="u1",
+                )
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "already_consumed")
+
+
+    def test_consume_once_media_attachment_video_threshold_not_met_retryable(self):
+        msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "kind": "video",
+            "consumption_policy": "view_once",
+            "media_kind": "video",
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_message_or_404", return_value=msg),
+            patch.object(messaging, "tbl_msg_consumption") as tbl_consumption,
+            patch.object(messaging, "now_ts", return_value=100),
+        ):
+            tbl_consumption.get_item.return_value = {"Item": {"consumption_state": "pending"}}
+            grant = messaging._encode_once_media_grant(
+                conversation_id="c1", message_id="m1", recipient_id="u1", expires_at=200
+            )
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.consume_once_media_attachment(
+                    "c1",
+                    "m1",
+                    messaging.ConsumeAttachmentIn(consumption_attempt_id="attempt-v1", trigger="play", playback_seconds=0.2),
+                    SimpleNamespace(headers={}),
+                    grant_token=grant,
+                    user_id="u1",
+                )
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "consume_threshold_not_met")
+        self.assertTrue(ctx.exception.detail["retryable"])
+
+    def test_consume_once_media_attachment_audio_threshold_met_succeeds(self):
+        msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "kind": "audio",
+            "consumption_policy": "listen_once",
+            "media_kind": "audio",
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_message_or_404", return_value=msg),
+            patch.object(messaging, "tbl_msg_consumption") as tbl_consumption,
+            patch.object(messaging, "now_ts", return_value=100),
+            patch.object(messaging, "audit_event"),
+        ):
+            tbl_consumption.get_item.side_effect = [
+                {"Item": {"consumption_state": "pending"}},
+                {"Item": {"consumption_state": "consumed", "consumed_at": 100, "last_consumption_attempt_id": "attempt-a1"}},
+            ]
+            grant = messaging._encode_once_media_grant(
+                conversation_id="c1", message_id="m1", recipient_id="u1", expires_at=200
+            )
+            out = messaging.consume_once_media_attachment(
+                "c1",
+                "m1",
+                messaging.ConsumeAttachmentIn(consumption_attempt_id="attempt-a1", trigger="play", playback_seconds=2.2),
+                SimpleNamespace(headers={}),
+                grant_token=grant,
+                user_id="u1",
+            )
+        self.assertEqual(out.consumption_state, "consumed")
+
+    def test_download_once_media_attachment_requires_valid_grant_and_no_store_cache(self):
+        class _Body:
+            def iter_chunks(self, chunk_size=65536):
+                yield b"x"
+
+        async def _drain(resp):
+            async for _ in resp.body_iterator:
+                pass
+
+        msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "kind": "image",
+            "consumption_policy": "view_once",
+            "media_kind": "image",
+            "image": {"bucket": "b", "key": "img/k.png", "content_type": "image/png"},
+        }
+
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_message_or_404", return_value=msg),
+            patch.object(messaging, "tbl_msg_consumption") as tbl_consumption,
+            patch.object(messaging, "now_ts", return_value=100),
+            patch.object(messaging, "s3") as s3,
+            patch.object(messaging, "_record_messaging_attachment_download"),
+            patch.object(messaging, "audit_event"),
+        ):
+            tbl_consumption.get_item.return_value = {"Item": {"consumption_state": "pending"}}
+            grant = messaging._encode_once_media_grant(
+                conversation_id="c1", message_id="m1", recipient_id="u1", expires_at=200
+            )
+            s3.get_object.return_value = {"Body": _Body(), "ContentLength": 1}
+            resp = messaging.download_message_attachment(
+                "c1", "m1", SimpleNamespace(headers={}), grant_token=grant, x_request_id=None, user_id="u1"
+            )
+            asyncio.run(_drain(resp))
+
+        self.assertEqual(resp.headers["Cache-Control"], "no-store, no-cache, max-age=0, must-revalidate")
+        self.assertEqual(resp.headers["Pragma"], "no-cache")
+        self.assertEqual(resp.headers["Expires"], "0")
 
     def test_download_message_attachment_streams_and_records_download_bytes(self):
         class _Body:
@@ -1126,6 +1955,437 @@ class TestMessagingRoutes(unittest.TestCase):
             )
         self.assertEqual(resp.message_id, "m_img")
         tbl_msgs.put_item.assert_called_once()
+
+
+
+    def test_message_out_non_once_omits_consumption_fields(self):
+        item = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "created_at": 10,
+            "kind": "image",
+            "image": {"bucket": "b", "key": "k"},
+            "consumption_policy": "none",
+            "media_kind": "image",
+            "reactions": {},
+        }
+        with patch.object(messaging, "tbl_msg_consumption") as tbl:
+            tbl.get_item.return_value = {}
+            out = messaging._serialize_message_event_payload(item, "u1")
+
+        self.assertNotIn("consumption_policy", out)
+        self.assertNotIn("media_kind", out)
+        self.assertNotIn("consumption_state", out)
+        self.assertNotIn("consumed_at", out)
+
+    def test_message_out_once_includes_recipient_consumption_state(self):
+        item = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "created_at": 10,
+            "kind": "video",
+            "file": {"path": "/v.mp4", "content_type": "video/mp4"},
+            "consumption_policy": "view_once",
+            "media_kind": "video",
+            "reactions": {},
+        }
+        with patch.object(messaging, "tbl_msg_consumption") as tbl:
+            tbl.get_item.return_value = {
+                "Item": {
+                    "consumption_policy": "view_once",
+                    "media_kind": "video",
+                    "consumption_state": "pending",
+                    "consumed_at": 0,
+                }
+            }
+            out = messaging._serialize_message_event_payload(item, "u1")
+
+        self.assertEqual(out["consumption_policy"], "view_once")
+        self.assertEqual(out["media_kind"], "video")
+        self.assertEqual(out["consumption_state"], "pending")
+        self.assertNotIn("consumed_at", out)
+
+    def test_list_messages_once_state_parity_with_event_serializer(self):
+        tbl_parts = Mock()
+        tbl_msgs = Mock()
+        tbl_parts.get_item.return_value = {"Item": {"status": "active"}}
+        msg_item = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "created_at": 10,
+            "kind": "audio",
+            "file": {"path": "/a.mp3", "content_type": "audio/mp3"},
+            "consumption_policy": "listen_once",
+            "media_kind": "audio",
+            "reactions": {},
+        }
+        tbl_msgs.query.return_value = {"Items": [msg_item]}
+        with (
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_msg_consumption") as tbl_consumption,
+        ):
+            tbl_consumption.get_item.return_value = {
+                "Item": {
+                    "consumption_policy": "listen_once",
+                    "media_kind": "audio",
+                    "consumption_state": "pending",
+                    "consumed_at": 0,
+                }
+            }
+            listed = messaging.list_messages("c1", user_id="u1")
+            event_payload = messaging._serialize_message_event_payload(msg_item, "u1")
+
+        self.assertEqual(listed[0].model_dump(exclude_none=True)["consumption_policy"], event_payload["consumption_policy"])
+        self.assertEqual(listed[0].model_dump(exclude_none=True)["media_kind"], event_payload["media_kind"])
+        self.assertEqual(listed[0].model_dump(exclude_none=True)["consumption_state"], event_payload["consumption_state"])
+
+    def test_create_image_message_view_once_persists_recipient_consumption(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        tbl_parts = Mock()
+        tbl_parts.query.return_value = {"Items": [{"user_id": "u1"}, {"user_id": "u2"}]}
+        tbl_consumption = Mock()
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "new_id", return_value="img"),
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "tbl_msg_consumption", tbl_consumption),
+            patch.object(messaging, "_meter_message_send"),
+            patch.object(messaging, "_meter_messaging_attachment_upload"),
+        ):
+            resp = messaging.create_image_message(
+                "c1",
+                messaging.CreateImageMessageIn(bucket="b", key="k", consumption_policy="view_once"),
+                user_id="u1",
+            )
+
+        self.assertEqual(resp.consumption_policy, "view_once")
+        self.assertEqual(resp.media_kind, "image")
+        self.assertEqual(resp.consumption_state, "pending")
+        tbl_consumption.put_item.assert_called_once()
+
+    def test_create_file_message_audio_listen_once_persists_recipient_consumption(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        tbl_parts = Mock()
+        tbl_parts.query.return_value = {"Items": [{"user_id": "u1"}, {"user_id": "u2"}]}
+        tbl_consumption = Mock()
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "new_id", return_value="file"),
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "tbl_msg_consumption", tbl_consumption),
+            patch.object(
+                messaging,
+                "get_node",
+                return_value={
+                    "type": "file",
+                    "path": "/a.mp3",
+                    "name": "a.mp3",
+                    "size": 1,
+                    "content_type": "audio/mp3",
+                },
+            ),
+            patch.object(messaging, "_meter_message_send"),
+        ):
+            resp = messaging.create_file_message(
+                "c1",
+                messaging.CreateFileMessageIn(path="/a.mp3", kind="audio", consumption_policy="listen_once"),
+                user_id="u1",
+            )
+
+        self.assertEqual(resp.consumption_policy, "listen_once")
+        self.assertEqual(resp.media_kind, "audio")
+        self.assertEqual(resp.consumption_state, "pending")
+        tbl_consumption.put_item.assert_called_once()
+
+    def test_create_file_message_invalid_policy_for_kind_raises(self):
+        with self.assertRaises(Exception):
+            messaging.CreateFileMessageIn(path="/doc.pdf", kind="file", consumption_policy="view_once")
+
+
+    def test_create_image_message_view_once_records_once_media_send_metric(self):
+        tbl_parts = Mock()
+        tbl_parts.query.return_value = {"Items": [{"user_id": "u1"}, {"user_id": "u2"}]}
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "new_id", return_value="img"),
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs"),
+            patch.object(messaging, "tbl_convos"),
+            patch.object(messaging, "tbl_msg_consumption"),
+            patch.object(messaging, "_meter_message_send"),
+            patch.object(messaging, "_meter_messaging_attachment_upload"),
+            patch.object(messaging, "audit_event"),
+            patch.object(messaging, "record_once_media_send") as record_send,
+        ):
+            messaging.create_image_message(
+                "c1",
+                messaging.CreateImageMessageIn(bucket="b", key="k", consumption_policy="view_once"),
+                req=SimpleNamespace(headers={"x-once-media-cohort": "beta_a"}),
+                user_id="u1",
+            )
+
+        record_send.assert_called_once_with(
+            media_kind="image",
+            consumption_policy="view_once",
+            cohort="beta_a",
+        )
+
+    def test_create_once_media_attachment_grant_failure_records_metrics(self):
+        msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "kind": "video",
+            "consumption_policy": "view_once",
+            "media_kind": "video",
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_message_or_404", return_value=msg),
+            patch.object(messaging, "tbl_msg_consumption") as tbl_consumption,
+            patch.object(messaging, "record_once_media_grant") as record_grant,
+            patch.object(messaging, "record_once_media_grant_latency") as record_latency,
+        ):
+            tbl_consumption.get_item.return_value = {"Item": {"consumption_state": "consumed"}}
+            with self.assertRaises(HTTPException):
+                messaging.create_once_media_attachment_grant(
+                    "c1",
+                    "m1",
+                    SimpleNamespace(headers={"x-once-media-cohort": "rollout-1"}),
+                    user_id="u1",
+                )
+
+        record_grant.assert_called_once_with(
+            media_kind="video",
+            outcome="error",
+            reason="already_consumed",
+            cohort="rollout-1",
+        )
+        record_latency.assert_called_once()
+
+    def test_consume_once_media_attachment_conflict_records_conflict_metric(self):
+        msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "kind": "video",
+            "consumption_policy": "view_once",
+            "media_kind": "video",
+        }
+
+        err = messaging.ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "failed"}},
+            "UpdateItem",
+        )
+
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_message_or_404", return_value=msg),
+            patch.object(messaging, "tbl_msg_consumption") as tbl_consumption,
+            patch.object(messaging, "now_ts", return_value=100),
+            patch.object(messaging, "record_once_media_consume") as record_consume,
+            patch.object(messaging, "record_once_media_conflict") as record_conflict,
+        ):
+            tbl_consumption.update_item.side_effect = err
+            tbl_consumption.get_item.side_effect = [
+                {"Item": {"consumption_state": "pending"}},
+                {
+                    "Item": {
+                        "consumption_state": "consumed",
+                        "consumed_at": 101,
+                        "last_consumption_attempt_id": "attempt-abc",
+                    }
+                },
+            ]
+            grant = messaging._encode_once_media_grant(
+                conversation_id="c1", message_id="m1", recipient_id="u1", expires_at=200
+            )
+            with self.assertRaises(HTTPException):
+                messaging.consume_once_media_attachment(
+                    "c1",
+                    "m1",
+                    messaging.ConsumeAttachmentIn(consumption_attempt_id="attempt-xyz", trigger="play", playback_seconds=2.0),
+                    SimpleNamespace(headers={"x-once-media-cohort": "rollout-1"}),
+                    grant_token=grant,
+                    user_id="u1",
+                )
+
+        record_consume.assert_called_once_with(
+            media_kind="video",
+            outcome="error",
+            reason="already_consumed",
+            cohort="rollout-1",
+        )
+        record_conflict.assert_called_once_with(media_kind="video", cohort="rollout-1")
+
+    def test_consume_once_media_state_atomic_success_transition(self):
+        with patch.object(messaging, "tbl_msg_consumption") as tbl_consumption:
+            tbl_consumption.update_item.return_value = {
+                "Attributes": {
+                    "consumption_state": "consumed",
+                    "consumed_at": 123,
+                    "last_consumption_attempt_id": "attempt-1",
+                }
+            }
+            tbl_consumption.get_item.return_value = {
+                "Item": {
+                    "consumption_state": "consumed",
+                    "consumed_at": 123,
+                    "last_consumption_attempt_id": "attempt-1",
+                }
+            }
+            out = messaging._consume_once_media_state_atomic(
+                conversation_id="c1",
+                message_id="m1",
+                recipient_id="u1",
+                consumption_attempt_id="attempt-1",
+                consumed_at=123,
+            )
+
+        self.assertEqual(out["consumption_state"], "consumed")
+        self.assertEqual(out["consumed_at"], 123)
+        self.assertTrue(out["idempotent_replay"])
+
+    def test_consume_once_media_state_atomic_missing_state_raises_404(self):
+        err = messaging.ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "failed"}},
+            "UpdateItem",
+        )
+        with patch.object(messaging, "tbl_msg_consumption") as tbl_consumption:
+            tbl_consumption.update_item.side_effect = err
+            tbl_consumption.get_item.return_value = {}
+            with self.assertRaises(HTTPException) as ctx:
+                messaging._consume_once_media_state_atomic(
+                    conversation_id="c1",
+                    message_id="m1",
+                    recipient_id="u1",
+                    consumption_attempt_id="attempt-1",
+                    consumed_at=123,
+                )
+
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(ctx.exception.detail["code"], "consumption_state_missing")
+
+
+    def test_group_video_view_once_creates_per_recipient_consumption_rows(self):
+        tbl_parts = Mock()
+        tbl_parts.query.return_value = {"Items": [{"user_id": "u1"}, {"user_id": "u2"}, {"user_id": "u3"}]}
+        tbl_consumption = Mock()
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "new_id", return_value="v1"),
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs"),
+            patch.object(messaging, "tbl_convos"),
+            patch.object(messaging, "tbl_msg_consumption", tbl_consumption),
+            patch.object(messaging, "get_node", return_value={"type": "file", "path": "/a.mp4", "name": "a.mp4", "size": 1, "content_type": "video/mp4"}),
+            patch.object(messaging, "_meter_message_send"),
+            patch.object(messaging, "audit_event"),
+            patch.object(messaging, "require_subscription_access"),
+        ):
+            resp = messaging.create_file_message(
+                "c1",
+                messaging.CreateFileMessageIn(path="/a.mp4", kind="video", consumption_policy="view_once"),
+                user_id="u1",
+            )
+
+        self.assertEqual(resp.consumption_policy, "view_once")
+        self.assertEqual(resp.media_kind, "video")
+        self.assertEqual(tbl_consumption.put_item.call_count, 2)
+
+    def test_create_file_message_without_once_policy_does_not_create_consumption_rows(self):
+        tbl_parts = Mock()
+        tbl_parts.query.return_value = {"Items": [{"user_id": "u1"}, {"user_id": "u2"}]}
+        tbl_consumption = Mock()
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "new_id", return_value="f1"),
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs"),
+            patch.object(messaging, "tbl_convos"),
+            patch.object(messaging, "tbl_msg_consumption", tbl_consumption),
+            patch.object(messaging, "get_node", return_value={"type": "file", "path": "/doc.pdf", "name": "doc.pdf", "size": 1, "content_type": "application/pdf"}),
+            patch.object(messaging, "_meter_message_send"),
+            patch.object(messaging, "audit_event"),
+            patch.object(messaging, "require_subscription_access"),
+        ):
+            resp = messaging.create_file_message(
+                "c1",
+                messaging.CreateFileMessageIn(path="/doc.pdf", kind="file", consumption_policy="none"),
+                user_id="u1",
+            )
+
+        self.assertIsNone(resp.consumption_policy)
+        self.assertIsNone(resp.media_kind)
+        self.assertIsNone(resp.consumption_state)
+        tbl_consumption.put_item.assert_not_called()
+
+    def test_consume_once_audio_interrupted_then_retry_succeeds(self):
+        msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u2",
+            "kind": "audio",
+            "consumption_policy": "listen_once",
+            "media_kind": "audio",
+        }
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_message_or_404", return_value=msg),
+            patch.object(messaging, "tbl_msg_consumption") as tbl_consumption,
+            patch.object(messaging, "now_ts", return_value=100),
+            patch.object(messaging, "audit_event"),
+        ):
+            tbl_consumption.get_item.side_effect = [
+                {"Item": {"consumption_state": "pending"}},
+                {"Item": {"consumption_state": "pending"}},
+                {"Item": {"consumption_state": "consumed", "consumed_at": 101, "last_consumption_attempt_id": "attempt-1"}},
+            ]
+            grant = messaging._encode_once_media_grant(conversation_id="c1", message_id="m1", recipient_id="u1", expires_at=200)
+
+            with self.assertRaises(HTTPException) as first:
+                messaging.consume_once_media_attachment(
+                    "c1",
+                    "m1",
+                    messaging.ConsumeAttachmentIn(consumption_attempt_id="attempt-1", trigger="play", playback_seconds=0.1),
+                    SimpleNamespace(headers={}),
+                    grant_token=grant,
+                    user_id="u1",
+                )
+            self.assertEqual(first.exception.detail["code"], "consume_threshold_not_met")
+
+            out = messaging.consume_once_media_attachment(
+                "c1",
+                "m1",
+                messaging.ConsumeAttachmentIn(consumption_attempt_id="attempt-1", trigger="play", playback_seconds=2.0),
+                SimpleNamespace(headers={}),
+                grant_token=grant,
+                user_id="u1",
+            )
+
+        self.assertTrue(out.ok)
+        self.assertEqual(out.consumption_state, "consumed")
+
 
     def test_mark_read_updates_last_read(self):
         tbl_parts = Mock()

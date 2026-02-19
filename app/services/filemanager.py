@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import binascii
 import logging
@@ -36,6 +37,10 @@ from app.metrics import (
     record_filemgr_operation_latency,
     record_filemgr_purge_run,
     record_filemgr_search_path,
+    record_filemgr_preview_job,
+    record_filemgr_preview_job_duration,
+    record_filemgr_preview_artifact_bytes,
+    record_filemgr_preview_queue_depth_delta,
 )
 from app.services.usage_metering import (
     build_usage_event,
@@ -336,6 +341,31 @@ def split_parent_name(path: str) -> tuple[str, str]:
     return parent, name
 
 
+def _sanitize_etag(etag: Optional[str]) -> str:
+    raw = str(etag or "").strip()
+    return raw.strip('"')
+
+
+def _media_derivative_version(source_key: str, etag: Optional[str], size: int) -> str:
+    payload = f"{source_key}|{_sanitize_etag(etag)}|{int(size or 0)}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:24]
+
+
+def build_media_derivative_layout(owner: str, source_key: str, etag: Optional[str], size: int) -> Dict[str, Any]:
+    """Return deterministic derivative storage keys tied to the source object version/hash."""
+    version = _media_derivative_version(source_key, etag, size)
+    base_prefix = f"{owner}/derived/media/{version}"
+    return {
+        "media_preview_version": version,
+        "media_preview_prefix": base_prefix,
+        "media_preview_keys": {
+            "poster_image": f"{base_prefix}/poster_image.webp",
+            "hover_clip": f"{base_prefix}/hover_clip.mp4",
+            "waveform_image": f"{base_prefix}/waveform_image.png",
+        },
+    }
+
+
 def pk_user(user: str) -> str:
     return f"USER#{user}"
 
@@ -498,39 +528,678 @@ def _node_matches(tokens: List[str], item: Dict[str, Any]) -> bool:
 
 
 def _maybe_probe_duration(bucket: str, s3_key: str, content_type: Optional[str]) -> Optional[int]:
-    if not content_type or not (content_type.startswith("audio/") or content_type.startswith("video/")):
+    inspection = inspect_media_object(bucket=bucket, s3_key=s3_key, content_type_hint=content_type)
+    return inspection.get("duration_seconds")
+
+
+def _safe_int(value: Any) -> Optional[int]:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
         return None
+
+
+def _normalize_stream(stream: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "index": _safe_int(stream.get("index")),
+        "codec_type": str(stream.get("codec_type") or "unknown").lower(),
+        "codec_name": str(stream.get("codec_name") or "unknown").lower(),
+        "width": _safe_int(stream.get("width")),
+        "height": _safe_int(stream.get("height")),
+        "sample_rate": _safe_int(stream.get("sample_rate")),
+        "channels": _safe_int(stream.get("channels")),
+    }
+
+
+def normalize_media_inspection_result(probe: Dict[str, Any], *, content_type_hint: Optional[str]) -> Dict[str, Any]:
+    fmt = probe.get("format") if isinstance(probe.get("format"), dict) else {}
+    stream_rows = probe.get("streams") if isinstance(probe.get("streams"), list) else []
+
+    streams = [_normalize_stream(row) for row in stream_rows if isinstance(row, dict)]
+    streams.sort(key=lambda s: (s.get("index") is None, s.get("index") or 0, s.get("codec_type") or ""))
+
+    duration_seconds: Optional[int]
+    try:
+        duration_seconds = int(float(fmt.get("duration"))) if fmt.get("duration") is not None else None
+    except (TypeError, ValueError):
+        duration_seconds = None
+
+    format_name = str(fmt.get("format_name") or "").strip().lower()
+    container = format_name.split(",", 1)[0] if format_name else "unknown"
+    mime_type = str(content_type_hint or fmt.get("mime_type") or "application/octet-stream").strip().lower()
+
+    video_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
+    audio_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
+
+    return {
+        "ok": True,
+        "mime_type": mime_type,
+        "container": container,
+        "duration_seconds": duration_seconds,
+        "has_video": video_stream is not None,
+        "has_audio": audio_stream is not None,
+        "primary_video_codec": video_stream.get("codec_name") if video_stream else None,
+        "primary_audio_codec": audio_stream.get("codec_name") if audio_stream else None,
+        "streams": streams,
+        "error": None,
+    }
+
+
+
+
+_DEFANGED_MEDIA_TOOL_ENV = {
+    "PATH": "/usr/bin:/bin",
+    "HOME": "/nonexistent",
+    "LANG": "C",
+    "LC_ALL": "C",
+}
+
+
+def _run_media_tool(args: List[str], *, timeout_seconds: Optional[int] = None) -> subprocess.CompletedProcess[str]:
+    """Run ffmpeg/ffprobe with hardened defaults and no shell interpolation."""
+    if not isinstance(args, list) or not all(isinstance(part, str) for part in args):
+        raise ValueError("media tool args must be a list[str]")
+    if any("\x00" in part for part in args):
+        raise ValueError("media tool args contain invalid null byte")
+
+    effective_timeout = int(timeout_seconds or getattr(S, "filemgr_preview_job_timeout_seconds", 120) or 120)
+    effective_timeout = max(5, effective_timeout)
+
+    return subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        check=False,
+        shell=False,
+        env=_DEFANGED_MEDIA_TOOL_ENV,
+        stdin=subprocess.DEVNULL,
+        close_fds=True,
+        timeout=effective_timeout,
+    )
+
+def inspect_media_object(*, bucket: str, s3_key: str, content_type_hint: Optional[str]) -> Dict[str, Any]:
+    default_mime = str(content_type_hint or "application/octet-stream").lower()
+    if not content_type_hint or not (content_type_hint.startswith("audio/") or content_type_hint.startswith("video/")):
+        return {
+            "ok": False,
+            "mime_type": default_mime,
+            "container": "unknown",
+            "duration_seconds": None,
+            "has_video": False,
+            "has_audio": False,
+            "primary_video_codec": None,
+            "primary_audio_codec": None,
+            "streams": [],
+            "error": "not_media",
+        }
     if not shutil.which("ffprobe"):
-        return None
+        return {
+            "ok": False,
+            "mime_type": default_mime,
+            "container": "unknown",
+            "duration_seconds": None,
+            "has_video": False,
+            "has_audio": False,
+            "primary_video_codec": None,
+            "primary_audio_codec": None,
+            "streams": [],
+            "error": "ffprobe_unavailable",
+        }
+
     with tempfile.NamedTemporaryFile(suffix=".media") as tmp:
         try:
             _s3.download_fileobj(bucket, s3_key, tmp)
             tmp.flush()
-            result = subprocess.run(
+            result = _run_media_tool(
                 [
                     "ffprobe",
                     "-v",
                     "error",
                     "-show_entries",
-                    "format=duration",
+                    "format=duration,format_name:stream=index,codec_type,codec_name,width,height,sample_rate,channels",
                     "-of",
-                    "default=noprint_wrappers=1:nokey=1",
+                    "json",
                     tmp.name,
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
+                ]
             )
-        except ClientError:
+        except (ClientError, OSError, subprocess.TimeoutExpired, ValueError):
+            return {
+                "ok": False,
+                "mime_type": default_mime,
+                "container": "unknown",
+                "duration_seconds": None,
+                "has_video": False,
+                "has_audio": False,
+                "primary_video_codec": None,
+                "primary_audio_codec": None,
+                "streams": [],
+                "error": "probe_failed",
+            }
+
+    if result.returncode != 0:
+        return {
+            "ok": False,
+            "mime_type": default_mime,
+            "container": "unknown",
+            "duration_seconds": None,
+            "has_video": False,
+            "has_audio": False,
+            "primary_video_codec": None,
+            "primary_audio_codec": None,
+            "streams": [],
+            "error": "probe_failed",
+        }
+
+    try:
+        probe_json = json.loads(result.stdout or "{}")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {
+            "ok": False,
+            "mime_type": default_mime,
+            "container": "unknown",
+            "duration_seconds": None,
+            "has_video": False,
+            "has_audio": False,
+            "primary_video_codec": None,
+            "primary_audio_codec": None,
+            "streams": [],
+            "error": "probe_malformed",
+        }
+
+    return normalize_media_inspection_result(probe_json, content_type_hint=content_type_hint)
+
+
+def media_preview_eligibility_from_node(node: Dict[str, Any]) -> Dict[str, Any]:
+    content_type = str(node.get("content_type") or "").lower()
+    size_bytes = int(node.get("size") or 0)
+    inspection = node.get("media_inspection") if isinstance(node.get("media_inspection"), dict) else {}
+
+    if content_type.startswith("video/"):
+        max_mb = int(getattr(S, "filemgr_video_preview_max_mb", 200) or 200)
+        max_duration = int(getattr(S, "filemgr_video_preview_max_duration_seconds", 600) or 600)
+        max_bytes = max_mb * 1024 * 1024
+        if max_bytes > 0 and size_bytes > max_bytes:
+            return {"eligible": False, "reason": "too_large"}
+
+        duration_seconds = inspection.get("duration_seconds")
+        if duration_seconds is None:
+            duration_seconds = _safe_int(node.get("duration_seconds"))
+        if max_duration > 0 and duration_seconds is not None and duration_seconds > max_duration:
+            return {"eligible": False, "reason": "too_long"}
+
+        allowed_containers = {"mp4", "mov", "matroska", "webm"}
+        allowed_video_codecs = {"h264", "hevc", "vp9", "av1"}
+        inspection_error = str(inspection.get("error") or "")
+        if inspection_error in {"probe_failed", "probe_malformed"}:
+            return {"eligible": False, "reason": "malformed_media"}
+
+        container = str(inspection.get("container") or "unknown").lower()
+        video_codec = str(inspection.get("primary_video_codec") or "unknown").lower()
+
+        if inspection and container == "unknown":
+            return {"eligible": False, "reason": "malformed_media"}
+        if inspection and video_codec == "unknown":
+            return {"eligible": False, "reason": "malformed_media"}
+        if container != "unknown" and container not in allowed_containers:
+            return {"eligible": False, "reason": "unsupported_container"}
+        if video_codec != "unknown" and video_codec not in allowed_video_codecs:
+            return {"eligible": False, "reason": "unsupported_codec"}
+        return {"eligible": True, "reason": None}
+
+    if content_type.startswith("audio/"):
+        max_mb = int(getattr(S, "filemgr_audio_waveform_max_mb", 100) or 100)
+        max_bytes = max_mb * 1024 * 1024
+        if max_bytes > 0 and size_bytes > max_bytes:
+            return {"eligible": False, "reason": "too_large"}
+
+        inspection_error = str(inspection.get("error") or "")
+        if inspection_error in {"probe_failed", "probe_malformed"}:
+            return {"eligible": False, "reason": "malformed_media"}
+
+        allowed_audio_codecs = {"aac", "mp3", "opus", "vorbis", "flac", "pcm_s16le"}
+        audio_codec = str(inspection.get("primary_audio_codec") or "unknown").lower()
+        if inspection and audio_codec == "unknown":
+            return {"eligible": False, "reason": "malformed_media"}
+        if audio_codec != "unknown" and audio_codec not in allowed_audio_codecs:
+            return {"eligible": False, "reason": "unsupported_codec"}
+        return {"eligible": True, "reason": None}
+
+    return {"eligible": False, "reason": "unsupported_type"}
+
+
+def _preview_job_sk(job_id: str) -> str:
+    return f"PREVIEWJOB#{job_id}"
+
+
+def _preview_enqueue_dedup_token(node: Dict[str, Any]) -> str:
+    material = "|".join(
+        [
+            str(node.get("path") or ""),
+            str(node.get("media_preview_version") or ""),
+            str(node.get("s3_key") or ""),
+            str(node.get("etag") or ""),
+            str(node.get("size") or 0),
+        ]
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+
+
+def _preview_job_max_attempts() -> int:
+    return max(1, int(getattr(S, "filemgr_preview_job_max_attempts", 3) or 3))
+
+
+def _media_artifact_url(*, bucket: str, key: str) -> str:
+    cdn_base = str(getattr(S, "filemgr_media_preview_cdn_base_url", "") or "").rstrip("/")
+    ttl = max(60, int(getattr(S, "filemgr_media_preview_url_ttl_seconds", 900) or 900))
+    is_private = bool(getattr(S, "filemgr_media_preview_private", True))
+    if cdn_base and not is_private:
+        return f"{cdn_base}/{key}"
+    return _s3.generate_presigned_url(
+        ClientMethod="get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=ttl,
+    )
+
+
+def _update_media_preview_status(owner: str, path: str, *, status: str, reason: Optional[str]) -> None:
+    try:
+        _table().update_item(
+            Key=node_key(owner, path),
+            UpdateExpression="SET media_preview_status=:s, media_preview_reason=:r, media_preview_updated_at=:t, updated_at=:t",
+            ExpressionAttributeValues={
+                ":s": status,
+                ":r": reason,
+                ":t": now_iso(),
+            },
+        )
+    except ClientError:
+        logger.exception("failed to update media preview status", extra={"owner": owner, "path": path, "status": status, "reason": reason})
+
+
+def _enqueue_media_preview_job(owner: str, node: Dict[str, Any]) -> None:
+    content_type = str(node.get("content_type") or "").lower()
+    if not content_type.startswith(("video/", "audio/")):
+        return
+
+    eligibility = media_preview_eligibility_from_node(node)
+    if not eligibility.get("eligible"):
+        _update_media_preview_status(owner, node["path"], status="unsupported", reason=str(eligibility.get("reason") or "unsupported_type"))
+        return
+
+    dedup = _preview_enqueue_dedup_token(node)
+    job_id = f"{('v' if content_type.startswith('video/') else 'a')}-{dedup}"
+    tbl = _table()
+    existing = tbl.get_item(Key={"PK": pk_user(owner), "SK": _preview_job_sk(job_id)}, ConsistentRead=True).get("Item")
+    if existing and str(existing.get("status") or "").lower() in {"pending", "in_progress", "retry_pending"}:
+        _update_media_preview_status(owner, node["path"], status="pending", reason="transcoding_pending")
+        return
+
+    job_item = {
+        "PK": pk_user(owner),
+        "SK": _preview_job_sk(job_id),
+        "job_id": job_id,
+        "owner": owner,
+        "path": node.get("path"),
+        "node_sk": node.get("SK"),
+        "status": "pending",
+        "job_type": "media_preview",
+        "preview_kind": "video" if content_type.startswith("video/") else "audio",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+        "attempts": 0,
+        "max_attempts": _preview_job_max_attempts(),
+        "idempotency_key": f"media_preview_enqueue|{owner}|{dedup}",
+        "timeout_seconds": int(getattr(S, "filemgr_preview_job_timeout_seconds", 120) or 120),
+        "dead_letter": False,
+        "last_error_reason": None,
+    }
+    try:
+        tbl.put_item(Item=job_item)
+    except ClientError:
+        logger.exception("failed to enqueue media preview job", extra={"owner": owner, "path": node.get("path")})
+        _update_media_preview_status(owner, node["path"], status="failed", reason="job_enqueue_failed")
+        return
+
+    _update_media_preview_status(owner, node["path"], status="pending", reason="transcoding_pending")
+    record_filemgr_preview_queue_depth_delta(1)
+
+
+def mark_media_preview_job_failed(owner: str, job_id: str, *, reason: str, transient: bool = True) -> Dict[str, Any]:
+    tbl = _table()
+    key = {"PK": pk_user(owner), "SK": _preview_job_sk(job_id)}
+    job = tbl.get_item(Key=key, ConsistentRead=True).get("Item")
+    if not job:
+        raise HTTPException(404, "preview job not found")
+
+    attempts = int(job.get("attempts") or 0) + 1
+    max_attempts = int(job.get("max_attempts") or _preview_job_max_attempts())
+    dead_letter = (not transient) or attempts >= max_attempts
+    status = "dead_letter" if dead_letter else "retry_pending"
+    updated = {
+        **job,
+        "attempts": attempts,
+        "max_attempts": max_attempts,
+        "status": status,
+        "dead_letter": dead_letter,
+        "last_error_reason": reason,
+        "updated_at": now_iso(),
+    }
+    tbl.put_item(Item=updated)
+
+    node_path = str(job.get("path") or "")
+    if node_path:
+        if dead_letter:
+            _update_media_preview_status(owner, node_path, status="failed", reason=f"dead_letter:{reason}")
+        else:
+            _update_media_preview_status(owner, node_path, status="pending", reason="retry_scheduled")
+    media_type = str(job.get("preview_kind") or "unknown")
+    record_filemgr_preview_job(media_type=media_type, artifact="job", outcome=status, reason=reason)
+    if dead_letter:
+        record_filemgr_preview_queue_depth_delta(-1)
+    logger.warning("filemgr_preview_job_failed", extra={"owner": owner, "job_id": job_id, "preview_kind": media_type, "preview_status": status, "preview_reason": reason, "attempts": attempts, "dead_letter": dead_letter})
+    return {"job_id": job_id, "status": status, "attempts": attempts, "dead_letter": dead_letter, "reason": reason}
+
+
+def _extract_video_poster_bytes(bucket: str, s3_key: str) -> Optional[Dict[str, Any]]:
+    if not shutil.which("ffmpeg"):
+        return None
+    target_height = max(120, int(getattr(S, "filemgr_video_preview_target_height", 360) or 360))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = f"{tmpdir}/input"
+        out_webp = f"{tmpdir}/poster.webp"
+        out_jpg = f"{tmpdir}/poster.jpg"
+        try:
+            with open(input_path, "wb") as infile:
+                _s3.download_fileobj(bucket, s3_key, infile)
+        except (ClientError, OSError):
             return None
+
+        # Representative frame strategy: try +1s then fallback to +0s.
+        for sec in ("1", "0"):
+            try:
+                webp = _run_media_tool(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-ss",
+                        sec,
+                        "-i",
+                        input_path,
+                        "-frames:v",
+                        "1",
+                        "-vf",
+                        f"scale=-2:{target_height}",
+                        out_webp,
+                    ]
+                )
+            except (subprocess.TimeoutExpired, ValueError):
+                return None
+            if webp.returncode == 0:
+                try:
+                    with open(out_webp, "rb") as fh:
+                        return {"bytes": fh.read(), "content_type": "image/webp", "ext": "webp"}
+                except OSError:
+                    pass
+
+            try:
+                jpg = _run_media_tool(
+                    [
+                        "ffmpeg",
+                        "-y",
+                        "-ss",
+                        sec,
+                        "-i",
+                        input_path,
+                        "-frames:v",
+                        "1",
+                        "-vf",
+                        f"scale=-2:{target_height}",
+                        out_jpg,
+                    ]
+                )
+            except (subprocess.TimeoutExpired, ValueError):
+                return None
+            if jpg.returncode == 0:
+                try:
+                    with open(out_jpg, "rb") as fh:
+                        return {"bytes": fh.read(), "content_type": "image/jpeg", "ext": "jpg"}
+                except OSError:
+                    pass
+    return None
+
+
+def _extract_video_hover_clip_bytes(bucket: str, s3_key: str) -> Optional[Dict[str, Any]]:
+    if not shutil.which("ffmpeg"):
+        return None
+    target_height = max(120, int(getattr(S, "filemgr_video_preview_target_height", 360) or 360))
+    clip_seconds = max(1, int(getattr(S, "filemgr_video_preview_clip_seconds", 6) or 6))
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = f"{tmpdir}/input"
+        out_mp4 = f"{tmpdir}/hover.mp4"
+        try:
+            with open(input_path, "wb") as infile:
+                _s3.download_fileobj(bucket, s3_key, infile)
+        except (ClientError, OSError):
+            return None
+
+        # v1 fixed offset clip selection.
+        try:
+            clip = _run_media_tool(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-ss",
+                    "1",
+                    "-i",
+                    input_path,
+                    "-t",
+                    str(clip_seconds),
+                    "-an",
+                    "-vf",
+                    f"scale=-2:{target_height}",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-crf",
+                    "32",
+                    "-movflags",
+                    "+faststart",
+                    out_mp4,
+                ]
+            )
+        except (subprocess.TimeoutExpired, ValueError):
+            return None
+        if clip.returncode != 0:
+            return None
+        try:
+            with open(out_mp4, "rb") as fh:
+                return {"bytes": fh.read(), "content_type": "video/mp4", "ext": "mp4"}
         except OSError:
             return None
-    if result.returncode != 0:
+
+
+def _extract_audio_waveform_bytes(bucket: str, s3_key: str) -> Optional[Dict[str, Any]]:
+    if not shutil.which("ffmpeg"):
         return None
-    try:
-        return int(float(result.stdout.strip()))
-    except (TypeError, ValueError):
-        return None
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = f"{tmpdir}/input"
+        out_png = f"{tmpdir}/waveform.png"
+        try:
+            with open(input_path, "wb") as infile:
+                _s3.download_fileobj(bucket, s3_key, infile)
+        except (ClientError, OSError):
+            return None
+
+        # Standardized waveform style + amplitude normalization.
+        try:
+            wave = _run_media_tool(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    input_path,
+                    "-filter_complex",
+                    "aformat=channel_layouts=mono,compand,showwavespic=s=640x120:colors=0x4f46e5",
+                    "-frames:v",
+                    "1",
+                    out_png,
+                ]
+            )
+        except (subprocess.TimeoutExpired, ValueError):
+            return None
+        if wave.returncode != 0:
+            return None
+        try:
+            with open(out_png, "rb") as fh:
+                return {"bytes": fh.read(), "content_type": "image/png", "ext": "png"}
+        except OSError:
+            return None
+
+
+def run_media_preview_job(owner: str, job_id: str) -> Dict[str, Any]:
+    tbl = _table()
+    key = {"PK": pk_user(owner), "SK": _preview_job_sk(job_id)}
+    job = tbl.get_item(Key=key, ConsistentRead=True).get("Item")
+    if not job:
+        raise HTTPException(404, "preview job not found")
+
+    node_path = str(job.get("path") or "")
+    if not node_path:
+        return mark_media_preview_job_failed(owner, job_id, reason="missing_node_path", transient=False)
+
+    node = get_node(owner, node_path)
+    kind = str(job.get("preview_kind") or "")
+    if kind == "video":
+        started = time.perf_counter()
+        poster = _extract_video_poster_bytes(node["s3_bucket"], node["s3_key"])
+        record_filemgr_preview_job_duration(artifact="poster_image", elapsed_seconds=time.perf_counter() - started)
+        if not poster:
+            record_filemgr_preview_job(media_type="video", artifact="poster_image", outcome="failed", reason="poster_generation_failed")
+            return mark_media_preview_job_failed(owner, job_id, reason="poster_generation_failed", transient=True)
+        record_filemgr_preview_artifact_bytes(artifact="poster_image", nbytes=len(poster.get("bytes") or b""))
+
+        started = time.perf_counter()
+        hover_clip = _extract_video_hover_clip_bytes(node["s3_bucket"], node["s3_key"])
+        record_filemgr_preview_job_duration(artifact="hover_clip", elapsed_seconds=time.perf_counter() - started)
+        if not hover_clip:
+            record_filemgr_preview_job(media_type="video", artifact="hover_clip", outcome="failed", reason="hover_clip_generation_failed")
+            return mark_media_preview_job_failed(owner, job_id, reason="hover_clip_generation_failed", transient=True)
+        record_filemgr_preview_artifact_bytes(artifact="hover_clip", nbytes=len(hover_clip.get("bytes") or b""))
+
+        poster_key = ((node.get("media_preview_keys") or {}).get("poster_image") or "").strip()
+        hover_key = ((node.get("media_preview_keys") or {}).get("hover_clip") or "").strip()
+        if not poster_key:
+            return mark_media_preview_job_failed(owner, job_id, reason="missing_derivative_key", transient=False)
+        if not hover_key:
+            return mark_media_preview_job_failed(owner, job_id, reason="missing_hover_derivative_key", transient=False)
+
+        try:
+            _s3.put_object(
+                Bucket=node["s3_bucket"],
+                Key=poster_key,
+                Body=poster["bytes"],
+                ContentType=poster["content_type"],
+                CacheControl="public, immutable, max-age=31536000",
+            )
+            _s3.put_object(
+                Bucket=node["s3_bucket"],
+                Key=hover_key,
+                Body=hover_clip["bytes"],
+                ContentType=hover_clip["content_type"],
+                CacheControl="public, immutable, max-age=31536000",
+            )
+            poster_url = _media_artifact_url(bucket=node["s3_bucket"], key=poster_key)
+            hover_preview_url = _media_artifact_url(bucket=node["s3_bucket"], key=hover_key)
+            tbl.update_item(
+                Key=node_key(owner, node_path),
+                UpdateExpression=(
+                    "SET poster_url=:u, hover_preview_url=:h, media_preview_status=:s, media_preview_reason=:r, "
+                    "media_preview_updated_at=:t, updated_at=:t"
+                ),
+                ExpressionAttributeValues={
+                    ":u": poster_url,
+                    ":h": hover_preview_url,
+                    ":s": "ready",
+                    ":r": None,
+                    ":t": now_iso(),
+                },
+            )
+            updated_job = {
+                **job,
+                "status": "completed",
+                "updated_at": now_iso(),
+                "last_error_reason": None,
+                "dead_letter": False,
+            }
+            tbl.put_item(Item=updated_job)
+            record_filemgr_preview_job(media_type="video", artifact="poster_image", outcome="success", reason="none")
+            record_filemgr_preview_job(media_type="video", artifact="hover_clip", outcome="success", reason="none")
+            record_filemgr_preview_queue_depth_delta(-1)
+            logger.info("filemgr_preview_job_completed", extra={"owner": owner, "job_id": job_id, "preview_kind": "video", "preview_status": "ready", "preview_reason": None})
+            return {
+                "job_id": job_id,
+                "status": "completed",
+                "poster_url": poster_url,
+                "hover_preview_url": hover_preview_url,
+            }
+        except ClientError:
+            record_filemgr_preview_job(media_type="video", artifact="upload", outcome="failed", reason="hover_clip_or_poster_upload_failed")
+            return mark_media_preview_job_failed(owner, job_id, reason="hover_clip_or_poster_upload_failed", transient=True)
+
+    if kind == "audio":
+        started = time.perf_counter()
+        waveform = _extract_audio_waveform_bytes(node["s3_bucket"], node["s3_key"])
+        record_filemgr_preview_job_duration(artifact="waveform_image", elapsed_seconds=time.perf_counter() - started)
+        if not waveform:
+            record_filemgr_preview_job(media_type="audio", artifact="waveform_image", outcome="failed", reason="waveform_generation_failed")
+            return mark_media_preview_job_failed(owner, job_id, reason="waveform_generation_failed", transient=True)
+        record_filemgr_preview_artifact_bytes(artifact="waveform_image", nbytes=len(waveform.get("bytes") or b""))
+        wave_key = ((node.get("media_preview_keys") or {}).get("waveform_image") or "").strip()
+        if not wave_key:
+            return mark_media_preview_job_failed(owner, job_id, reason="missing_waveform_derivative_key", transient=False)
+        try:
+            _s3.put_object(
+                Bucket=node["s3_bucket"],
+                Key=wave_key,
+                Body=waveform["bytes"],
+                ContentType=waveform["content_type"],
+                CacheControl="public, immutable, max-age=31536000",
+            )
+            waveform_url = _media_artifact_url(bucket=node["s3_bucket"], key=wave_key)
+            tbl.update_item(
+                Key=node_key(owner, node_path),
+                UpdateExpression=(
+                    "SET waveform_url=:w, media_preview_status=:s, media_preview_reason=:r, "
+                    "media_preview_updated_at=:t, updated_at=:t"
+                ),
+                ExpressionAttributeValues={
+                    ":w": waveform_url,
+                    ":s": "ready",
+                    ":r": None,
+                    ":t": now_iso(),
+                },
+            )
+            updated_job = {
+                **job,
+                "status": "completed",
+                "updated_at": now_iso(),
+                "last_error_reason": None,
+                "dead_letter": False,
+            }
+            tbl.put_item(Item=updated_job)
+            record_filemgr_preview_job(media_type="audio", artifact="waveform_image", outcome="success", reason="none")
+            record_filemgr_preview_queue_depth_delta(-1)
+            logger.info("filemgr_preview_job_completed", extra={"owner": owner, "job_id": job_id, "preview_kind": "audio", "preview_status": "ready", "preview_reason": None})
+            return {"job_id": job_id, "status": "completed", "waveform_url": waveform_url}
+        except ClientError:
+            record_filemgr_preview_job(media_type="audio", artifact="upload", outcome="failed", reason="waveform_upload_failed")
+            return mark_media_preview_job_failed(owner, job_id, reason="waveform_upload_failed", transient=True)
+
+    record_filemgr_preview_job(media_type=kind or "unknown", artifact="job", outcome="failed", reason="unsupported_preview_kind")
+    return mark_media_preview_job_failed(owner, job_id, reason="unsupported_preview_kind", transient=False)
 
 
 def _maybe_generate_thumbnail(
@@ -548,7 +1217,7 @@ def _maybe_generate_thumbnail(
         try:
             with open(input_path, "wb") as infile:
                 _s3.download_fileobj(bucket, s3_key, infile)
-            result = subprocess.run(
+            result = _run_media_tool(
                 [
                     "ffmpeg",
                     "-y",
@@ -561,14 +1230,9 @@ def _maybe_generate_thumbnail(
                     "-vf",
                     "scale=320:-1",
                     output_path,
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
+                ]
             )
-        except ClientError:
-            return None
-        except OSError:
+        except (ClientError, OSError, subprocess.TimeoutExpired, ValueError):
             return None
         if result.returncode != 0:
             return None
@@ -580,7 +1244,7 @@ def _maybe_generate_thumbnail(
                 Key=thumb_key,
                 ExtraArgs={"ContentType": "image/jpeg"},
             )
-        except ClientError:
+        except (ClientError, OSError, subprocess.TimeoutExpired, ValueError):
             return None
     return {"bucket": bucket, "key": thumb_key, "content_type": "image/jpeg"}
 
@@ -802,6 +1466,7 @@ def create_empty_folder(user: str, path: str) -> str:
         "GSI2SK": f"TYPE#folder#NAME#{name.lower()}#PATH#{folder}",
     }
     put_node(item)
+    _enqueue_media_preview_job(user, item)
     _put_token_entries(user, item)
     return folder
 
@@ -847,6 +1512,11 @@ def upload_file(
 
     enc_meta = _normalize_encryption_meta(encryption_meta)
     is_encrypted = enc_meta is not None
+    media_inspection = (
+        inspect_media_object(bucket=bucket, s3_key=s3_key, content_type_hint=file.content_type)
+        if not is_encrypted and (file.content_type or "").startswith(("video/", "audio/"))
+        else None
+    )
 
     duration_seconds = None if is_encrypted else _maybe_probe_duration(bucket, s3_key, file.content_type)
     thumbnail = None if is_encrypted else _maybe_generate_thumbnail(bucket, s3_key, file.content_type)
@@ -870,6 +1540,8 @@ def upload_file(
         "s3_bucket": bucket,
         "s3_key": s3_key,
         "etag": etag,
+        **build_media_derivative_layout(user, s3_key, etag, size),
+        "media_inspection": media_inspection,
         "is_encrypted": is_encrypted,
         "enc_metadata": enc_meta,
         **_flatten_encryption_meta(enc_meta),
@@ -879,6 +1551,7 @@ def upload_file(
         "GSI2SK": f"TYPE#file#NAME#{name.lower()}#PATH#{p}",
     }
     put_node(item)
+    _enqueue_media_preview_job(user, item)
     _put_token_entries(user, item)
     usage_event = build_usage_event(
         user_id=user,
@@ -1001,6 +1674,11 @@ def register_presigned_upload(
 
     enc_meta = _normalize_encryption_meta(encryption_meta)
     is_encrypted = enc_meta is not None
+    media_inspection = (
+        inspect_media_object(bucket=bucket, s3_key=s3_key, content_type_hint=resolved_content_type)
+        if not is_encrypted and (resolved_content_type or "").startswith(("video/", "audio/"))
+        else None
+    )
 
     duration_seconds = None if is_encrypted else _maybe_probe_duration(bucket, s3_key, resolved_content_type)
     thumbnail = None if is_encrypted else _maybe_generate_thumbnail(bucket, s3_key, resolved_content_type)
@@ -1024,6 +1702,8 @@ def register_presigned_upload(
         "s3_bucket": bucket,
         "s3_key": s3_key,
         "etag": etag,
+        **build_media_derivative_layout(user, s3_key, etag, size),
+        "media_inspection": media_inspection,
         "is_encrypted": is_encrypted,
         "enc_metadata": enc_meta,
         **_flatten_encryption_meta(enc_meta),
@@ -1317,12 +1997,91 @@ def _detect_preview_kind(node: Dict[str, Any]) -> str:
 
 def preview_capability_from_node(node: Dict[str, Any]) -> Dict[str, Any]:
     if node.get("type") != "file":
-        return {"preview_kind": "none", "preview_supported": False, "preview_reason": "not_file"}
+        return {
+            "preview_kind": "none",
+            "preview_status": "unsupported",
+            "poster_url": None,
+            "hover_preview_url": None,
+            "waveform_url": None,
+            "preview_supported": False,
+            "preview_reason": "not_file",
+        }
 
-    preview_kind = _detect_preview_kind(node)
+    detected_kind = _detect_preview_kind(node)
+    content_type = (node.get("content_type") or "").strip().lower()
+    if content_type.startswith("video/"):
+        preview_kind = "video"
+    elif content_type.startswith("audio/"):
+        preview_kind = "audio"
+    elif detected_kind in {"image"}:
+        preview_kind = "image"
+    elif detected_kind == "none":
+        preview_kind = "none"
+    else:
+        preview_kind = "document"
+
     preview_supported = is_previewable(node)
     max_bytes = int(getattr(S, "filemgr_preview_max_bytes", 0) or 0)
     size = int(node.get("size") or 0)
+    media_previews_enabled = bool(getattr(S, "filemgr_media_previews_v1", False))
+    video_hover_clip_enabled = bool(getattr(S, "filemgr_video_hover_clip_enabled", True))
+    audio_waveform_enabled = bool(getattr(S, "filemgr_audio_waveform_enabled", True))
+
+    if preview_kind in {"video", "audio"} and not media_previews_enabled:
+        return {
+            "preview_kind": preview_kind,
+            "preview_status": "unsupported",
+            "poster_url": None,
+            "hover_preview_url": None,
+            "waveform_url": None,
+            "preview_supported": preview_supported,
+            "preview_reason": "not_enabled",
+        }
+
+    if preview_kind in {"video", "audio"}:
+        status_override = str(node.get("media_preview_status") or "").strip().lower()
+        if status_override in {"pending", "ready", "failed", "unsupported"}:
+            reason_override = node.get("media_preview_reason")
+            media_keys = node.get("media_preview_keys") if isinstance(node.get("media_preview_keys"), dict) else {}
+            poster_key = str(media_keys.get("poster_image") or "").strip()
+            hover_key = str(media_keys.get("hover_clip") or "").strip()
+            waveform_key = str(media_keys.get("waveform_image") or "").strip()
+            poster_url = (
+                _media_artifact_url(bucket=str(node.get("s3_bucket") or ""), key=poster_key)
+                if status_override == "ready" and poster_key and node.get("s3_bucket")
+                else None
+            )
+            hover_preview_url = (
+                _media_artifact_url(bucket=str(node.get("s3_bucket") or ""), key=hover_key)
+                if status_override == "ready" and hover_key and node.get("s3_bucket")
+                else None
+            )
+            waveform_url = (
+                _media_artifact_url(bucket=str(node.get("s3_bucket") or ""), key=waveform_key)
+                if status_override == "ready" and waveform_key and node.get("s3_bucket")
+                else None
+            )
+            return {
+                "preview_kind": preview_kind,
+                "preview_status": status_override,
+                "poster_url": poster_url,
+                "hover_preview_url": hover_preview_url,
+                "waveform_url": waveform_url,
+                "preview_supported": status_override == "ready",
+                "preview_reason": reason_override,
+            }
+
+        eligibility = media_preview_eligibility_from_node(node)
+        if not eligibility.get("eligible"):
+            return {
+                "preview_kind": preview_kind,
+                "preview_status": "unsupported",
+                "poster_url": None,
+                "hover_preview_url": None,
+                "waveform_url": None,
+                "preview_supported": False,
+                "preview_reason": str(eligibility.get("reason") or "not_enabled"),
+            }
 
     if max_bytes > 0 and size > max_bytes:
         preview_supported = False
@@ -1331,13 +2090,52 @@ def preview_capability_from_node(node: Dict[str, Any]) -> Dict[str, Any]:
         preview_reason = None
     elif node.get("is_encrypted"):
         preview_reason = "encrypted"
-    elif preview_kind == "none":
+    elif detected_kind == "none" and preview_kind == "none":
         preview_reason = "unsupported_type"
+    elif preview_kind in {"video", "audio"}:
+        preview_reason = "transcoding_pending"
     else:
         preview_reason = "not_enabled"
 
+    preview_status = "ready" if preview_supported else "unsupported"
+    if preview_kind in {"video", "audio"} and not preview_supported and preview_reason == "transcoding_pending":
+        preview_status = "pending"
+
+    logger.debug("filemgr_preview_capability", extra={"preview_kind": preview_kind, "preview_status": preview_status, "preview_reason": preview_reason})
+
+    poster_url = node.get("poster_url")
+    hover_preview_url = node.get("hover_preview_url") if video_hover_clip_enabled else None
+    waveform_url = node.get("waveform_url") if audio_waveform_enabled else None
+
+    if preview_kind == "video":
+        if poster_url and (hover_preview_url or not video_hover_clip_enabled):
+            preview_status = "ready"
+            preview_reason = None
+        elif preview_status == "ready":
+            preview_status = "pending"
+            preview_reason = "transcoding_pending"
+    elif preview_kind == "audio":
+        if not audio_waveform_enabled:
+            preview_status = "unsupported"
+            preview_reason = "not_enabled"
+            waveform_url = None
+        elif waveform_url:
+            preview_status = "ready"
+            preview_reason = None
+        elif preview_status == "ready":
+            preview_status = "pending"
+            preview_reason = "transcoding_pending"
+    else:
+        poster_url = None
+        hover_preview_url = None
+        waveform_url = None
+
     return {
         "preview_kind": preview_kind,
+        "preview_status": preview_status,
+        "poster_url": poster_url,
+        "hover_preview_url": hover_preview_url,
+        "waveform_url": waveform_url,
         "preview_supported": preview_supported,
         "preview_reason": preview_reason,
     }
@@ -2128,6 +2926,7 @@ def _upload_archive_entries(
             "GSI2SK": f"TYPE#file#NAME#{split_parent_name(out_path)[1].lower()}#PATH#{out_path}",
         }
         put_node(item)
+        _enqueue_media_preview_job(user, item)
         _put_token_entries(user, item)
         record_filemgr_bytes("uploaded", byte_op, uploaded_size)
         total_uploaded_bytes += uploaded_size

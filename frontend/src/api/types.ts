@@ -618,6 +618,10 @@ export interface MessageFile {
   url?: string;
 }
 
+export type MessageConsumptionPolicy = "none" | "view_once" | "listen_once";
+export type MessageMediaKind = "image" | "video" | "audio";
+export type MessageConsumptionState = "pending" | "consumed" | "expired" | "failed";
+
 export interface Message {
   message_id: string;
   conversation_id: string;
@@ -643,6 +647,10 @@ export interface Message {
   my_reactions?: string[];
   is_encrypted?: boolean;
   encryption?: MessageEncryptionEnvelope;
+  consumption_policy?: MessageConsumptionPolicy;
+  media_kind?: MessageMediaKind;
+  consumption_state?: MessageConsumptionState;
+  consumed_at?: number;
   // UI convenience fields (derived client-side)
   edited?: boolean;
   revoked?: boolean;
@@ -661,6 +669,24 @@ export interface SendTextMessageReq {
   encryption?: MessageEncryptionEnvelope;
   reply_to_message_id?: string;
   preview?: LinkPreview;
+}
+
+export interface SendImageMessageReq {
+  bucket: string;
+  key: string;
+  content_type?: string;
+  width?: number;
+  height?: number;
+  reply_to_message_id?: string;
+  consumption_policy?: Extract<MessageConsumptionPolicy, "none" | "view_once">;
+}
+
+export interface SendFileMessageReq {
+  path: string;
+  kind?: "file" | "audio" | "video";
+  duration_seconds?: number;
+  reply_to_message_id?: string;
+  consumption_policy?: MessageConsumptionPolicy;
 }
 
 export interface StartConversationReq {
@@ -693,10 +719,61 @@ export interface UserSearchResult {
   display_name: string;
 }
 
+export interface CreateAttachmentGrantResp {
+  grant_token: string;
+  expires_at: number;
+  conversation_id: string;
+  message_id: string;
+}
+
+export interface ConsumeAttachmentReq {
+  consumption_attempt_id: string;
+  trigger: "open" | "play";
+  playback_seconds?: number;
+}
+
+export interface ConsumeAttachmentResp {
+  ok: boolean;
+  conversation_id: string;
+  message_id: string;
+  consumption_state: "consumed";
+  consumed_at: number;
+  consumption_attempt_id: string;
+}
+
 export interface MessageViewer {
   user_id: string;
   last_viewed_at: number;
   view_count: number;
+}
+
+
+export type MessageGalleryType = "image" | "video" | "file" | "link";
+
+export interface ConversationGalleryItem {
+  message_id: string;
+  conversation_id: string;
+  sender_id: string;
+  created_at: number;
+  type: MessageGalleryType;
+  url: string;
+  thumbnail_url?: string;
+  title?: string;
+  file_name?: string;
+  content_type?: string;
+  size?: number;
+}
+
+export interface ConversationGalleryResp {
+  items: ConversationGalleryItem[];
+  next_cursor?: string;
+}
+
+
+export interface ConversationGalleryQuery {
+  type: MessageGalleryType;
+  cursor?: string;
+  limit?: number;
 }
 
 export interface ForwardMessageReq {
@@ -727,7 +804,8 @@ export interface FileEncryptionMetadata {
   mime?: string;
 }
 
-export type PreviewKind = "image" | "pdf" | "word" | "csv" | "excel" | "parquet" | "text" | "none";
+export type PreviewKind = "image" | "document" | "video" | "audio" | "none" | "pdf" | "word" | "csv" | "excel" | "parquet" | "text";
+export type PreviewStatus = "pending" | "ready" | "failed" | "unsupported";
 
 export interface FileEntry {
   name: string;
@@ -749,6 +827,10 @@ export interface FileEntry {
   enc_orig_size?: number;
   enc_orig_content_type?: string;
   preview_kind?: PreviewKind;
+  preview_status?: PreviewStatus;
+  poster_url?: string | null;
+  hover_preview_url?: string | null;
+  waveform_url?: string | null;
   preview_supported?: boolean;
   preview_reason?: string | null;
 }
@@ -844,6 +926,10 @@ export interface SharedItem {
   enc_orig_size?: number;
   enc_orig_content_type?: string;
   preview_kind?: PreviewKind;
+  preview_status?: PreviewStatus;
+  poster_url?: string | null;
+  hover_preview_url?: string | null;
+  waveform_url?: string | null;
   preview_supported?: boolean;
   preview_reason?: string | null;
 }
@@ -1341,4 +1427,5 @@ export interface ChallengeResp {
 
 export interface MessagingConfig {
   messaging_encrypted_messages_enabled: boolean;
+  messaging_gallery_enabled: boolean;
 }

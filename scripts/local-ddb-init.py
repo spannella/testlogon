@@ -110,6 +110,15 @@ def _table_defs() -> List[TableDef]:
         TableDef(os.getenv("DDB_MESSAGE_EDITS", "MessageEdits"), "message_key", "edited_at"),
         TableDef(os.getenv("DDB_MESSAGE_VIEWS", "MessageViews"), "conversation_id", "message_user"),
         TableDef(os.getenv("DDB_MESSAGE_RECEIPTS", "MessageReceipts"), "conversation_id", "message_user"),
+        TableDef(
+            os.getenv("DDB_MESSAGE_CONSUMPTION", "MessageConsumption"),
+            "conversation_id",
+            "recipient_message",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+                {"index_name": "GSI2", "partition_key": "recipient_id", "sort_key": "GSI2SK"},
+            ],
+        ),
         TableDef(os.getenv("DDB_CONVERSATION_ROUTING_EVENTS", "ConversationRoutingEvents"), "conversation_id", "event_id"),
     ]
 

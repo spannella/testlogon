@@ -182,6 +182,54 @@ FILEMGR_PREVIEW_FALLBACK = Counter(
     "File manager preview fallback outcomes by kind/reason",
     ["kind", "reason"],
 )
+
+FILEMGR_PREVIEW_JOBS = Counter(
+    "filemgr_preview_jobs_total",
+    "File manager preview job outcomes by media/artifact/outcome/reason",
+    ["media_type", "artifact", "outcome", "reason"],
+)
+FILEMGR_PREVIEW_JOB_DURATION = Histogram(
+    "filemgr_preview_job_duration_seconds",
+    "File manager preview artifact generation/upload duration in seconds",
+    ["artifact"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60),
+)
+FILEMGR_PREVIEW_ARTIFACT_BYTES = Counter(
+    "filemgr_preview_artifact_bytes",
+    "File manager preview artifact bytes produced",
+    ["artifact"],
+)
+FILEMGR_PREVIEW_HOVER_PLAY_STARTS = Counter(
+    "filemgr_preview_hover_play_starts_total",
+    "Client hover/tap preview play starts",
+)
+FILEMGR_PREVIEW_HOVER_PLAY_FAILURES = Counter(
+    "filemgr_preview_hover_play_failures_total",
+    "Client hover/tap preview play failures",
+    ["reason"],
+)
+FILEMGR_PREVIEW_QUEUE_DEPTH = Gauge(
+    "filemgr_preview_queue_depth",
+    "Approximate in-flight preview jobs in this worker process",
+)
+
+MESSAGING_GALLERY_REQUESTS = Counter(
+    "messaging_gallery_requests_total",
+    "Messaging gallery request outcomes by type/outcome",
+    ["type", "outcome"],
+)
+MESSAGING_GALLERY_LATENCY = Histogram(
+    "messaging_gallery_latency_seconds",
+    "Messaging gallery request latency by type",
+    ["type"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+)
+MESSAGING_GALLERY_CURSOR_PAGE_DEPTH = Histogram(
+    "messaging_gallery_cursor_page_depth",
+    "Messaging gallery cursor page depth by type",
+    ["type"],
+    buckets=(0, 1, 2, 3, 5, 8, 13, 21, 34),
+)
 USAGE_METERING_EVENTS = Counter(
     "usage_metering_events_total",
     "Usage metering event outcomes",
@@ -264,6 +312,32 @@ ADMIN_SCOPE_DENIED = Counter(
     "admin_scope_denied_total",
     "Denied admin scope authorization checks by route, required scope, and profile type",
     ["route", "required_scope", "admin_profile_type"],
+)
+ONCE_MEDIA_SEND_EVENTS = Counter(
+    "messaging_once_media_send_total",
+    "Once-media send events by media kind/policy and rollout cohort",
+    ["media_kind", "consumption_policy", "cohort"],
+)
+ONCE_MEDIA_GRANT_EVENTS = Counter(
+    "messaging_once_media_grant_total",
+    "Once-media grant endpoint outcomes by media kind/reason/cohort",
+    ["media_kind", "outcome", "reason", "cohort"],
+)
+ONCE_MEDIA_GRANT_LATENCY = Histogram(
+    "messaging_once_media_grant_latency_seconds",
+    "Once-media attachment grant issuance latency",
+    ["media_kind", "outcome", "cohort"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
+)
+ONCE_MEDIA_CONSUME_EVENTS = Counter(
+    "messaging_once_media_consume_total",
+    "Once-media consume outcomes by media kind/reason/cohort",
+    ["media_kind", "outcome", "reason", "cohort"],
+)
+ONCE_MEDIA_CONFLICT_EVENTS = Counter(
+    "messaging_once_media_conflicts_total",
+    "Once-media consume conflict/race outcomes by media kind/cohort",
+    ["media_kind", "cohort"],
 )
 
 _START_TIME = time.monotonic()
@@ -426,6 +500,76 @@ def record_admin_scope_denied(*, route: str, required_scope: str, admin_profile_
         admin_profile_type=admin_profile_type or "unknown",
     ).inc()
 
+
+def _normalize_once_media_kind(media_kind: str) -> str:
+    kind = (media_kind or "unknown").strip().lower()
+    return kind if kind in {"image", "video", "audio"} else "unknown"
+
+
+def _normalize_once_media_policy(consumption_policy: str) -> str:
+    policy = (consumption_policy or "unknown").strip().lower()
+    return policy if policy in {"view_once", "listen_once"} else "unknown"
+
+
+def _normalize_once_media_outcome(outcome: str) -> str:
+    value = (outcome or "error").strip().lower()
+    return value if value in {"success", "error"} else "error"
+
+
+def _normalize_cohort(cohort: str) -> str:
+    value = (cohort or "default").strip().lower()
+    if not value:
+        return "default"
+    return value[:32]
+
+
+def _normalize_reason(reason: str) -> str:
+    value = (reason or "none").strip().lower()
+    if not value:
+        return "none"
+    return value[:48]
+
+
+def record_once_media_send(*, media_kind: str, consumption_policy: str, cohort: str = "default") -> None:
+    ONCE_MEDIA_SEND_EVENTS.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        consumption_policy=_normalize_once_media_policy(consumption_policy),
+        cohort=_normalize_cohort(cohort),
+    ).inc()
+
+
+def record_once_media_grant(*, media_kind: str, outcome: str, reason: str = "none", cohort: str = "default") -> None:
+    ONCE_MEDIA_GRANT_EVENTS.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        outcome=_normalize_once_media_outcome(outcome),
+        reason=_normalize_reason(reason),
+        cohort=_normalize_cohort(cohort),
+    ).inc()
+
+
+def record_once_media_grant_latency(*, media_kind: str, outcome: str, elapsed_seconds: float, cohort: str = "default") -> None:
+    ONCE_MEDIA_GRANT_LATENCY.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        outcome=_normalize_once_media_outcome(outcome),
+        cohort=_normalize_cohort(cohort),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_once_media_consume(*, media_kind: str, outcome: str, reason: str = "none", cohort: str = "default") -> None:
+    ONCE_MEDIA_CONSUME_EVENTS.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        outcome=_normalize_once_media_outcome(outcome),
+        reason=_normalize_reason(reason),
+        cohort=_normalize_cohort(cohort),
+    ).inc()
+
+
+def record_once_media_conflict(*, media_kind: str, cohort: str = "default") -> None:
+    ONCE_MEDIA_CONFLICT_EVENTS.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        cohort=_normalize_cohort(cohort),
+    ).inc()
+
 def set_app_info(name: str, version: str) -> None:
     APP_INFO.info({"name": name, "version": version})
 
@@ -501,6 +645,58 @@ def record_filemgr_preview_fallback(*, kind: str, reason: str) -> None:
         kind=(kind or "none").lower(),
         reason=(reason or "unknown").lower(),
     ).inc()
+
+
+
+def record_filemgr_preview_job(*, media_type: str, artifact: str, outcome: str, reason: str = "none") -> None:
+    FILEMGR_PREVIEW_JOBS.labels(
+        media_type=(media_type or "unknown").lower(),
+        artifact=(artifact or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+        reason=(reason or "none").lower(),
+    ).inc()
+
+
+def record_filemgr_preview_job_duration(*, artifact: str, elapsed_seconds: float) -> None:
+    FILEMGR_PREVIEW_JOB_DURATION.labels(artifact=(artifact or "unknown").lower()).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_filemgr_preview_artifact_bytes(*, artifact: str, nbytes: int) -> None:
+    if nbytes <= 0:
+        return
+    FILEMGR_PREVIEW_ARTIFACT_BYTES.labels(artifact=(artifact or "unknown").lower()).inc(float(nbytes))
+
+
+def record_filemgr_preview_hover_play_start() -> None:
+    FILEMGR_PREVIEW_HOVER_PLAY_STARTS.inc()
+
+
+def record_filemgr_preview_hover_play_failure(*, reason: str) -> None:
+    FILEMGR_PREVIEW_HOVER_PLAY_FAILURES.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def record_filemgr_preview_queue_depth_delta(delta: int) -> None:
+    if delta == 0:
+        return
+    FILEMGR_PREVIEW_QUEUE_DEPTH.inc(float(delta))
+def record_messaging_gallery_request(*, gallery_type: str, outcome: str) -> None:
+    MESSAGING_GALLERY_REQUESTS.labels(
+        type=(gallery_type or "unknown").lower(),
+        outcome=(outcome or "error").lower(),
+    ).inc()
+
+
+def record_messaging_gallery_latency(*, gallery_type: str, elapsed_seconds: float) -> None:
+    MESSAGING_GALLERY_LATENCY.labels(type=(gallery_type or "unknown").lower()).observe(
+        max(0.0, float(elapsed_seconds))
+    )
+
+
+def record_messaging_gallery_cursor_page_depth(*, gallery_type: str, depth: int) -> None:
+    MESSAGING_GALLERY_CURSOR_PAGE_DEPTH.labels(type=(gallery_type or "unknown").lower()).observe(
+        max(0.0, float(depth))
+    )
+
 
 def metrics_endpoint() -> Response:
     UPTIME_SECONDS.set(time.monotonic() - _START_TIME)
