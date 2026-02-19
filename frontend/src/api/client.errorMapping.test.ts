@@ -35,4 +35,16 @@ describe("normalizeErrorDetail authorization mapping", () => {
     const msg = normalizeErrorDetail({ code: "unknown_code", foo: "bar" }, "Permission denied");
     expect(msg).toBe("Permission denied");
   });
+
+
+  it("maps helpdesk claim-required code to UX copy", () => {
+    const msg = normalizeErrorDetail({ code: "helpdesk_claim_required" }, "Request failed");
+    expect(msg).toContain("Claim this helpdesk conversation");
+  });
+
+  it("maps helpdesk assignee-required code to UX copy", () => {
+    const msg = normalizeErrorDetail({ code: "helpdesk_assignee_required" }, "Request failed");
+    expect(msg).toContain("assigned helpdesk agent");
+  });
+
 });

@@ -43,6 +43,18 @@ function mapAuthorizationError(detail: Record<string, unknown>): string | null {
     return "You don't currently have permission for this action. Request temporary elevation or contact a general admin/root operator.";
   }
 
+  if (code === "helpdesk_claim_required") {
+    return "Claim this helpdesk conversation before replying.";
+  }
+
+  if (code === "helpdesk_assignee_required") {
+    return "Only the currently assigned helpdesk agent can reply in this conversation.";
+  }
+
+  if (code === "helpdesk_claim_not_available") {
+    return "You need to be online and available before you can claim and reply.";
+  }
+
   return null;
 }
 
