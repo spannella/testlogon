@@ -54,6 +54,9 @@ def create_api_key(user_sub: str, label: str) -> Dict[str, Any]:
         "prefix": f"ak_{key_id[:8]}",
         "allow_cidrs": [],
         "deny_cidrs": [],
+        "monthly_calls_cap": 0,
+        "monthly_spend_cap_micros": 0,
+        "route_caps": {},
     }
     if ttl:
         item = with_ttl(item, ttl_epoch=ttl)
@@ -123,6 +126,94 @@ def set_api_key_ip_rules(user_sub: str, key_id: str, allow_cidrs: List[str], den
         raise HTTPException(404, "API key not found")
     return {"allow_cidrs": allow, "deny_cidrs": deny}
 
+
+
+def _coerce_non_negative_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except Exception:
+        return 0
+
+
+def _normalize_route_caps(route_caps: Dict[str, Dict[str, Any]] | None) -> Dict[str, Dict[str, int]]:
+    out: Dict[str, Dict[str, int]] = {}
+    for route_id, caps in (route_caps or {}).items():
+        rid = (route_id or "").strip()
+        if not rid or ":" not in rid:
+            continue
+        method, path = rid.split(":", 1)
+        normalized = f"{method.upper()}:{path}"
+        out[normalized] = {
+            "monthly_calls_cap": _coerce_non_negative_int((caps or {}).get("monthly_calls_cap")),
+            "monthly_spend_cap_micros": _coerce_non_negative_int((caps or {}).get("monthly_spend_cap_micros")),
+        }
+    return out
+
+
+def _enforce_self_limit_guardrails(*, monthly_calls_cap: int, monthly_spend_cap_micros: int, route_caps: Dict[str, Dict[str, int]]) -> None:
+    account_monthly_calls = _coerce_non_negative_int(getattr(S, "api_usage_account_monthly_calls_limit", 0))
+    account_monthly_spend = _coerce_non_negative_int(getattr(S, "api_usage_account_monthly_spend_micros_limit", 0))
+
+    if account_monthly_calls > 0 and monthly_calls_cap > account_monthly_calls:
+        raise HTTPException(400, "monthly_calls_cap exceeds account monthly limit")
+    if account_monthly_spend > 0 and monthly_spend_cap_micros > account_monthly_spend:
+        raise HTTPException(400, "monthly_spend_cap_micros exceeds account monthly spend limit")
+
+    for route_id, caps in route_caps.items():
+        route_calls = _coerce_non_negative_int(caps.get("monthly_calls_cap"))
+        route_spend = _coerce_non_negative_int(caps.get("monthly_spend_cap_micros"))
+        if account_monthly_calls > 0 and route_calls > account_monthly_calls:
+            raise HTTPException(400, f"route cap monthly_calls_cap exceeds account monthly limit: {route_id}")
+        if account_monthly_spend > 0 and route_spend > account_monthly_spend:
+            raise HTTPException(400, f"route cap monthly_spend_cap_micros exceeds account monthly spend limit: {route_id}")
+
+
+def set_api_key_self_limits(
+    user_sub: str,
+    key_id: str,
+    *,
+    monthly_calls_cap: int,
+    monthly_spend_cap_micros: int,
+    route_caps: Dict[str, Dict[str, Any]] | None,
+) -> Dict[str, Any]:
+    calls_cap = _coerce_non_negative_int(monthly_calls_cap)
+    spend_cap = _coerce_non_negative_int(monthly_spend_cap_micros)
+    normalized_route_caps = _normalize_route_caps(route_caps)
+    _enforce_self_limit_guardrails(
+        monthly_calls_cap=calls_cap,
+        monthly_spend_cap_micros=spend_cap,
+        route_caps=normalized_route_caps,
+    )
+
+    try:
+        T.api_keys.update_item(
+            Key={"key_id": key_id},
+            UpdateExpression=(
+                "SET monthly_calls_cap = :mc, monthly_spend_cap_micros = :ms, "
+                "route_caps = :rc, updated_at = :now"
+            ),
+            ConditionExpression="user_sub = :u",
+            ExpressionAttributeValues={
+                ":mc": calls_cap,
+                ":ms": spend_cap,
+                ":rc": normalized_route_caps,
+                ":u": user_sub,
+                ":now": now_ts(),
+            },
+        )
+    except Exception:
+        raise HTTPException(404, "API key not found")
+
+    return {
+        "key_id": key_id,
+        "monthly_calls_cap": calls_cap,
+        "monthly_spend_cap_micros": spend_cap,
+        "route_caps": normalized_route_caps,
+    }
+
+
+def get_api_key_item(key_id: str) -> Dict[str, Any]:
+    return T.api_keys.get_item(Key={"key_id": key_id}).get("Item") or {}
 def list_api_keys(user_sub: str) -> List[Dict[str, Any]]:
     r = T.api_keys.query(IndexName=S.api_keys_user_index, KeyConditionExpression=Key("user_sub").eq(user_sub), ScanIndexForward=False, Limit=100)
     out = []
@@ -139,6 +230,9 @@ def list_api_keys(user_sub: str) -> List[Dict[str, Any]]:
             "prefix": it.get("prefix",""),
             "allow_cidrs": it.get("allow_cidrs", []),
             "deny_cidrs": it.get("deny_cidrs", []),
+            "monthly_calls_cap": int(it.get("monthly_calls_cap", 0) or 0),
+            "monthly_spend_cap_micros": int(it.get("monthly_spend_cap_micros", 0) or 0),
+            "route_caps": it.get("route_caps", {}),
         })
     out.sort(key=lambda x: int(x.get("created_at") or 0), reverse=True)
     return out

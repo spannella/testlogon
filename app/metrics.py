@@ -217,12 +217,49 @@ USAGE_METERING_PIPELINE_ERRORS = Counter(
     "Usage metering pipeline errors",
     ["stage"],
 )
+
+API_USAGE_INGEST_EVENTS = Counter(
+    "api_usage_ingest_events_total",
+    "API usage metering ingest outcomes",
+    ["outcome"],
+)
+API_USAGE_INGEST_LAG = Histogram(
+    "api_usage_ingest_lag_seconds",
+    "Lag from API event timestamp to persistence time",
+    buckets=(0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600),
+)
+API_USAGE_LIMIT_DENY = Counter(
+    "api_usage_limit_deny_total",
+    "API usage quota/limit denials",
+    ["scope", "limit_type"],
+)
+API_USAGE_SNAPSHOT_FINALIZE = Counter(
+    "api_usage_snapshot_finalize_total",
+    "API usage snapshot finalize outcomes",
+    ["outcome"],
+)
+API_USAGE_RECONCILIATION_DRIFT = Gauge(
+    "api_usage_reconciliation_drift_rows",
+    "API usage reconciliation drift rows by area",
+    ["area"],
+)
 USAGE_METERING_PIPELINE_LATENCY = Histogram(
     "usage_metering_pipeline_duration_seconds",
     "Usage metering pipeline latency in seconds",
     ["stage"],
     buckets=(0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5),
 )
+HELPDESK_ALERTS_SENT = Counter(
+    "helpdesk_alerts_sent_total",
+    "Helpdesk alerted-agent fanout outcomes",
+    ["outcome"],
+)
+HELPDESK_CLAIMS_TOTAL = Counter(
+    "helpdesk_claims_total",
+    "Helpdesk claim outcomes",
+    ["outcome"],
+)
+
 ADMIN_SCOPE_DENIED = Counter(
     "admin_scope_denied_total",
     "Denied admin scope authorization checks by route, required scope, and profile type",
@@ -375,6 +412,37 @@ def record_usage_metering_pipeline_error(stage: str) -> None:
 
 def record_usage_metering_pipeline_latency(stage: str, elapsed_seconds: float) -> None:
     USAGE_METERING_PIPELINE_LATENCY.labels(stage=stage).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_api_usage_ingest_event(outcome: str) -> None:
+    API_USAGE_INGEST_EVENTS.labels(outcome=(outcome or "unknown").lower()).inc()
+
+
+def record_api_usage_ingest_lag(elapsed_seconds: float) -> None:
+    API_USAGE_INGEST_LAG.observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_api_usage_limit_deny(scope: str, limit_type: str) -> None:
+    API_USAGE_LIMIT_DENY.labels(
+        scope=(scope or "unknown").lower(),
+        limit_type=(limit_type or "unknown").lower(),
+    ).inc()
+
+
+def record_api_usage_snapshot_finalize(outcome: str) -> None:
+    API_USAGE_SNAPSHOT_FINALIZE.labels(outcome=(outcome or "unknown").lower()).inc()
+
+
+def record_api_usage_reconciliation_drift(*, area: str, rows: int) -> None:
+    API_USAGE_RECONCILIATION_DRIFT.labels(area=(area or "unknown").lower()).set(float(max(0, int(rows))))
+
+
+def record_helpdesk_alert_sent(outcome: str) -> None:
+    HELPDESK_ALERTS_SENT.labels(outcome=(outcome or "unknown").lower()).inc()
+
+
+def record_helpdesk_claim(outcome: str) -> None:
+    HELPDESK_CLAIMS_TOTAL.labels(outcome=(outcome or "unknown").lower()).inc()
 
 
 def record_admin_scope_denied(*, route: str, required_scope: str, admin_profile_type: str) -> None:
