@@ -68,6 +68,29 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
     }
   }, [convoId, allMessages, conversation.unread_count]);
 
+  // ── Reconcile stale local state across reconnect/focus ─────────
+
+  React.useEffect(() => {
+    const refresh = () => {
+      void queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        refresh();
+      }
+    };
+
+    window.addEventListener("online", refresh);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      window.removeEventListener("online", refresh);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [convoId, queryClient]);
+
   // ── Send mutations ─────────────────────────────────────────────
 
   const sendText = useMutation({
@@ -79,10 +102,10 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
   });
 
   const sendImage = useMutation({
-    mutationFn: (file: File) => {
+    mutationFn: (args: { file: File; consumptionPolicy?: "none" | "view_once" }) => {
       const fd = new FormData();
-      fd.append("file", file);
-      return sendImageMessage(convoId, fd);
+      fd.append("file", args.file);
+      return sendImageMessage(convoId, fd, { consumption_policy: args.consumptionPolicy ?? "none" });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
@@ -196,7 +219,7 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
       {/* Compose */}
       <ComposeBar
         onSendText={(payload) => sendText.mutate(payload)}
-        onSendImage={(file) => sendImage.mutate(file)}
+        onSendImage={(file, options) => sendImage.mutate({ file, consumptionPolicy: options?.consumption_policy })}
         sending={sendText.isPending || sendImage.isPending}
         onKeystroke={onKeystroke}
       />
@@ -223,5 +246,7 @@ function useMessagesQuery(conversationId: string) {
     queryFn: ({ pageParam }) => getMessages(conversationId, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
   });
 }

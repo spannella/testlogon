@@ -618,6 +618,10 @@ export interface MessageFile {
   url?: string;
 }
 
+export type MessageConsumptionPolicy = "none" | "view_once" | "listen_once";
+export type MessageMediaKind = "image" | "video" | "audio";
+export type MessageConsumptionState = "pending" | "consumed" | "expired" | "failed";
+
 export interface Message {
   message_id: string;
   conversation_id: string;
@@ -643,6 +647,10 @@ export interface Message {
   my_reactions?: string[];
   is_encrypted?: boolean;
   encryption?: MessageEncryptionEnvelope;
+  consumption_policy?: MessageConsumptionPolicy;
+  media_kind?: MessageMediaKind;
+  consumption_state?: MessageConsumptionState;
+  consumed_at?: number;
   // UI convenience fields (derived client-side)
   edited?: boolean;
   revoked?: boolean;
@@ -661,6 +669,24 @@ export interface SendTextMessageReq {
   encryption?: MessageEncryptionEnvelope;
   reply_to_message_id?: string;
   preview?: LinkPreview;
+}
+
+export interface SendImageMessageReq {
+  bucket: string;
+  key: string;
+  content_type?: string;
+  width?: number;
+  height?: number;
+  reply_to_message_id?: string;
+  consumption_policy?: Extract<MessageConsumptionPolicy, "none" | "view_once">;
+}
+
+export interface SendFileMessageReq {
+  path: string;
+  kind?: "file" | "audio" | "video";
+  duration_seconds?: number;
+  reply_to_message_id?: string;
+  consumption_policy?: MessageConsumptionPolicy;
 }
 
 export interface StartConversationReq {
@@ -691,6 +717,28 @@ export interface TypingUser {
 export interface UserSearchResult {
   user_id: string;
   display_name: string;
+}
+
+export interface CreateAttachmentGrantResp {
+  grant_token: string;
+  expires_at: number;
+  conversation_id: string;
+  message_id: string;
+}
+
+export interface ConsumeAttachmentReq {
+  consumption_attempt_id: string;
+  trigger: "open" | "play";
+  playback_seconds?: number;
+}
+
+export interface ConsumeAttachmentResp {
+  ok: boolean;
+  conversation_id: string;
+  message_id: string;
+  consumption_state: "consumed";
+  consumed_at: number;
+  consumption_attempt_id: string;
 }
 
 export interface MessageViewer {
