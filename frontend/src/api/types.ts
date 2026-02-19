@@ -699,6 +699,35 @@ export interface MessageViewer {
   view_count: number;
 }
 
+
+export type MessageGalleryType = "image" | "video" | "file" | "link";
+
+export interface ConversationGalleryItem {
+  message_id: string;
+  conversation_id: string;
+  sender_id: string;
+  created_at: number;
+  type: MessageGalleryType;
+  url: string;
+  thumbnail_url?: string;
+  title?: string;
+  file_name?: string;
+  content_type?: string;
+  size?: number;
+}
+
+export interface ConversationGalleryResp {
+  items: ConversationGalleryItem[];
+  next_cursor?: string;
+}
+
+
+export interface ConversationGalleryQuery {
+  type: MessageGalleryType;
+  cursor?: string;
+  limit?: number;
+}
+
 export interface ForwardMessageReq {
   source_conversation_id: string;
   source_message_id: string;
@@ -1341,4 +1370,5 @@ export interface ChallengeResp {
 
 export interface MessagingConfig {
   messaging_encrypted_messages_enabled: boolean;
+  messaging_gallery_enabled: boolean;
 }

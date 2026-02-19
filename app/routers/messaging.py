@@ -27,11 +27,18 @@ from pydantic import BaseModel, Field, model_validator
 from pydantic_core import PydanticCustomError
 
 from app.auth.deps import extract_bearer_token, get_authenticated_user_sub
+from app.metrics import (
+    record_messaging_gallery_cursor_page_depth,
+    record_messaging_gallery_latency,
+    record_messaging_gallery_request,
+)
 from app.core.settings import S
 from app.core.aws import ddb
 from app.core.aws_clients import s3_client
 from app.services.alerts import audit_event
 from app.services.filemanager import get_node, get_usage_summary, norm_path
+from app.services.messaging_gallery import fetch_gallery_page
+from app.services.messaging_gallery_index import fetch_gallery_index_page, sync_gallery_index_entries
 from app.services.sessions import require_ui_session
 from app.services.subscription_access import require_subscription_access
 from app.services.usage_metering import (
@@ -53,6 +60,7 @@ DDB_USER_EVENTS = os.getenv("DDB_USER_EVENTS", "UserEvents")
 DDB_USERS = os.getenv("DDB_USERS", "Users")
 DDB_USER_SEARCH = os.getenv("DDB_USER_SEARCH", "UserSearch")
 DDB_MESSAGE_SEARCH = os.getenv("DDB_MESSAGE_SEARCH", "MessageSearch")
+DDB_MESSAGE_GALLERY_INDEX = os.getenv("DDB_MESSAGE_GALLERY_INDEX", "")
 OPENSEARCH_ENDPOINT = os.getenv("OPENSEARCH_ENDPOINT", "").strip()
 OPENSEARCH_INDEX = os.getenv("OPENSEARCH_INDEX", "messages")
 OPENSEARCH_REGION = os.getenv("OPENSEARCH_REGION", AWS_REGION)
@@ -84,6 +92,7 @@ tbl_events = ddb.Table(DDB_USER_EVENTS)
 tbl_users = ddb.Table(DDB_USERS)
 tbl_search = ddb.Table(DDB_USER_SEARCH)
 tbl_msg_search = ddb.Table(DDB_MESSAGE_SEARCH)
+tbl_gallery_index = ddb.Table(DDB_MESSAGE_GALLERY_INDEX) if DDB_MESSAGE_GALLERY_INDEX else None
 tbl_presence = ddb.Table(DDB_PRESENCE)
 tbl_typing = ddb.Table(DDB_TYPING)
 
@@ -553,6 +562,7 @@ class PresenceOut(BaseModel):
 
 class MessagingConfigOut(BaseModel):
     messaging_encrypted_messages_enabled: bool
+    messaging_gallery_enabled: bool
 
 
 class ParticipantOut(BaseModel):
@@ -670,6 +680,29 @@ class MessageOut(BaseModel):
     encryption: Optional[MessageEncryptionEnvelope] = None
 
 
+GalleryType = Literal["image", "video", "file", "link"]
+GALLERY_TYPES: set[str] = {"image", "video", "file", "link"}
+
+
+class GalleryItemOut(BaseModel):
+    message_id: str
+    conversation_id: str
+    sender_id: str
+    created_at: int
+    type: GalleryType
+    url: str
+    thumbnail_url: Optional[str] = None
+    title: Optional[str] = None
+    file_name: Optional[str] = None
+    content_type: Optional[str] = None
+    size: Optional[int] = None
+
+
+class GalleryPageOut(BaseModel):
+    items: List[GalleryItemOut]
+    next_cursor: Optional[str] = None
+
+
 # -------------------------
 # Helpers
 # -------------------------
@@ -748,8 +781,260 @@ def _message_search_enabled() -> bool:
     return bool(DDB_MESSAGE_SEARCH) and _aws_credentials_available()
 
 
+def _encode_gallery_cursor(message_id: str) -> str:
+    payload = {"message_id": message_id}
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _gallery_attachment_fallback_url(conversation_id: str, message_id: str) -> str:
+    return f"/messaging/conversations/{conversation_id}/messages/{message_id}/attachment"
+
+
+def _decode_gallery_cursor(cursor: str) -> str:
+    if not isinstance(cursor, str) or not cursor.strip():
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "gallery_cursor_invalid", "message": "Invalid gallery cursor"},
+        )
+    token = cursor.strip()
+    padded = token + "=" * (-len(token) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        payload = json.loads(decoded)
+        message_id = str(payload.get("message_id") or "").strip()
+    except (UnicodeDecodeError, ValueError, TypeError, binascii.Error):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "gallery_cursor_invalid", "message": "Invalid gallery cursor"},
+        )
+    if not message_id:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "gallery_cursor_invalid", "message": "Invalid gallery cursor"},
+        )
+    return message_id
+
+
+def _gallery_item_from_message(message: Dict[str, Any], gallery_type: str) -> Optional[GalleryItemOut]:
+    if message.get("revoked") or message.get("revoked_at"):
+        return None
+
+    is_encrypted = bool(message.get("is_encrypted") or message.get("encryption"))
+    kind = str(message.get("kind") or "").strip().lower()
+    message_id = str(message.get("message_id") or "").strip()
+    conversation_id = str(message.get("conversation_id") or "").strip()
+    sender_id = str(message.get("sender_id") or "").strip()
+    created_at = int(message.get("created_at") or 0)
+    if not message_id or not conversation_id or not sender_id or created_at <= 0:
+        return None
+
+    # Encrypted-content gallery policy:
+    # - Encrypted payloads are excluded from image/video/file tabs.
+    # - For links, only explicit preview.url is exposed; other preview metadata is redacted.
+    if is_encrypted:
+        if gallery_type != "link":
+            return None
+        preview = message.get("preview") if isinstance(message.get("preview"), dict) else {}
+        url = str(preview.get("url") or "").strip()
+        if not url:
+            return None
+        return GalleryItemOut(
+            message_id=message_id,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            created_at=created_at,
+            type="link",
+            url=url,
+            title=None,
+            thumbnail_url=None,
+        )
+
+    if gallery_type == "image" and kind == "image":
+        image = message.get("image") if isinstance(message.get("image"), dict) else {}
+        url = str(image.get("url") or "").strip()
+        if not url:
+            bucket = str(image.get("bucket") or "").strip()
+            key = str(image.get("key") or "").strip()
+            if bucket and key:
+                url = _gallery_attachment_fallback_url(conversation_id, message_id)
+            else:
+                return None
+        return GalleryItemOut(
+            message_id=message_id,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            created_at=created_at,
+            type="image",
+            url=url,
+            content_type=str(image.get("content_type") or "").strip() or None,
+        )
+
+    if gallery_type == "video" and kind == "video":
+        file_payload = message.get("file") if isinstance(message.get("file"), dict) else {}
+        url = str(file_payload.get("url") or "").strip()
+        if not url:
+            path = str(file_payload.get("path") or "").strip()
+            if path:
+                url = _gallery_attachment_fallback_url(conversation_id, message_id)
+            else:
+                return None
+        size = file_payload.get("size")
+        return GalleryItemOut(
+            message_id=message_id,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            created_at=created_at,
+            type="video",
+            url=url,
+            thumbnail_url=str(file_payload.get("thumbnail") or "").strip() or None,
+            file_name=str(file_payload.get("name") or "").strip() or None,
+            content_type=str(file_payload.get("content_type") or "").strip() or None,
+            size=int(size) if isinstance(size, (int, float)) else None,
+        )
+
+    include_audio = os.getenv("MESSAGING_GALLERY_INCLUDE_AUDIO", "0") in ("1", "true", "True")
+    if gallery_type == "file" and (kind == "file" or (include_audio and kind == "audio")):
+        file_payload = message.get("file") if isinstance(message.get("file"), dict) else {}
+        url = str(file_payload.get("url") or "").strip()
+        if not url:
+            path = str(file_payload.get("path") or "").strip()
+            if path:
+                url = _gallery_attachment_fallback_url(conversation_id, message_id)
+            else:
+                return None
+        size = file_payload.get("size")
+        return GalleryItemOut(
+            message_id=message_id,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            created_at=created_at,
+            type="file",
+            url=url,
+            file_name=str(file_payload.get("name") or "").strip() or None,
+            content_type=str(file_payload.get("content_type") or "").strip() or None,
+            size=int(size) if isinstance(size, (int, float)) else None,
+        )
+
+    if gallery_type == "link" and kind == "text":
+        preview = message.get("preview") if isinstance(message.get("preview"), dict) else {}
+        url = str(preview.get("url") or "").strip()
+        if not url:
+            return None
+        return GalleryItemOut(
+            message_id=message_id,
+            conversation_id=conversation_id,
+            sender_id=sender_id,
+            created_at=created_at,
+            type="link",
+            url=url,
+            thumbnail_url=str(preview.get("image_url") or "").strip() or None,
+            title=str(preview.get("title") or "").strip() or None,
+        )
+
+    return None
+
+
 def _message_receipts_enabled() -> bool:
     return bool(DDB_MESSAGE_RECEIPTS) and _aws_credentials_available()
+
+
+def _messaging_gallery_enabled() -> bool:
+    enabled = os.getenv(
+        "MESSAGING_GALLERY_ENABLED",
+        "true" if S.messaging_gallery_enabled else "false",
+    ) not in ("0", "false", "False")
+    kill_switch = os.getenv(
+        "MESSAGING_GALLERY_KILL_SWITCH",
+        "true" if S.messaging_gallery_kill_switch else "false",
+    ) not in ("0", "false", "False")
+    return enabled and not kill_switch
+
+
+def _messaging_gallery_index_enabled() -> bool:
+    enabled = os.getenv(
+        "MESSAGING_GALLERY_INDEX_ENABLED",
+        "true" if S.messaging_gallery_index_enabled else "false",
+    ) not in ("0", "false", "False")
+    return bool(enabled and tbl_gallery_index is not None and _aws_credentials_available())
+
+
+def _encode_gallery_index_cursor(sort_key: str) -> str:
+    payload = {"gallery_sort": sort_key}
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_gallery_index_cursor(cursor: str) -> str:
+    if not isinstance(cursor, str) or not cursor.strip():
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "gallery_cursor_invalid", "message": "Invalid gallery cursor"},
+        )
+    token = cursor.strip()
+    padded = token + "=" * (-len(token) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
+        payload = json.loads(decoded)
+        sort_key = str(payload.get("gallery_sort") or "").strip()
+    except (UnicodeDecodeError, ValueError, TypeError, binascii.Error):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "gallery_cursor_invalid", "message": "Invalid gallery cursor"},
+        )
+    if not sort_key:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "gallery_cursor_invalid", "message": "Invalid gallery cursor"},
+        )
+    return sort_key
+
+
+def _gallery_index_entries_from_message(message: Dict[str, Any]) -> list[Dict[str, Any]]:
+    out: list[Dict[str, Any]] = []
+    for gallery_type in GALLERY_TYPES:
+        item = _gallery_item_from_message(message, gallery_type)
+        if item is None:
+            continue
+        row = {
+            "type": item.type,
+            "sender_id": item.sender_id,
+            "created_at": int(item.created_at),
+            "url": item.url,
+            "thumbnail_url": item.thumbnail_url,
+            "title": item.title,
+            "file_name": item.file_name,
+            "content_type": item.content_type,
+            "size": item.size,
+            "deleted_for": list(message.get("deleted_for") or []),
+            "revoked_at": int(message.get("revoked_at") or 0),
+        }
+        out.append(row)
+    return out
+
+
+def _sync_gallery_index_message(message: Dict[str, Any]) -> None:
+    if not _messaging_gallery_index_enabled():
+        return
+    conversation_id = str(message.get("conversation_id") or "").strip()
+    message_id = str(message.get("message_id") or "").strip()
+    created_at = int(message.get("created_at") or 0)
+    if not conversation_id or not message_id or not created_at:
+        return
+    entries = _gallery_index_entries_from_message(message)
+    try:
+        sync_gallery_index_entries(
+            table=tbl_gallery_index,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            created_at=created_at,
+            entries=entries,
+        )
+    except Exception:
+        logger.exception(
+            "messaging gallery index sync failed",
+            extra={"conversation_id": conversation_id, "message_id": message_id},
+        )
 
 
 def _encrypted_messages_enabled() -> bool:
@@ -2119,6 +2404,94 @@ def search_messages_in_conversation(
     return out
 
 
+@router.get("/conversations/{conversation_id}/gallery", response_model=GalleryPageOut)
+def list_conversation_gallery(
+    conversation_id: str,
+    type: Annotated[str, Query(description="Gallery type: image, video, file, link")],
+    cursor: Annotated[Optional[str], Query(description="Pagination cursor")] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    started = time.perf_counter()
+    gallery_type = (type or "").strip().lower() or "unknown"
+    outcome = "error"
+    try:
+        if not _messaging_gallery_enabled():
+            outcome = "disabled"
+            raise HTTPException(status_code=404, detail="Gallery disabled")
+
+        require_participant_active(user_id, conversation_id)
+        if gallery_type not in GALLERY_TYPES:
+            outcome = "invalid_type"
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "gallery_type_invalid",
+                    "message": "Invalid gallery type",
+                    "allowed": sorted(GALLERY_TYPES),
+                },
+            )
+
+        if _messaging_gallery_index_enabled():
+            cursor_sort_key = _decode_gallery_index_cursor(cursor) if cursor else None
+            raw_items, next_sort_key = fetch_gallery_index_page(
+                table=tbl_gallery_index,
+                conversation_id=conversation_id,
+                gallery_type=gallery_type,
+                limit=limit,
+                cursor_sort_key=cursor_sort_key,
+            )
+            items = [
+                GalleryItemOut(
+                    conversation_id=str(row.get("conversation_id") or conversation_id),
+                    type=str(row.get("type") or gallery_type),
+                    message_id=str(row.get("message_id") or ""),
+                    sender_id=str(row.get("sender_id") or ""),
+                    created_at=int(row.get("created_at") or 0),
+                    url=str(row.get("url") or ""),
+                    thumbnail_url=row.get("thumbnail_url"),
+                    title=row.get("title"),
+                    file_name=row.get("file_name"),
+                    content_type=row.get("content_type"),
+                    size=(int(row.get("size")) if row.get("size") is not None else None),
+                )
+                for row in raw_items
+                if _filter_message_visible(row, user_id)
+            ]
+            next_cursor = _encode_gallery_index_cursor(next_sort_key) if next_sort_key else None
+        else:
+            cursor_message_id = _decode_gallery_cursor(cursor) if cursor else None
+
+            items, next_message_id = fetch_gallery_page(
+                table=tbl_msgs,
+                conversation_id=conversation_id,
+                gallery_type=gallery_type,
+                limit=limit,
+                cursor_message_id=cursor_message_id,
+                is_visible=lambda m: _filter_message_visible(m, user_id),
+                map_item=_gallery_item_from_message,
+            )
+            next_cursor = _encode_gallery_cursor(next_message_id) if next_message_id else None
+
+        record_messaging_gallery_cursor_page_depth(
+            gallery_type=gallery_type,
+            depth=0 if cursor is None else 1,
+        )
+
+        outcome = "success"
+        return GalleryPageOut(items=items, next_cursor=next_cursor)
+    except HTTPException as exc:
+        if outcome == "error":
+            outcome = "http_%s" % exc.status_code
+        raise
+    finally:
+        record_messaging_gallery_request(gallery_type=gallery_type, outcome=outcome)
+        record_messaging_gallery_latency(
+            gallery_type=gallery_type,
+            elapsed_seconds=time.perf_counter() - started,
+        )
+
+
 @router.get("/messages/search", response_model=List[MessageOut])
 def search_messages_all_conversations(
     q: Annotated[str, Query(..., min_length=1, max_length=200)],
@@ -2275,6 +2648,7 @@ def send_text_message(
         item["reply_to_message_id"] = inp.reply_to_message_id
 
     tbl_msgs.put_item(Item=item)
+    _sync_gallery_index_message(item)
     _bump_unread_counts(conversation_id, user_id, participants)
     _record_delivery_receipts(conversation_id, mid, user_id, participants)
     if not is_encrypted:
@@ -2388,6 +2762,7 @@ def create_image_message(
         item["reply_to_message_id"] = inp.reply_to_message_id
 
     tbl_msgs.put_item(Item=item)
+    _sync_gallery_index_message(item)
     _bump_unread_counts(conversation_id, user_id, participants)
     _record_delivery_receipts(conversation_id, mid, user_id, participants)
 
@@ -2488,6 +2863,7 @@ def create_file_message(
         item["reply_to_message_id"] = inp.reply_to_message_id
 
     tbl_msgs.put_item(Item=item)
+    _sync_gallery_index_message(item)
     _bump_unread_counts(conversation_id, user_id, resp.get("Items", []))
     _record_delivery_receipts(conversation_id, mid, user_id, resp.get("Items", []))
     if item.get("search_text"):
@@ -2678,6 +3054,8 @@ def delete_message_for_me(
         UpdateExpression="ADD deleted_for :u",
         ExpressionAttributeValues={":u": {user_id}},
     )
+    msg = _get_message_or_404(conversation_id, message_id)
+    _sync_gallery_index_message(msg)
     audit_event(
         "messaging_message_deleted",
         user_id,
@@ -2708,6 +3086,11 @@ def revoke_message_for_all(
     )
     if _is_searchable_kind(msg.get("kind")):
         remove_message_search(conversation_id, message_id, _message_search_text(msg))
+
+    revoked_item = dict(msg)
+    revoked_item["revoked_at"] = ts
+    revoked_item["revoked_by"] = user_id
+    _sync_gallery_index_message(revoked_item)
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,
@@ -2864,6 +3247,7 @@ def edit_message(
     index_message_search(conversation_id, message_id, user_id, int(msg.get("created_at", ts)), new_text)
 
     item = _get_message_or_404(conversation_id, message_id)
+    _sync_gallery_index_message(item)
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,
@@ -3005,6 +3389,7 @@ def forward_message(
         preview = f"[fwd {kind}]"
 
     tbl_msgs.put_item(Item=item)
+    _sync_gallery_index_message(item)
     if _is_searchable_kind(kind) and not bool(item.get("is_encrypted")):
         index_message_search(
             target_conversation_id,
@@ -3302,7 +3687,10 @@ async def events_stream(
 @router.get("/config", response_model=MessagingConfigOut)
 def messaging_config(user_id: str = Depends(get_messaging_user_id)):
     _ = user_id
-    return MessagingConfigOut(messaging_encrypted_messages_enabled=_encrypted_messages_enabled())
+    return MessagingConfigOut(
+        messaging_encrypted_messages_enabled=_encrypted_messages_enabled(),
+        messaging_gallery_enabled=_messaging_gallery_enabled(),
+    )
 
 
 @router.get("/healthz")

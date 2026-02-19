@@ -11,10 +11,13 @@ from app.routers.messaging import (
     MuteIn,
     SendTextMessageIn,
     StartConversationIn,
+    _decode_gallery_cursor,
+    _encode_gallery_cursor,
 )
 
 
 SWAGGER_PATH = Path("docs/swagger.json")
+FRONTEND_TYPES_PATH = Path("frontend/src/api/types.ts")
 
 
 def test_canonical_contract_source_exists_and_contains_messaging_models():
@@ -155,3 +158,49 @@ def test_send_text_rejects_empty_payload_without_text_or_encryption():
         SendTextMessageIn()
     errors = exc.value.errors()
     assert errors[0]["type"] == "message_text_required"
+
+
+def test_gallery_contract_is_present_in_swagger():
+    spec = json.loads(SWAGGER_PATH.read_text())
+    paths = spec.get("paths", {})
+    schemas = spec.get("components", {}).get("schemas", {})
+
+    assert "/messaging/conversations/{conversation_id}/gallery" in paths
+    assert "GalleryPageOut" in schemas
+    assert "GalleryItemOut" in schemas
+
+
+def test_gallery_cursor_roundtrip_is_stable():
+    cursor = _encode_gallery_cursor("m_123")
+    assert _decode_gallery_cursor(cursor) == "m_123"
+
+
+
+def test_gallery_contract_parameters_and_response_shape_are_stable():
+    spec = json.loads(SWAGGER_PATH.read_text())
+    path_item = spec["paths"]["/messaging/conversations/{conversation_id}/gallery"]["get"]
+
+    params = {p["name"]: p for p in path_item.get("parameters", [])}
+    assert "type" in params
+    assert "cursor" in params
+    assert "limit" in params
+
+    type_schema = params["type"]["schema"]
+    assert type_schema.get("type") == "string"
+
+    response_schema = path_item["responses"]["200"]["content"]["application/json"]["schema"]
+    assert response_schema == {"$ref": "#/components/schemas/GalleryPageOut"}
+
+
+def test_gallery_contract_frontend_type_alignment():
+    spec = json.loads(SWAGGER_PATH.read_text())
+    schemas = spec.get("components", {}).get("schemas", {})
+
+    assert "GalleryItemOut" in schemas
+    assert "GalleryPageOut" in schemas
+
+    frontend_types = FRONTEND_TYPES_PATH.read_text()
+    assert "export type MessageGalleryType" in frontend_types
+    assert "export interface ConversationGalleryItem" in frontend_types
+    assert "export interface ConversationGalleryResp" in frontend_types
+

@@ -182,6 +182,23 @@ FILEMGR_PREVIEW_FALLBACK = Counter(
     "File manager preview fallback outcomes by kind/reason",
     ["kind", "reason"],
 )
+MESSAGING_GALLERY_REQUESTS = Counter(
+    "messaging_gallery_requests_total",
+    "Messaging gallery request outcomes by type/outcome",
+    ["type", "outcome"],
+)
+MESSAGING_GALLERY_LATENCY = Histogram(
+    "messaging_gallery_latency_seconds",
+    "Messaging gallery request latency by type",
+    ["type"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+)
+MESSAGING_GALLERY_CURSOR_PAGE_DEPTH = Histogram(
+    "messaging_gallery_cursor_page_depth",
+    "Messaging gallery cursor page depth by type",
+    ["type"],
+    buckets=(0, 1, 2, 3, 5, 8, 13, 21, 34),
+)
 USAGE_METERING_EVENTS = Counter(
     "usage_metering_events_total",
     "Usage metering event outcomes",
@@ -433,6 +450,25 @@ def record_filemgr_preview_fallback(*, kind: str, reason: str) -> None:
         kind=(kind or "none").lower(),
         reason=(reason or "unknown").lower(),
     ).inc()
+
+def record_messaging_gallery_request(*, gallery_type: str, outcome: str) -> None:
+    MESSAGING_GALLERY_REQUESTS.labels(
+        type=(gallery_type or "unknown").lower(),
+        outcome=(outcome or "error").lower(),
+    ).inc()
+
+
+def record_messaging_gallery_latency(*, gallery_type: str, elapsed_seconds: float) -> None:
+    MESSAGING_GALLERY_LATENCY.labels(type=(gallery_type or "unknown").lower()).observe(
+        max(0.0, float(elapsed_seconds))
+    )
+
+
+def record_messaging_gallery_cursor_page_depth(*, gallery_type: str, depth: int) -> None:
+    MESSAGING_GALLERY_CURSOR_PAGE_DEPTH.labels(type=(gallery_type or "unknown").lower()).observe(
+        max(0.0, float(depth))
+    )
+
 
 def metrics_endpoint() -> Response:
     UPTIME_SECONDS.set(time.monotonic() - _START_TIME)

@@ -23,3 +23,8 @@ export const messagingEncryptedMessagesKillSwitch = toBool(env.VITE_MESSAGING_EN
 
 export const isMessagingEncryptionEnabled = () =>
   messagingEncryptedMessagesEnabled && !messagingEncryptedMessagesKillSwitch;
+
+
+export const messagingGalleryEnabled = toBool(env.VITE_MESSAGING_GALLERY_ENABLED, true);
+export const messagingGalleryKillSwitch = toBool(env.VITE_MESSAGING_GALLERY_KILL_SWITCH, false);
+export const isMessagingGalleryEnabled = () => messagingGalleryEnabled && !messagingGalleryKillSwitch;
