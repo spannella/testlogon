@@ -23,3 +23,14 @@ export const messagingEncryptedMessagesKillSwitch = toBool(env.VITE_MESSAGING_EN
 
 export const isMessagingEncryptionEnabled = () =>
   messagingEncryptedMessagesEnabled && !messagingEncryptedMessagesKillSwitch;
+
+export const messagingOnceMediaComposerEnabled = toBool(env.VITE_CLIENT_ONCE_MEDIA_COMPOSER_ENABLED, false);
+export const messagingOnceMediaImageEnabled = toBool(env.VITE_MESSAGING_ONCE_MEDIA_IMAGE_ENABLED, false);
+export const messagingOnceMediaVideoEnabled = toBool(env.VITE_MESSAGING_ONCE_MEDIA_VIDEO_ENABLED, false);
+export const messagingOnceMediaAudioEnabled = toBool(env.VITE_MESSAGING_ONCE_MEDIA_AUDIO_ENABLED, false);
+
+export const isMessagingOnceMediaComposerEnabled = () => messagingOnceMediaComposerEnabled;
+export const isMessagingViewOnceImageEnabled = () => isMessagingOnceMediaComposerEnabled() && messagingOnceMediaImageEnabled;
+export const isMessagingViewOnceVideoEnabled = () => isMessagingOnceMediaComposerEnabled() && messagingOnceMediaVideoEnabled;
+export const isMessagingListenOnceAudioEnabled = () => isMessagingOnceMediaComposerEnabled() && messagingOnceMediaAudioEnabled;
+

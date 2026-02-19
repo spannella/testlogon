@@ -29,21 +29,34 @@ export function useMessagingStream(enabled = true) {
       es.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          const eventType = typeof data.type === "string" ? data.type : "";
+          const conversationId = typeof data.conversation_id === "string" ? data.conversation_id : undefined;
 
-          if (data.type === "new_message" || data.type === "message") {
+          const shouldRefreshConversation = new Set([
+            "new_message",
+            "message",
+            "message_updated",
+            "message_consumed",
+            "once_media_consumed",
+            "once_media_state_changed",
+            "conversation_updated",
+          ]).has(eventType);
+
+          if (eventType === "new_message" || eventType === "message") {
             // Invalidate conversations list to update last message / unread
             queryClient.invalidateQueries({ queryKey: ["conversations"] });
-
-            // Invalidate messages for the specific conversation
-            if (data.conversation_id) {
-              queryClient.invalidateQueries({
-                queryKey: ["messages", data.conversation_id],
-              });
-            }
           }
 
-          if (data.type === "conversation_updated") {
+          if (eventType === "conversation_updated") {
             queryClient.invalidateQueries({ queryKey: ["conversations"] });
+          }
+
+          // Deterministic reconciliation for once-media state and edits:
+          // always refetch the specific conversation timeline when possible.
+          if (shouldRefreshConversation && conversationId) {
+            queryClient.invalidateQueries({
+              queryKey: ["messages", conversationId],
+            });
           }
         } catch {
           // Ignore parse errors from non-JSON events (heartbeats, etc.)

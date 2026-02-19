@@ -228,6 +228,32 @@ ADMIN_SCOPE_DENIED = Counter(
     "Denied admin scope authorization checks by route, required scope, and profile type",
     ["route", "required_scope", "admin_profile_type"],
 )
+ONCE_MEDIA_SEND_EVENTS = Counter(
+    "messaging_once_media_send_total",
+    "Once-media send events by media kind/policy and rollout cohort",
+    ["media_kind", "consumption_policy", "cohort"],
+)
+ONCE_MEDIA_GRANT_EVENTS = Counter(
+    "messaging_once_media_grant_total",
+    "Once-media grant endpoint outcomes by media kind/reason/cohort",
+    ["media_kind", "outcome", "reason", "cohort"],
+)
+ONCE_MEDIA_GRANT_LATENCY = Histogram(
+    "messaging_once_media_grant_latency_seconds",
+    "Once-media attachment grant issuance latency",
+    ["media_kind", "outcome", "cohort"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
+)
+ONCE_MEDIA_CONSUME_EVENTS = Counter(
+    "messaging_once_media_consume_total",
+    "Once-media consume outcomes by media kind/reason/cohort",
+    ["media_kind", "outcome", "reason", "cohort"],
+)
+ONCE_MEDIA_CONFLICT_EVENTS = Counter(
+    "messaging_once_media_conflicts_total",
+    "Once-media consume conflict/race outcomes by media kind/cohort",
+    ["media_kind", "cohort"],
+)
 
 _START_TIME = time.monotonic()
 _ACTIVE_SESSIONS_BY_USER: dict[str, int] = {}
@@ -356,6 +382,76 @@ def record_admin_scope_denied(*, route: str, required_scope: str, admin_profile_
         route=route or "unknown",
         required_scope=required_scope or "unknown",
         admin_profile_type=admin_profile_type or "unknown",
+    ).inc()
+
+
+def _normalize_once_media_kind(media_kind: str) -> str:
+    kind = (media_kind or "unknown").strip().lower()
+    return kind if kind in {"image", "video", "audio"} else "unknown"
+
+
+def _normalize_once_media_policy(consumption_policy: str) -> str:
+    policy = (consumption_policy or "unknown").strip().lower()
+    return policy if policy in {"view_once", "listen_once"} else "unknown"
+
+
+def _normalize_once_media_outcome(outcome: str) -> str:
+    value = (outcome or "error").strip().lower()
+    return value if value in {"success", "error"} else "error"
+
+
+def _normalize_cohort(cohort: str) -> str:
+    value = (cohort or "default").strip().lower()
+    if not value:
+        return "default"
+    return value[:32]
+
+
+def _normalize_reason(reason: str) -> str:
+    value = (reason or "none").strip().lower()
+    if not value:
+        return "none"
+    return value[:48]
+
+
+def record_once_media_send(*, media_kind: str, consumption_policy: str, cohort: str = "default") -> None:
+    ONCE_MEDIA_SEND_EVENTS.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        consumption_policy=_normalize_once_media_policy(consumption_policy),
+        cohort=_normalize_cohort(cohort),
+    ).inc()
+
+
+def record_once_media_grant(*, media_kind: str, outcome: str, reason: str = "none", cohort: str = "default") -> None:
+    ONCE_MEDIA_GRANT_EVENTS.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        outcome=_normalize_once_media_outcome(outcome),
+        reason=_normalize_reason(reason),
+        cohort=_normalize_cohort(cohort),
+    ).inc()
+
+
+def record_once_media_grant_latency(*, media_kind: str, outcome: str, elapsed_seconds: float, cohort: str = "default") -> None:
+    ONCE_MEDIA_GRANT_LATENCY.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        outcome=_normalize_once_media_outcome(outcome),
+        cohort=_normalize_cohort(cohort),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_once_media_consume(*, media_kind: str, outcome: str, reason: str = "none", cohort: str = "default") -> None:
+    ONCE_MEDIA_CONSUME_EVENTS.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        outcome=_normalize_once_media_outcome(outcome),
+        reason=_normalize_reason(reason),
+        cohort=_normalize_cohort(cohort),
+    ).inc()
+
+
+def record_once_media_conflict(*, media_kind: str, cohort: str = "default") -> None:
+    ONCE_MEDIA_CONFLICT_EVENTS.labels(
+        media_kind=_normalize_once_media_kind(media_kind),
+        cohort=_normalize_cohort(cohort),
     ).inc()
 
 def set_app_info(name: str, version: str) -> None:

@@ -2,9 +2,13 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ComposeBar } from "./ComposeBar";
+import { isMessagingViewOnceImageEnabled } from "@/lib/featureFlags";
 
 vi.mock("@/lib/featureFlags", () => ({
   isMessagingEncryptionEnabled: vi.fn(() => true),
+  isMessagingViewOnceImageEnabled: vi.fn(() => true),
+  isMessagingViewOnceVideoEnabled: vi.fn(() => false),
+  isMessagingListenOnceAudioEnabled: vi.fn(() => false),
 }));
 
 vi.mock("@/lib/messageEncryption", () => ({
@@ -22,6 +26,7 @@ vi.mock("@/lib/messageEncryption", () => ({
 describe("ComposeBar encrypted send UX", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(isMessagingViewOnceImageEnabled).mockReturnValue(true);
   });
 
   it("sends encrypted payload only (no plaintext/password fields)", async () => {
@@ -53,5 +58,32 @@ describe("ComposeBar encrypted send UX", () => {
 
     expect(onSendText).not.toHaveBeenCalled();
     expect(screen.getByText(/Passwords must match/i)).toBeInTheDocument();
+  });
+});
+
+
+describe("ComposeBar once-media toggles", () => {
+  beforeEach(() => {
+    vi.mocked(isMessagingViewOnceImageEnabled).mockReturnValue(true);
+  });
+  it("sends image with view-once metadata when toggle is enabled", async () => {
+    const onSendText = vi.fn();
+    const onSendImage = vi.fn();
+    render(<ComposeBar onSendText={onSendText} onSendImage={onSendImage} />);
+
+    await userEvent.click(screen.getByLabelText(/View once \(image\)/i));
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["abc"], "photo.png", { type: "image/png" });
+    await userEvent.upload(fileInput, file);
+
+    expect(onSendImage).toHaveBeenCalledTimes(1);
+    expect(onSendImage.mock.calls[0][1]).toEqual({ consumption_policy: "view_once" });
+  });
+
+  it("does not render once-media toggles when feature flags are disabled", () => {
+    vi.mocked(isMessagingViewOnceImageEnabled).mockReturnValue(false);
+    const onSendText = vi.fn();
+    render(<ComposeBar onSendText={onSendText} onSendImage={vi.fn()} />);
+    expect(screen.queryByLabelText(/View once \(image\)/i)).not.toBeInTheDocument();
   });
 });

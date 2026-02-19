@@ -10,9 +10,14 @@ import type {
   UserSearchResult,
   MessageViewer,
   ForwardMessageReq,
+  SendImageMessageReq,
+  SendFileMessageReq,
   AddParticipantsReq,
   UpdateRoleReq,
   MessagingConfig,
+  ConsumeAttachmentReq,
+  ConsumeAttachmentResp,
+  CreateAttachmentGrantResp,
 } from "@/api/types";
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
 import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
@@ -81,7 +86,11 @@ const uploadToPresignedUrl = async (uploadUrl: string, file: File, contentType: 
   }
 };
 
-export const sendImageMessage = async (conversationId: string, formData: FormData) => {
+export const sendImageMessage = async (
+  conversationId: string,
+  formData: FormData,
+  options?: { consumption_policy?: "none" | "view_once" },
+) => {
   const file = formData.get("file");
   if (!(file instanceof File)) {
     throw new Error("sendImageMessage requires FormData with a file field");
@@ -98,11 +107,14 @@ export const sendImageMessage = async (conversationId: string, formData: FormDat
 
   await uploadToPresignedUrl(presign.upload_url, file, presign.content_type || contentType);
 
-  const res = await api.post<Message>(`/messaging/conversations/${conversationId}/messages/image`, {
+  const payload: SendImageMessageReq = {
     bucket: presign.bucket,
     key: presign.key,
     content_type: presign.content_type || contentType,
-  });
+  };
+  if (options?.consumption_policy) payload.consumption_policy = options.consumption_policy;
+
+  const res = await api.post<Message>(`/messaging/conversations/${conversationId}/messages/image`, payload);
   return adaptMessage(res);
 };
 
@@ -168,7 +180,7 @@ export const searchUsers = (q: string, limit?: number) => {
 
 export const sendFileMessage = async (
   conversationId: string,
-  body: { path: string; kind?: string; duration_seconds?: number },
+  body: SendFileMessageReq,
 ) => {
   const res = await api.post<Message>(
     `/messaging/conversations/${conversationId}/messages/file`,
@@ -189,6 +201,25 @@ export const forwardMessage = async (
   );
   return adaptMessage(res);
 };
+
+
+export const createOnceMediaAttachmentGrant = (conversationId: string, messageId: string) =>
+  api.post<CreateAttachmentGrantResp>(
+    `/messaging/conversations/${conversationId}/messages/${messageId}/attachment/grant`,
+    {},
+  );
+
+export const consumeOnceMediaAttachment = (
+  conversationId: string,
+  messageId: string,
+  grantToken: string,
+  body: ConsumeAttachmentReq,
+) =>
+  api.post<ConsumeAttachmentResp>(
+    `/messaging/conversations/${conversationId}/messages/${messageId}/attachment/consume`,
+    body,
+    { grant_token: grantToken },
+  );
 
 // ─── Views / Read Receipts ─────────────────────────────────────
 
@@ -220,3 +251,17 @@ export const updateParticipantRole = (
     `/messaging/conversations/${conversationId}/participants/${participantId}`,
     body,
   );
+
+
+export const buildAttachmentDownloadUrl = (
+  conversationId: string,
+  messageId: string,
+  grantToken?: string,
+) => {
+  const params = new URLSearchParams();
+  if (grantToken) {
+    params.set("grant_token", grantToken);
+  }
+  const qs = params.toString();
+  return `/messaging/conversations/${conversationId}/messages/${messageId}/attachment${qs ? `?${qs}` : ""}`;
+};
