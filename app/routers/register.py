@@ -52,6 +52,10 @@ def _require_cognito() -> None:
 
 
 def _cognito_available() -> bool:
+    # In dev mode the local DynamoDB auth path is used end-to-end; skip Cognito
+    # so that moto's password-policy enforcement doesn't silently block sign-ups.
+    if S.dev_mode:
+        return False
     return bool(S.cognito_app_client_id)
 
 
