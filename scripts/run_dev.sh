@@ -62,6 +62,19 @@ else
 fi
 
 set -a
+# In mock mode, load .env.local first so endpoint URLs and table names are
+# available to the init scripts (local-s3-init.py, local-ddb-init.py, etc.)
+# before run_local_mock_backend.sh sources it for the backend itself.
+if [[ "$backend_mode" == "mock" ]]; then
+  if [[ ! -f ".env.local" ]] && [[ -f ".env.local.example" ]]; then
+    cp .env.local.example ".env.local"
+    echo "Created .env.local from .env.local.example"
+  fi
+  if [[ -f ".env.local" ]]; then
+    # shellcheck disable=SC1091
+    source .env.local
+  fi
+fi
 if [[ -f ".env" ]]; then
   # shellcheck disable=SC1091
   source .env

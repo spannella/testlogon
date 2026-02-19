@@ -139,6 +139,15 @@ else
   start_host_stack
 fi
 
+# Load .env.local so init scripts have the endpoint URLs and bucket names they need.
+# run_dev.sh may have already exported these, but source again for direct invocation.
+if [[ -f "${REPO_ROOT}/.env.local" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "${REPO_ROOT}/.env.local"
+  set +a
+fi
+
 PYTHONPATH="${REPO_ROOT}" python3 scripts/local-s3-init.py
 PYTHONPATH="${REPO_ROOT}" python3 scripts/local-cognito-init.py
 PYTHONPATH="${REPO_ROOT}" python3 scripts/local-ses-init.py
