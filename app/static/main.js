@@ -6129,6 +6129,32 @@ function renderSharedWithMe() {
   });
 }
 
+function fileMgrPreviewFallbackMessage(previewKind, previewStatus) {
+  const kindLabel = previewKind === "video" ? "Video" : "Audio";
+  const statusLabel = {
+    pending: "preview pending",
+    failed: "preview unavailable",
+    unsupported: "preview unsupported",
+  }[previewStatus] || "preview unavailable";
+  return `${kindLabel} ${statusLabel}`;
+}
+
+function renderFileMgrMediaPreview(item) {
+  if (!item || item.type !== "file") return "";
+  const previewKind = item.preview_kind;
+  if (previewKind !== "video" && previewKind !== "audio") return "";
+  const previewStatus = item.preview_status || "pending";
+  if (previewStatus === "ready") {
+    if (previewKind === "video" && item.poster_url) {
+      return `<div class="filemgr-preview"><img src="${escapeHtml(item.poster_url)}" alt="Video preview poster" loading="lazy" /></div>`;
+    }
+    if (previewKind === "audio" && item.waveform_url) {
+      return `<div class="filemgr-preview"><img src="${escapeHtml(item.waveform_url)}" alt="Audio waveform preview" loading="lazy" /></div>`;
+    }
+  }
+  return `<div class="filemgr-preview filemgr-preview-fallback muted">${escapeHtml(fileMgrPreviewFallbackMessage(previewKind, previewStatus))}</div>`;
+}
+
 function renderFileMgrSearchResults() {
   const list = document.getElementById("filemgrSearchResults");
   if (!list) return;
@@ -6146,6 +6172,7 @@ function renderFileMgrSearchResults() {
       <div class="grow">
         <div class="mono">${escapeHtml(item.name || "")}</div>
         <div class="muted">${escapeHtml(item.path || "")}</div>
+        ${renderFileMgrMediaPreview(item)}
       </div>
       <div class="muted">${escapeHtml(item.type || "")}</div>
       <div class="muted">${item.type === "file" ? fmtBytes(item.size || 0) : ""}</div>
@@ -6260,6 +6287,7 @@ function renderFileMgrList(items) {
       <td><input type="checkbox" data-path="${escapeHtml(item.path || "")}" ${isSelected ? "checked" : ""} ${disableEdits ? "disabled" : ""} /></td>
       <td class="mono">
         ${isRenaming ? `<input type="text" class="mono" data-rename-input value="${escapeHtml(fileMgrState.renameValue || item.name || "")}" />` : escapeHtml(item.name || "")}
+        ${isRenaming ? "" : renderFileMgrMediaPreview(item)}
       </td>
       <td>${escapeHtml(item.type || "")}</td>
       <td>${isFolder ? "" : fmtBytes(item.size || 0)}</td>

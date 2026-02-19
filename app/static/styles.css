@@ -29,6 +29,9 @@ progress::-moz-progress-bar { background:#111; border-radius:999px; }
 table { width:100%; border-collapse:collapse; margin-top:10px; }
 th, td { border-top:1px solid #eee; padding:8px; text-align:left; vertical-align:top; }
 th { font-size: 12px; color:#444; }
+.filemgr-preview { margin-top:4px; }
+.filemgr-preview img { max-width:120px; max-height:68px; border-radius:6px; border:1px solid #e5e7eb; object-fit:cover; display:block; }
+.filemgr-preview-fallback { font-size:12px; }
 code.mono, pre.mono, .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
 .break { word-break: break-all; }
 .pill { display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid #ddd; font-size:12px; }

@@ -1,0 +1,80 @@
+{
+  "title": "Media Preview Pipeline Ops",
+  "uid": "media-preview-pipeline-ops",
+  "tags": ["filemanager", "preview", "media", "mp-052"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Preview generation success rate (5m)",
+      "targets": [
+        {
+          "expr": "sum(rate(filemgr_preview_jobs_total{outcome=~\"success|completed\"}[5m])) / clamp_min(sum(rate(filemgr_preview_jobs_total[5m])), 1)",
+          "legendFormat": "success_rate"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Preview queue depth",
+      "targets": [
+        {
+          "expr": "sum(filemgr_preview_queue_depth)",
+          "legendFormat": "queue_depth"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Preview job p95 duration by artifact",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, artifact) (rate(filemgr_preview_job_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{artifact}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Hover preview failures by reason",
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(filemgr_preview_hover_play_failures_total[10m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Hover preview starts",
+      "targets": [
+        {
+          "expr": "sum(rate(filemgr_preview_hover_play_starts_total[10m]))",
+          "legendFormat": "starts"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Preview job failures by reason",
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(filemgr_preview_jobs_total{outcome=~\"failed|retry_pending|dead_letter\"}[10m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    }
+  ],
+  "annotations": {
+    "list": []
+  }
+}

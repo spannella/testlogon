@@ -1,5 +1,6 @@
 import asyncio
 import io
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -57,8 +58,12 @@ class TestFileManagerRoutes(unittest.TestCase):
             self.assertEqual(len(resp["items"]), 1)
             self.assertEqual(resp["items"][0]["path"], "/docs/a.txt")
             self.assertEqual(resp["items"][0]["name"], "a.txt")
-            self.assertEqual(resp["items"][0]["preview_kind"], "text")
+            self.assertEqual(resp["items"][0]["preview_kind"], "document")
             self.assertFalse(resp["items"][0]["preview_supported"])
+            self.assertEqual(resp["items"][0]["preview_status"], "unsupported")
+            self.assertIsNone(resp["items"][0]["poster_url"])
+            self.assertIsNone(resp["items"][0]["hover_preview_url"])
+            self.assertIsNone(resp["items"][0]["waveform_url"])
             self.assertEqual(resp["items"][0]["preview_reason"], "encrypted")
 
             info = filemanager.file_info(path="/docs/a.txt", user="user")
@@ -67,7 +72,11 @@ class TestFileManagerRoutes(unittest.TestCase):
             self.assertTrue(info["is_encrypted"])
             self.assertEqual(info["enc_version"], 1)
             self.assertEqual(info["enc_alg"], "AES-256-GCM")
-            self.assertEqual(info["preview_kind"], "text")
+            self.assertEqual(info["preview_kind"], "document")
+            self.assertEqual(info["preview_status"], "unsupported")
+            self.assertIsNone(info["poster_url"])
+            self.assertIsNone(info["hover_preview_url"])
+            self.assertIsNone(info["waveform_url"])
             self.assertFalse(info["preview_supported"])
             self.assertEqual(info["preview_reason"], "encrypted")
 
@@ -244,18 +253,18 @@ class TestFileManagerRoutes(unittest.TestCase):
             with self.assertRaises(HTTPException) as ctx:
                 filemanager.preview_fs_file(path="/docs/a.txt", user="user")
         self.assertEqual(ctx.exception.status_code, 415)
-        preview_attempt.assert_called_once_with(kind="text", outcome="fallback", reason="encrypted")
-        preview_fallback.assert_called_once_with(kind="text", reason="encrypted")
+        preview_attempt.assert_called_once_with(kind="document", outcome="fallback", reason="encrypted")
+        preview_fallback.assert_called_once_with(kind="document", reason="encrypted")
         preview_latency.assert_called_once()
-        self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "text")
+        self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "document")
         self.assertEqual(audit_event.call_args.kwargs["preview_supported"], False)
         self.assertEqual(audit_event.call_args.kwargs["preview_reason"], "encrypted")
         self.assertEqual(audit_event.call_args.kwargs["is_encrypted"], True)
-        self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "text")
+        self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "document")
         self.assertEqual(audit_event.call_args.kwargs["preview_supported"], False)
         self.assertEqual(audit_event.call_args.kwargs["preview_reason"], "encrypted")
         self.assertEqual(audit_event.call_args.kwargs["is_encrypted"], True)
-        self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "text")
+        self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "document")
         self.assertEqual(audit_event.call_args.kwargs["preview_supported"], False)
         self.assertEqual(audit_event.call_args.kwargs["preview_reason"], "encrypted")
         self.assertEqual(audit_event.call_args.kwargs["is_encrypted"], True)
@@ -272,10 +281,10 @@ class TestFileManagerRoutes(unittest.TestCase):
         ):
             resp = filemanager.preview_fs_file(path="/docs/a.txt", user="user")
             self.assertIsInstance(resp, StreamingResponse)
-            preview_attempt.assert_called_once_with(kind="text", outcome="success", reason="none")
-            preview_bytes.assert_called_once_with(kind="text", nbytes=5)
+            preview_attempt.assert_called_once_with(kind="document", outcome="success", reason="none")
+            preview_bytes.assert_called_once_with(kind="document", nbytes=5)
             preview_latency.assert_called_once()
-            self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "text")
+            self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "document")
             self.assertEqual(audit_event.call_args.kwargs["preview_supported"], True)
             self.assertEqual(audit_event.call_args.kwargs["preview_reason"], "none")
             self.assertEqual(audit_event.call_args.kwargs["is_encrypted"], False)
@@ -293,8 +302,8 @@ class TestFileManagerRoutes(unittest.TestCase):
             with self.assertRaises(HTTPException) as ctx:
                 filemanager.thumbnail_fs_file(path="/docs/a.txt", user="user")
         self.assertEqual(ctx.exception.status_code, 415)
-        preview_attempt.assert_called_once_with(kind="text", outcome="fallback", reason="encrypted")
-        preview_fallback.assert_called_once_with(kind="text", reason="encrypted")
+        preview_attempt.assert_called_once_with(kind="document", outcome="fallback", reason="encrypted")
+        preview_fallback.assert_called_once_with(kind="document", reason="encrypted")
         preview_latency.assert_called_once()
 
     def test_shared_thumbnail_blocks_encrypted_file(self):
@@ -311,8 +320,8 @@ class TestFileManagerRoutes(unittest.TestCase):
             with self.assertRaises(HTTPException) as ctx:
                 filemanager.shared_thumbnail_fs_file(owner="owner", path="/docs/a.txt", user="user")
         self.assertEqual(ctx.exception.status_code, 415)
-        preview_attempt.assert_called_once_with(kind="text", outcome="fallback", reason="encrypted")
-        preview_fallback.assert_called_once_with(kind="text", reason="encrypted")
+        preview_attempt.assert_called_once_with(kind="document", outcome="fallback", reason="encrypted")
+        preview_fallback.assert_called_once_with(kind="document", reason="encrypted")
         preview_latency.assert_called_once()
 
     def test_file_crypto_client_telemetry_records_metrics(self):
@@ -332,6 +341,34 @@ class TestFileManagerRoutes(unittest.TestCase):
             self.assertTrue(resp["ok"])
             record_encryption_event.assert_called_once_with("decrypt_failure", encrypted=True, reason="wrong_password")
             audit_event.assert_called_once()
+
+    def test_file_preview_hover_telemetry_records_metrics(self):
+        with (
+            patch.object(filemanager, "record_filemgr_preview_hover_play_start") as record_start,
+            patch.object(filemanager, "record_filemgr_preview_hover_play_failure") as record_failure,
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            start_resp = filemanager.file_crypto_client_telemetry(
+                inp=filemanager.FileCryptoTelemetryIn(
+                    event="hover_play_start",
+                    path="/docs/clip.mp4",
+                ),
+                user="user",
+            )
+            self.assertTrue(start_resp["ok"])
+            record_start.assert_called_once_with()
+
+            failure_resp = filemanager.file_crypto_client_telemetry(
+                inp=filemanager.FileCryptoTelemetryIn(
+                    event="hover_play_failure",
+                    path="/docs/clip.mp4",
+                    reason="playback_error",
+                ),
+                user="user",
+            )
+            self.assertTrue(failure_resp["ok"])
+            record_failure.assert_called_once_with(reason="playback_error")
+            self.assertEqual(audit_event.call_count, 2)
 
     def test_presign_and_complete_upload(self):
         with patch.object(
@@ -423,12 +460,12 @@ class TestFileManagerRoutes(unittest.TestCase):
             self.assertIsInstance(resp, StreamingResponse)
             self.assertEqual(audit_event.call_args.kwargs["encrypted_shared_access_attempt"], False)
             self.assertEqual(audit_event.call_args.kwargs["share_scope"], "direct")
-            self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "text")
+            self.assertEqual(audit_event.call_args.kwargs["preview_kind"], "document")
             self.assertEqual(audit_event.call_args.kwargs["preview_supported"], True)
             self.assertEqual(audit_event.call_args.kwargs["preview_reason"], "none")
             self.assertEqual(audit_event.call_args.kwargs["is_encrypted"], False)
-            preview_attempt.assert_called_once_with(kind="text", outcome="success", reason="none")
-            preview_bytes.assert_called_once_with(kind="text", nbytes=5)
+            preview_attempt.assert_called_once_with(kind="document", outcome="success", reason="none")
+            preview_bytes.assert_called_once_with(kind="document", nbytes=5)
             preview_latency.assert_called_once()
 
     def test_upload_archive_routes(self):
@@ -515,12 +552,20 @@ class TestFileManagerRoutes(unittest.TestCase):
             patch.object(filemanager, "get_node", return_value=shared_node),
         ):
             listed = filemanager.list_shared_files(owner="owner", path="/docs", sort_by="name", user="user")
-            self.assertEqual(listed["items"][0]["preview_kind"], "csv")
+            self.assertEqual(listed["items"][0]["preview_kind"], "document")
+            self.assertEqual(listed["items"][0]["preview_status"], "ready")
+            self.assertIsNone(listed["items"][0]["poster_url"])
+            self.assertIsNone(listed["items"][0]["hover_preview_url"])
+            self.assertIsNone(listed["items"][0]["waveform_url"])
             self.assertTrue(listed["items"][0]["preview_supported"])
             self.assertIsNone(listed["items"][0]["preview_reason"])
 
             info = filemanager.shared_file_info(owner="owner", path="/docs/table.csv", user="user")
-            self.assertEqual(info["preview_kind"], "csv")
+            self.assertEqual(info["preview_kind"], "document")
+            self.assertEqual(info["preview_status"], "ready")
+            self.assertIsNone(info["poster_url"])
+            self.assertIsNone(info["hover_preview_url"])
+            self.assertIsNone(info["waveform_url"])
             self.assertTrue(info["preview_supported"])
             self.assertIsNone(info["preview_reason"])
 
@@ -563,6 +608,75 @@ class TestFileManagerRoutes(unittest.TestCase):
             asyncio.run(_consume_zip())
             record_download_usage.assert_called_once_with("user", "/_zip/shared-download.zip", 4, source="shared_download_zip", request_id=None)
             assert_download_allowed.assert_called_once_with("user", requested_bytes=0)
+
+    def test_list_files_shows_ready_video_and_audio_artifacts(self):
+        items = [
+            {
+                "path": "/docs/clip.mp4",
+                "type": "file",
+                "name": "clip.mp4",
+                "parent": "/docs/",
+                "content_type": "video/mp4",
+                "size": 100,
+                "s3_bucket": "bucket",
+                "media_preview_status": "ready",
+                "media_inspection": {"container": "mp4", "primary_video_codec": "h264", "duration_seconds": 8},
+                "media_preview_keys": {
+                    "poster_image": "owner/derived/media/ver/poster_image.webp",
+                    "hover_clip": "owner/derived/media/ver/hover_clip.mp4",
+                },
+                "is_encrypted": False,
+            },
+            {
+                "path": "/docs/track.mp3",
+                "type": "file",
+                "name": "track.mp3",
+                "parent": "/docs/",
+                "content_type": "audio/mpeg",
+                "size": 80,
+                "s3_bucket": "bucket",
+                "media_preview_status": "ready",
+                "media_inspection": {"container": "mp3", "primary_audio_codec": "mp3", "duration_seconds": 12},
+                "media_preview_keys": {
+                    "waveform_image": "owner/derived/media/ver/waveform_image.png",
+                },
+                "is_encrypted": False,
+            },
+        ]
+        with (
+            patch.object(filemanager, "list_children_page", return_value=(items, None)),
+            patch(
+                "app.services.filemanager.S",
+                SimpleNamespace(
+                    filemgr_media_previews_v1=True,
+                    filemgr_video_hover_clip_enabled=True,
+                    filemgr_audio_waveform_enabled=True,
+                    filemgr_preview_max_bytes=10485760,
+                    filemgr_video_preview_max_mb=200,
+                    filemgr_video_preview_max_duration_seconds=600,
+                    filemgr_audio_waveform_max_mb=100,
+                    filemgr_media_preview_cdn_base_url="https://cdn.example",
+                    filemgr_media_preview_private=False,
+                    filemgr_media_preview_url_ttl_seconds=900,
+                ),
+            ),
+        ):
+            resp = filemanager.list_files(path="/docs", sort_by="name", user="owner")
+
+        by_name = {item["name"]: item for item in resp["items"]}
+        self.assertEqual(by_name["clip.mp4"]["poster_url"], "https://cdn.example/owner/derived/media/ver/poster_image.webp")
+        self.assertEqual(by_name["clip.mp4"]["hover_preview_url"], "https://cdn.example/owner/derived/media/ver/hover_clip.mp4")
+        self.assertEqual(by_name["track.mp3"]["waveform_url"], "https://cdn.example/owner/derived/media/ver/waveform_image.png")
+
+    def test_shared_media_preview_access_denied_without_permission(self):
+        with patch.object(filemanager, "require_shared_access", side_effect=HTTPException(status_code=403, detail="forbidden")):
+            with self.assertRaises(HTTPException) as list_ctx:
+                filemanager.list_shared_files(owner="owner", path="/docs", user="intruder")
+            with self.assertRaises(HTTPException) as info_ctx:
+                filemanager.shared_file_info(owner="owner", path="/docs/clip.mp4", user="intruder")
+
+        self.assertEqual(list_ctx.exception.status_code, 403)
+        self.assertEqual(info_ctx.exception.status_code, 403)
 
     def test_usage_endpoints(self):
         with patch.object(filemanager, "get_usage_summary", return_value={"period_id": "2026-02"}) as summary:
