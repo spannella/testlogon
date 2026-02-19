@@ -151,6 +151,8 @@ class Settings:
     dev_registration_password: str = os.environ.get("DEV_REGISTRATION_PASSWORD", "")
     dev_registration_code: str = os.environ.get("DEV_REGISTRATION_CODE", "")
     dev_registration_phone: str = os.environ.get("DEV_REGISTRATION_PHONE", "")
+    dev_email_log: str = os.environ.get("DEV_EMAIL_LOG", ".logs/dev/emails.log")
+    dev_sms_log: str = os.environ.get("DEV_SMS_LOG", ".logs/dev/sms.log")
 
     # Billing / CCBill
     ccbill_base_url: str = os.environ.get("CCBILL_BASE_URL", "https://api.ccbill.com").rstrip("/")
