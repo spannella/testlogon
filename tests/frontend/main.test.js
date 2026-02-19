@@ -75,3 +75,25 @@ test('parseHttpError returns status codes when present', () => {
   assert.equal(parseHttpError('403: Forbidden'), 403);
   assert.equal(parseHttpError('Boom'), null);
 });
+
+
+test('isEditableImageFile supports mime type and extension checks', () => {
+  const dom = loadUiDom();
+  const { isEditableImageFile } = dom.window;
+  assert.equal(isEditableImageFile({ type: 'file', name: 'photo.bin', content_type: 'image/png' }), true);
+  assert.equal(isEditableImageFile({ type: 'file', name: 'photo.JPG', content_type: '' }), true);
+  assert.equal(isEditableImageFile({ type: 'file', name: 'notes.txt', content_type: 'text/plain' }), false);
+});
+
+test('_fileMgrEditorNormalizeRect creates positive bounded rectangles', () => {
+  const dom = loadUiDom();
+  const { _fileMgrEditorNormalizeRect } = dom.window;
+  assert.equal(
+    JSON.stringify(_fileMgrEditorNormalizeRect({ x: 80, y: 40 }, { x: 10, y: 5 }, 100, 80)),
+    JSON.stringify({ x: 10, y: 5, w: 70, h: 35 })
+  );
+  assert.equal(
+    JSON.stringify(_fileMgrEditorNormalizeRect({ x: -20, y: -5 }, { x: 120, y: 90 }, 100, 80)),
+    JSON.stringify({ x: 0, y: 0, w: 100, h: 80 })
+  );
+});

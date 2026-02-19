@@ -6184,6 +6184,234 @@ async function fileMgrPreview(path) {
   setTimeout(() => URL.revokeObjectURL(previewUrl), 2000);
 }
 
+
+
+function isEditableImageFile(item) {
+  if (!item || item.type !== "file") return false;
+  const contentType = String(item.content_type || "").toLowerCase();
+  if (contentType.startsWith("image/")) return true;
+  const name = String(item.name || item.path || "").toLowerCase();
+  return /\.(png|jpe?g|gif|webp|bmp)$/i.test(name);
+}
+
+function _fileMgrEditorCanvasPoint(ev, canvas, naturalWidth, naturalHeight) {
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return { x: 0, y: 0 };
+  const x = Math.max(0, Math.min(naturalWidth, ((ev.clientX - rect.left) * naturalWidth) / rect.width));
+  const y = Math.max(0, Math.min(naturalHeight, ((ev.clientY - rect.top) * naturalHeight) / rect.height));
+  return { x, y };
+}
+
+function _fileMgrEditorNormalizeRect(start, end, maxW, maxH) {
+  const x1 = Math.max(0, Math.min(maxW, Math.min(start.x, end.x)));
+  const y1 = Math.max(0, Math.min(maxH, Math.min(start.y, end.y)));
+  const x2 = Math.max(0, Math.min(maxW, Math.max(start.x, end.x)));
+  const y2 = Math.max(0, Math.min(maxH, Math.max(start.y, end.y)));
+  return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+}
+
+async function fileMgrFetchBlob(path, ownerOverride = null) {
+  const tok = accessToken();
+  if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
+  const sid = sessionId();
+  if (!sid) throw new Error("Missing UI session_id; call ensureUiSession() first.");
+  const isShared = Boolean(ownerOverride || fileMgrState.sharedMode);
+  const owner = ownerOverride || fileMgrState.sharedOwner;
+  const endpoint = isShared ? "/v1/fs/shared-download" : "/v1/fs/download";
+  const params = new URLSearchParams();
+  params.set("path", path);
+  if (isShared && owner) params.set("owner", owner);
+  const res = await fetch(`${API_BASE}${endpoint}?${params.toString()}`, {
+    method: "GET",
+    headers: {
+      "Authorization": "Bearer " + tok,
+      "X-SESSION-ID": sid,
+    },
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.blob();
+}
+
+async function openFileMgrImageEditor(item) {
+  if (!item || !item.path) return;
+  await ensureUiSession();
+  const ownerOverride = fileMgrState.sharedMode ? fileMgrState.sharedOwner : null;
+  const info = await fileMgrFetchInfo(item.path, ownerOverride);
+  if (info && info.is_encrypted) {
+    fileMgrStatus("Image edit is not available for encrypted files.");
+    return;
+  }
+  const srcBlob = await fileMgrFetchBlob(item.path, ownerOverride);
+  const objectUrl = URL.createObjectURL(srcBlob);
+  const img = new Image();
+  await new Promise((resolve, reject) => {
+    img.onload = resolve;
+    img.onerror = () => reject(new Error("Unable to load image for editing."));
+    img.src = objectUrl;
+  });
+  const naturalWidth = img.naturalWidth || img.width;
+  const naturalHeight = img.naturalHeight || img.height;
+  modalShow({
+    title: `Edit image: ${item.name || item.path}`,
+    bodyHtml: `
+      <div class="filemgr-editor-layout">
+        <div class="row-inline filemgr-editor-controls">
+          <button id="filemgrEditorCropBtn" type="button">Crop selection</button>
+          <button id="filemgrEditorBlockBtn" type="button">Block selection</button>
+          <button id="filemgrEditorResetBtn" type="button">Reset</button>
+          <button id="filemgrEditorSaveBtn" type="button" class="primary">Save image</button>
+        </div>
+        <div class="muted">Drag on the image to create a selection rectangle. Crop keeps selected area; Block fills the area with black.</div>
+        <canvas id="filemgrEditorCanvas" class="filemgr-editor-canvas"></canvas>
+        <div id="filemgrEditorStatus" class="muted"></div>
+      </div>
+    `,
+    actions: [{ text: "Close", onClick: modalClose }],
+  });
+  const canvas = document.getElementById("filemgrEditorCanvas");
+  const status = document.getElementById("filemgrEditorStatus");
+  const cropBtn = document.getElementById("filemgrEditorCropBtn");
+  const blockBtn = document.getElementById("filemgrEditorBlockBtn");
+  const resetBtn = document.getElementById("filemgrEditorResetBtn");
+  const saveBtn = document.getElementById("filemgrEditorSaveBtn");
+  if (!canvas || !status || !cropBtn || !blockBtn || !resetBtn || !saveBtn) throw new Error("Image editor UI failed to initialize.");
+
+  const workingCanvas = document.createElement("canvas");
+  workingCanvas.width = naturalWidth;
+  workingCanvas.height = naturalHeight;
+  let workingCtx = workingCanvas.getContext("2d");
+  if (!workingCtx) throw new Error("Unable to start image editor canvas.");
+  workingCtx.drawImage(img, 0, 0);
+
+  const draw = (selection) => {
+    const scale = Math.min(1, 900 / naturalWidth, 520 / naturalHeight);
+    canvas.width = workingCanvas.width;
+    canvas.height = workingCanvas.height;
+    canvas.style.width = `${Math.max(1, Math.round(workingCanvas.width * scale))}px`;
+    canvas.style.height = `${Math.max(1, Math.round(workingCanvas.height * scale))}px`;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(workingCanvas, 0, 0);
+    if (selection && selection.w > 1 && selection.h > 1) {
+      ctx.fillStyle = "rgba(0,0,0,0.3)";
+      ctx.fillRect(selection.x, selection.y, selection.w, selection.h);
+      ctx.strokeStyle = "#fff";
+      ctx.lineWidth = 3;
+      ctx.strokeRect(selection.x, selection.y, selection.w, selection.h);
+    }
+  };
+
+  let dragStart = null;
+  let selection = null;
+  draw(selection);
+  canvas.onpointerdown = (ev) => {
+    dragStart = _fileMgrEditorCanvasPoint(ev, canvas, workingCanvas.width, workingCanvas.height);
+    selection = { x: dragStart.x, y: dragStart.y, w: 0, h: 0 };
+    draw(selection);
+  };
+  canvas.onpointermove = (ev) => {
+    if (!dragStart) return;
+    const current = _fileMgrEditorCanvasPoint(ev, canvas, workingCanvas.width, workingCanvas.height);
+    selection = _fileMgrEditorNormalizeRect(dragStart, current, workingCanvas.width, workingCanvas.height);
+    draw(selection);
+  };
+  const onPointerUp = (ev) => {
+    if (!dragStart) return;
+    const current = _fileMgrEditorCanvasPoint(ev, canvas, workingCanvas.width, workingCanvas.height);
+    selection = _fileMgrEditorNormalizeRect(dragStart, current, workingCanvas.width, workingCanvas.height);
+    dragStart = null;
+    draw(selection);
+  };
+  window.addEventListener("pointerup", onPointerUp);
+
+  let cleanedUp = false;
+  const cleanupEditor = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    window.removeEventListener("pointerup", onPointerUp);
+    URL.revokeObjectURL(objectUrl);
+  };
+  const closeBtn = _modalEl ? _modalEl.querySelector(".modal-actions button") : null;
+  if (closeBtn) closeBtn.addEventListener("click", cleanupEditor);
+  if (_modalEl) {
+    _modalEl.addEventListener("click", (ev) => {
+      if (ev.target === _modalEl) cleanupEditor();
+    });
+  }
+
+  const requireSelection = () => {
+    if (!selection || selection.w < 2 || selection.h < 2) {
+      status.textContent = "Drag to select an area first.";
+      return false;
+    }
+    return true;
+  };
+
+  cropBtn.onclick = () => {
+    if (!requireSelection()) return;
+    const next = document.createElement("canvas");
+    next.width = Math.max(1, Math.round(selection.w));
+    next.height = Math.max(1, Math.round(selection.h));
+    const nextCtx = next.getContext("2d");
+    if (!nextCtx) return;
+    nextCtx.drawImage(workingCanvas, selection.x, selection.y, selection.w, selection.h, 0, 0, next.width, next.height);
+    workingCanvas.width = next.width;
+    workingCanvas.height = next.height;
+    workingCtx = workingCanvas.getContext("2d");
+    if (!workingCtx) return;
+    workingCtx.drawImage(next, 0, 0);
+    selection = null;
+    status.textContent = `Cropped to ${next.width} × ${next.height}.`;
+    draw(selection);
+  };
+
+  blockBtn.onclick = () => {
+    if (!requireSelection()) return;
+    workingCtx.fillStyle = "#000";
+    workingCtx.fillRect(selection.x, selection.y, selection.w, selection.h);
+    status.textContent = "Blocked selected area.";
+    draw(selection);
+  };
+
+  resetBtn.onclick = () => {
+    workingCanvas.width = naturalWidth;
+    workingCanvas.height = naturalHeight;
+    workingCtx = workingCanvas.getContext("2d");
+    if (!workingCtx) return;
+    workingCtx.drawImage(img, 0, 0);
+    selection = null;
+    status.textContent = "Reset to original image.";
+    draw(selection);
+  };
+
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    status.textContent = "Saving...";
+    try {
+      const outBlob = await new Promise((resolve, reject) => {
+        workingCanvas.toBlob((blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error("Failed to encode edited image."));
+        }, srcBlob.type || "image/png", 0.92);
+      });
+      const uploadFile = new File([outBlob], item.name || "edited-image", {
+        type: outBlob.type || srcBlob.type || "image/png",
+      });
+      await apiUploadFileManager(item.path, uploadFile, null, null, {
+        sharedOwner: fileMgrState.sharedMode ? fileMgrState.sharedOwner : null,
+      });
+      status.textContent = "Saved updated image.";
+      await refreshFileManager();
+      cleanupEditor();
+    } catch (e) {
+      status.textContent = String(e);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  };
+}
 async function fileMgrDetails(path) {
   const tok = accessToken();
   if (!tok) throw new Error("Missing access_token (Cognito login not completed).");
@@ -6366,7 +6594,7 @@ function renderFileMgrSearchResults() {
       <div class="row-inline">
         <button data-action="open" data-path="${escapeHtml(item.path || "")}" data-type="${escapeHtml(item.type || "")}">Open</button>
         <button data-action="details">Details</button>
-        ${isFolder ? "" : '<button data-action="download">Download</button><button data-action="preview">Preview</button>'}
+        ${isFolder ? "" : `<button data-action="download">Download</button><button data-action="preview">Preview</button>${isEditableImageFile(item) ? '<button data-action="edit-image">Edit image</button>' : ''}`}
       </div>
     `;
     row.querySelectorAll("button").forEach((btn) => {
@@ -6391,6 +6619,10 @@ function renderFileMgrSearchResults() {
           }
           if (action === "preview") {
             await fileMgrPreview(p);
+            return;
+          }
+          if (action === "edit-image") {
+            await openFileMgrImageEditor(item);
             return;
           }
           if (action === "details") {
@@ -6483,7 +6715,7 @@ function renderFileMgrList(items) {
           ${
             isFolder
               ? '<button data-action="open">Open</button>'
-              : '<button data-action="download">Download</button><button data-action="preview">Preview</button>'
+              : `<button data-action="download">Download</button><button data-action="preview">Preview</button>${isEditableImageFile(item) && !disableEdits ? '<button data-action="edit-image">Edit image</button>' : ''}`
           }
           <button data-action="details">Details</button>
           ${
@@ -6513,6 +6745,10 @@ function renderFileMgrList(items) {
           }
           if (action === "preview") {
             await fileMgrPreview(item.path);
+            return;
+          }
+          if (action === "edit-image") {
+            await openFileMgrImageEditor(item);
             return;
           }
           if (action === "rename") {

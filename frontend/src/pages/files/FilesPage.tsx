@@ -69,6 +69,8 @@ import {
   sharedPreviewUrl,
 } from "@/api/endpoints/files";
 import { FileTable } from "./FileTable";
+import { ImageEditorDialog } from "./ImageEditorDialog";
+import { isEditableImageFile } from "./imageEdit";
 import { FilePreview } from "./FilePreview";
 import { SharedWithMe } from "./SharedWithMe";
 import { ShareDialog } from "./ShareDialog";
@@ -148,6 +150,7 @@ export default function FilesPage() {
   // Move dialog state
   const [moveDialogOpen, setMoveDialogOpen] = React.useState(false);
   const [moveTarget, setMoveTarget] = React.useState<FileEntry | null>(null);
+  const [imageEditTarget, setImageEditTarget] = React.useState<FileEntry | null>(null);
 
   // ── Queries ─────────────────────────────────────────────────────
 
@@ -274,6 +277,14 @@ export default function FilesPage() {
 
   const handlePreview = (file: FileEntry) => {
     setPreviewContext({ file, files: displayItems, source: "owned" });
+  };
+
+  const handleEditImage = (file: FileEntry) => {
+    if (!isEditableImageFile(file)) {
+      toast.error("Only non-encrypted image files can be edited.");
+      return;
+    }
+    setImageEditTarget(file);
   };
 
   const handlePreviewShared = (_item: SharedItem) => {
@@ -829,6 +840,7 @@ export default function FilesPage() {
                 onNavigate={handleNavigate}
                 onPreview={handlePreview}
                 onDownload={handleDownload}
+                onEditImage={handleEditImage}
                 onShare={(f) => setShareTarget(f)}
                 onRename={(f) => { setRenameTarget(f); setRenameName(f.name); }}
                 onMove={handleMoveOpen}
@@ -1015,6 +1027,16 @@ export default function FilesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+
+      <ImageEditorDialog
+        open={!!imageEditTarget}
+        file={imageEditTarget}
+        onOpenChange={(open) => { if (!open) setImageEditTarget(null); }}
+        onSaved={() => {
+          queryClient.invalidateQueries({ queryKey: ["files"] });
+        }}
+      />
 
       {/* File preview modal */}
       {previewContext && (
