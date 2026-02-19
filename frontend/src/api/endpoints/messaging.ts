@@ -15,6 +15,8 @@ import type {
   AddParticipantsReq,
   UpdateRoleReq,
   MessagingConfig,
+  ConversationGalleryResp,
+  ConversationGalleryQuery,
   ConsumeAttachmentReq,
   ConsumeAttachmentResp,
   CreateAttachmentGrantResp,
@@ -57,6 +59,18 @@ export const getMessages = async (conversationId: string, cursor?: string) => {
     messages: (res.messages ?? []).map(adaptMessage),
     next_cursor: res.next_cursor,
   };
+};
+
+
+export const getConversationGallery = async (
+  conversationId: string,
+  query: ConversationGalleryQuery,
+) => {
+  const { type, cursor, limit = 50 } = query;
+  return api.get<ConversationGalleryResp>(
+    `/messaging/conversations/${conversationId}/gallery`,
+    { type, limit: String(limit), ...(cursor ? { cursor } : {}) },
+  );
 };
 
 export const sendTextMessage = async (conversationId: string, body: SendTextMessageReq) => {

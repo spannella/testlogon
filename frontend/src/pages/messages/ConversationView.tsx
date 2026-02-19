@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Users } from "lucide-react";
+import { ArrowLeft, Images, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,6 +18,8 @@ import { ComposeBar } from "./ComposeBar";
 import { PresenceDot } from "./PresenceDot";
 import { TypingIndicator, useTypingSignal } from "./TypingIndicator";
 import { ParticipantsPanel } from "./ParticipantsPanel";
+import { isMessagingGalleryEnabled } from "@/lib/featureFlags";
+import { ConversationGallery } from "./ConversationGallery";
 
 interface ConversationViewProps {
   conversation: Conversation;
@@ -33,6 +35,10 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
   const convoId = conversation.conversation_id;
   const isGroup = conversation.type === "group";
   const [participantsOpen, setParticipantsOpen] = React.useState(false);
+  const [galleryOpen, setGalleryOpen] = React.useState(false);
+  const galleryEnabled = isMessagingGalleryEnabled();
+  const [jumpTargetMessageId, setJumpTargetMessageId] = React.useState<string | null>(null);
+  const [highlightMessageId, setHighlightMessageId] = React.useState<string | null>(null);
 
   // ── Messages query ──────────────────────────────────────────────
 
@@ -131,6 +137,39 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
   // Typing signal
   const onKeystroke = useTypingSignal(convoId);
 
+
+  React.useEffect(() => {
+    if (!jumpTargetMessageId) return;
+
+    let cancelled = false;
+    const run = async () => {
+      let attempts = 0;
+      while (!cancelled) {
+        const el = document.getElementById(`msg-${jumpTargetMessageId}`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+          setHighlightMessageId(jumpTargetMessageId);
+          window.setTimeout(() => {
+            setHighlightMessageId((current) => (current === jumpTargetMessageId ? null : current));
+          }, 2000);
+          setJumpTargetMessageId(null);
+          return;
+        }
+        if (!hasNextPage || attempts >= 10) {
+          setJumpTargetMessageId(null);
+          return;
+        }
+        attempts += 1;
+        await fetchNextPage();
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [jumpTargetMessageId, hasNextPage, fetchNextPage]);
+
   // ── Render ──────────────────────────────────────────────────────
 
   return (
@@ -159,6 +198,18 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
             </p>
           )}
         </div>
+        {galleryEnabled && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 shrink-0"
+            onClick={() => setGalleryOpen(true)}
+            aria-label="Open media and links gallery"
+          >
+            <Images className="mr-1.5 h-4 w-4" />
+            Media & Links
+          </Button>
+        )}
         {isGroup && (
           <Button
             variant="ghost"
@@ -202,13 +253,21 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
           </p>
         ) : (
           allMessages.map((msg) => (
-            <MessageBubble
+            <div
               key={msg.message_id}
-              message={msg}
-              isOwn={msg.sender_id === userId}
-              showSender={isGroup}
-              conversationId={convoId}
-            />
+              id={`msg-${msg.message_id}`}
+              className={cn(
+                "rounded-lg transition-colors",
+                highlightMessageId === msg.message_id ? "bg-primary/10" : "",
+              )}
+            >
+              <MessageBubble
+                message={msg}
+                isOwn={msg.sender_id === userId}
+                showSender={isGroup}
+                conversationId={convoId}
+              />
+            </div>
           ))
         )}
       </div>
@@ -223,6 +282,19 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
         sending={sendText.isPending || sendImage.isPending}
         onKeystroke={onKeystroke}
       />
+
+
+      {galleryEnabled && (
+        <ConversationGallery
+          open={galleryOpen}
+          onOpenChange={setGalleryOpen}
+          conversationId={convoId}
+          onJumpToMessage={(messageId) => {
+            setGalleryOpen(false);
+            setJumpTargetMessageId(messageId);
+          }}
+        />
+      )}
 
       {/* Group participants panel */}
       {isGroup && (
