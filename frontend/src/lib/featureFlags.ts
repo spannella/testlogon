@@ -28,3 +28,13 @@ export const isMessagingEncryptionEnabled = () =>
 export const messagingGalleryEnabled = toBool(env.VITE_MESSAGING_GALLERY_ENABLED, true);
 export const messagingGalleryKillSwitch = toBool(env.VITE_MESSAGING_GALLERY_KILL_SWITCH, false);
 export const isMessagingGalleryEnabled = () => messagingGalleryEnabled && !messagingGalleryKillSwitch;
+export const messagingOnceMediaComposerEnabled = toBool(env.VITE_CLIENT_ONCE_MEDIA_COMPOSER_ENABLED, false);
+export const messagingOnceMediaImageEnabled = toBool(env.VITE_MESSAGING_ONCE_MEDIA_IMAGE_ENABLED, false);
+export const messagingOnceMediaVideoEnabled = toBool(env.VITE_MESSAGING_ONCE_MEDIA_VIDEO_ENABLED, false);
+export const messagingOnceMediaAudioEnabled = toBool(env.VITE_MESSAGING_ONCE_MEDIA_AUDIO_ENABLED, false);
+
+export const isMessagingOnceMediaComposerEnabled = () => messagingOnceMediaComposerEnabled;
+export const isMessagingViewOnceImageEnabled = () => isMessagingOnceMediaComposerEnabled() && messagingOnceMediaImageEnabled;
+export const isMessagingViewOnceVideoEnabled = () => isMessagingOnceMediaComposerEnabled() && messagingOnceMediaVideoEnabled;
+export const isMessagingListenOnceAudioEnabled = () => isMessagingOnceMediaComposerEnabled() && messagingOnceMediaAudioEnabled;
+

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import secrets
 import logging
 import sys
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 from boto3.dynamodb.conditions import Key
@@ -23,6 +25,26 @@ except Exception:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+# In-memory store for SMS codes issued in dev mode (phone_e164 -> code).
+_dev_sms_codes: Dict[str, str] = {}
+
+
+def _write_dev_log(log_path: str, entry: str) -> None:
+    """Append *entry* to the dev log at *log_path*, creating directories as needed."""
+    try:
+        parent = os.path.dirname(log_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(entry)
+    except Exception as exc:
+        logger.warning("Failed to write dev log %s: %s", log_path, exc)
+
+
+def _now_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _need_pyotp():
     if pyotp is None:
         raise HTTPException(500, "pyotp not installed (required for TOTP features)")
@@ -32,8 +54,18 @@ def gen_numeric_code(n_digits: int = 6) -> str:
 
 def send_email_code(to_email: str, purpose: str, code: str) -> None:
     if S.dev_mode:
+        subject = f"Your verification code ({purpose})"
+        body = f"Your verification code is: {code}\n\nIf you did not request this, ignore this email."
         logger.warning("DEV MODE email verification code for %s (%s): %s", to_email, purpose, code)
         print(f"DEV MODE email verification code for {to_email} ({purpose}): {code}", file=sys.stderr, flush=True)
+        entry = (
+            f"[{_now_utc()}] TO={to_email} PURPOSE={purpose}\n"
+            f"  Subject: {subject}\n"
+            f"  Code: {code}\n"
+            f"  Body: {body}\n\n"
+        )
+        _write_dev_log(S.dev_email_log, entry)
+        return
     if not ses:
         raise HTTPException(500, "SES not configured")
     subject = f"Your verification code ({purpose})"
@@ -45,11 +77,22 @@ def send_email_code(to_email: str, purpose: str, code: str) -> None:
     )
 
 def twilio_start_sms(to_e164: str) -> None:
+    if S.dev_mode:
+        code = gen_numeric_code(6)
+        _dev_sms_codes[to_e164] = code
+        logger.warning("DEV MODE SMS verification code for %s: %s", to_e164, code)
+        print(f"DEV MODE SMS verification code for {to_e164}: {code}", file=sys.stderr, flush=True)
+        entry = f"[{_now_utc()}] SMS TO={to_e164} Code: {code}\n"
+        _write_dev_log(S.dev_sms_log, entry)
+        return
     if not twilio:
         raise HTTPException(500, "Twilio not configured")
     twilio.verify.v2.services(S.twilio_verify_service_sid).verifications.create(to=to_e164, channel="sms")
 
 def twilio_check_sms(to_e164: str, code: str) -> bool:
+    if S.dev_mode:
+        expected = _dev_sms_codes.get(to_e164, "")
+        return bool(expected and code.strip() == expected)
     if not twilio:
         raise HTTPException(500, "Twilio not configured")
     r = twilio.verify.v2.services(S.twilio_verify_service_sid).verification_checks.create(to=to_e164, code=code)

@@ -6,8 +6,10 @@ from pydantic import ValidationError
 from pathlib import Path
 
 from app.routers.messaging import (
+    ConsumeAttachmentIn,
     EditMessageIn,
     MarkReadIn,
+    MessageOut,
     MuteIn,
     SendTextMessageIn,
     StartConversationIn,
@@ -18,6 +20,7 @@ from app.routers.messaging import (
 
 SWAGGER_PATH = Path("docs/swagger.json")
 FRONTEND_TYPES_PATH = Path("frontend/src/api/types.ts")
+ONCE_SCHEMA_PATH = Path("docs/messaging-once-media-schema-v1.json")
 
 
 def test_canonical_contract_source_exists_and_contains_messaging_models():
@@ -204,3 +207,37 @@ def test_gallery_contract_frontend_type_alignment():
     assert "export interface ConversationGalleryItem" in frontend_types
     assert "export interface ConversationGalleryResp" in frontend_types
 
+def test_once_media_schema_exists_and_matches_model_enums_and_types():
+    assert ONCE_SCHEMA_PATH.exists(), "Once-media schema missing: docs/messaging-once-media-schema-v1.json"
+    schema = json.loads(ONCE_SCHEMA_PATH.read_text())
+
+    consumption_policy_enum = set(schema["properties"]["consumption_policy"]["enum"])
+    media_kind_enum = set(schema["properties"]["media_kind"]["enum"])
+    consumption_state_enum = set(schema["properties"]["consumption_state"]["enum"])
+
+    message_schema = MessageOut.model_json_schema()
+    props = message_schema["properties"]
+
+    assert set(props["consumption_policy"]["anyOf"][0]["enum"]) == consumption_policy_enum
+    assert set(props["media_kind"]["anyOf"][0]["enum"]) == media_kind_enum
+    assert set(props["consumption_state"]["anyOf"][0]["enum"]) == consumption_state_enum
+
+    consumed_at_any = props["consumed_at"]["anyOf"]
+    assert any(item.get("type") == "integer" for item in consumed_at_any)
+    assert schema["properties"]["consumed_at"]["oneOf"][0]["type"] == "integer"
+
+
+def test_once_media_consume_request_contract_shape_is_stable():
+    req = ConsumeAttachmentIn(
+        consumption_attempt_id="attempt-1234",
+        trigger="play",
+        playback_seconds=1.2,
+    )
+    payload = req.model_dump(exclude_none=True)
+    assert set(payload.keys()) == {"consumption_attempt_id", "trigger", "playback_seconds"}
+    assert payload["trigger"] == "play"
+
+
+def test_once_media_contract_version_stable_in_schema():
+    schema = json.loads(ONCE_SCHEMA_PATH.read_text())
+    assert schema["properties"]["messaging_contract_version"]["const"] == "2026-02-once-media-v1"
