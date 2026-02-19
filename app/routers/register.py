@@ -52,10 +52,6 @@ def _require_cognito() -> None:
 
 
 def _cognito_available() -> bool:
-    # In dev mode the local DynamoDB auth path is used end-to-end; skip Cognito
-    # so that moto's password-policy enforcement doesn't silently block sign-ups.
-    if S.dev_mode:
-        return False
     return bool(S.cognito_app_client_id)
 
 
@@ -91,6 +87,14 @@ async def register_start(
         try:
             cognito_sign_up(username, body.password, body.full_name)
         except HTTPException as exc:
+            if exc.status_code == 400:
+                # Password did not meet Cognito's policy.  The frontend should have
+                # caught this before submission; if it still gets through, surface the
+                # error clearly rather than returning a misleading "ok".
+                audit_event("register_start", username, req, outcome="failure", reason="password_policy")
+                raise
+            # 409 user-already-exists and other non-400 errors: return the generic
+            # response to avoid leaking whether this email address is registered.
             logger.warning(
                 "register_start cognito_sign_up rejected",
                 extra={"email": username, "status_code": exc.status_code, "detail": exc.detail},

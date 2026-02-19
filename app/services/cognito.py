@@ -83,7 +83,15 @@ def cognito_sign_up(username: str, password: str, full_name: str) -> Dict[str, A
         logger.info("cognito sign_up user already exists", extra={"username": username})
         raise HTTPException(409, "User already exists") from exc
     except client.exceptions.InvalidPasswordException as exc:  # type: ignore[attr-defined]
-        logger.warning("cognito sign_up invalid password", extra={"username": username})
+        # Cognito's message lists every unmet requirement, e.g.
+        # "Password did not conform with policy: Password must have uppercase
+        #  characters; Password must have symbol characters"
+        reason = str(exc)
+        logger.warning(
+            "cognito sign_up password policy violation for %s: %s",
+            username, reason,
+            extra={"username": username, "cognito_reason": reason},
+        )
         raise HTTPException(400, "Invalid password") from exc
     except client.exceptions.InvalidParameterException as exc:  # type: ignore[attr-defined]
         logger.warning("cognito sign_up invalid parameters", extra={"username": username, "error": str(exc)})
