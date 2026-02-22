@@ -764,7 +764,7 @@ export default function FilesPage() {
             <div className="rounded-md border px-3 py-1.5 text-xs" data-testid="files-usage-widget">
               {usageSummary ? (
                 <div className="space-y-0.5">
-                  <div>Storage: {formatBytesCompact(usageSummary.storage.used_bytes)} ({usageSummary.storage.percent_used.toFixed(1)}%)</div>
+                  <div>Storage: {formatBytesCompact(usageSummary.storage.used_bytes)} ({(usageSummary.storage.percent_used ?? 0).toFixed(1)}%)</div>
                   <div>Transfer: {formatBytesCompact(usageSummary.upload.used_bytes + usageSummary.download.used_bytes)}</div>
                   <Link to="/billing?tab=usage" className="text-primary underline">Usage &amp; Billing</Link>
                 </div>
