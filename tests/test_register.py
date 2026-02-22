@@ -129,7 +129,7 @@ class TestRegisterRoutes(unittest.TestCase):
 
     def test_register_start_duplicate_user(self):
         req = build_request()
-        with patch.object(register, "_cognito_available", return_value=True),              patch.object(register, "_require_cognito"),              patch.object(register, "check_password_breach", return_value=0),              patch.object(register, "cognito_sign_up", side_effect=HTTPException(400, "Exists")),              patch.object(register, "record_lockout_failure") as record_lockout_failure,              patch.object(register, "enforce_lockout") as enforce_lockout,              patch.object(register, "rate_limit_password_recovery") as rate_limit_password_recovery,              patch.object(register, "audit_event") as audit_event:
+        with patch.object(register, "_cognito_available", return_value=True),              patch.object(register, "_require_cognito"),              patch.object(register, "check_password_breach", return_value=0),              patch.object(register, "cognito_sign_up", side_effect=HTTPException(409, "Exists")),              patch.object(register, "record_lockout_failure") as record_lockout_failure,              patch.object(register, "enforce_lockout") as enforce_lockout,              patch.object(register, "rate_limit_password_recovery") as rate_limit_password_recovery,              patch.object(register, "audit_event") as audit_event:
             result = run_async(register.register_start(
                 req,
                 RegisterStartReq(
@@ -338,7 +338,7 @@ class TestRegisterRoutes(unittest.TestCase):
 
     def test_register_start_is_generic_on_signup_failure(self):
         req = build_request()
-        with patch.object(register, "_cognito_available", return_value=True),              patch.object(register, "_require_cognito"),              patch.object(register, "check_password_breach", return_value=0),              patch.object(register, "cognito_sign_up", side_effect=HTTPException(400, "Exists")),              patch.object(register, "record_lockout_failure"):
+        with patch.object(register, "_cognito_available", return_value=True),              patch.object(register, "_require_cognito"),              patch.object(register, "check_password_breach", return_value=0),              patch.object(register, "cognito_sign_up", side_effect=HTTPException(409, "Exists")),              patch.object(register, "record_lockout_failure"):
             result = run_async(register.register_start(
                 req,
                 RegisterStartReq(

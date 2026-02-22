@@ -228,6 +228,20 @@ class TestMessagingRoutes(unittest.TestCase):
             ]
         }
 
+        with (
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(
+                messaging,
+                "_get_conversation_or_404",
+                return_value={"routing_mode": "helpdesk_bridge", "routing_group_id": "helpdesk-l1"},
+            ),
+            patch.object(messaging, "_is_helpdesk_group_member", side_effect=lambda gid, uid: uid == "agent-1"),
+        ):
+            messages = messaging.list_messages("c1", user_id="customer-1")
+
+        self.assertEqual(messages[0].sender_id, messaging.HELPDESK_MASKED_SENDER_ID)
+
     def test_list_conversation_gallery_filters_by_type_and_returns_cursor(self):
         tbl_parts = Mock()
         tbl_msgs = Mock()
@@ -257,57 +271,134 @@ class TestMessagingRoutes(unittest.TestCase):
             {"Items": []},
         ]
 
-with (
-    patch.object(messaging, "tbl_parts", tbl_parts),
-    patch.object(messaging, "tbl_msgs", tbl_msgs),
-    patch.object(
-        messaging,
-        "_get_conversation_or_404",
-        return_value={"routing_mode": "helpdesk_bridge", "routing_group_id": "helpdesk-l1"},
-    ),
-    patch.object(messaging, "_is_helpdesk_group_member", side_effect=lambda gid, uid: uid == "agent-1"),
-):
-    messages = messaging.list_messages("c1", user_id="customer-1")
+        with (
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+        ):
+            page = messaging.list_conversation_gallery("c1", type="image", user_id="user-1")
 
-self.assertEqual(messages[0].sender_id, messaging.HELPDESK_MASKED_SENDER_ID)
+        self.assertEqual(len(page.items), 1)
+        self.assertEqual(page.items[0].type, "image")
+        self.assertEqual(page.items[0].message_id, "m3")
+        self.assertIsNone(page.next_cursor)
 
+    def test_e2e_mid_thread_assignee_change_keeps_helpdesk_identity_for_end_user(self):
+        tbl_parts = Mock()
+        tbl_msgs = Mock()
+        tbl_parts.get_item.return_value = {"Item": {"status": "active"}}
+        tbl_parts.query.return_value = {"Items": []}
+        # agent-1 sent early, agent-2 claimed and replied later — end user sees both as "Helpdesk"
+        tbl_msgs.query.return_value = {
+            "Items": [
+                {
+                    "conversation_id": "c1",
+                    "message_id": "m2",
+                    "sender_id": "agent-2",
+                    "created_at": 20,
+                    "kind": "text",
+                    "text": "I can take over from here",
+                    "deleted_for": [],
+                    "reactions": {},
+                },
+                {
+                    "conversation_id": "c1",
+                    "message_id": "m1",
+                    "sender_id": "agent-1",
+                    "created_at": 10,
+                    "kind": "text",
+                    "text": "Hi, I will help you",
+                    "deleted_for": [],
+                    "reactions": {},
+                },
+            ]
+        }
 
-def test_e2e_mid_thread_assignee_change_keeps_helpdesk_identity_for_end_user(self):
-    tbl_parts = Mock()
-    tbl_msgs = Mock()
-    tbl_parts.get_item.return_value = {"Item": {"status": "active"}}
-    tbl_parts.query.return_value = {"Items": []}
-    # ... rest of your test ...
+        with (
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(
+                messaging,
+                "_get_conversation_or_404",
+                return_value={
+                    "routing_mode": "helpdesk_bridge",
+                    "routing_group_id": "helpdesk-l1",
+                    "routing_state": "assigned",
+                    "active_agent_user_id": "agent-2",
+                },
+            ),
+            patch.object(
+                messaging,
+                "_is_helpdesk_group_member",
+                side_effect=lambda gid, uid: uid in {"agent-1", "agent-2"},
+            ),
+        ):
+            messages = messaging.list_messages("c1", user_id="customer-1")
 
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[0].sender_id, messaging.HELPDESK_MASKED_SENDER_ID)
+        self.assertEqual(messages[1].sender_id, messaging.HELPDESK_MASKED_SENDER_ID)
 
-# --- gallery tests from main continue here ---
+    def test_list_conversation_gallery_paginates_across_sparse_matches(self):
+        tbl_parts = Mock()
+        tbl_msgs = Mock()
+        tbl_parts.get_item.return_value = {"Item": {"status": "active"}}
+        tbl_msgs.query.side_effect = [
+            {
+                "Items": [
+                    {
+                        "conversation_id": "c1",
+                        "message_id": "m3",
+                        "sender_id": "user-2",
+                        "created_at": 103,
+                        "kind": "text",
+                        "text": "hello",
+                    },
+                    {
+                        "conversation_id": "c1",
+                        "message_id": "m2",
+                        "sender_id": "user-2",
+                        "created_at": 102,
+                        "kind": "image",
+                        "image": {"url": "https://cdn.example.com/2.jpg"},
+                    },
+                ],
+                "LastEvaluatedKey": {"conversation_id": "c1", "message_id": "m2"},
+            },
+            {
+                "Items": [
+                    {
+                        "conversation_id": "c1",
+                        "message_id": "m1",
+                        "sender_id": "user-3",
+                        "created_at": 101,
+                        "kind": "image",
+                        "image": {"url": "https://cdn.example.com/1.jpg"},
+                    },
+                ]
+            },
+        ]
 
-with (
-    patch.object(messaging, "tbl_parts", tbl_parts),
-    patch.object(messaging, "tbl_msgs", tbl_msgs),
-):
-    page = messaging.list_conversation_gallery("c1", type="image", user_id="user-1")
+        with (
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+        ):
+            page = messaging.list_conversation_gallery("c1", type="image", limit=2, user_id="user-1")
 
-self.assertEqual(len(page.items), 1)
-self.assertEqual(page.items[0].type, "image")
-self.assertEqual(page.items[0].message_id, "m3")
-self.assertIsNone(page.next_cursor)
+        self.assertEqual([item.message_id for item in page.items], ["m2", "m1"])
+        self.assertIsNone(page.next_cursor)
 
-
-def test_list_conversation_gallery_paginates_across_sparse_matches(self):
-    tbl_parts = Mock()
-    tbl_msgs = Mock()
-    tbl_parts.get_item.return_value = {"Item": {"status": "active"}}
-    tbl_msgs.query.side_effect = [
-        {
+    def test_list_conversation_gallery_suppresses_revoked_and_deleted(self):
+        tbl_msgs = Mock()
+        tbl_msgs.query.return_value = {
             "Items": [
                 {
                     "conversation_id": "c1",
                     "message_id": "m3",
                     "sender_id": "user-2",
                     "created_at": 103,
-                    "kind": "text",
-                    "text": "hello",
+                    "kind": "image",
+                    "image": {"url": "https://cdn.example.com/3.jpg"},
+                    "revoked_at": 101,
                 },
                 {
                     "conversation_id": "c1",
@@ -316,216 +407,160 @@ def test_list_conversation_gallery_paginates_across_sparse_matches(self):
                     "created_at": 102,
                     "kind": "image",
                     "image": {"url": "https://cdn.example.com/2.jpg"},
+                    "deleted_for": ["user-1"],
                 },
-            ],
-            "LastEvaluatedKey": {"conversation_id": "c1", "message_id": "m2"},
-        },
-        {
-            "Items": [
                 {
                     "conversation_id": "c1",
                     "message_id": "m1",
-                    "sender_id": "user-3",
+                    "sender_id": "user-2",
                     "created_at": 101,
                     "kind": "image",
                     "image": {"url": "https://cdn.example.com/1.jpg"},
                 },
             ]
-        },
-    ]
+        }
 
-    with (
-        patch.object(messaging, "tbl_parts", tbl_parts),
-        patch.object(messaging, "tbl_msgs", tbl_msgs),
-    ):
-        page = messaging.list_conversation_gallery("c1", type="image", limit=2, user_id="user-1")
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+        ):
+            page = messaging.list_conversation_gallery("c1", type="image", user_id="user-1")
 
-    self.assertEqual([item.message_id for item in page.items], ["m2", "m1"])
-    self.assertIsNone(page.next_cursor)
+        self.assertEqual([item.message_id for item in page.items], ["m1"])
 
+    def test_list_messages_masks_helpdesk_agents_for_end_users(self):
+        tbl_parts = Mock()
+        tbl_msgs = Mock()
+        tbl_parts.get_item.return_value = {"Item": {"status": "active"}}
+        tbl_parts.query.return_value = {"Items": []}
 
-# ... keep all other main gallery tests unchanged ...
-
-
-def test_list_conversation_gallery_suppresses_revoked_and_deleted(self):
-    tbl_msgs = Mock()
-    tbl_msgs.query.return_value = {
-        "Items": [
-            {
-                "conversation_id": "c1",
-                "message_id": "m3",
-                "sender_id": "user-2",
-                "created_at": 103,
-                "kind": "image",
-                "image": {"url": "https://cdn.example.com/3.jpg"},
-                "revoked_at": 101,
-            },
-            {
-                "conversation_id": "c1",
-                "message_id": "m2",
-                "sender_id": "user-2",
-                "created_at": 102,
-                "kind": "image",
-                "image": {"url": "https://cdn.example.com/2.jpg"},
-                "deleted_for": ["user-1"],
-            },
-            {
-                "conversation_id": "c1",
-                "message_id": "m1",
-                "sender_id": "user-2",
-                "created_at": 101,
-                "kind": "image",
-                "image": {"url": "https://cdn.example.com/1.jpg"},
-            },
-        ]
-    }
-
-    with (
-        patch.object(messaging, "require_participant_active"),
-        patch.object(messaging, "tbl_msgs", tbl_msgs),
-    ):
-        page = messaging.list_conversation_gallery("c1", type="image", user_id="user-1")
-
-    self.assertEqual([item.message_id for item in page.items], ["m1"])
-
-
-# --- helpdesk tests from your branch continue here (keep them) ---
-
-def test_list_messages_masks_helpdesk_agents_for_end_users(self):
-    tbl_parts = Mock()
-    tbl_msgs = Mock()
-    tbl_parts.get_item.return_value = {"Item": {"status": "active"}}
-    tbl_parts.query.return_value = {"Items": []}
-
-    tbl_msgs.query.return_value = {
-        "Items": [
-            {
-                "conversation_id": "c1",
-                "message_id": "m2",
-                "sender_id": "agent-2",
-                "created_at": 20,
-                "kind": "text",
-                "text": "I can take over",
-                "deleted_for": [],
-                "reactions": {},
-            },
-            {
-                "conversation_id": "c1",
-                "message_id": "m1",
-                "sender_id": "agent-1",
-                "created_at": 10,
-                "kind": "text",
-                "text": "I will help you",
-                "deleted_for": [],
-                "reactions": {},
-            },
-        ]
-    }
-
-    with (
-        patch.object(messaging, "tbl_parts", tbl_parts),
-        patch.object(messaging, "tbl_msgs", tbl_msgs),
-        patch.object(
-            messaging,
-            "_get_conversation_or_404",
-            return_value={
-                "routing_mode": "helpdesk_bridge",
-                "routing_group_id": "helpdesk-l1",
-                "routing_state": "assigned",
-            },
-        ),
-        patch.object(messaging, "_is_helpdesk_group_member", side_effect=lambda gid, uid: uid in {"agent-1", "agent-2"}),
-    ):
-        messages = messaging.list_messages("c1", user_id="customer-1")
-
-    self.assertEqual(
-        [m.sender_id for m in messages],
-        [messaging.HELPDESK_MASKED_SENDER_ID, messaging.HELPDESK_MASKED_SENDER_ID],
-    )
-
-
-def test_list_messages_retains_helpdesk_agent_sender_for_helpdesk_agents(self):
-    tbl_parts = Mock()
-    tbl_msgs = Mock()
-    tbl_parts.get_item.return_value = {"Item": {"status": "active"}}
-    tbl_parts.query.return_value = {"Items": []}
-
-    tbl_msgs.query.return_value = {
-        "Items": [
-            {
-                "conversation_id": "c1",
-                "message_id": "m1",
-                "sender_id": "agent-1",
-                "created_at": 10,
-                "kind": "text",
-                "text": "hello",
-                "deleted_for": [],
-                "reactions": {},
-            }
-        ]
-    }
-
-    with (
-        patch.object(messaging, "tbl_parts", tbl_parts),
-        patch.object(messaging, "tbl_msgs", tbl_msgs),
-        patch.object(
-            messaging,
-            "_get_conversation_or_404",
-            return_value={"routing_mode": "helpdesk_bridge", "routing_group_id": "helpdesk-l1"},
-        ),
-        patch.object(messaging, "_is_helpdesk_group_member", side_effect=lambda gid, uid: uid in {"agent-1", "agent-2"}),
-    ):
-        messages = messaging.list_messages("c1", user_id="agent-2")
-
-    self.assertEqual(messages[0].sender_id, "agent-1")
-
-
-def test_fetch_events_projects_helpdesk_sender_for_end_users(self):
-    with (
-        patch.object(
-            messaging,
-            "_ddb_fetch_events",
-            return_value=[
+        tbl_msgs.query.return_value = {
+            "Items": [
                 {
-                    "event_id": "e1",
-                    "type": "message:new",
                     "conversation_id": "c1",
-                    "payload": {
-                        "message": {
-                            "conversation_id": "c1",
-                            "message_id": "m1",
-                            "sender_id": "agent-1",
-                        }
-                    },
-                }
-            ],
-        ),
-        patch.object(
-            messaging,
-            "_get_message_or_404",
-            return_value={
-                "conversation_id": "c1",
-                "message_id": "m1",
-                "sender_id": "agent-1",
-                "created_at": 10,
-                "kind": "text",
-                "text": "hello",
-                "reactions": {},
-            },
-        ),
-        patch.object(
-            messaging,
-            "_get_conversation_or_404",
-            return_value={"routing_mode": "helpdesk_bridge", "routing_group_id": "helpdesk-l1"},
-        ),
-        patch.object(messaging, "_is_helpdesk_group_member", side_effect=lambda gid, uid: uid == "agent-1"),
-    ):
-        resp = messaging.fetch_events(user_id="customer-1")
+                    "message_id": "m2",
+                    "sender_id": "agent-2",
+                    "created_at": 20,
+                    "kind": "text",
+                    "text": "I can take over",
+                    "deleted_for": [],
+                    "reactions": {},
+                },
+                {
+                    "conversation_id": "c1",
+                    "message_id": "m1",
+                    "sender_id": "agent-1",
+                    "created_at": 10,
+                    "kind": "text",
+                    "text": "I will help you",
+                    "deleted_for": [],
+                    "reactions": {},
+                },
+            ]
+        }
 
-    self.assertEqual(
-        resp["events"][0]["payload"]["message"]["sender_id"],
-        messaging.HELPDESK_MASKED_SENDER_ID,
-    )
+        with (
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(
+                messaging,
+                "_get_conversation_or_404",
+                return_value={
+                    "routing_mode": "helpdesk_bridge",
+                    "routing_group_id": "helpdesk-l1",
+                    "routing_state": "assigned",
+                },
+            ),
+            patch.object(messaging, "_is_helpdesk_group_member", side_effect=lambda gid, uid: uid in {"agent-1", "agent-2"}),
+        ):
+            messages = messaging.list_messages("c1", user_id="customer-1")
+
+        self.assertEqual(
+            [m.sender_id for m in messages],
+            [messaging.HELPDESK_MASKED_SENDER_ID, messaging.HELPDESK_MASKED_SENDER_ID],
+        )
+
+    def test_list_messages_retains_helpdesk_agent_sender_for_helpdesk_agents(self):
+        tbl_parts = Mock()
+        tbl_msgs = Mock()
+        tbl_parts.get_item.return_value = {"Item": {"status": "active"}}
+        tbl_parts.query.return_value = {"Items": []}
+
+        tbl_msgs.query.return_value = {
+            "Items": [
+                {
+                    "conversation_id": "c1",
+                    "message_id": "m1",
+                    "sender_id": "agent-1",
+                    "created_at": 10,
+                    "kind": "text",
+                    "text": "hello",
+                    "deleted_for": [],
+                    "reactions": {},
+                }
+            ]
+        }
+
+        with (
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(
+                messaging,
+                "_get_conversation_or_404",
+                return_value={"routing_mode": "helpdesk_bridge", "routing_group_id": "helpdesk-l1"},
+            ),
+            patch.object(messaging, "_is_helpdesk_group_member", side_effect=lambda gid, uid: uid in {"agent-1", "agent-2"}),
+        ):
+            messages = messaging.list_messages("c1", user_id="agent-2")
+
+        self.assertEqual(messages[0].sender_id, "agent-1")
+
+    def test_fetch_events_projects_helpdesk_sender_for_end_users(self):
+        with (
+            patch.object(
+                messaging,
+                "_ddb_fetch_events",
+                return_value=[
+                    {
+                        "event_id": "e1",
+                        "type": "message:new",
+                        "conversation_id": "c1",
+                        "payload": {
+                            "message": {
+                                "conversation_id": "c1",
+                                "message_id": "m1",
+                                "sender_id": "agent-1",
+                            }
+                        },
+                    }
+                ],
+            ),
+            patch.object(
+                messaging,
+                "_get_message_or_404",
+                return_value={
+                    "conversation_id": "c1",
+                    "message_id": "m1",
+                    "sender_id": "agent-1",
+                    "created_at": 10,
+                    "kind": "text",
+                    "text": "hello",
+                    "reactions": {},
+                },
+            ),
+            patch.object(
+                messaging,
+                "_get_conversation_or_404",
+                return_value={"routing_mode": "helpdesk_bridge", "routing_group_id": "helpdesk-l1"},
+            ),
+            patch.object(messaging, "_is_helpdesk_group_member", side_effect=lambda gid, uid: uid == "agent-1"),
+        ):
+            resp = messaging.fetch_events(user_id="customer-1")
+
+        self.assertEqual(
+            resp["events"][0]["payload"]["message"]["sender_id"],
+            messaging.HELPDESK_MASKED_SENDER_ID,
+        )
 
 
     def test_send_text_message_success_records_usage_once(self):
@@ -2624,7 +2659,11 @@ def test_fetch_events_projects_helpdesk_sender_for_end_users(self):
         tbl_views = Mock()
         with (
             patch.object(messaging, "require_participant_active"),
-            patch.object(messaging, "_get_message_or_404"),
+            patch.object(
+                messaging,
+                "_get_message_or_404",
+                return_value={"message_id": "m1", "sender_id": "other-user", "kind": "text"},
+            ),
             patch.object(messaging, "tbl_views", tbl_views),
             patch.object(messaging, "fanout_event_to_conversation"),
             patch.object(messaging, "now_ts", return_value=10),

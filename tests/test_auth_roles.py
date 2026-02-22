@@ -51,25 +51,33 @@ def test_get_authenticated_user_role_reads_dev_header() -> None:
 
 
 def test_get_authenticated_user_role_reads_jwt_role_claim() -> None:
-    object.__setattr__(S, "root_user_sub", "user-1")
-    token = _encode_payload({"sub": "user-1", "role": "root"})
-    req = SimpleNamespace(headers={"authorization": f"Bearer {token}"})
-    assert run_async(deps.get_authenticated_user_role(req)) == Role.ROOT
+    original = S.root_user_sub
+    try:
+        object.__setattr__(S, "root_user_sub", "user-1")
+        token = _encode_payload({"sub": "user-1", "role": "root"})
+        req = SimpleNamespace(headers={"authorization": f"Bearer {token}"})
+        assert run_async(deps.get_authenticated_user_role(req)) == Role.ROOT
+    finally:
+        object.__setattr__(S, "root_user_sub", original)
 
 
 def test_get_authenticated_user_role_rejects_root_claim_for_other_subject() -> None:
-    object.__setattr__(S, "root_user_sub", "actual-root")
-    token = _encode_payload({"sub": "user-1", "role": "root"})
-    req = SimpleNamespace(headers={"authorization": f"Bearer {token}"})
+    original = S.root_user_sub
     try:
-        run_async(deps.get_authenticated_user_role(req))
-        assert False, "expected exception"
-    except Exception as exc:
-        from fastapi import HTTPException
+        object.__setattr__(S, "root_user_sub", "actual-root")
+        token = _encode_payload({"sub": "user-1", "role": "root"})
+        req = SimpleNamespace(headers={"authorization": f"Bearer {token}"})
+        try:
+            run_async(deps.get_authenticated_user_role(req))
+            assert False, "expected exception"
+        except Exception as exc:
+            from fastapi import HTTPException
 
-        assert isinstance(exc, HTTPException)
-        assert exc.status_code == 403
-        assert exc.detail["code"] == "role_required"
+            assert isinstance(exc, HTTPException)
+            assert exc.status_code == 403
+            assert exc.detail["code"] == "role_required"
+    finally:
+        object.__setattr__(S, "root_user_sub", original)
 
 
 def test_get_authenticated_user_role_prefers_highest_privilege_in_roles_claim() -> None:

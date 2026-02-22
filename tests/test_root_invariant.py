@@ -8,6 +8,14 @@ from app.auth.roles import Role
 from app.core.settings import S
 
 
+@pytest.fixture(autouse=True)
+def restore_root_user_sub():
+    """Restore S.root_user_sub after each test that may mutate it."""
+    original = S.root_user_sub
+    yield
+    object.__setattr__(S, "root_user_sub", original)
+
+
 def test_validate_root_user_sub_config_rejects_missing() -> None:
     object.__setattr__(S, "root_user_sub", "")
     with pytest.raises(RuntimeError):

@@ -1429,6 +1429,7 @@ class TestFileManagerService(unittest.TestCase):
             patch.object(filemanager, "require_not_exists"),
             patch.object(filemanager, "_table") as table_factory,
             patch.object(filemanager, "_s3") as s3,
+            patch.object(filemanager, "S", SimpleNamespace(dev_mode=False)),
         ):
             table = Mock()
             table_factory.return_value = table

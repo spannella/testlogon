@@ -42,8 +42,15 @@ def enable_cognito() -> None:
     object.__setattr__(S, "cognito_region", "us-east-1")
 
 
-def test_auth_fallback_allows_x_user_sub() -> None:
+@pytest.fixture(autouse=True)
+def reset_cognito():
+    """Ensure Cognito settings are disabled before and after each test."""
     disable_cognito()
+    yield
+    disable_cognito()
+
+
+def test_auth_fallback_allows_x_user_sub() -> None:
     req = build_request(headers={"x-user-sub": "user-123"})
     assert run_async(deps.get_authenticated_user_sub(req)) == "user-123"
 
