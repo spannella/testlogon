@@ -6,6 +6,12 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 cd "${REPO_ROOT}"
 
+# Prepend the project venv (if present) so moto_server and other tools are
+# found without needing a system-wide or --user pip install.
+if [[ -d "${REPO_ROOT}/.venv/bin" ]]; then
+  export PATH="${REPO_ROOT}/.venv/bin:${PATH}"
+fi
+
 RUN_DIR="${REPO_ROOT}/.local/run"
 TOOLS_DIR="${REPO_ROOT}/.local/tools"
 LOG_DIR="${REPO_ROOT}/.local/logs"
