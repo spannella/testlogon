@@ -189,19 +189,19 @@ function ImagePreview({ file, url, onDownload }: { file: FileEntry; url: string;
 function PdfPreview({ file, url, onDownload }: { file: FileEntry; url: string; onDownload: (file: FileEntry) => void }) {
   const [page, setPage] = useState(1);
   const [zoom, setZoom] = useState(100);
-  const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
+  const loadedRef = useRef(false);
 
   useEffect(() => {
-    setLoaded(false);
+    loadedRef.current = false;
     setFailed(false);
     const timeout = window.setTimeout(() => {
-      if (!loaded) {
+      if (!loadedRef.current) {
         setFailed(true);
       }
     }, 8000);
     return () => window.clearTimeout(timeout);
-  }, [url, page, zoom, loaded]);
+  }, [url, page, zoom]);
 
   if ((file.size ?? 0) > PDF_PREVIEW_MAX_BYTES) {
     return <UnsupportedPreview file={file} onDownload={onDownload} reason="too_large" />;
@@ -211,7 +211,7 @@ function PdfPreview({ file, url, onDownload }: { file: FileEntry; url: string; o
     return (
       <div className="flex max-w-md flex-col items-center gap-3 text-center">
         <UnsupportedPreview file={file} onDownload={onDownload} reason="parse_failed" />
-        <Button variant="ghost" size="sm" onClick={() => { setFailed(false); setLoaded(false); }}>
+        <Button variant="ghost" size="sm" onClick={() => { setFailed(false); }}>
           Retry preview
         </Button>
       </div>
@@ -248,7 +248,7 @@ function PdfPreview({ file, url, onDownload }: { file: FileEntry; url: string; o
         src={src}
         title={file.name}
         className="h-full min-h-[28rem] w-full rounded-lg border"
-        onLoad={() => setLoaded(true)}
+        onLoad={() => { loadedRef.current = true; }}
       />
     </div>
   );

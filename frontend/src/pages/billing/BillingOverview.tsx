@@ -24,7 +24,11 @@ function formatCents(cents: number, currency = "USD"): string {
   }).format(cents / 100);
 }
 
-export function BillingOverview() {
+interface BillingOverviewProps {
+  onTabChange?: (tab: string) => void;
+}
+
+export function BillingOverview({ onTabChange }: BillingOverviewProps) {
   const queryClient = useQueryClient();
   const [payOpen, setPayOpen] = useState(false);
 
@@ -218,11 +222,7 @@ export function BillingOverview() {
               <button
                 key={link.tab}
                 className="flex items-center justify-between rounded-lg border px-4 py-3 text-sm font-medium transition-colors hover:bg-accent"
-                onClick={() => {
-                  // Find the tab trigger and click it
-                  const trigger = document.querySelector(`[data-state][value="${link.tab}"]`);
-                  if (trigger instanceof HTMLElement) trigger.click();
-                }}
+                onClick={() => onTabChange?.(link.tab)}
               >
                 {link.label}
                 <ArrowRight className="h-4 w-4 text-muted-foreground" />

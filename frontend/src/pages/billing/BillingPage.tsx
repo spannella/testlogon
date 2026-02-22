@@ -48,7 +48,7 @@ export default function BillingPage() {
           <UsageBillingOverview />
         </TabsContent>
         <TabsContent value="overview">
-          <BillingOverview />
+          <BillingOverview onTabChange={setTab} />
         </TabsContent>
         <TabsContent value="methods">
           <PaymentMethods />

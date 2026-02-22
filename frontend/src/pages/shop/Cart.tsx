@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -52,7 +52,7 @@ export function Cart() {
   });
 
   const carts = Array.isArray(cartsQuery.data) ? cartsQuery.data : [];
-  const activeCarts = carts.filter((c) => c.status === "active");
+  const activeCarts = carts.filter((c) => c.status === "OPEN");
 
   // Auto-select first active cart
   const cartId = selectedCartId ?? (activeCarts.length > 0 ? activeCarts[0]!.cart_id : null);
@@ -80,6 +80,22 @@ export function Cart() {
       toast.error("Failed to create cart");
     },
   });
+
+  // Auto-create a default cart if none exists
+  const autoCreatingRef = useRef(false);
+  useEffect(() => {
+    if (cartsQuery.isSuccess && activeCarts.length === 0 && !autoCreatingRef.current) {
+      autoCreatingRef.current = true;
+      createCart()
+        .then((data) => {
+          queryClient.invalidateQueries({ queryKey: ["carts"] });
+          setSelectedCartId(data.cart_id);
+        })
+        .catch(() => {
+          autoCreatingRef.current = false;
+        });
+    }
+  }, [cartsQuery.isSuccess, activeCarts.length, queryClient]);
 
   const updateQtyMutation = useMutation({
     mutationFn: ({ sku, quantity }: { sku: string; quantity: number }) =>

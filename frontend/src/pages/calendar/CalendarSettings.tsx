@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Settings2, Loader2, Trash2 } from "lucide-react";
+import { HelpCircle, Settings2, Loader2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getCalendars, updateCalendar, deleteCalendar } from "@/api/endpoints/calendar";
 import type { Calendar, WorkingHoursWindow } from "@/api/types";
 
@@ -151,7 +152,7 @@ export function CalendarSettings() {
       <EmptyState
         icon={<Settings2 className="h-6 w-6" />}
         title="No calendars"
-        description="Create a calendar first to configure its settings"
+        description="Use the Calendars tab to create your first calendar, then return here to configure its settings."
       />
     );
   }
@@ -197,7 +198,18 @@ export function CalendarSettings() {
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="buf-before">Buffer before (min)</Label>
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor="buf-before">Buffer before (min)</Label>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <HelpCircle className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  Blocks out this many minutes <strong>before</strong> each event. Useful for
+                  travel or preparation time — no other events can be booked in this window.
+                </TooltipContent>
+              </Tooltip>
+            </div>
             <Input
               id="buf-before"
               type="number"
@@ -207,7 +219,18 @@ export function CalendarSettings() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="buf-after">Buffer after (min)</Label>
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor="buf-after">Buffer after (min)</Label>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <HelpCircle className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent className="max-w-xs">
+                  Blocks out this many minutes <strong>after</strong> each event. Useful for
+                  wrap-up, note-taking, or recovery time between meetings.
+                </TooltipContent>
+              </Tooltip>
+            </div>
             <Input
               id="buf-after"
               type="number"

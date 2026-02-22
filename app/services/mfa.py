@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import io
 import os
 import secrets
 import logging
@@ -153,13 +155,22 @@ def totp_begin_enroll(user_sub: str, label: Optional[str]) -> Dict[str, Any]:
     issuer = "YourApp"
     name = f"{user_sub[:8]}@{issuer}"
     otpauth_uri = pyotp.TOTP(secret_b32).provisioning_uri(name=name, issuer_name=issuer)
+    try:
+        import qrcode  # type: ignore
+        import qrcode.image.svg  # type: ignore
+        qr_img = qrcode.make(otpauth_uri, image_factory=qrcode.image.svg.SvgFillImage)
+        buf = io.BytesIO()
+        qr_img.save(buf)
+        qr_code_uri = "data:image/svg+xml;base64," + base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        qr_code_uri = otpauth_uri
     r = T.totp.query(KeyConditionExpression=Key("user_sub").eq(user_sub))
     enabled_count = sum(1 for d in r.get("Items", []) if d.get("enabled", False))
     codes: List[str] = []
     if enabled_count == 0:
         codes = new_recovery_codes(10)
         store_recovery_codes(user_sub, "totp", codes)
-    return {"device_id": device_id, "otpauth_uri": otpauth_uri, "recovery_codes": codes}
+    return {"device_id": device_id, "qr_code_uri": qr_code_uri, "secret": secret_b32, "recovery_codes": codes}
 
 def totp_confirm_enroll(user_sub: str, device_id: str, totp_code: str) -> None:
     _need_pyotp()

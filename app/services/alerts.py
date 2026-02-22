@@ -24,6 +24,25 @@ from app.services.profile import get_profile_identity
 from app.services.push import send_push_for_alert
 from app.services.ttl import with_ttl
 
+# Events that are too high-frequency or low-importance to persist as user-visible alerts.
+# They still flow through metrics and SIEM; they just never appear in the alert centre.
+_NO_ALERT_EVENTS: frozenset = frozenset({
+    # Presence / heartbeat — fires on every active client poll
+    "messaging_presence_heartbeat_processed",
+    # Routine in-app messaging activity (not security-relevant)
+    "messaging_message_viewed",
+    "messaging_conversation_read",
+    "messaging_message_reaction",
+    # Session lifecycle churn — fires on every page load / token refresh
+    "ui_session_start",
+    "ui_session_refresh",
+    # Granular file-browser activity
+    "filemgr_file_previewed",
+    "filemgr_preview_hover_play_start",
+    "filemgr_preview_hover_play_failure",
+    "filemgr_client_remembered_password_used",
+})
+
 ALERT_EVENT_TYPES: List[str] = [
     "login_success","login_failure","mfa_success","mfa_failure","challenge_created","challenge_revoked",
     "challenge_failed","api_key_created","api_key_revoked","api_key_ip_rules_updated","session_revoked",
@@ -476,10 +495,12 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
             "device_revoke": "Device trust revoked",
         }
         title = pretty.get(event, event.replace("_", " "))
-        wr = write_alert(user_sub, event=event, outcome=outcome, title=title, details={**payload, "alert_type": alert_type})
-        alert_id = (wr or {}).get("alert_id", "")
-        send_push_for_alert(user_sub, alert_type, title, f"{event} ({outcome})", alert_id or "")
-        webhook_result = send_alert_webhook(payload, alert_type=alert_type, alert_id=alert_id or "")
+        alert_id = ""
+        if event not in _NO_ALERT_EVENTS:
+            wr = write_alert(user_sub, event=event, outcome=outcome, title=title, details={**payload, "alert_type": alert_type})
+            alert_id = (wr or {}).get("alert_id", "")
+            send_push_for_alert(user_sub, alert_type, title, f"{event} ({outcome})", alert_id)
+        webhook_result = send_alert_webhook(payload, alert_type=alert_type, alert_id=alert_id)
         siem_result = send_siem_event(payload)
 
         delivery_failures: List[Dict[str, Any]] = []
