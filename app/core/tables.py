@@ -29,6 +29,7 @@ class Tables:
     shopping_cart: Any
     catalog: Any
     subscriptions: Any
+    projects: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -52,4 +53,5 @@ T = Tables(
     shopping_cart=ddb.Table(S.shopping_cart_table_name),
     catalog=ddb.Table(S.catalog_table_name),
     subscriptions=ddb.Table(S.subscriptions_table_name),
+    projects=ddb.Table(S.projects_table_name),
 )

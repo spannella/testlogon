@@ -4,7 +4,10 @@ The canonical API contract source for this repository is:
 
 - `docs/swagger.json` (FastAPI OpenAPI artifact)
 
-For messaging changes, treat this file as the source of truth for request and response shapes. Frontend endpoint payloads and TypeScript models must match this contract.
+For messaging and projects changes, treat this file as the source of truth for request and response shapes. Frontend endpoint payloads and TypeScript models must match this contract.
+
+Companion docs:
+- `docs/project-api-contract.md` (human-readable projects endpoint examples)
 
 ## Workflow (temporary)
 

@@ -363,10 +363,41 @@ ONCE_MEDIA_CONFLICT_EVENTS = Counter(
     "Once-media consume conflict/race outcomes by media kind/cohort",
     ["media_kind", "cohort"],
 )
+PROJECT_COUNT = Gauge(
+    "project_count",
+    "Estimated project count in this process",
+)
+TRACKED_FILE_COUNT = Gauge(
+    "tracked_file_count",
+    "Estimated tracked file count in this process",
+)
+RECONCILE_FAILURES = Counter(
+    "reconcile_failures_total",
+    "Tracked file reconciliation failures",
+    ["provider", "reason"],
+)
+PROVIDER_LATENCY = Histogram(
+    "provider_latency_seconds",
+    "Provider operation latency in seconds",
+    ["provider", "operation"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+)
+PROVIDER_FAILURE_STREAK = Gauge(
+    "provider_failure_streak",
+    "Current consecutive provider failures",
+    ["provider"],
+)
+PROVIDER_FAILURE_ALERTS = Counter(
+    "provider_failure_alerts_total",
+    "Provider repeated-failure alert triggers",
+    ["provider"],
+)
 
 _START_TIME = time.monotonic()
 _ACTIVE_SESSIONS_BY_USER: dict[str, int] = {}
 _ACTIVE_SESSIONS_COUNT = 0
+_PROJECT_COUNT_ESTIMATE = 0
+_TRACKED_FILE_COUNT_ESTIMATE = 0
 
 
 def _route_path(request: Request) -> str:
@@ -725,6 +756,8 @@ def record_filemgr_preview_queue_depth_delta(delta: int) -> None:
     if delta == 0:
         return
     FILEMGR_PREVIEW_QUEUE_DEPTH.inc(float(delta))
+
+
 def record_messaging_gallery_request(*, gallery_type: str, outcome: str) -> None:
     MESSAGING_GALLERY_REQUESTS.labels(
         type=(gallery_type or "unknown").lower(),
@@ -743,6 +776,39 @@ def record_messaging_gallery_cursor_page_depth(*, gallery_type: str, depth: int)
         max(0.0, float(depth))
     )
 
+
+def record_project_count_delta(delta: int) -> None:
+    global _PROJECT_COUNT_ESTIMATE
+    _PROJECT_COUNT_ESTIMATE = max(0, _PROJECT_COUNT_ESTIMATE + int(delta))
+    PROJECT_COUNT.set(float(_PROJECT_COUNT_ESTIMATE))
+
+
+def record_tracked_file_count_delta(delta: int) -> None:
+    global _TRACKED_FILE_COUNT_ESTIMATE
+    _TRACKED_FILE_COUNT_ESTIMATE = max(0, _TRACKED_FILE_COUNT_ESTIMATE + int(delta))
+    TRACKED_FILE_COUNT.set(float(_TRACKED_FILE_COUNT_ESTIMATE))
+
+
+def record_reconcile_failure(provider: str, reason: str) -> None:
+    RECONCILE_FAILURES.labels(
+        provider=(provider or "unknown").lower(),
+        reason=(reason or "unknown").lower(),
+    ).inc()
+
+
+def record_provider_latency(provider: str, operation: str, elapsed_seconds: float) -> None:
+    PROVIDER_LATENCY.labels(
+        provider=(provider or "unknown").lower(),
+        operation=(operation or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_provider_failure_streak(provider: str, streak: int) -> None:
+    PROVIDER_FAILURE_STREAK.labels(provider=(provider or "unknown").lower()).set(float(max(0, int(streak))))
+
+
+def record_provider_failure_alert(provider: str) -> None:
+    PROVIDER_FAILURE_ALERTS.labels(provider=(provider or "unknown").lower()).inc()
 
 def metrics_endpoint() -> Response:
     UPTIME_SECONDS.set(time.monotonic() - _START_TIME)

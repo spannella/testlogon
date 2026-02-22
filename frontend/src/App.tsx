@@ -14,6 +14,8 @@ const MagicLinkVerify = lazy(() => import("@/pages/MagicLinkVerify"));
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const MessagesPage = lazy(() => import("@/pages/messages/MessagesPage"));
 const FilesPage = lazy(() => import("@/pages/files/FilesPage"));
+const ProjectsPage = lazy(() => import("@/pages/projects/ProjectsPage"));
+const ProjectDetailPage = lazy(() => import("@/pages/projects/ProjectDetailPage"));
 const BillingPage = lazy(() => import("@/pages/billing/BillingPage"));
 const CalendarPage = lazy(() => import("@/pages/calendar/CalendarPage"));
 const CatalogPage = lazy(() => import("@/pages/shop/CatalogPage"));
@@ -52,6 +54,8 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="messages" element={<MessagesPage />} />
           <Route path="files" element={<FilesPage />} />
+          <Route path="projects" element={<ProjectsPage />} />
+          <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="billing" element={<BillingPage />} />
           <Route path="calendar" element={<CalendarPage />} />
           <Route path="shop" element={<CatalogPage />} />
