@@ -259,7 +259,9 @@ def store_profile_photo(
             content=content,
             content_type=content_type,
         )
-        return result["url"]
+        url = result.get("url")
+        if url:
+            return url
     safe_name = file_name.replace("/", "_")
     upload_dir = Path(__file__).resolve().parents[1] / "static" / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)

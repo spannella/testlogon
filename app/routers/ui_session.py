@@ -22,6 +22,7 @@ from app.services.sessions import (
     is_real_ui_session_id,
     load_challenge_or_401,
     maybe_finalize,
+    mint_access_token,
     require_ui_session,
     rotate_session_cookies,
     rotate_refresh_token,
@@ -142,6 +143,19 @@ async def ui_session_start(
         risk_score=anomaly_risk_score,
         refresh_ttl_seconds=high_risk_refresh_ttl,
     )
+    # Mint a short-lived access token cookie so MFA endpoints can identify the user
+    # during the challenge phase. get_authenticated_user_sub reads this cookie; without
+    # it the call would hit the Cognito check and raise 401 "Missing bearer token".
+    _chal_access = mint_access_token(user_sub, challenge_id)
+    if _chal_access:
+        response.set_cookie(
+            S.ui_access_token_cookie_name,
+            _chal_access,
+            max_age=S.session_challenge_ttl_seconds,
+            httponly=True,
+            secure=S.ui_cookie_secure,
+            samesite=S.ui_cookie_samesite,
+        )
     audit_event(
         "ui_session_start",
         user_sub,

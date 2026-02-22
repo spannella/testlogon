@@ -177,11 +177,11 @@ def _billing_sk(kind: str, identifier: str) -> str:
 
 
 def ensure_balance_row(user_sub: str) -> None:
-    ensure_balance_row_for_key(T.billing, "user_sub", user_sub, S.default_currency)
+    ensure_balance_row_for_key(T.billing, "pk", user_sub, S.default_currency)
 
 
 def apply_balance_delta(user_sub: str, delta: Dict[str, int]) -> None:
-    apply_balance_delta_for_key(T.billing, "user_sub", user_sub, delta, currency=S.default_currency)
+    apply_balance_delta_for_key(T.billing, "pk", user_sub, delta, currency=S.default_currency)
 
 
 def compute_due(balance_item: Dict[str, Any]) -> Dict[str, int]:
@@ -207,7 +207,7 @@ def new_ledger_entry(
     if ccbill_subscription_id:
         extra["ccbill_subscription_id"] = ccbill_subscription_id
     return new_ledger_entry_shared(
-        key_name="user_sub",
+        key_name="pk",
         key_value=user_sub,
         entry_type=entry_type,
         amount_cents=amount_cents,
@@ -219,7 +219,7 @@ def new_ledger_entry(
 
 
 def settle_or_reverse_ledger(user_sub: str, ledger_sk_value: str, new_state: str) -> None:
-    settle_or_reverse_ledger_shared(T.billing, "user_sub", user_sub, ledger_sk_value, new_state)
+    settle_or_reverse_ledger_shared(T.billing, "pk", user_sub, ledger_sk_value, new_state)
 
 
 def put_payment_record(
@@ -235,7 +235,7 @@ def put_payment_record(
     purchase_txn_id: Optional[str] = None,
 ) -> None:
     item = {
-        "user_sub": user_sub,
+        "pk": user_sub,
         "sk": _billing_sk("PAY", transaction_id),
         "transaction_id": transaction_id,
         "kind": kind,
@@ -264,7 +264,7 @@ def update_payment_status(user_sub: str, transaction_id: str, status: str, raw: 
         values[":r"] = _sanitize_ccbill_raw(raw)
         sets.append("#r = :r")
     T.billing.update_item(
-        Key={"user_sub": user_sub, "sk": _billing_sk("PAY", transaction_id)},
+        Key={"pk": user_sub, "sk": _billing_sk("PAY", transaction_id)},
         UpdateExpression="SET " + ", ".join(sets),
         ExpressionAttributeNames=names,
         ExpressionAttributeValues=values,
@@ -322,7 +322,7 @@ def upsert_subscription(
     interval: Optional[str] = None,
     raw: Optional[Dict[str, Any]] = None,
 ) -> None:
-    existing = T.billing.get_item(Key={"user_sub": user_sub, "sk": _billing_sk("SUB", subscription_id)}).get("Item") or {}
+    existing = T.billing.get_item(Key={"pk": user_sub, "sk": _billing_sk("SUB", subscription_id)}).get("Item") or {}
     status_lower = (status or "").lower()
     default_cancel_at_period_end = status_lower == "canceling"
     auto_renew_default, renewal_policy_default, cancel_default = renewal_fields(
@@ -347,7 +347,7 @@ def upsert_subscription(
     price_cents_value = price_cents if price_cents is not None else existing.get("price_cents", S.default_monthly_price_cents)
     interval_value = interval or existing.get("interval") or "month"
     item = existing or {
-        "user_sub": user_sub,
+        "pk": user_sub,
         "sk": _billing_sk("SUB", subscription_id),
         "subscription_id": subscription_id,
         "created_at": now_ts(),
@@ -377,22 +377,22 @@ def upsert_subscription(
 
 def list_payment_methods(user_sub: str) -> List[Dict[str, Any]]:
     resp = T.billing.query(
-        KeyConditionExpression="user_sub = :u AND begins_with(sk, :p)",
+        KeyConditionExpression="pk = :u AND begins_with(sk, :p)",
         ExpressionAttributeValues={":u": user_sub, ":p": "PM#"},
     )
     return resp.get("Items", [])
 
 
 def current_default_pm(user_sub: str) -> Optional[str]:
-    billing = T.billing.get_item(Key={"user_sub": user_sub, "sk": "BILLING"}).get("Item") or {}
+    billing = T.billing.get_item(Key={"pk": user_sub, "sk": "BILLING"}).get("Item") or {}
     return billing.get("default_payment_token_id")
 
 
 def set_default_pm(user_sub: str, token_id: Optional[str]) -> None:
-    existing = T.billing.get_item(Key={"user_sub": user_sub, "sk": "BILLING"}).get("Item")
+    existing = T.billing.get_item(Key={"pk": user_sub, "sk": "BILLING"}).get("Item")
     if not existing:
         T.billing.put_item(Item={
-            "user_sub": user_sub,
+            "pk": user_sub,
             "sk": "BILLING",
             "autopay_enabled": False,
             "currency": S.default_currency,
@@ -400,7 +400,7 @@ def set_default_pm(user_sub: str, token_id: Optional[str]) -> None:
         })
     else:
         T.billing.update_item(
-            Key={"user_sub": user_sub, "sk": "BILLING"},
+            Key={"pk": user_sub, "sk": "BILLING"},
             UpdateExpression="SET default_payment_token_id = :t",
             ExpressionAttributeValues={":t": token_id},
         )
@@ -496,12 +496,12 @@ def mark_webhook_processed(dedupe_key: str) -> bool:
     try:
         T.billing.put_item(
             Item={
-                "user_sub": "CCBILL_WEBHOOK",
+                "pk": "CCBILL_WEBHOOK",
                 "sk": dedupe_key,
                 "ts": now_ts(),
                 "ttl": now_ts() + 60 * 60 * 24 * 7,
             },
-            ConditionExpression="attribute_not_exists(user_sub)",
+            ConditionExpression="attribute_not_exists(pk)",
         )
         return True
     except ClientError as exc:
@@ -710,7 +710,7 @@ def pay_balance(
     request: Request,
 ) -> Dict[str, Any]:
     ensure_balance_row(user_sub)
-    bal = T.billing.get_item(Key={"user_sub": user_sub, "sk": "BALANCE"}).get("Item") or {}
+    bal = T.billing.get_item(Key={"pk": user_sub, "sk": "BALANCE"}).get("Item") or {}
     due = compute_due(bal)["due_settled_cents"]
     if due <= 0:
         return {"status": "no_settled_balance_due"}
@@ -732,7 +732,7 @@ def pay_balance(
 
 
 def _get_default_token_or_400(user_sub: str) -> str:
-    billing = T.billing.get_item(Key={"user_sub": user_sub, "sk": "BILLING"}).get("Item") or {}
+    billing = T.billing.get_item(Key={"pk": user_sub, "sk": "BILLING"}).get("Item") or {}
     token = billing.get("default_payment_token_id")
     if not token:
         raise HTTPException(400, "No default payment method set")

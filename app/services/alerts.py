@@ -224,10 +224,27 @@ def write_alert(user_sub: str, *, event: str, outcome: str, title: str, details:
 
     return {"alert_id": alert_id, "ts": ts}
 
+def _write_dev_log(path: str, entry: str) -> None:
+    try:
+        import os
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as f:
+            f.write(entry)
+    except Exception:
+        pass
+
+
 def send_alert_email(to_emails: List[str], subject: str, body_text: str) -> None:
-    if not S.alerts_email_enabled or not S.alerts_from_email:
-        return
     if not to_emails:
+        return
+    if S.dev_mode:
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for addr in to_emails:
+            entry = f"[{ts}] ALERT_EMAIL TO={addr}\n  Subject: {subject}\n  Body: {body_text}\n\n"
+            _write_dev_log(S.dev_email_log, entry)
+        return
+    if not S.alerts_email_enabled or not S.alerts_from_email:
         return
     try:
         import boto3
@@ -241,9 +258,16 @@ def send_alert_email(to_emails: List[str], subject: str, body_text: str) -> None
         pass
 
 def send_alert_sms(to_numbers: List[str], body_text: str) -> None:
-    if not S.alerts_sms_enabled:
-        return
     if not to_numbers:
+        return
+    if S.dev_mode:
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        for n in to_numbers:
+            entry = f"[{ts}] ALERT_SMS TO={n}\n  Body: {body_text}\n\n"
+            _write_dev_log(S.dev_sms_log, entry)
+        return
+    if not S.alerts_sms_enabled:
         return
     try:
         sns = sns_client()

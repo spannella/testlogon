@@ -75,7 +75,7 @@ def schedule_ccbill_dunning(
     ts = now_ts()
     next_ts = next_attempt_ts or ts
     item = {
-        "user_sub": user_sub,
+        "pk": user_sub,
         "sk": _dunning_sk(next_ts),
         "provider": "ccbill",
         "amount_cents": int(amount_cents),
@@ -118,7 +118,7 @@ def schedule_autopay_disabled_notice(user_id: str, provider: str) -> None:
 
 
 def schedule_ccbill_autopay_disabled_notice(user_sub: str) -> None:
-    bal = T.billing.get_item(Key={"user_sub": user_sub, "sk": "BALANCE"}).get("Item") or {}
+    bal = T.billing.get_item(Key={"pk": user_sub, "sk": "BALANCE"}).get("Item") or {}
     due = compute_due(bal)
     due_cents = int(due.get("due_settled_cents", 0))
     if due_cents <= 0:
@@ -170,13 +170,7 @@ def _scan_dunning_items(limit: int) -> List[Dict[str, Any]]:
 
 
 def _update_dunning(item: Dict[str, Any], *, status: str, retry_count: int, next_attempt_ts: Optional[int] = None) -> None:
-    key: Dict[str, Any] = {"sk": item["sk"]}
-    if "pk" in item:
-        key["pk"] = item["pk"]
-        key_name = "pk"
-    else:
-        key["user_sub"] = item["user_sub"]
-        key_name = "user_sub"
+    key: Dict[str, Any] = {"sk": item["sk"], "pk": item["pk"]}
     values = {":s": status, ":u": now_ts(), ":r": retry_count}
     expr = "SET #s = :s, updated_at = :u, retry_count = :r"
     if next_attempt_ts is not None:
@@ -230,8 +224,8 @@ def process_dunning_queue() -> None:
             pk = item.get("pk")
             if isinstance(pk, str) and pk.startswith("USER#"):
                 user_id = pk.split("USER#", 1)[1]
-        if "user_sub" in item:
-            user_sub = item.get("user_sub")
+            elif isinstance(pk, str):
+                user_sub = pk
 
         if provider == "stripe" and user_id:
             billing = ddb_get(T.billing, user_pk(user_id), "BILLING") or {}
@@ -254,7 +248,7 @@ def process_dunning_queue() -> None:
                 _update_dunning(item, status="pending", retry_count=retry_count + 1, next_attempt_ts=next_ts)
                 audit_event("billing_dunning_retry_scheduled", user_id, None, outcome="failure", provider="stripe")
         elif provider == "ccbill" and user_sub:
-            billing = T.billing.get_item(Key={"user_sub": user_sub, "sk": "BILLING"}).get("Item") or {}
+            billing = T.billing.get_item(Key={"pk": user_sub, "sk": "BILLING"}).get("Item") or {}
             if not billing.get("autopay_enabled", False):
                 audit_event("billing_dunning_autopay_disabled", user_sub, None, outcome="info", provider="ccbill")
                 next_ts = now_ts() + schedule[min(retry_count, len(schedule) - 1)]

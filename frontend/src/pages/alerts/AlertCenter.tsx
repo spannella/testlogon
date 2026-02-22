@@ -236,7 +236,7 @@ export function AlertCenter() {
                         </p>
                         {!isExpanded && alert.details && (
                           <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                            {alert.details}
+                            {formatAlertDetails(alert.details)}
                           </p>
                         )}
                       </div>
@@ -252,9 +252,9 @@ export function AlertCenter() {
 
                     {/* Expanded details */}
                     {isExpanded && alert.details && (
-                      <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">
-                        {alert.details}
-                      </p>
+                      <pre className="mt-2 whitespace-pre-wrap break-all text-xs text-muted-foreground">
+                        {JSON.stringify(alert.details, null, 2)}
+                      </pre>
                     )}
                   </div>
 
@@ -298,6 +298,16 @@ export function AlertCenter() {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────
+
+function formatAlertDetails(details: Record<string, unknown>): string {
+  if (details.ip) return `IP: ${details.ip}`;
+  const skip = new Set(["user_sub", "ts", "event", "outcome", "alert_type"]);
+  const parts = Object.entries(details)
+    .filter(([k, v]) => !skip.has(k) && v != null)
+    .slice(0, 2)
+    .map(([k, v]) => `${k}: ${v}`);
+  return parts.join(", ");
+}
 
 function formatAlertDate(ts: number): string {
   const date = new Date(ts * 1000);

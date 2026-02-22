@@ -33,6 +33,16 @@ function formatCents(cents: number, currency = "USD"): string {
   }).format(cents / 100);
 }
 
+function formatAlertDetails(details: Record<string, unknown>): string {
+  if (details.ip) return `IP: ${details.ip}`;
+  const skip = new Set(["user_sub", "ts", "event", "outcome", "alert_type"]);
+  const parts = Object.entries(details)
+    .filter(([k, v]) => !skip.has(k) && v != null)
+    .slice(0, 2)
+    .map(([k, v]) => `${k}: ${v}`);
+  return parts.join(", ");
+}
+
 function relativeTime(ts: number): string {
   const now = Date.now();
   const diff = now - ts * 1000;
@@ -297,7 +307,7 @@ export default function Dashboard() {
                       {!alert.read_at && <Badge variant="default" className="h-4 px-1 text-[10px]">New</Badge>}
                     </div>
                     {alert.details && (
-                      <p className="text-xs text-muted-foreground truncate">{alert.details}</p>
+                      <p className="text-xs text-muted-foreground truncate">{formatAlertDetails(alert.details)}</p>
                     )}
                     <p className="text-[11px] text-muted-foreground">{relativeTime(alert.ts)}</p>
                   </div>

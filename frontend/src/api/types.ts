@@ -359,7 +359,7 @@ export interface Alert {
   alert_id: string;
   event: string;
   title: string;
-  details?: string;
+  details?: Record<string, unknown>;
   delivered?: Record<string, boolean>;
   read_at?: number;
   ts: number;

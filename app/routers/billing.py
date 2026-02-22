@@ -148,6 +148,8 @@ def ensure_stripe_configured() -> None:
     if not S.stripe_secret_key:
         raise HTTPException(501, "Stripe is not configured")
     stripe.api_key = S.stripe_secret_key
+    if S.stripe_api_base:
+        stripe.api_base = S.stripe_api_base
 
 
 def build_return_url(req: Request, fallback_query: str) -> str:

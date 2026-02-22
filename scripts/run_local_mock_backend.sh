@@ -62,4 +62,9 @@ PYCODE
 ensure_fastapi_multipart_dependency
 
 echo "Starting backend in local mock mode on http://localhost:8000"
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# S3 is mocked in-process via moto (mock_aws started at app startup).
+# moto intercepts boto3 calls at the botocore layer — no HTTP is made back to
+# the server — so there is no deadlock and a single worker is sufficient.
+# Multiple workers would give each process independent moto state (uploads in
+# worker A would be invisible to worker B), so we default to 1.
+exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers "${UVICORN_WORKERS:-1}"

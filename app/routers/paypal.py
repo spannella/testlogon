@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
+
+import asyncio
 
 import requests
 from botocore.exceptions import ClientError
@@ -36,7 +39,9 @@ DEFAULT_CURRENCY_CODE = DEFAULT_CURRENCY.upper()
 
 PUBLIC_BASE_URL = (S.public_base_url or "http://localhost:8000").rstrip("/")
 PAYPAL_ENV = (S.paypal_env or "sandbox").lower()
-PAYPAL_BASE_URL = "https://api-m.sandbox.paypal.com" if PAYPAL_ENV == "sandbox" else "https://api-m.paypal.com"
+PAYPAL_BASE_URL = os.environ.get("PAYPAL_BASE_URL") or (
+    "https://api-m.sandbox.paypal.com" if PAYPAL_ENV == "sandbox" else "https://api-m.paypal.com"
+)
 
 PAYPAL_PLAN_MAP: Dict[str, str] = {}
 if S.paypal_plan_map.strip():
@@ -938,7 +943,8 @@ async def charge_once(body: OneTimeChargeIn, request: Request, x_user_id: Option
     apply_balance_delta(pk, {"payments_pending_cents": amount})
 
     custom_id = f"{user_id}|{led_sk_value}"
-    order = paypal_create_order(
+    order = await asyncio.to_thread(
+        paypal_create_order,
         user_id=user_id,
         amount_cents=amount,
         currency=DEFAULT_CURRENCY_CODE,
@@ -999,7 +1005,7 @@ async def capture_order(body: CaptureOrderIn, x_user_id: Optional[str] = Header(
     amount = int(pay.get("amount_cents", 0))
     led_sk_value = pay["ledger_sk"]
 
-    cap = paypal_capture_order(order_id=order_id, idempotency_key=idem)
+    cap = await asyncio.to_thread(paypal_capture_order, order_id=order_id, idempotency_key=idem)
 
     status = (cap.get("status") or "").upper()
     ok = status in ("COMPLETED",)
@@ -1107,7 +1113,8 @@ async def subscribe_monthly(body: SubscribeMonthlyIn, x_user_id: Optional[str] =
     cancel_url = f"{PUBLIC_BASE_URL}/billing/paypal/subscription/cancel"
 
     custom_id = f"{user_id}|plan={body.plan_id}"
-    resp = paypal_create_subscription(
+    resp = await asyncio.to_thread(
+        paypal_create_subscription,
         plan_id=paypal_plan_id,
         user_id=user_id,
         idempotency_key=idem,
@@ -1252,7 +1259,8 @@ async def paypal_webhook(req: Request):
         )
         return {"received": True, "deduped": True}
 
-    verified = paypal_verify_webhook_signature(
+    verified = await asyncio.to_thread(
+        paypal_verify_webhook_signature,
         transmission_id=transmission_id,
         transmission_time=transmission_time,
         transmission_sig=transmission_sig,

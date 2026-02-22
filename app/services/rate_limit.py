@@ -21,12 +21,16 @@ def rate_limit_or_429(user_sub: str, factor: str) -> None:
     bucket = now // 3600
     key = {"user_sub": user_sub, "session_id": f"rl#{factor}"}
 
+    # 'bucket' and 'count' are DynamoDB reserved keywords; escape them.
+    names = {"#bkt": "bucket", "#cnt": "count"}
+
     # New bucket -> reset to 1
     try:
         T.sessions.update_item(
             Key=key,
-            UpdateExpression="SET bucket=:b, count=:one, last_sent_at=:now, updated_at=:now",
-            ConditionExpression="attribute_not_exists(bucket) OR bucket <> :b",
+            UpdateExpression="SET #bkt=:b, #cnt=:one, last_sent_at=:now, updated_at=:now",
+            ConditionExpression="attribute_not_exists(#bkt) OR #bkt <> :b",
+            ExpressionAttributeNames=names,
             ExpressionAttributeValues={":b": bucket, ":one": 1, ":now": now},
         )
         return
@@ -37,8 +41,9 @@ def rate_limit_or_429(user_sub: str, factor: str) -> None:
     try:
         T.sessions.update_item(
             Key=key,
-            UpdateExpression="ADD count :one SET last_sent_at=:now, updated_at=:now",
-            ConditionExpression="bucket = :b AND count < :limit AND (attribute_not_exists(last_sent_at) OR last_sent_at <= :earliest)",
+            UpdateExpression="ADD #cnt :one SET last_sent_at=:now, updated_at=:now",
+            ConditionExpression="#bkt = :b AND #cnt < :limit AND (attribute_not_exists(last_sent_at) OR last_sent_at <= :earliest)",
+            ExpressionAttributeNames=names,
             ExpressionAttributeValues={
                 ":b": bucket,
                 ":one": 1,

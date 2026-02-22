@@ -148,14 +148,26 @@ def _load_event(calendar_id: str, event_id: str) -> Dict[str, Any]:
 
 
 def _load_booking_link(link_id: str) -> Dict[str, Any]:
-    response = T.calendar.scan(
-        FilterExpression=Attr("sk").eq(_booking_link_key(link_id)) & Attr("type").eq("booking_link"),
-        Limit=1,
-    )
-    items = response.get("Items", [])
-    if not items:
-        raise HTTPException(status_code=404, detail="Booking link not found")
-    return items[0]
+    # First try: query by known calendar_id approach won't work without knowing calendar_id.
+    # Use scan without Limit so all pages are checked.
+    # Note: DynamoDB Limit on scan limits *examined* items, not returned items.
+    # We must paginate to find the booking link across the whole table.
+    sk_val = _booking_link_key(link_id)
+    last_evaluated_key = None
+    while True:
+        scan_kwargs: Dict[str, Any] = {
+            "FilterExpression": Attr("sk").eq(sk_val) & Attr("type").eq("booking_link"),
+        }
+        if last_evaluated_key:
+            scan_kwargs["ExclusiveStartKey"] = last_evaluated_key
+        response = T.calendar.scan(**scan_kwargs)
+        items = response.get("Items", [])
+        if items:
+            return items[0]
+        last_evaluated_key = response.get("LastEvaluatedKey")
+        if not last_evaluated_key:
+            break
+    raise HTTPException(status_code=404, detail="Booking link not found")
 
 
 def _load_calendar_public(calendar_id: str) -> Dict[str, Any]:
@@ -180,15 +192,41 @@ def _parse_hhmm(value: str) -> time:
         raise HTTPException(status_code=400, detail=f"Invalid time: {value}") from exc
 
 
-def _validate_working_hours(working_hours: Dict[str, list[Dict[str, str]]] | None) -> None:
+def _serialize_working_hours(working_hours: Dict[str, Any] | None) -> Dict[str, list[Dict[str, str]]] | None:
+    """Convert working_hours dict (possibly containing Pydantic models) to plain dicts for DynamoDB storage."""
+    if working_hours is None:
+        return None
+    serialized: Dict[str, list[Dict[str, str]]] = {}
+    for day, windows in working_hours.items():
+        serialized[day] = []
+        for window in windows:
+            if hasattr(window, "model_dump"):
+                serialized[day].append(window.model_dump())
+            elif hasattr(window, "dict"):
+                serialized[day].append(window.dict())
+            elif isinstance(window, dict):
+                serialized[day].append(window)
+            else:
+                serialized[day].append({"start": window.start, "end": window.end})
+    return serialized
+
+
+def _validate_working_hours(working_hours: Dict[str, Any] | None) -> None:
     if working_hours is None:
         return
     for day, windows in working_hours.items():
         if day not in WEEKDAY_NAMES:
             raise HTTPException(status_code=400, detail=f"Invalid weekday: {day}")
         for window in windows:
-            start = _parse_hhmm(window["start"])
-            end = _parse_hhmm(window["end"])
+            # Support both Pydantic model instances and plain dicts
+            if hasattr(window, "start") and hasattr(window, "end"):
+                start_val = window.start
+                end_val = window.end
+            else:
+                start_val = window["start"]
+                end_val = window["end"]
+            start = _parse_hhmm(start_val)
+            end = _parse_hhmm(end_val)
             if end <= start:
                 raise HTTPException(status_code=400, detail="working_hours end must be after start")
 
@@ -836,7 +874,7 @@ async def create_calendar(body: CalendarCreateIn, ctx: Dict[str, str] = Depends(
         "name": body.name,
         "timezone": body.timezone,
         "conflict_detection": body.conflict_detection,
-        "working_hours": body.working_hours,
+        "working_hours": _serialize_working_hours(body.working_hours),
         "buffer_before_minutes": buffer_before,
         "buffer_after_minutes": buffer_after,
         "owner_user_sub": ctx["user_sub"],
@@ -1291,6 +1329,7 @@ async def update_calendar(
         if body.conflict_detection is None
         else body.conflict_detection
     )
+    working_hours = _serialize_working_hours(working_hours)
     updated = {
         **meta,
         "name": name,

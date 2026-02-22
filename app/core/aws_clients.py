@@ -76,6 +76,10 @@ def _ddb_endpoint_url() -> Optional[str]:
 
 
 def _s3_endpoint_url() -> Optional[str]:
+    # In dev mode, moto intercepts boto3 S3 calls in-process; no endpoint URL
+    # should be set (a custom endpoint would bypass moto's botocore patching).
+    if S.dev_mode:
+        return None
     return _resolve_endpoint_url(S.s3_endpoint_url, _aws_endpoint_url())
 
 
