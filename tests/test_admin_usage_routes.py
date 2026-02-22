@@ -174,7 +174,7 @@ class TestAdminUsageRoutes(unittest.TestCase):
             patch.object(admin_usage, "_api_usage_table", return_value="tbl"),
             patch.object(admin_usage, "export_api_billing_reconciliation_report", return_value={"variance_vs_snapshot_micros": 0}) as fn,
         ):
-            resp = admin_usage.export_api_usage_reconciliation(user_sub="u1", period_id="2026-02", snapshot_version=1, admin_user="admin")
+            resp = admin_usage.export_api_usage_reconciliation(target_user_sub="u1", period_id="2026-02", snapshot_version=1, admin_user="admin")
         self.assertEqual(resp["variance_vs_snapshot_micros"], 0)
         fn.assert_called_once_with("tbl", user_sub="u1", period_id="2026-02", snapshot_version=1)
 

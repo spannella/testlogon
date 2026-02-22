@@ -315,6 +315,9 @@ def test_billing_payments_and_subscriptions(monkeypatch) -> None:
     payments = billing_router.list_payments(ctx={"user_sub": "user-123"})
     assert payments["items"][0]["payment_intent_id"] == "pi_123"
 
+    monkeypatch.setattr(billing_router, "S", type("S", (), {
+        "dev_mode": False, "stripe_secret_key": "sk_test", "stripe_api_base": None,
+    })())
     subs = billing_router.list_subscriptions(ctx={"user_sub": "user-123"})
     assert subs["items"][0]["id"] == "sub_123"
 
@@ -341,6 +344,9 @@ def test_billing_read_surfaces_allow_admin_target_override(monkeypatch) -> None:
     payments = billing_router.list_payments(ctx=admin_ctx, actor=_billing_admin_actor(), user_sub="target-1")
     assert payments["items"][0]["payment_intent_id"] == "pi_target"
 
+    monkeypatch.setattr(billing_router, "S", type("S", (), {
+        "dev_mode": False, "stripe_secret_key": "sk_test", "stripe_api_base": None,
+    })())
     subs = billing_router.list_subscriptions(ctx=admin_ctx, actor=_billing_admin_actor(), user_sub="target-1")
     assert subs["items"][0]["id"] == "sub_123"
 

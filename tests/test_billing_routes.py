@@ -14,14 +14,14 @@ class FakeBillingTable:
         self._items: Dict[tuple[str, str], Dict[str, Any]] = {}
 
     def get_item(self, Key: Dict[str, str]) -> Dict[str, Any]:
-        return {"Item": self._items.get((Key["user_sub"], Key["sk"]))}
+        return {"Item": self._items.get((Key["pk"], Key["sk"]))}
 
     def put_item(self, Item: Dict[str, Any], **kwargs: Any) -> Dict[str, Any]:
-        self._items[(Item["user_sub"], Item["sk"])] = Item
+        self._items[(Item["pk"], Item["sk"])] = Item
         return {}
 
     def delete_item(self, Key: Dict[str, str]) -> Dict[str, Any]:
-        self._items.pop((Key["user_sub"], Key["sk"]), None)
+        self._items.pop((Key["pk"], Key["sk"]), None)
         return {}
 
     def update_item(
@@ -32,7 +32,7 @@ class FakeBillingTable:
         ExpressionAttributeNames: Dict[str, str] | None = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        item = self._items.setdefault((Key["user_sub"], Key["sk"]), {"user_sub": Key["user_sub"], "sk": Key["sk"]})
+        item = self._items.setdefault((Key["pk"], Key["sk"]), {"pk": Key["pk"], "sk": Key["sk"]})
         expr = UpdateExpression.replace("SET", "").strip()
         parts = []
         depth = 0
@@ -58,7 +58,7 @@ class FakeBillingTable:
                 lhs = ExpressionAttributeNames[lhs]
             if rhs.startswith(":"):
                 item[lhs] = ExpressionAttributeValues[rhs]
-        self._items[(Key["user_sub"], Key["sk"])] = item
+        self._items[(Key["pk"], Key["sk"])] = item
         return {}
 
     def query(self, ExpressionAttributeValues: Dict[str, Any], **kwargs: Any) -> Dict[str, List[Dict[str, Any]]]:
@@ -193,13 +193,13 @@ class BillingRoutesTests(unittest.TestCase):
 
     def test_list_payments_and_subscriptions(self) -> None:
         self.table.put_item(Item={
-            "user_sub": "user_123",
+            "pk": "user_123",
             "sk": "PAY#txn_1",
             "transaction_id": "txn_1",
             "created_at": 2,
         })
         self.table.put_item(Item={
-            "user_sub": "user_123",
+            "pk": "user_123",
             "sk": "SUB#sub_1",
             "subscription_id": "sub_1",
             "created_at": 3,
@@ -239,13 +239,13 @@ class BillingRoutesTests(unittest.TestCase):
     def test_webhook_new_sale_success_updates_records(self) -> None:
         ledger_sk = "LEDGER#1#abc"
         self.table.put_item(Item={
-            "user_sub": "user_123",
+            "pk": "user_123",
             "sk": ledger_sk,
             "state": "pending",
             "amount_cents": 999,
         })
         self.table.put_item(Item={
-            "user_sub": "user_123",
+            "pk": "user_123",
             "sk": "PAY#txn_1",
             "transaction_id": "txn_1",
             "status": "pending",
@@ -260,10 +260,10 @@ class BillingRoutesTests(unittest.TestCase):
             resp = asyncio.run(routes.ccbill_webhook(req))
         self.assertTrue(resp["received"])
 
-        ledger = self.table.get_item(Key={"user_sub": "user_123", "sk": ledger_sk})["Item"]
+        ledger = self.table.get_item(Key={"pk": "user_123", "sk": ledger_sk})["Item"]
         self.assertEqual(ledger["state"], "settled")
 
-        payment = self.table.get_item(Key={"user_sub": "user_123", "sk": "PAY#txn_1"})["Item"]
+        payment = self.table.get_item(Key={"pk": "user_123", "sk": "PAY#txn_1"})["Item"]
         self.assertEqual(payment["status"], "succeeded")
 
     def test_set_default_missing_payment_method_rejected(self) -> None:

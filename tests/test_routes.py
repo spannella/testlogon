@@ -201,7 +201,10 @@ class TestUiSessionRoutes(unittest.TestCase):
 
     def test_ui_session_start_rejects_root_subject(self):
         req = build_request()
-        with self.assertRaises(HTTPException) as ctx:
+        with patch.object(ui_session, "S", SimpleNamespace(
+            root_user_sub=ui_session.S.root_user_sub,
+            dev_mode=False,
+        )), self.assertRaises(HTTPException) as ctx:
             run_async(ui_session.ui_session_start(req, UiSessionStartReq(), user_sub=ui_session.S.root_user_sub))
         self.assertEqual(ctx.exception.status_code, 403)
 

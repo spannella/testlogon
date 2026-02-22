@@ -12,6 +12,7 @@ _EXCLUDED_PATH_PREFIXES: tuple[str, ...] = (
     "/docs",
     "/redoc",
     "/static",
+    "/mock",
 )
 _EXCLUDED_EXACT_PATHS: Set[str] = {
     "/",

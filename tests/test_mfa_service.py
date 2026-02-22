@@ -7,9 +7,10 @@ from app.services import mfa
 def test_send_email_code_logs_code_in_dev_mode(monkeypatch):
     ses_mock = Mock()
     logger_mock = Mock()
-    monkeypatch.setattr(mfa, "S", SimpleNamespace(dev_mode=True, ses_from_email="noreply@example.com"))
+    monkeypatch.setattr(mfa, "S", SimpleNamespace(dev_mode=True, ses_from_email="noreply@example.com", dev_email_log=None))
     monkeypatch.setattr(mfa, "ses", ses_mock)
     monkeypatch.setattr(mfa, "logger", logger_mock)
+    monkeypatch.setattr(mfa, "_write_dev_log", lambda *a, **kw: None)
 
     mfa.send_email_code("user@example.com", "Registration", "123456")
 
@@ -19,13 +20,14 @@ def test_send_email_code_logs_code_in_dev_mode(monkeypatch):
         "Registration",
         "123456",
     )
-    ses_mock.send_email.assert_called_once()
+    ses_mock.send_email.assert_not_called()
 
 
 def test_send_email_code_prints_code_to_stderr_in_dev_mode(monkeypatch, capsys):
     ses_mock = Mock()
-    monkeypatch.setattr(mfa, "S", SimpleNamespace(dev_mode=True, ses_from_email="noreply@example.com"))
+    monkeypatch.setattr(mfa, "S", SimpleNamespace(dev_mode=True, ses_from_email="noreply@example.com", dev_email_log=None))
     monkeypatch.setattr(mfa, "ses", ses_mock)
+    monkeypatch.setattr(mfa, "_write_dev_log", lambda *a, **kw: None)
 
     mfa.send_email_code("user@example.com", "Registration", "123456")
 
