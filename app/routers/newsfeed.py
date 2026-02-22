@@ -211,6 +211,8 @@ def ddb_get_item(key: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def ddb_query(**kwargs) -> Dict[str, Any]:
+    # Strip None-valued kwargs so DynamoDB doesn't choke on e.g. ExclusiveStartKey=None
+    kwargs = {k: v for k, v in kwargs.items() if v is not None}
     try:
         return tbl.query(**kwargs)
     except ClientError as exc:
@@ -605,8 +607,8 @@ def put_notification(*, recipient_user_id: str, notif_type: str, payload: Dict[s
     notif_id = new_id("ntf")
     created_at = now_iso()
     item = {
-        "PK": pk_notif(recipient_user_id),
-        "SK": f"{created_at}#NOTIF#{notif_id}",
+        "pk": pk_notif(recipient_user_id),
+        "sk": f"{created_at}#NOTIF#{notif_id}",
         "Entity": "Notification",
         "notif_id": notif_id,
         "recipient_user_id": recipient_user_id,
@@ -619,17 +621,18 @@ def put_notification(*, recipient_user_id: str, notif_type: str, payload: Dict[s
     }
     ddb_put_item(item)
 
-    asyncio.create_task(
-        sse_hub.publish(
-            recipient_user_id,
-            {
-                "type": "notification",
-                "user_id": recipient_user_id,
-                "created_at": created_at,
-                "data": {"notif_type": notif_type, "payload": payload, "notif_id": notif_id},
-            },
-        )
-    )
+    event = {
+        "type": "notification",
+        "user_id": recipient_user_id,
+        "created_at": created_at,
+        "data": {"notif_type": notif_type, "payload": payload, "notif_id": notif_id},
+    }
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(sse_hub.publish(recipient_user_id, event))
+    except RuntimeError:
+        # Called from a sync threadpool context — SSE push not possible; notification is in DDB
+        pass
 
     return notif_id
 
@@ -638,17 +641,17 @@ def put_notification(*, recipient_user_id: str, notif_type: str, payload: Dict[s
 # Following / hiding / unlock helpers
 # -----------------------------
 def is_following(viewer_id: str, target_id: str) -> bool:
-    it = ddb_get_item({"PK": pk_user(viewer_id), "SK": f"FOLLOWING#{target_id}"})
+    it = ddb_get_item({"pk": pk_user(viewer_id), "sk": f"FOLLOWING#{target_id}"})
     return bool(it and it.get("state") == "following")
 
 
 def is_hidden(user_id: str, post_id: str) -> bool:
-    it = ddb_get_item({"PK": pk_hide(user_id), "SK": f"POST#{post_id}"})
+    it = ddb_get_item({"pk": pk_hide(user_id), "sk": f"POST#{post_id}"})
     return bool(it and it.get("hidden") is True)
 
 
 def has_unlocked(user_id: str, post_id: str) -> bool:
-    it = ddb_get_item({"PK": pk_unlock(user_id), "SK": f"POST#{post_id}"})
+    it = ddb_get_item({"pk": pk_unlock(user_id), "sk": f"POST#{post_id}"})
     return bool(it and it.get("unlocked") is True)
 
 
@@ -692,8 +695,8 @@ def unfollow(req: UnfollowRequest, x_user_id: Optional[str] = Header(default=Non
     user_id = require_user(x_user_id)
     target = req.target_user_id
     item = {
-        "PK": pk_user(user_id),
-        "SK": f"FOLLOWING#{target}",
+        "pk": pk_user(user_id),
+        "sk": f"FOLLOWING#{target}",
         "Entity": "Following",
         "user_id": user_id,
         "target_user_id": target,
@@ -709,8 +712,8 @@ def refollow(req: UnfollowRequest, x_user_id: Optional[str] = Header(default=Non
     user_id = require_user(x_user_id)
     target = req.target_user_id
     item = {
-        "PK": pk_user(user_id),
-        "SK": f"FOLLOWING#{target}",
+        "pk": pk_user(user_id),
+        "sk": f"FOLLOWING#{target}",
         "Entity": "Following",
         "user_id": user_id,
         "target_user_id": target,
@@ -735,8 +738,8 @@ def create_post(req: CreatePostRequest, x_user_id: Optional[str] = Header(defaul
     locked = unlock_price_cents is not None
 
     post_item = {
-        "PK": pk_post(post_id),
-        "SK": sk_post(),
+        "pk": pk_post(post_id),
+        "sk": sk_post(),
         "Entity": "Post",
         "post_id": post_id,
         "user_id": user_id,
@@ -751,8 +754,8 @@ def create_post(req: CreatePostRequest, x_user_id: Optional[str] = Header(defaul
     ddb_put_item(post_item)
 
     feed_item = {
-        "PK": pk_post(post_id),
-        "SK": f"FEEDREF#{user_id}",
+        "pk": pk_post(post_id),
+        "sk": f"FEEDREF#{user_id}",
         "Entity": "FeedRef",
         "post_id": post_id,
         "owner_user_id": user_id,
@@ -780,8 +783,8 @@ def create_post(req: CreatePostRequest, x_user_id: Optional[str] = Header(defaul
 def hide_post(req: HidePostRequest, x_user_id: Optional[str] = Header(default=None)):
     user_id = require_user(x_user_id)
     item = {
-        "PK": pk_hide(user_id),
-        "SK": f"POST#{req.post_id}",
+        "pk": pk_hide(user_id),
+        "sk": f"POST#{req.post_id}",
         "Entity": "Hide",
         "user_id": user_id,
         "post_id": req.post_id,
@@ -815,36 +818,12 @@ def view_feed(
 
     posts: List[Dict[str, Any]] = []
     if post_ids:
-        keys = [{"PK": pk_post(pid), "SK": sk_post()} for pid in post_ids]
+        keys = [{"pk": pk_post(pid), "sk": sk_post()} for pid in post_ids]
         try:
-            client = boto3.client("dynamodb", region_name=AWS_REGION)
-            raw = client.batch_get_item(
-                RequestItems={
-                    APP_TABLE: {
-                        "Keys": [{"PK": {"S": key["PK"]}, "SK": {"S": key["SK"]}} for key in keys]
-                    }
-                }
+            raw = ddb.batch_get_item(
+                RequestItems={APP_TABLE: {"Keys": keys}}
             )
-            got = raw.get("Responses", {}).get(APP_TABLE, [])
-
-            def unmarshal(av: Dict[str, Any]):
-                if "S" in av:
-                    return av["S"]
-                if "N" in av:
-                    num = av["N"]
-                    return int(num) if num.isdigit() else float(num)
-                if "BOOL" in av:
-                    return av["BOOL"]
-                if "M" in av:
-                    return {k: unmarshal(v) for k, v in av["M"].items()}
-                if "L" in av:
-                    return [unmarshal(x) for x in av["L"]]
-                if "NULL" in av:
-                    return None
-                return None
-
-            for item in got:
-                posts.append({k: unmarshal(v) for k, v in item.items()})
+            posts = raw.get("Responses", {}).get(APP_TABLE, [])
         except ClientError as exc:
             raise HTTPException(
                 status_code=500,
@@ -964,7 +943,7 @@ def download_post_attachment(
 def create_comment(post_id: str, req: CreateCommentRequest, x_user_id: Optional[str] = Header(default=None)):
     user_id = require_user(x_user_id)
 
-    post = ddb_get_item({"PK": pk_post(post_id), "SK": sk_post()})
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
 
@@ -980,8 +959,8 @@ def create_comment(post_id: str, req: CreateCommentRequest, x_user_id: Optional[
     parent = req.parent_comment_id
 
     item = {
-        "PK": pk_post_comments(post_id),
-        "SK": f"{created_at}#CMT#{comment_id}",
+        "pk": pk_post_comments(post_id),
+        "sk": f"{created_at}#CMT#{comment_id}",
         "Entity": "Comment",
         "comment_id": comment_id,
         "post_id": post_id,
@@ -999,7 +978,7 @@ def create_comment(post_id: str, req: CreateCommentRequest, x_user_id: Optional[
     ddb_put_item(item)
 
     ddb_update_item(
-        key={"PK": pk_post(post_id), "SK": sk_post()},
+        key={"pk": pk_post(post_id), "sk": sk_post()},
         update_expr="SET comment_count = if_not_exists(comment_count, :z) + :one",
         expr_vals={":z": 0, ":one": 1},
     )
@@ -1013,7 +992,7 @@ def create_comment(post_id: str, req: CreateCommentRequest, x_user_id: Optional[
 
     if parent:
         q = ddb_query(
-            KeyConditionExpression="PK = :pk",
+            KeyConditionExpression="pk = :pk",
             ExpressionAttributeValues={":pk": pk_post_comments(post_id)},
             ScanIndexForward=False,
             Limit=200,
@@ -1059,7 +1038,7 @@ def list_comments(
 ):
     user_id = require_user(x_user_id)
 
-    post = ddb_get_item({"PK": pk_post(post_id), "SK": sk_post()})
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
 
@@ -1087,7 +1066,7 @@ def edit_comment(post_id: str, comment_id: str, req: EditCommentRequest, x_user_
     user_id = require_user(x_user_id)
 
     q = ddb_query(
-        KeyConditionExpression="PK = :pk",
+        KeyConditionExpression="pk = :pk",
         ExpressionAttributeValues={":pk": pk_post_comments(post_id)},
         ScanIndexForward=False,
         Limit=500,
@@ -1104,7 +1083,7 @@ def edit_comment(post_id: str, comment_id: str, req: EditCommentRequest, x_user_
     if target.get("deleted"):
         raise HTTPException(status_code=409, detail="Comment deleted")
 
-    key = {"PK": target["PK"], "SK": target["SK"]}
+    key = {"pk": target["pk"], "sk": target["sk"]}
     new_version = int(req.expected_version) + 1
 
     updated = ddb_update_item(
@@ -1134,7 +1113,7 @@ def delete_comment(post_id: str, comment_id: str, x_user_id: Optional[str] = Hea
     user_id = require_user(x_user_id)
 
     q = ddb_query(
-        KeyConditionExpression="PK = :pk",
+        KeyConditionExpression="pk = :pk",
         ExpressionAttributeValues={":pk": pk_post_comments(post_id)},
         ScanIndexForward=False,
         Limit=500,
@@ -1149,7 +1128,7 @@ def delete_comment(post_id: str, comment_id: str, x_user_id: Optional[str] = Hea
     if target.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Not your comment")
 
-    key = {"PK": target["PK"], "SK": target["SK"]}
+    key = {"pk": target["pk"], "sk": target["sk"]}
     ddb_update_item(
         key=key,
         update_expr="SET deleted = :t, #body = :null, updated_at = :u",
@@ -1167,7 +1146,7 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, x_user_id: Optio
     tipper_id = require_user(x_user_id)
 
     q = ddb_query(
-        KeyConditionExpression="PK = :pk",
+        KeyConditionExpression="pk = :pk",
         ExpressionAttributeValues={":pk": pk_post_comments(post_id)},
         ScanIndexForward=False,
         Limit=500,
@@ -1192,7 +1171,7 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, x_user_id: Optio
     if conf.get("status") != "succeeded":
         raise HTTPException(status_code=402, detail="Payment failed")
 
-    key = {"PK": target["PK"], "SK": target["SK"]}
+    key = {"pk": target["pk"], "sk": target["sk"]}
     updated = ddb_update_item(
         key=key,
         update_expr="SET tip_total_cents = if_not_exists(tip_total_cents, :z) + :amt",
@@ -1224,7 +1203,7 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, x_user_id: Optio
 def unlock_post(req: UnlockPostRequest, x_user_id: Optional[str] = Header(default=None)):
     user_id = require_user(x_user_id)
 
-    post = ddb_get_item({"PK": pk_post(req.post_id), "SK": sk_post()})
+    post = ddb_get_item({"pk": pk_post(req.post_id), "sk": sk_post()})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
     if not post.get("locked"):
@@ -1249,8 +1228,8 @@ def unlock_post(req: UnlockPostRequest, x_user_id: Optional[str] = Header(defaul
         raise HTTPException(status_code=402, detail="Payment failed")
 
     item = {
-        "PK": pk_unlock(user_id),
-        "SK": f"POST#{req.post_id}",
+        "pk": pk_unlock(user_id),
+        "sk": f"POST#{req.post_id}",
         "Entity": "Unlock",
         "user_id": user_id,
         "post_id": req.post_id,

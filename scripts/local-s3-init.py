@@ -33,6 +33,14 @@ def _ensure_bucket(client, name: str) -> None:
 
 
 def main() -> None:
+    dev_mode = os.getenv("DEV_MODE", "1") not in ("0", "false", "False")
+    if dev_mode:
+        # S3 is mocked in-process via moto (started by the FastAPI app at
+        # startup).  This script runs before the app starts, so boto3 calls
+        # would hit real AWS.  Bucket creation is handled by dev_s3.start_s3_mock().
+        print("DEV_MODE=1: S3 buckets are created by moto at app startup; skipping.")
+        return
+
     client = s3_client()
     buckets = _bucket_names()
     for name in buckets:

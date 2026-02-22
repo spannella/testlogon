@@ -593,6 +593,12 @@ class SendTextMessageIn(BaseModel):
     reply_to_message_id: Optional[str] = None
     preview: Optional[LinkPreviewIn] = None
     encryption: Optional[MessageEncryptionEnvelope] = None
+    send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
+    tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)  # e.g. 500 = $5.00
+    expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=604800)  # 10s–7d
+    view_once: bool = False
+    lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
+    lock_description: Optional[str] = Field(default=None, max_length=200)
 
     @model_validator(mode="before")
     @classmethod
@@ -625,6 +631,12 @@ class SendTextMessageIn(BaseModel):
         return self
 
 
+class SendTipIn(BaseModel):
+    amount_cents: int = Field(ge=1, le=100_000)
+    currency: str = "USD"
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
 class SendImagePresignIn(BaseModel):
     content_type: str = "image/jpeg"
     filename: str = "image.jpg"
@@ -645,6 +657,10 @@ class CreateImageMessageIn(BaseModel):
     height: Optional[int] = None
     reply_to_message_id: Optional[str] = None
     consumption_policy: Literal["none", "view_once"] = "none"
+    expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=604800)
+    view_once: bool = False
+    lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
+    lock_description: Optional[str] = Field(default=None, max_length=200)
 
 
 class MarkReadIn(BaseModel):
@@ -862,6 +878,26 @@ class MessageOut(BaseModel):
     consumption_state: Optional[Literal["pending", "consumed", "expired", "failed"]] = None
     consumed_at: Optional[int] = None
 
+    # Scheduled delivery
+    scheduled: bool = False
+    deliver_at: Optional[int] = None
+
+    # Tips / money
+    tip_amount_cents: Optional[int] = None
+    tip_currency: Optional[str] = None
+    tip_payment_id: Optional[str] = None
+
+    # Expiry
+    expires_at: Optional[int] = None      # absolute Unix timestamp when it expires
+    view_once: bool = False
+    expired: bool = False                  # true = content redacted, tombstone shown
+
+    # Lock / PPV
+    locked: bool = False                   # has a lock_price set
+    lock_price_cents: Optional[int] = None
+    lock_description: Optional[str] = None
+    is_unlocked: bool = False              # viewer-specific: True once paid
+
 
 GalleryType = Literal["image", "video", "file", "link"]
 GALLERY_TYPES: set[str] = {"image", "video", "file", "link"}
@@ -887,6 +923,18 @@ class GalleryPageOut(BaseModel):
 
 
 HELPDESK_MASKED_SENDER_ID = "Helpdesk"
+
+
+class UnlockMessageIn(BaseModel):
+    pass  # body intentionally empty; amount comes from message's lock_price_cents
+
+
+class UnlockOut(BaseModel):
+    ok: bool
+    conversation_id: str
+    message_id: str
+    unlock_payment_id: str
+    amount_cents: int
 
 
 # -------------------------
@@ -1713,6 +1761,22 @@ def _consume_once_media_state_atomic(
     }
 
 
+def _is_expired(item: dict, now: int) -> bool:
+    expires_at = item.get("expires_at")
+    if not expires_at:
+        return False
+    return int(expires_at) < now
+
+
+def _is_view_once_consumed(item: dict, viewer_user_id: str) -> bool:
+    if not item.get("view_once"):
+        return False
+    if viewer_user_id == item.get("sender_id"):
+        return False
+    seen = item.get("view_once_seen") or set()
+    return viewer_user_id in seen
+
+
 def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOut:
     merged_item = _merge_consumption_state(message_item, viewer_user_id)
 
@@ -1725,7 +1789,7 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
     consumption_state = merged_item.get("consumption_state") if policy else None
     consumed_at = (int(merged_item.get("consumed_at", 0) or 0) or None) if policy else None
 
-    # Sender projection (feature branch)
+    # Sender projection (main)
     conversation_id = str(merged_item.get("conversation_id") or "")
     projected_sender_id = _project_message_sender_id(
         message_item=merged_item,
@@ -1733,16 +1797,34 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         conversation_id=conversation_id,
     )
 
+    # Expiry / view-once / lock projection (branch)
+    now = now_ts()
+    expired = _is_expired(merged_item, now)
+    view_once_consumed = _is_view_once_consumed(merged_item, viewer_user_id)
+    has_lock = bool(merged_item.get("lock_price_cents"))
+    is_unlocked = (
+        viewer_user_id in (merged_item.get("unlocked_by") or {})
+        or viewer_user_id == merged_item.get("sender_id")
+    )
+    content_hidden = expired or view_once_consumed or (has_lock and not is_unlocked)
+
+    deliver_at = int(merged_item.get("deliver_at", 0)) or None
+
+    text = None if content_hidden else merged_item.get("text")
+    image = None if content_hidden else merged_item.get("image")
+    file_ = None if content_hidden else merged_item.get("file")
+    preview = None if content_hidden else merged_item.get("preview")
+
     return MessageOut(
         conversation_id=merged_item["conversation_id"],
         message_id=merged_item["message_id"],
         sender_id=projected_sender_id,
         created_at=int(merged_item["created_at"]),
         kind=merged_item["kind"],
-        text=merged_item.get("text"),
-        image=merged_item.get("image"),
-        file=merged_item.get("file"),
-        preview=merged_item.get("preview"),
+        text=text,
+        image=image,
+        file=file_,
+        preview=preview,
         reply_to_message_id=merged_item.get("reply_to_message_id"),
         forwarded_from=merged_item.get("forwarded_from"),
         forward_note=merged_item.get("forward_note"),
@@ -1758,6 +1840,18 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         media_kind=media_kind,
         consumption_state=consumption_state,
         consumed_at=consumed_at,
+        scheduled=merged_item.get("status") == "scheduled",
+        deliver_at=deliver_at,
+        tip_amount_cents=int(merged_item["tip_amount_cents"]) if merged_item.get("tip_amount_cents") else None,
+        tip_currency=merged_item.get("tip_currency"),
+        tip_payment_id=merged_item.get("tip_payment_id"),
+        expires_at=int(merged_item["expires_at"]) if merged_item.get("expires_at") else None,
+        view_once=bool(merged_item.get("view_once")),
+        expired=expired,
+        locked=has_lock,
+        lock_price_cents=int(merged_item["lock_price_cents"]) if merged_item.get("lock_price_cents") else None,
+        lock_description=merged_item.get("lock_description"),
+        is_unlocked=is_unlocked,
     )
 
 
@@ -3152,8 +3246,8 @@ def add_participants(
                 continue
             tbl_parts.update_item(
                 Key={"user_id": pid, "conversation_id": conversation_id},
-                UpdateExpression="SET #s = :pending, role = :role, joined_at = :zero, left_at = :zero, unread_count = :zero",
-                ExpressionAttributeNames={"#s": "status"},
+                UpdateExpression="SET #s = :pending, #r = :role, joined_at = :zero, left_at = :zero, unread_count = :zero",
+                ExpressionAttributeNames={"#s": "status", "#r": "role"},
                 ExpressionAttributeValues={
                     ":pending": "pending",
                     ":role": existing.get("role") or "member",
@@ -3248,7 +3342,8 @@ def update_participant_role(
         raise HTTPException(404, "Participant not found")
     tbl_parts.update_item(
         Key={"user_id": participant_id, "conversation_id": conversation_id},
-        UpdateExpression="SET role = :role",
+        UpdateExpression="SET #r = :role",
+        ExpressionAttributeNames={"#r": "role"},
         ExpressionAttributeValues={":role": inp.role},
     )
     audit_event(
@@ -3888,8 +3983,27 @@ def send_text_message(
     _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
-    mid = "m_" + new_id()
+    # Validate send_at: must be in the future (at least 5 seconds from now)
     ts = now_ts()
+    deliver_at: Optional[int] = None
+    is_scheduled = False
+    if inp.send_at is not None:
+        if inp.send_at <= ts + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        deliver_at = inp.send_at
+        is_scheduled = True
+
+    # Process tip
+    tip_amount_cents: Optional[int] = None
+    tip_currency: Optional[str] = None
+    tip_payment_id: Optional[str] = None
+    if inp.tip_amount_cents:
+        tip_amount_cents = inp.tip_amount_cents
+        tip_currency = "USD"
+        # In dev mode, mock the payment; in production this would call a payment processor
+        tip_payment_id = "tip_" + new_id()
+
+    mid = "m_" + new_id()
 
     is_encrypted = inp.encryption is not None
     message_text = inp.text or ""
@@ -3901,11 +4015,37 @@ def send_text_message(
         "kind": "text",
         "text": message_text if not is_encrypted else None,
         "is_encrypted": is_encrypted,
-        "deleted_for": set(),
         "reactions": {},
     }
     if is_encrypted and inp.encryption:
         item["encryption"] = inp.encryption.model_dump()
+    if is_scheduled:
+        item["status"] = "scheduled"
+        item["deliver_at"] = deliver_at
+    if tip_amount_cents:
+        item["tip_amount_cents"] = tip_amount_cents
+        item["tip_currency"] = tip_currency
+        item["tip_payment_id"] = tip_payment_id
+
+    # Validate: lock_price_cents and tip_amount_cents cannot both be set
+    if inp.lock_price_cents and inp.tip_amount_cents:
+        raise HTTPException(400, "Cannot combine lock_price_cents with tip_amount_cents")
+
+    # Expiry
+    expires_at = None
+    if inp.expires_in_seconds:
+        expires_at = ts + inp.expires_in_seconds
+        item["expires_at"] = expires_at
+    if inp.view_once:
+        item["view_once"] = True
+        # Do NOT store view_once_seen as an empty set — DynamoDB rejects empty sets.
+        # The ADD update in mark_message_viewed inserts the first element on first view.
+    # Lock / PPV
+    if inp.lock_price_cents:
+        item["lock_price_cents"] = inp.lock_price_cents
+        item["unlocked_by"] = {}  # pre-initialize so nested SET path works
+        if inp.lock_description:
+            item["lock_description"] = inp.lock_description
 
     link_preview = _serialize_preview(inp.preview) if not is_encrypted else None
     if not link_preview and not is_encrypted:
@@ -3922,17 +4062,20 @@ def send_text_message(
 
     tbl_msgs.put_item(Item=item)
     _sync_gallery_index_message(item)
-    _bump_unread_counts(conversation_id, user_id, participants)
-    _record_delivery_receipts(conversation_id, mid, user_id, participants)
-    if not is_encrypted:
-        index_message_search(conversation_id, mid, user_id, ts, message_text, kind="text")
 
-    preview_text = "[Encrypted message]" if is_encrypted else message_text[:140]
-    tbl_convos.update_item(
-        Key={"conversation_id": conversation_id},
-        UpdateExpression="SET last_message_at = :ts, last_message_preview = :p",
-        ExpressionAttributeValues={":ts": ts, ":p": preview_text},
-    )
+    if not is_scheduled:
+        # Only deliver immediately if not scheduled
+        _bump_unread_counts(conversation_id, user_id, participants)
+        _record_delivery_receipts(conversation_id, mid, user_id, participants)
+        if not is_encrypted:
+            index_message_search(conversation_id, mid, user_id, ts, message_text, kind="text")
+
+        preview_text = "[Encrypted message]" if is_encrypted else message_text[:140]
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p",
+            ExpressionAttributeValues={":ts": ts, ":p": preview_text},
+        )
 
     message = MessageOut(
         conversation_id=conversation_id,
@@ -3945,8 +4088,20 @@ def send_text_message(
         reply_to_message_id=inp.reply_to_message_id,
         is_encrypted=is_encrypted,
         encryption=inp.encryption,
+        scheduled=is_scheduled,
+        deliver_at=deliver_at,
+        tip_amount_cents=tip_amount_cents,
+        tip_currency=tip_currency,
+        tip_payment_id=tip_payment_id,
+        expires_at=expires_at,
+        view_once=inp.view_once,
+        locked=bool(inp.lock_price_cents),
+        lock_price_cents=inp.lock_price_cents,
+        lock_description=inp.lock_description,
+        is_unlocked=True,  # sender always sees their own content
     )
-    message = _apply_message_receipts(message, item, participants)
+    if not is_scheduled:
+        message = _apply_message_receipts(message, item, participants)
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,
@@ -3970,6 +4125,8 @@ def send_text_message(
         kind="text",
         is_encrypted=is_encrypted,
         reply_to_message_id=inp.reply_to_message_id,
+        scheduled=is_scheduled,
+        tip_amount_cents=tip_amount_cents,
     )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     return message
@@ -4026,9 +4183,23 @@ def create_image_message(
             "width": inp.width,
             "height": inp.height,
         },
-        "deleted_for": set(),
         "reactions": {},
     }
+    # Expiry
+    expires_at = None
+    if inp.expires_in_seconds:
+        expires_at = ts + inp.expires_in_seconds
+        item["expires_at"] = expires_at
+    if inp.view_once:
+        item["view_once"] = True
+        # Do NOT store view_once_seen as an empty set — DynamoDB rejects empty sets.
+    # Lock / PPV
+    if inp.lock_price_cents:
+        item["lock_price_cents"] = inp.lock_price_cents
+        item["unlocked_by"] = {}  # pre-initialize so nested SET path works
+        if inp.lock_description:
+            item["lock_description"] = inp.lock_description
+
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
         item["ttl"] = ttl
@@ -4069,6 +4240,12 @@ def create_image_message(
         consumption_policy=inp.consumption_policy if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
         media_kind="image" if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
         consumption_state=CONSUMPTION_STATE_PENDING if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
+        expires_at=expires_at,
+        view_once=inp.view_once,
+        locked=bool(inp.lock_price_cents),
+        lock_price_cents=inp.lock_price_cents,
+        lock_description=inp.lock_description,
+        is_unlocked=True,  # sender always sees their own content
     )
     message = _apply_message_receipts(message, item, participants)
     audit_event(
@@ -4147,7 +4324,6 @@ def create_file_message(
             "duration_seconds": duration_seconds,
             "thumbnail": node.get("thumbnail"),
         },
-        "deleted_for": set(),
         "reactions": {},
     }
     if preview:
@@ -4598,22 +4774,29 @@ def react_to_message(
         raise HTTPException(400, "Cannot react to a revoked message")
 
     expr_names = {"#e": inp.emoji}
-    expr_vals = {":empty": set(), ":u": {user_id}}
-
-    if inp.action == "add":
-        update_expr = "SET reactions.#e = if_not_exists(reactions.#e, :empty) ADD reactions.#e :u"
-    else:
-        update_expr = "SET reactions.#e = if_not_exists(reactions.#e, :empty) DELETE reactions.#e :u"
 
     try:
-        tbl_msgs.update_item(
-            Key={"conversation_id": conversation_id, "message_id": message_id},
-            UpdateExpression=update_expr,
-            ExpressionAttributeNames=expr_names,
-            ExpressionAttributeValues=expr_vals,
-            ConditionExpression="attribute_exists(message_id)",
-        )
-    except Exception as e:
+        if inp.action == "add":
+            tbl_msgs.update_item(
+                Key={"conversation_id": conversation_id, "message_id": message_id},
+                UpdateExpression="ADD reactions.#e :u",
+                ExpressionAttributeNames=expr_names,
+                ExpressionAttributeValues={":u": {user_id}},
+                ConditionExpression="attribute_exists(message_id)",
+            )
+        else:
+            try:
+                tbl_msgs.update_item(
+                    Key={"conversation_id": conversation_id, "message_id": message_id},
+                    UpdateExpression="DELETE reactions.#e :u",
+                    ExpressionAttributeNames=expr_names,
+                    ExpressionAttributeValues={":u": {user_id}},
+                    ConditionExpression="attribute_exists(message_id) AND attribute_exists(reactions.#e)",
+                )
+            except ClientError as ce:
+                if ce.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                    raise
+    except ClientError as e:
         raise HTTPException(400, f"Reaction update failed: {str(e)}")
 
     ts = now_ts()
@@ -4688,7 +4871,7 @@ def edit_message(
     tbl_edits.put_item(
         Item={
             "message_key": _message_key(conversation_id, message_id),
-            "edited_at": ts,
+            "edited_at": str(ts),
             "edited_by": user_id,
             "old_text": old_text,
             "new_text": new_text,
@@ -4817,7 +5000,6 @@ def forward_message(
         "sender_id": user_id,
         "created_at": ts,
         "kind": kind,
-        "deleted_for": set(),
         "reactions": {},
         "forwarded_from": forwarded_from,
     }
@@ -4941,9 +5123,10 @@ def mark_message_viewed(
     tbl_views.update_item(
         Key=key,
         UpdateExpression=(
-            "SET message_id = :mid, user_id = :uid, last_viewed_at = :ts, ttl = :ttl "
+            "SET message_id = :mid, user_id = :uid, last_viewed_at = :ts, #ttl = :ttl "
             "ADD view_count :one"
         ),
+        ExpressionAttributeNames={"#ttl": "ttl"},
         ExpressionAttributeValues={
             ":mid": message_id,
             ":uid": user_id,
@@ -4958,6 +5141,21 @@ def mark_message_viewed(
             UpdateExpression="SET message_id = :mid, user_id = :uid, delivered_at = if_not_exists(delivered_at, :ts), "
             "read_at = :ts",
             ExpressionAttributeValues={":mid": message_id, ":uid": user_id, ":ts": ts},
+        )
+
+    # View-once: mark this user as having consumed their view
+    if msg.get("view_once") and user_id != msg.get("sender_id"):
+        tbl_msgs.update_item(
+            Key={"conversation_id": conversation_id, "message_id": message_id},
+            UpdateExpression="ADD view_once_seen :uid",
+            ExpressionAttributeValues={":uid": {user_id}},
+        )
+        fanout_event_to_conversation(
+            conversation_id=conversation_id,
+            sender_id=user_id,
+            event_type="message:view_once_consumed",
+            payload={"message_id": message_id, "viewer_id": user_id},
+            respect_mute=False,
         )
 
     fanout_event_to_conversation(
@@ -5188,3 +5386,316 @@ def messaging_config(user_id: str = Depends(get_messaging_user_id)):
 @router.get("/healthz")
 def healthz():
     return {"ok": True, "ts": now_ts()}
+
+
+# -------------------------
+# Scheduled Messages
+# -------------------------
+
+@router.get("/conversations/{conversation_id}/messages/scheduled", response_model=List[MessageOut])
+def list_scheduled_messages(
+    conversation_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Return the caller's pending scheduled messages in a conversation."""
+    require_participant_active(user_id, conversation_id)
+    resp = tbl_msgs.query(
+        KeyConditionExpression=Key("conversation_id").eq(conversation_id),
+        FilterExpression=Attr("status").eq("scheduled") & Attr("sender_id").eq(user_id),
+    )
+    items = resp.get("Items", [])
+    items.sort(key=lambda x: int(x.get("deliver_at", 0)))
+    return [_message_out_from_item(item, user_id) for item in items]
+
+
+@router.delete(
+    "/conversations/{conversation_id}/messages/{message_id}/schedule",
+    response_model=Dict[str, Any],
+)
+def cancel_scheduled_message(
+    conversation_id: str,
+    message_id: str,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Cancel a scheduled message (only the sender can cancel)."""
+    require_participant_active(user_id, conversation_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+    if msg.get("sender_id") != user_id:
+        raise HTTPException(403, "Only the sender can cancel a scheduled message")
+    if msg.get("status") != "scheduled":
+        raise HTTPException(400, "Message is not scheduled")
+    tbl_msgs.delete_item(Key={"conversation_id": conversation_id, "message_id": message_id})
+    audit_event(
+        "messaging_scheduled_message_cancelled",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+    )
+    return {"ok": True, "message_id": message_id}
+
+
+def _deliver_scheduled_message(item: dict) -> None:
+    """Promote a scheduled message to delivered status."""
+    conversation_id = item["conversation_id"]
+    message_id = item["message_id"]
+    user_id = item["sender_id"]
+    ts = now_ts()
+
+    # Remove scheduled status
+    tbl_msgs.update_item(
+        Key={"conversation_id": conversation_id, "message_id": message_id},
+        UpdateExpression="REMOVE #s, deliver_at SET created_at = :ts",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":ts": ts},
+    )
+
+    # Fetch participants and bump unread counts
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+
+    _bump_unread_counts(conversation_id, user_id, participants)
+    _record_delivery_receipts(conversation_id, message_id, user_id, participants)
+    index_message_search(
+        conversation_id, message_id, user_id, ts,
+        item.get("text", ""), kind=item.get("kind", "text"),
+    )
+
+    preview_text = (item.get("text") or "")[:140]
+    tbl_convos.update_item(
+        Key={"conversation_id": conversation_id},
+        UpdateExpression="SET last_message_at = :ts, last_message_preview = :p",
+        ExpressionAttributeValues={":ts": ts, ":p": preview_text},
+    )
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="message:new",
+        payload={"conversation_id": conversation_id, "message_id": message_id},
+    )
+    logger.info("Delivered scheduled message %s in conversation %s", message_id, conversation_id)
+
+
+async def _messaging_background_loop() -> None:
+    """Background task: deliver due scheduled messages and expire timed-out messages."""
+    while True:
+        # A) Deliver due scheduled messages
+        try:
+            resp = tbl_msgs.scan(
+                FilterExpression=Attr("status").eq("scheduled") & Attr("deliver_at").lte(now_ts()),
+            )
+            for item in resp.get("Items", []):
+                try:
+                    _deliver_scheduled_message(item)
+                except Exception as exc:
+                    logger.error(
+                        "Failed to deliver scheduled message %s: %s",
+                        item.get("message_id"), exc,
+                    )
+        except Exception as exc:
+            logger.error("Scheduled messages loop error: %s", exc)
+
+        # B) Expire messages past expires_at
+        try:
+            resp = tbl_msgs.scan(
+                FilterExpression=(
+                    Attr("expires_at").exists()
+                    & Attr("expires_at").lte(now_ts())
+                    & Attr("expired").ne(True)
+                )
+            )
+            for item in resp.get("Items", []):
+                try:
+                    tbl_msgs.update_item(
+                        Key={
+                            "conversation_id": item["conversation_id"],
+                            "message_id": item["message_id"],
+                        },
+                        UpdateExpression="SET expired = :t REMOVE #txt, image, #file, preview",
+                        ExpressionAttributeNames={"#txt": "text", "#file": "file"},
+                        ExpressionAttributeValues={":t": True},
+                    )
+                    fanout_event_to_conversation(
+                        conversation_id=item["conversation_id"],
+                        sender_id=item.get("sender_id", ""),
+                        event_type="message:expired",
+                        payload={
+                            "message_id": item["message_id"],
+                            "conversation_id": item["conversation_id"],
+                        },
+                        respect_mute=False,
+                    )
+                    logger.info(
+                        "Expired message %s in conversation %s",
+                        item.get("message_id"), item.get("conversation_id"),
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Failed to expire message %s: %s",
+                        item.get("message_id"), exc,
+                    )
+        except Exception as exc:
+            logger.error("Expiry loop error: %s", exc)
+
+        await asyncio.sleep(30)
+
+
+def start_scheduled_messages_task() -> None:
+    asyncio.create_task(_messaging_background_loop())
+
+
+# -------------------------
+# Message Tips
+# -------------------------
+
+class TipOut(BaseModel):
+    ok: bool
+    conversation_id: str
+    message_id: str
+    tip_payment_id: str
+    amount_cents: int
+    currency: str
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/tip",
+    response_model=TipOut,
+)
+def send_message_tip(
+    conversation_id: str,
+    message_id: str,
+    inp: SendTipIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Send a monetary tip attached to a message."""
+    require_participant_active(user_id, conversation_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+    if msg.get("revoked_at"):
+        raise HTTPException(400, "Cannot tip a revoked message")
+    if msg.get("sender_id") == user_id:
+        raise HTTPException(400, "Cannot tip your own message")
+
+    # Mock payment in dev mode; real payment processor in production
+    tip_payment_id = "tip_" + new_id()
+    ts = now_ts()
+
+    tbl_msgs.update_item(
+        Key={"conversation_id": conversation_id, "message_id": message_id},
+        UpdateExpression=(
+            "SET tip_amount_cents = if_not_exists(tip_amount_cents, :zero) + :amt, "
+            "tip_currency = :cur, tip_payment_id = :pid, tip_updated_at = :ts"
+        ),
+        ExpressionAttributeValues={
+            ":zero": 0,
+            ":amt": inp.amount_cents,
+            ":cur": inp.currency,
+            ":pid": tip_payment_id,
+            ":ts": ts,
+        },
+    )
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="message:tip",
+        payload={
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            "tipper_id": user_id,
+            "amount_cents": inp.amount_cents,
+            "currency": inp.currency,
+            "tip_payment_id": tip_payment_id,
+        },
+    )
+    audit_event(
+        "messaging_tip_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+        amount_cents=inp.amount_cents,
+        currency=inp.currency,
+    )
+    return TipOut(
+        ok=True,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        tip_payment_id=tip_payment_id,
+        amount_cents=inp.amount_cents,
+        currency=inp.currency,
+    )
+
+
+# -------------------------
+# Unlock (PPV) Message
+# -------------------------
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/unlock",
+    response_model=UnlockOut,
+)
+def unlock_message(
+    conversation_id: str,
+    message_id: str,
+    inp: UnlockMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Pay to unlock a locked (PPV) message."""
+    require_participant_active(user_id, conversation_id)
+    msg = _get_message_or_404(conversation_id, message_id)
+
+    if not msg.get("lock_price_cents"):
+        raise HTTPException(400, "Message is not locked")
+    if msg.get("sender_id") == user_id:
+        raise HTTPException(400, "Sender cannot unlock their own message")
+    if user_id in (msg.get("unlocked_by") or {}):
+        raise HTTPException(400, "Already unlocked")
+
+    amount_cents = int(msg["lock_price_cents"])
+    # Dev-mode: mock payment; production would call a real payment processor
+    unlock_payment_id = "unlock_" + new_id()
+
+    tbl_msgs.update_item(
+        Key={"conversation_id": conversation_id, "message_id": message_id},
+        UpdateExpression="SET unlocked_by.#uid = :pid",
+        ExpressionAttributeNames={"#uid": user_id},
+        ExpressionAttributeValues={":pid": unlock_payment_id},
+    )
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="message:unlocked",
+        payload={
+            "message_id": message_id,
+            "unlocker_id": user_id,
+            "unlock_payment_id": unlock_payment_id,
+            "amount_cents": amount_cents,
+        },
+        respect_mute=False,
+    )
+    audit_event(
+        "messaging_message_unlocked",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+        amount_cents=amount_cents,
+    )
+    return UnlockOut(
+        ok=True,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        unlock_payment_id=unlock_payment_id,
+        amount_cents=amount_cents,
+    )

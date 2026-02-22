@@ -30,6 +30,10 @@ from app.routers.admin_impersonation import router as admin_impersonation_router
 from app.routers.misc import router as misc_router
 from app.routers.billing_ccbill import router as billing_ccbill_router
 from app.routers.ccbill_mock import router as ccbill_mock_router
+from app.routers.paypal_mock import router as paypal_mock_router
+from app.routers.s3_mock import router as s3_mock_router, list_buckets as _s3_list_buckets
+from app.core.dev_s3 import start_s3_mock as _start_s3_mock
+from app.core.settings import S as _S
 from app.routers.paypal import router as paypal_router
 from app.routers.billing import router as billing_router
 from app.routers.account_state import router as account_state_router
@@ -52,6 +56,7 @@ from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
 from app.services.api_usage_metering import record_api_usage_from_response, enforce_account_quota_pre_request
 from app.services.api_metering_policy import build_limit_denial_headers
+from app.routers.messaging import start_scheduled_messages_task
 
 
 def _api_usage_metering_middleware():
@@ -110,7 +115,7 @@ def _build_cors_options() -> dict[str, object]:
     }
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Security Backend (refactored)", version="0.1.0")
+    app = FastAPI(title="Security Backend (refactored)", version="0.1.0", redirect_slashes=False)
     settings = Settings()
     static_dir = Path(__file__).resolve().parent / "static"
 
@@ -146,6 +151,10 @@ def create_app() -> FastAPI:
     app.include_router(misc_router)
     app.include_router(billing_ccbill_router)
     app.include_router(ccbill_mock_router)
+    app.include_router(paypal_mock_router)
+    app.include_router(s3_mock_router, prefix="/mock/s3")
+    # Also register GET /mock/s3 (no trailing slash) for boto3 list_buckets
+    app.add_api_route("/mock/s3", _s3_list_buckets, methods=["GET"], include_in_schema=False)
     app.include_router(paypal_router)
     app.include_router(billing_router)
     app.include_router(account_state_router)
@@ -158,9 +167,15 @@ def create_app() -> FastAPI:
     app.include_router(device_trust_router)
     app.include_router(newsfeed_router)
     app.add_event_handler("startup", validate_startup_root_invariant)
+    if _S.dev_mode:
+        _dev_buckets = [b for b in [_S.filemgr_bucket] if b]
+        app.add_event_handler("startup", lambda: _start_s3_mock(_dev_buckets))
+
+
     app.add_event_handler("startup", newsfeed_startup)
     app.add_event_handler("startup", start_billing_dunning_task)
     app.add_event_handler("startup", start_filemgr_purge_task)
+    app.add_event_handler("startup", start_scheduled_messages_task)
     app.include_router(purchase_history_router)
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)

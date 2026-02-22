@@ -1872,6 +1872,18 @@ def _role_timeline_command(args: argparse.Namespace) -> Dict[str, Any]:
     }
 
 
+def _sanitize_for_json(obj: Any) -> Any:
+    """Recursively convert DDB Decimal values to int/float so json.dumps works."""
+    from decimal import Decimal
+    if isinstance(obj, Decimal):
+        return int(obj) if obj == obj.to_integral_value() else float(obj)
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(i) for i in obj]
+    return obj
+
+
 def _alerts_event_matches_timeline(details: Dict[str, Any], timeline: str) -> bool:
     event = str(details.get("event") or "")
     if timeline == "impersonation":
@@ -1923,7 +1935,7 @@ def _alerts_timeline_command(args: argparse.Namespace) -> Dict[str, Any]:
             "user_sub": str(details.get("user_sub") or it.get("user_sub") or ""),
             "request_id": str(details.get("request_id") or ""),
             "correlation_id": str(details.get("correlation_id") or ""),
-            "details": details,
+            "details": _sanitize_for_json(details),
         }
         if _timeline_matches_filters(
             row,

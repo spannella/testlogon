@@ -179,7 +179,8 @@ def main() -> None:
             "VITE_COGNITO_REGION": _region(),
             "VITE_COGNITO_ISSUER_URL": issuer_url,
             "VITE_COGNITO_JWKS_URL": jwks_url,
-            "VITE_API_BASE_URL": _frontend_api_base_url(),
+            # VITE_API_BASE_URL is intentionally omitted: the frontend routes all
+            # API calls through the Vite proxy so cookies stay on one origin.
         },
     )
 

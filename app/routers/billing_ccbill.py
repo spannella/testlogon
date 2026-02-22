@@ -78,7 +78,7 @@ def _sub_sk(subscription_id: str) -> str:
 
 def _ledger_items(user_sub: str, prefix: str) -> List[Dict[str, Any]]:
     resp = T.billing.query(
-        KeyConditionExpression="user_sub = :u AND begins_with(sk, :p)",
+        KeyConditionExpression="pk = :u AND begins_with(sk, :p)",
         ExpressionAttributeValues={":u": user_sub, ":p": prefix},
     )
     return resp.get("Items", [])
@@ -137,24 +137,24 @@ def get_frontend_oauth(ctx=Depends(require_ui_session)):
 @router.get("/api/billing/settings")
 def get_settings(ctx=Depends(require_ui_session)):
     user_sub = ctx["user_sub"]
-    it = T.billing.get_item(Key={"user_sub": user_sub, "sk": "BILLING"}).get("Item")
+    it = T.billing.get_item(Key={"pk": user_sub, "sk": "BILLING"}).get("Item")
     return it or {"autopay_enabled": False, "currency": S.default_currency, "default_payment_token_id": None}
 
 
 @router.post("/api/billing/autopay")
 def set_autopay(body: SetAutopayIn, ctx=Depends(require_ui_session), req: Request = None):
     user_sub = ctx["user_sub"]
-    existing = T.billing.get_item(Key={"user_sub": user_sub, "sk": "BILLING"}).get("Item")
+    existing = T.billing.get_item(Key={"pk": user_sub, "sk": "BILLING"}).get("Item")
     if not existing:
         T.billing.put_item(Item={
-            "user_sub": user_sub,
+            "pk": user_sub,
             "sk": "BILLING",
             "autopay_enabled": False,
             "currency": S.default_currency,
             "default_payment_token_id": None,
         })
     T.billing.update_item(
-        Key={"user_sub": user_sub, "sk": "BILLING"},
+        Key={"pk": user_sub, "sk": "BILLING"},
         UpdateExpression="SET autopay_enabled = :e",
         ExpressionAttributeValues={":e": bool(body.enabled)},
     )
@@ -168,7 +168,7 @@ def set_autopay(body: SetAutopayIn, ctx=Depends(require_ui_session), req: Reques
 def get_balance(ctx=Depends(require_ui_session)):
     user_sub = ctx["user_sub"]
     ensure_balance_row(user_sub)
-    bal = T.billing.get_item(Key={"user_sub": user_sub, "sk": "BALANCE"}).get("Item") or {}
+    bal = T.billing.get_item(Key={"pk": user_sub, "sk": "BALANCE"}).get("Item") or {}
     due = compute_due(bal)
     return {
         "currency": bal.get("currency", S.default_currency),
@@ -188,7 +188,7 @@ def save_payment_token(body: SavePaymentTokenIn, ctx=Depends(require_ui_session)
     next_priority = 0 if not existing else (max(int(x.get("priority", 0)) for x in existing) + 1)
 
     T.billing.put_item(Item={
-        "user_sub": user_sub,
+        "pk": user_sub,
         "sk": _pm_sk(body.payment_token_id),
         "payment_token_id": body.payment_token_id,
         "provider": "ccbill",
@@ -238,10 +238,10 @@ def list_payment_methods_endpoint(ctx=Depends(require_ui_session)):
 def set_priority(body: SetPriorityIn, ctx=Depends(require_ui_session), req: Request = None):
     user_sub = ctx["user_sub"]
     sk = _pm_sk(body.payment_token_id)
-    if not T.billing.get_item(Key={"user_sub": user_sub, "sk": sk}).get("Item"):
+    if not T.billing.get_item(Key={"pk": user_sub, "sk": sk}).get("Item"):
         raise HTTPException(404, "Payment method not found")
     T.billing.update_item(
-        Key={"user_sub": user_sub, "sk": sk},
+        Key={"pk": user_sub, "sk": sk},
         UpdateExpression="SET priority = :p",
         ExpressionAttributeValues={":p": int(body.priority)},
     )
@@ -260,7 +260,7 @@ def set_priority(body: SetPriorityIn, ctx=Depends(require_ui_session), req: Requ
 @router.post("/api/billing/payment-methods/default")
 def set_default(body: SetDefaultIn, ctx=Depends(require_ui_session), req: Request = None):
     user_sub = ctx["user_sub"]
-    if not T.billing.get_item(Key={"user_sub": user_sub, "sk": _pm_sk(body.payment_token_id)}).get("Item"):
+    if not T.billing.get_item(Key={"pk": user_sub, "sk": _pm_sk(body.payment_token_id)}).get("Item"):
         raise HTTPException(404, "Payment method not found")
     _set_default_pm(user_sub, body.payment_token_id)
     audit_event(
@@ -279,10 +279,10 @@ def set_default(body: SetDefaultIn, ctx=Depends(require_ui_session), req: Reques
 def remove_payment_method(payment_token_id: str, ctx=Depends(require_ui_session), req: Request = None):
     user_sub = ctx["user_sub"]
     sk = _pm_sk(payment_token_id)
-    if not T.billing.get_item(Key={"user_sub": user_sub, "sk": sk}).get("Item"):
+    if not T.billing.get_item(Key={"pk": user_sub, "sk": sk}).get("Item"):
         raise HTTPException(404, "Payment method not found")
 
-    T.billing.delete_item(Key={"user_sub": user_sub, "sk": sk})
+    T.billing.delete_item(Key={"pk": user_sub, "sk": sk})
 
     if _current_default_pm(user_sub) == payment_token_id:
         remaining = list_payment_methods(user_sub)
@@ -401,7 +401,7 @@ async def subscribe_monthly_endpoint(body: SubscribeMonthlyIn, request: Request,
 @router.post("/api/billing/refund")
 def refund_payment(body: RefundIn, ctx=Depends(require_ui_session), req: Request = None):
     user_sub = ctx["user_sub"]
-    pay = T.billing.get_item(Key={"user_sub": user_sub, "sk": _pay_sk(body.transaction_id)}).get("Item")
+    pay = T.billing.get_item(Key={"pk": user_sub, "sk": _pay_sk(body.transaction_id)}).get("Item")
     if not pay:
         raise HTTPException(404, "Payment record not found")
 
@@ -569,7 +569,7 @@ async def ccbill_webhook(req: Request):
     if not user_sub:
         safe_meta = _webhook_meta(event_type, payload, q)
         T.billing.put_item(Item={
-            "user_sub": "CCBILL_WEBHOOK_UNMATCHED",
+            "pk": "CCBILL_WEBHOOK_UNMATCHED",
             "sk": f"{now_ts()}#{dedupe_key}",
             "eventType": event_type,
             "q": safe_meta["q"],
@@ -584,7 +584,7 @@ async def ccbill_webhook(req: Request):
     def _try_find_pay_and_ledger(tid: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         if not tid:
             return None, None
-        pay = T.billing.get_item(Key={"user_sub": user_sub, "sk": _pay_sk(str(tid))}).get("Item")
+        pay = T.billing.get_item(Key={"pk": user_sub, "sk": _pay_sk(str(tid))}).get("Item")
         return pay, (pay.get("ledger_sk") if pay else None)
 
     if event_type == "NewSaleSuccess":
@@ -594,7 +594,7 @@ async def ccbill_webhook(req: Request):
 
         led_sk_to_settle = led_sk_value
         if not led_sk_to_settle and ledger_sk_hint:
-            if T.billing.get_item(Key={"user_sub": user_sub, "sk": str(ledger_sk_hint)}).get("Item"):
+            if T.billing.get_item(Key={"pk": user_sub, "sk": str(ledger_sk_hint)}).get("Item"):
                 led_sk_to_settle = str(ledger_sk_hint)
 
         if led_sk_to_settle:
@@ -810,7 +810,7 @@ async def ccbill_webhook(req: Request):
             apply_balance_delta(user_sub, {"owed_settled_cents": amount})
 
         if transaction_id:
-            pay = T.billing.get_item(Key={"user_sub": user_sub, "sk": _pay_sk(str(transaction_id))}).get("Item")
+            pay = T.billing.get_item(Key={"pk": user_sub, "sk": _pay_sk(str(transaction_id))}).get("Item")
         else:
             pay = None
 
@@ -827,7 +827,7 @@ async def ccbill_webhook(req: Request):
     else:
         safe_meta = _webhook_meta(event_type, payload, q)
         T.billing.put_item(Item={
-            "user_sub": "CCBILL_WEBHOOK_OTHER",
+            "pk": "CCBILL_WEBHOOK_OTHER",
             "sk": f"{now_ts()}#{dedupe_key}",
             "eventType": event_type,
             "q": safe_meta["q"],
@@ -856,7 +856,7 @@ def _log_ccbill_webhook_rejection(
         if val:
             safe_headers[key] = "[REDACTED]" if key == S.ccbill_webhook_signature_header else val
     T.billing.put_item(Item={
-        "user_sub": "CCBILL_WEBHOOK_REJECTED",
+        "pk": "CCBILL_WEBHOOK_REJECTED",
         "sk": f"{now_ts()}#{dedupe_key or hashlib.sha256(raw_body).hexdigest()}",
         "reason": reason,
         "remote_ip": remote_ip,
@@ -871,15 +871,15 @@ def _log_ccbill_webhook_rejection(
 
 
 def _current_default_pm(user_sub: str) -> Optional[str]:
-    billing = T.billing.get_item(Key={"user_sub": user_sub, "sk": "BILLING"}).get("Item") or {}
+    billing = T.billing.get_item(Key={"pk": user_sub, "sk": "BILLING"}).get("Item") or {}
     return billing.get("default_payment_token_id")
 
 
 def _set_default_pm(user_sub: str, token_id: Optional[str]) -> None:
-    existing = T.billing.get_item(Key={"user_sub": user_sub, "sk": "BILLING"}).get("Item")
+    existing = T.billing.get_item(Key={"pk": user_sub, "sk": "BILLING"}).get("Item")
     if not existing:
         T.billing.put_item(Item={
-            "user_sub": user_sub,
+            "pk": user_sub,
             "sk": "BILLING",
             "autopay_enabled": False,
             "currency": S.default_currency,
@@ -887,7 +887,7 @@ def _set_default_pm(user_sub: str, token_id: Optional[str]) -> None:
         })
     else:
         T.billing.update_item(
-            Key={"user_sub": user_sub, "sk": "BILLING"},
+            Key={"pk": user_sub, "sk": "BILLING"},
             UpdateExpression="SET default_payment_token_id = :t",
             ExpressionAttributeValues={":t": token_id},
         )

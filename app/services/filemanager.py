@@ -1582,19 +1582,24 @@ def presign_upload(user: str, path: str, *, content_type: Optional[str]) -> Dict
     expires_at = expires_at_dt.isoformat()
     resolved_content_type = content_type or "application/octet-stream"
 
-    upload_url = _s3.generate_presigned_url(
-        ClientMethod="put_object",
-        Params={
-            "Bucket": bucket,
-            "Key": s3_key,
-            "ContentType": resolved_content_type,
-            "Metadata": {
-                "filemgr-ticket": ticket_id,
-                "filemgr-user": user,
+    # In dev mode the moto mock is in-process; presigned AWS URLs won't resolve
+    # locally, so we return a direct PUT URL to the in-app proxy route instead.
+    if S.dev_mode:
+        upload_url = f"{S.public_base_url}/mock/s3/{bucket}/{s3_key}"
+    else:
+        upload_url = _s3.generate_presigned_url(
+            ClientMethod="put_object",
+            Params={
+                "Bucket": bucket,
+                "Key": s3_key,
+                "ContentType": resolved_content_type,
+                "Metadata": {
+                    "filemgr-ticket": ticket_id,
+                    "filemgr-user": user,
+                },
             },
-        },
-        ExpiresIn=900,
-    )
+            ExpiresIn=900,
+        )
     _table().put_item(
         Item={
             "PK": pk_user(user),
@@ -1750,8 +1755,9 @@ def upload_profile_photo(
     path = norm_path(f"{folder}{obj_id}_{safe_name}", is_folder=False)
     require_not_exists(user, path)
 
+    s3_key = f"{user}/objects/{obj_id}"
     extra_args = {"ContentType": content_type or "application/octet-stream"}
-    resp = _s3.put_object(Bucket=bucket, Key=f"{user}/objects/{obj_id}", Body=content, **extra_args)
+    resp = _s3.put_object(Bucket=bucket, Key=s3_key, Body=content, **extra_args)
     etag = resp.get("ETag")
     size = len(content)
 
@@ -1771,7 +1777,7 @@ def upload_profile_photo(
         "size": size,
         "content_type": content_type or "application/octet-stream",
         "s3_bucket": bucket,
-        "s3_key": f"{user}/objects/{obj_id}",
+        "s3_key": s3_key,
         "etag": etag,
         **_flatten_encryption_meta(enc_meta),
         "GSI1PK": pk_user(user),
@@ -1781,7 +1787,10 @@ def upload_profile_photo(
     }
     put_node(item)
     _put_token_entries(user, item)
-    return {"path": path, "size": size}
+
+    # In dev mode the moto in-process mock is used; return a directly-accessible URL.
+    url = f"{S.public_base_url}/mock/s3/{bucket}/{s3_key}" if S.dev_mode else None
+    return {"path": path, "size": size, "url": url}
 
 
 def upload_billing_receipt(
@@ -2683,6 +2692,39 @@ def move_node(user: str, src: str, dst: str) -> Dict[str, Any]:
     resp = tbl.get_item(Key=node_key(user, dst_p), ConsistentRead=True)
     if "Item" in resp:
         raise HTTPException(409, "destination exists")
+
+    def transact_move_item(item: Dict[str, Any], new_path: str, new_parent: str, new_name: str) -> None:
+        new_item = dict(item)
+        new_item["path"] = new_path
+        new_item["parent"] = new_parent
+        new_item["name"] = new_name
+        new_item["name_lc"] = new_name.lower()
+        new_item["updated_at"] = now_iso()
+        new_item["SK"] = sk_node(new_path)
+        new_item["GSI1SK"] = f"NAME#{new_item['name_lc']}#PATH#{new_path}"
+        new_item["GSI2PK"] = f"PARENT#{new_parent}"
+        new_item["GSI2SK"] = f"TYPE#{new_item['type']}#NAME#{new_item['name_lc']}#PATH#{new_path}"
+        ddb.meta.client.transact_write_items(
+            TransactItems=[
+                {
+                    "Delete": {
+                        "TableName": tbl.name,
+                        "Key": node_key(user, item["path"]),
+                    }
+                },
+                {
+                    "Put": {
+                        "TableName": tbl.name,
+                        "Item": new_item,
+                        # Atomically assert the destination doesn't exist.
+                        "ConditionExpression": "attribute_not_exists(PK)",
+                    }
+                },
+            ]
+        )
+        _delete_token_entries(user, item)
+        _put_token_entries(user, new_item)
+
 
     if is_folder:
         if is_ancestor_path(src_p, dst_p):

@@ -126,13 +126,14 @@ ensure_external_base_urls() {
     export PUBLIC_BASE_URL="${backend_url}"
   fi
 
-  if [[ -z "${VITE_API_BASE_URL:-}" || "${VITE_API_BASE_URL}" == *"localhost"* || "${VITE_API_BASE_URL}" == *"127.0.0.1"* ]]; then
-    export VITE_API_BASE_URL="${backend_url}"
-  fi
+  # NOTE: VITE_API_BASE_URL is intentionally NOT set here.  All browser API
+  # calls must route through the Vite proxy (/ui, /v1, …→ localhost:8000) so
+  # that session cookies are always issued for the same origin as the page.
+  # Setting an absolute EC2 IP here causes cookies to be scoped to that IP
+  # while EventSource/SSE uses the page origin → cookie mismatch → 401s.
 
   echo "Using local dev host ${dev_host}"
   echo "PUBLIC_BASE_URL=${PUBLIC_BASE_URL}"
-  echo "VITE_API_BASE_URL=${VITE_API_BASE_URL}"
 }
 
 probe_http() {
@@ -148,7 +149,7 @@ mock_component_ready() {
     "twilio")
       [[ "${DEV_MODE:-1}" == "1" ]]
       ;;
-    "s3") probe_http "http://localhost:4566/health" ;;
+    "s3") probe_http "http://localhost:8000/openapi.json" ;;
     "dynamodb") probe_http "http://localhost:8001/" ;;
     "cognito") probe_http "http://localhost:4566/health" ;;
     "stripe") probe_http "http://localhost:12111/" ;;
@@ -278,7 +279,7 @@ if [[ "$backend_mode" == "mock" ]]; then
 fi
 
 if [[ -f "frontend/package.json" ]]; then
-  npm --prefix frontend run dev -- --host 0.0.0.0 --port 5173 >>"$FRONTEND_LOG_PATH" 2>&1
+  npm --prefix frontend run dev >>"$FRONTEND_LOG_PATH" 2>&1
 else
   wait "$BACKEND_PID"
 fi
