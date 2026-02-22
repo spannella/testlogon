@@ -22,6 +22,11 @@ $SUDO apt-get install -y --no-install-recommends \
   nodejs \
   npm
 
+if ! command -v just >/dev/null 2>&1; then
+  echo "Installing just..."
+  curl -fsSL https://just.systems/install.sh | $SUDO bash -s -- --to /usr/local/bin
+fi
+
 if [[ ! -d ".venv" ]]; then
   python3 -m venv .venv
 fi
@@ -44,4 +49,4 @@ if [[ -f "frontend/package.json" ]]; then
   chmod -R u+rwX frontend/node_modules 2>/dev/null || true
 fi
 
-echo "Setup complete. Configure env vars (see docs/run-deploy.md) and run scripts/run_dev.sh."
+echo "Setup complete. Configure env vars (see docs/run-deploy.md) and run: just start"
