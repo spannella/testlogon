@@ -28,7 +28,7 @@ from app.services.mfa import (
     store_recovery_codes,
 )
 from app.services.rate_limit import rate_limit_or_429
-from app.services.sessions import create_action_challenge, load_challenge_or_401, require_ui_session, revoke_challenge, require_fresh_mfa
+from app.services.sessions import create_action_challenge, load_challenge_or_401, require_ui_session, revoke_challenge, require_fresh_mfa, stamp_mfa_verified
 from app.core.tables import T
 from app.core.time import now_ts
 
@@ -66,6 +66,7 @@ async def totp_devices_begin(req: Request, body: TotpDeviceBeginReq, ctx=Depends
 async def totp_devices_confirm(req: Request, body: TotpDeviceConfirmReq, ctx=Depends(require_ui_session)):
     require_fresh_mfa(ctx)
     totp_confirm_enroll(ctx["user_sub"], body.device_id, body.totp_code)
+    stamp_mfa_verified(ctx["user_sub"], ctx["session_id"])
     audit_event("totp_device_confirm", ctx["user_sub"], req, outcome="success", device_id=body.device_id)
     return {"ok": True}
 
@@ -156,6 +157,7 @@ async def sms_devices_confirm(req: Request, body: SmsDeviceConfirmReq, ctx=Depen
         recovery_codes = new_recovery_codes(10)
         store_recovery_codes(user_sub, "sms", recovery_codes)
     revoke_challenge(user_sub, body.challenge_id)
+    stamp_mfa_verified(user_sub, ctx["session_id"])
     audit_event("sms_device_confirm", ctx["user_sub"], req, outcome="success", sms_device_id=sms_device_id)
     return {"ok": True, "sms_device_id": sms_device_id, "recovery_codes": recovery_codes}
 
@@ -277,6 +279,7 @@ async def email_devices_confirm(req: Request, body: EmailDeviceConfirmReq, ctx=D
         recovery_codes = new_recovery_codes(10)
         store_recovery_codes(user_sub, "email", recovery_codes)
     revoke_challenge(user_sub, body.challenge_id)
+    stamp_mfa_verified(user_sub, ctx["session_id"])
     audit_event("email_device_confirm", ctx["user_sub"], req, outcome="success", email_device_id=email_device_id)
     return {"ok": True, "email_device_id": email_device_id, "recovery_codes": recovery_codes}
 

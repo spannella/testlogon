@@ -342,7 +342,7 @@ function SmsSection() {
             {devices.map((d) => (
               <li key={d.sms_device_id} className="flex items-center justify-between py-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-medium">{d.label ?? d.phone_e164}</p>
+                  <p className="text-sm font-medium">{d.label || d.phone_e164}</p>
                   <p className="text-xs text-muted-foreground">
                     Added {new Date(d.created_at * 1000).toLocaleDateString()}
                   </p>

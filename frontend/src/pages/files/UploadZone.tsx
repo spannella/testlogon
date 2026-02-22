@@ -40,7 +40,7 @@ export function UploadZone({ currentPath, onUploadComplete, children }: UploadZo
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
-    dragCountRef.current--;
+    dragCountRef.current = Math.max(0, dragCountRef.current - 1);
     if (dragCountRef.current === 0) setDragOver(false);
   };
 

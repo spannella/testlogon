@@ -126,6 +126,12 @@ export default function Register() {
   const passwordValue = form.watch("password");
   const confirmPasswordValue = form.watch("confirm_password");
 
+  React.useEffect(() => {
+    if (form.formState.touchedFields.confirm_password) {
+      void form.trigger("confirm_password");
+    }
+  }, [passwordValue, form]);
+
   const passwordRequirements = [
     { id: "length", label: "At least 12 characters", met: passwordValue.length >= 12 },
     { id: "max", label: "No more than 128 characters", met: passwordValue.length <= 128 },

@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  CalendarDays,
   ChevronLeft,
   ChevronRight,
   Plus,
@@ -20,6 +21,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { getCalendars, getEvents, excludeOccurrence } from "@/api/endpoints/calendar";
 import { EventDialog } from "./EventDialog";
+import { EmptyState } from "@/components/shared/EmptyState";
 import type { CalendarEvent, Calendar } from "@/api/types";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -324,6 +326,17 @@ export function CalendarView() {
 
   if (calendarsQuery.isLoading) {
     return <Skeleton className="h-96 w-full rounded-xl" />;
+  }
+
+  if (calendars.length === 0) {
+    return (
+      <EmptyState
+        icon={<CalendarDays className="h-8 w-8" />}
+        title="No calendars yet"
+        description="Go to the Calendars tab to create your first calendar, then come back to add events."
+        className="py-24"
+      />
+    );
   }
 
   return (

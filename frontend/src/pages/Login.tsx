@@ -3,7 +3,7 @@ import { useNavigate, Link } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Loader2, Shield, Smartphone, Mail, KeyRound, ArrowLeft, Fingerprint, Send, HelpCircle } from "lucide-react";
+import { Loader2, Shield, Smartphone, Mail, KeyRound, ArrowLeft, Fingerprint, Send, HelpCircle, Eye, EyeOff } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -101,6 +101,8 @@ export default function Login() {
 
   // WebAuthn login state
   const [webauthnUsername, setWebauthnUsername] = React.useState("");
+
+  const [showPassword, setShowPassword] = React.useState(false);
 
   // Loading / error
   const [loading, setLoading] = React.useState(false);
@@ -462,21 +464,47 @@ export default function Login() {
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <Label htmlFor="password">Password</Label>
-                    <Link
-                      to="/password-recovery"
-                      className="text-xs text-primary hover:underline"
-                    >
-                      Forgot password?
-                    </Link>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Link
+                          to="/password-recovery"
+                          className="text-xs text-primary hover:underline"
+                        >
+                          Forgot password?
+                        </Link>
+                      </TooltipTrigger>
+                      <TooltipContent side="left" className="max-w-xs">
+                        <p className="mb-1 font-medium">Password requirements:</p>
+                        <ul className="space-y-0.5 text-xs">
+                          <li>At least 12 characters</li>
+                          <li>No more than 128 characters</li>
+                          <li>One lowercase letter (a–z)</li>
+                          <li>One uppercase letter (A–Z)</li>
+                          <li>One number (0–9)</li>
+                          <li>One special character (!@#$ …)</li>
+                        </ul>
+                      </TooltipContent>
+                    </Tooltip>
                   </div>
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder="Enter your password"
-                    autoComplete="current-password"
-                    disabled={loading}
-                    {...form.register("password")}
-                  />
+                  <div className="relative">
+                    <Input
+                      id="password"
+                      type={showPassword ? "text" : "password"}
+                      placeholder="Enter your password"
+                      autoComplete="current-password"
+                      className="pr-10"
+                      disabled={loading}
+                      {...form.register("password")}
+                    />
+                    <button
+                      type="button"
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      className="absolute inset-y-0 right-0 flex items-center px-3 text-muted-foreground hover:text-foreground"
+                      onClick={() => setShowPassword((prev) => !prev)}
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                   {form.formState.errors.password && (
                     <p className="text-xs text-destructive">
                       {form.formState.errors.password.message}

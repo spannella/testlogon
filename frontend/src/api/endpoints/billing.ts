@@ -37,6 +37,9 @@ export const createCardSetupIntent = () =>
 export const createBankSetupIntent = () =>
   api.post<{ client_secret: string }>("/ui/billing/setup-intent/us-bank");
 
+export const verifyMicrodeposits = (body: { setup_intent_id: string; amounts: [number, number] }) =>
+  api.post<{ status: string }>("/ui/billing/us-bank/verify-microdeposits", body);
+
 export const setPriority = (body: SetPriorityReq) =>
   api.post<OkResp>("/ui/billing/payment-methods/priority", body);
 

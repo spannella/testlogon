@@ -43,7 +43,24 @@ import { useAuthStore } from "@/stores/authStore";
 import { useUiStore, type Theme } from "@/stores/uiStore";
 import { logout as apiLogout } from "@/api/endpoints/auth";
 import { getAlerts, markRead } from "@/api/endpoints/alerts";
+import { getProfile } from "@/api/endpoints/profile";
 import { useAlertStream } from "@/hooks/useAlertStream";
+import type { Profile } from "@/api/types";
+
+function getInitials(profile: Profile | undefined, userId: string | null): string {
+  const first = profile?.first_name?.trim();
+  const last = profile?.last_name?.trim();
+  if (first && last) return (first[0]! + last[0]!).toUpperCase();
+  if (first) return first.slice(0, 2).toUpperCase();
+  if (last) return last.slice(0, 2).toUpperCase();
+  const display = profile?.display_name?.trim();
+  if (display) {
+    const parts = display.split(/\s+/);
+    if (parts.length >= 2) return (parts[0]![0]! + parts[parts.length - 1]![0]!).toUpperCase();
+    return display.slice(0, 2).toUpperCase();
+  }
+  return userId ? userId.slice(0, 2).toUpperCase() : "U";
+}
 
 interface HeaderProps {
   onMobileMenuToggle?: () => void;
@@ -77,6 +94,12 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
   const logoutAuth = useAuthStore((s) => s.logout);
   const theme = useUiStore((s) => s.theme);
   const setTheme = useUiStore((s) => s.setTheme);
+
+  const profileQuery = useQuery({
+    queryKey: ["profile"],
+    queryFn: getProfile,
+    staleTime: 5 * 60 * 1000,
+  });
 
   const [searchOpen, setSearchOpen] = React.useState(false);
   const [alertsOpen, setAlertsOpen] = React.useState(false);
@@ -154,7 +177,7 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
     dark: <Moon className="h-4 w-4" />,
   }[theme];
 
-  const initials = userId ? userId.slice(0, 2).toUpperCase() : "U";
+  const initials = getInitials(profileQuery.data?.profile, userId);
 
   const alerts = recentAlerts.data?.alerts ?? [];
 

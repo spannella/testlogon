@@ -438,6 +438,23 @@ def revoke_challenge(user_sub: str, challenge_id: str) -> None:
     except Exception:
         pass
 
+
+def stamp_mfa_verified(user_sub: str, session_id: str) -> None:
+    """Update mfa_verified_at on the active session to now.
+
+    Called after a user successfully confirms a new MFA device enrollment so
+    that require_fresh_mfa() does not block subsequent security-page actions
+    in the same session (e.g. adding a second MFA factor right after the first).
+    """
+    try:
+        T.sessions.update_item(
+            Key={"user_sub": user_sub, "session_id": session_id},
+            UpdateExpression="SET mfa_verified_at = :now",
+            ExpressionAttributeValues={":now": now_ts()},
+        )
+    except Exception:
+        pass
+
 def mark_factor_passed(user_sub: str, challenge_id: str, factor: str) -> None:
     T.sessions.update_item(
         Key={"user_sub": user_sub, "session_id": challenge_id},
