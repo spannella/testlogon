@@ -14,6 +14,7 @@ DDB_BOOTSTRAP_MARKER_PATH="${LOCAL_RUN_DIR}/ddb-bootstrap.done"
 DEV_DDB_BOOTSTRAP="${DEV_DDB_BOOTSTRAP:-1}"
 DEV_DDB_SEED="${DEV_DDB_SEED:-0}"
 DEV_FORCE_DDB_BOOTSTRAP="${DEV_FORCE_DDB_BOOTSTRAP:-0}"
+clean_mode=1
 
 usage() {
   cat <<'USAGE'
@@ -22,6 +23,7 @@ Usage: scripts/run_dev.sh [--real-backend|--mock-backend]
 Options:
   --mock-backend   Start backend using scripts/run_local_mock_backend.sh (default)
   --real-backend   Start backend directly with current env/.env configuration
+  --no-clean       Skip the clean wipe; reuse existing databases, logs, and services
   -h, --help       Show this help message
 USAGE
 }
@@ -37,6 +39,9 @@ while (($#)); do
     -h|--help)
       usage
       exit 0
+      ;;
+    --no-clean)
+      clean_mode=0
       ;;
     *)
       echo "Unknown argument: $1" >&2
@@ -203,6 +208,45 @@ ensure_local_mock_infra() {
   scripts/local-stack-up.sh
 }
 
+wipe_clean() {
+  echo "=== Wiping dev environment for a clean start ==="
+
+  # Stop infrastructure services (moto, dynamodb-local, stripe-mock)
+  echo "Stopping local stack services..."
+  scripts/local-stack-down.sh || true
+
+  # Kill any leftover backend uvicorn process
+  pkill -f "uvicorn app.main:app" >/dev/null 2>&1 || true
+
+  # Kill any leftover frontend vite/npm dev process
+  pkill -f "vite" >/dev/null 2>&1 || true
+
+  # Wipe DynamoDB persistent data (must be AFTER dynamodb-local is stopped)
+  local ddb_data_dir="${REPO_ROOT}/.local/tools/dynamodb-local/data"
+  if [[ -d "$ddb_data_dir" ]]; then
+    echo "Clearing DynamoDB data: ${ddb_data_dir}"
+    rm -f "${ddb_data_dir:?}"/*
+  fi
+
+  # Remove bootstrap marker so tables are recreated from scratch
+  rm -f "${DDB_BOOTSTRAP_MARKER_PATH}"
+
+  # Clear dev logs
+  if [[ -d "${DEV_LOG_DIR}" ]]; then
+    echo "Clearing dev logs: ${DEV_LOG_DIR}"
+    rm -f "${DEV_LOG_DIR}"/*.log
+  fi
+
+  # Clear infra logs
+  local infra_log_dir="${REPO_ROOT}/.local/logs"
+  if [[ -d "$infra_log_dir" ]]; then
+    echo "Clearing infra logs: ${infra_log_dir}"
+    rm -f "${infra_log_dir}"/*.log
+  fi
+
+  echo "=== Clean wipe complete ==="
+}
+
 ensure_dynamodb_tables_initialized() {
   mkdir -p "${LOCAL_RUN_DIR}"
 
@@ -239,6 +283,10 @@ ensure_dynamodb_tables_initialized() {
   date -u +"%Y-%m-%dT%H:%M:%SZ" > "${DDB_BOOTSTRAP_MARKER_PATH}"
   echo "DynamoDB table bootstrap complete. Marker written to ${DDB_BOOTSTRAP_MARKER_PATH}."
 }
+
+if [[ "$clean_mode" == "1" ]]; then
+  wipe_clean
+fi
 
 ensure_external_base_urls
 
