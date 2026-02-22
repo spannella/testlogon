@@ -47,9 +47,10 @@ import {
 function TotpSection() {
   const queryClient = useQueryClient();
   const [enrollOpen, setEnrollOpen] = useState(false);
-  const [enrollStep, setEnrollStep] = useState<"qr" | "confirm">("qr");
+  const [enrollStep, setEnrollStep] = useState<"qr" | "confirm" | "recovery">("qr");
   const [enrollData, setEnrollData] = useState<{ device_id: string; qr_code_uri: string; secret: string } | null>(null);
   const [totpCode, setTotpCode] = useState("");
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
   const [removeCode, setRemoveCode] = useState("");
 
@@ -70,12 +71,17 @@ function TotpSection() {
 
   const confirmMutation = useMutation({
     mutationFn: () => confirmTotpEnrollment({ device_id: enrollData?.device_id ?? "", totp_code: totpCode }),
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["mfa", "totp", "devices"] });
-      toast.success("Authenticator added");
-      setEnrollOpen(false);
       setTotpCode("");
-      setEnrollData(null);
+      if (data.recovery_codes.length > 0) {
+        setRecoveryCodes(data.recovery_codes);
+        setEnrollStep("recovery");
+      } else {
+        toast.success("Authenticator added");
+        setEnrollOpen(false);
+        setEnrollData(null);
+      }
     },
     onError: () => toast.error("Invalid code, please try again"),
   });
@@ -152,17 +158,49 @@ function TotpSection() {
       </CardContent>
 
       {/* Enrollment dialog */}
-      <Dialog open={enrollOpen} onOpenChange={(o) => { if (!o) { setEnrollOpen(false); setTotpCode(""); } }}>
+      <Dialog open={enrollOpen} onOpenChange={(o) => {
+        if (!o) {
+          setEnrollOpen(false);
+          setTotpCode("");
+          setEnrollData(null);
+          setRecoveryCodes([]);
+          setEnrollStep("qr");
+        }
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add Authenticator App</DialogTitle>
             <DialogDescription>
               {enrollStep === "qr"
                 ? "Scan the QR code with your authenticator app, then enter the 6-digit code."
-                : "Enter the 6-digit code from your authenticator app to confirm."}
+                : enrollStep === "confirm"
+                  ? "Enter the 6-digit code from your authenticator app to confirm."
+                  : "Save these recovery codes somewhere safe. They can be used to access your account if you lose your authenticator."}
             </DialogDescription>
           </DialogHeader>
-          {enrollData && (
+          {enrollStep === "recovery" ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted p-3">
+                {recoveryCodes.map((code) => (
+                  <code key={code} className="text-center text-sm font-mono">{code}</code>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                These codes will not be shown again. Store them in a password manager or other secure location.
+              </p>
+              <DialogFooter>
+                <Button className="w-full" onClick={() => {
+                  toast.success("Authenticator added");
+                  setEnrollOpen(false);
+                  setEnrollData(null);
+                  setRecoveryCodes([]);
+                  setEnrollStep("qr");
+                }}>
+                  I&apos;ve saved my recovery codes
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : enrollData && (
             <div className="space-y-4">
               {enrollStep === "qr" && (
                 <div className="space-y-3">
@@ -261,6 +299,7 @@ function SmsSection() {
   const [phone, setPhone] = useState("");
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [verifyCode, setVerifyCode] = useState("");
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
   const [removeChallengeId, setRemoveChallengeId] = useState<string | null>(null);
   const [removeCode, setRemoveCode] = useState("");
@@ -280,13 +319,17 @@ function SmsSection() {
 
   const confirmMutation = useMutation({
     mutationFn: () => confirmSmsEnrollment({ challenge_id: challengeId ?? "", code: verifyCode }),
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["mfa", "sms", "devices"] });
-      toast.success("SMS device added");
-      setEnrollOpen(false);
-      setPhone("");
-      setChallengeId(null);
       setVerifyCode("");
+      if (data.recovery_codes.length > 0) {
+        setRecoveryCodes(data.recovery_codes);
+      } else {
+        toast.success("SMS device added");
+        setEnrollOpen(false);
+        setPhone("");
+        setChallengeId(null);
+      }
     },
     onError: () => toast.error("Invalid code"),
   });
@@ -370,15 +413,49 @@ function SmsSection() {
       </CardContent>
 
       {/* Enrollment dialog */}
-      <Dialog open={enrollOpen} onOpenChange={(o) => { if (!o) setEnrollOpen(false); }}>
+      <Dialog open={enrollOpen} onOpenChange={(o) => {
+        if (!o) {
+          setEnrollOpen(false);
+          setPhone("");
+          setChallengeId(null);
+          setVerifyCode("");
+          setRecoveryCodes([]);
+        }
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add SMS Device</DialogTitle>
             <DialogDescription>
-              {challengeId ? "Enter the verification code sent to your phone." : "Enter the phone number in E.164 format (e.g. +12125551234)."}
+              {recoveryCodes.length > 0
+                ? "Save these recovery codes somewhere safe. They can be used to access your account if you lose access to your phone."
+                : challengeId
+                  ? "Enter the verification code sent to your phone."
+                  : "Enter the phone number in E.164 format (e.g. +12125551234)."}
             </DialogDescription>
           </DialogHeader>
-          {!challengeId ? (
+          {recoveryCodes.length > 0 ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted p-3">
+                {recoveryCodes.map((code) => (
+                  <code key={code} className="text-center text-sm font-mono">{code}</code>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                These codes will not be shown again. Store them in a password manager or other secure location.
+              </p>
+              <DialogFooter>
+                <Button className="w-full" onClick={() => {
+                  toast.success("SMS device added");
+                  setEnrollOpen(false);
+                  setPhone("");
+                  setChallengeId(null);
+                  setRecoveryCodes([]);
+                }}>
+                  I&apos;ve saved my recovery codes
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : !challengeId ? (
             <form onSubmit={(e) => { e.preventDefault(); beginMutation.mutate(); }} className="space-y-3">
               <div>
                 <Label htmlFor="sms-phone">Phone number</Label>
@@ -445,6 +522,7 @@ function EmailSection() {
   const [email, setEmail] = useState("");
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [verifyCode, setVerifyCode] = useState("");
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
   const [removeChallengeId, setRemoveChallengeId] = useState<string | null>(null);
   const [removeCode, setRemoveCode] = useState("");
@@ -464,13 +542,17 @@ function EmailSection() {
 
   const confirmMutation = useMutation({
     mutationFn: () => confirmEmailEnrollment({ challenge_id: challengeId ?? "", code: verifyCode }),
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["mfa", "email", "devices"] });
-      toast.success("Email device added");
-      setEnrollOpen(false);
-      setEmail("");
-      setChallengeId(null);
       setVerifyCode("");
+      if (data.recovery_codes.length > 0) {
+        setRecoveryCodes(data.recovery_codes);
+      } else {
+        toast.success("Email device added");
+        setEnrollOpen(false);
+        setEmail("");
+        setChallengeId(null);
+      }
     },
     onError: () => toast.error("Invalid code"),
   });
@@ -554,15 +636,49 @@ function EmailSection() {
       </CardContent>
 
       {/* Enrollment dialog */}
-      <Dialog open={enrollOpen} onOpenChange={(o) => { if (!o) setEnrollOpen(false); }}>
+      <Dialog open={enrollOpen} onOpenChange={(o) => {
+        if (!o) {
+          setEnrollOpen(false);
+          setEmail("");
+          setChallengeId(null);
+          setVerifyCode("");
+          setRecoveryCodes([]);
+        }
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add Email Device</DialogTitle>
             <DialogDescription>
-              {challengeId ? "Enter the verification code sent to your email." : "Enter the email address for verification."}
+              {recoveryCodes.length > 0
+                ? "Save these recovery codes somewhere safe. They can be used to access your account if you lose access to your email."
+                : challengeId
+                  ? "Enter the verification code sent to your email."
+                  : "Enter the email address for verification."}
             </DialogDescription>
           </DialogHeader>
-          {!challengeId ? (
+          {recoveryCodes.length > 0 ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted p-3">
+                {recoveryCodes.map((code) => (
+                  <code key={code} className="text-center text-sm font-mono">{code}</code>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                These codes will not be shown again. Store them in a password manager or other secure location.
+              </p>
+              <DialogFooter>
+                <Button className="w-full" onClick={() => {
+                  toast.success("Email device added");
+                  setEnrollOpen(false);
+                  setEmail("");
+                  setChallengeId(null);
+                  setRecoveryCodes([]);
+                }}>
+                  I&apos;ve saved my recovery codes
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : !challengeId ? (
             <form onSubmit={(e) => { e.preventDefault(); beginMutation.mutate(); }} className="space-y-3">
               <div>
                 <Label htmlFor="email-addr">Email address</Label>

@@ -83,7 +83,7 @@ export const beginTotpEnrollment = (body: TotpDeviceBeginReq) =>
   api.post<TotpDeviceBeginResp>("/ui/mfa/totp/devices/begin", body);
 
 export const confirmTotpEnrollment = (body: TotpDeviceConfirmReq) =>
-  api.post<OkResp>("/ui/mfa/totp/devices/confirm", body);
+  api.post<{ ok: boolean; recovery_codes: string[] }>("/ui/mfa/totp/devices/confirm", body);
 
 export const removeTotpDevice = (deviceId: string, totpCode: string) =>
   api.post<OkResp>(`/ui/mfa/totp/devices/${deviceId}/remove`, { totp_code: totpCode });

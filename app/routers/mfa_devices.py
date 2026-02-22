@@ -64,11 +64,18 @@ async def totp_devices_begin(req: Request, body: TotpDeviceBeginReq, ctx=Depends
 
 @router.post("/totp/devices/confirm")
 async def totp_devices_confirm(req: Request, body: TotpDeviceConfirmReq, ctx=Depends(require_ui_session)):
+    user_sub = ctx["user_sub"]
     require_fresh_mfa(ctx)
-    totp_confirm_enroll(ctx["user_sub"], body.device_id, body.totp_code)
-    stamp_mfa_verified(ctx["user_sub"], ctx["session_id"])
-    audit_event("totp_device_confirm", ctx["user_sub"], req, outcome="success", device_id=body.device_id)
-    return {"ok": True}
+    totp_confirm_enroll(user_sub, body.device_id, body.totp_code)
+    r = T.totp.query(KeyConditionExpression=Key("user_sub").eq(user_sub))
+    enabled_count = sum(1 for d in r.get("Items", []) if d.get("enabled", False))
+    recovery_codes: List[str] = []
+    if enabled_count == 1:
+        recovery_codes = new_recovery_codes(10)
+        store_recovery_codes(user_sub, "totp", recovery_codes)
+    stamp_mfa_verified(user_sub, ctx["session_id"])
+    audit_event("totp_device_confirm", user_sub, req, outcome="success", device_id=body.device_id)
+    return {"ok": True, "recovery_codes": recovery_codes}
 
 @router.post("/totp/devices/{device_id}/remove")
 async def totp_devices_remove(req: Request, device_id: str, body: TotpDeviceRemoveReq, ctx=Depends(require_ui_session)):
