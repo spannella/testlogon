@@ -92,7 +92,7 @@ def set_session_cookies(response: Response, session: SessionInfo, *, refresh_ttl
         response.set_cookie(
             S.ui_access_token_cookie_name,
             access,
-            max_age=_access_ttl_seconds_for_user(user_sub),
+            max_age=_access_ttl_seconds_for_user(session.user_sub),
             httponly=True,
             secure=S.ui_cookie_secure,
             samesite=S.ui_cookie_samesite,
