@@ -4015,7 +4015,6 @@ def send_text_message(
         "kind": "text",
         "text": message_text if not is_encrypted else None,
         "is_encrypted": is_encrypted,
-        "deleted_for": set(),
         "reactions": {},
     }
     if is_encrypted and inp.encryption:
