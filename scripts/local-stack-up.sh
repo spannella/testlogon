@@ -118,10 +118,15 @@ start_host_stack() {
     start_with_pidfile "stripe-mock" "'${TOOLS_DIR}/stripe-mock/stripe-mock' -http-port 12111 -https-port 12112" "stripe-mock"
   fi
 
+  if ! is_up "http://localhost:7999/health"; then
+    start_with_pidfile "mock-kms" "python3 '${SCRIPT_DIR}/mock_kms_server.py'" "mock_kms_server.py"
+  fi
+
   echo "Waiting for local services to be healthy..."
   wait_up "http://localhost:4566/" "Moto AWS mock (S3/Cognito)"
   wait_up "http://localhost:8001/" "DynamoDB Local"
   wait_up "http://localhost:12111/" "Stripe mock"
+  wait_up "http://localhost:7999/health" "Mock KMS"
 }
 
 if command -v docker >/dev/null 2>&1; then
@@ -151,6 +156,7 @@ fi
 PYTHONPATH="${REPO_ROOT}" python3 scripts/local-s3-init.py
 PYTHONPATH="${REPO_ROOT}" python3 scripts/local-cognito-init.py
 PYTHONPATH="${REPO_ROOT}" python3 scripts/local-ses-init.py
+PYTHONPATH="${REPO_ROOT}" python3 scripts/local-kms-init.py
 
 echo ""
 echo "Local stack is starting."

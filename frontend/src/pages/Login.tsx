@@ -37,7 +37,7 @@ type LoginStep = "credentials" | "mfa" | "magic-link" | "webauthn";
 type MfaMethod = "totp" | "sms" | "email" | "recovery";
 
 const credentialsSchema = z.object({
-  username: z.string().min(1, "Username is required"),
+  username: z.string().min(1, "Email is required"),
   password: z.string().min(1, "Password is required"),
 });
 
@@ -445,10 +445,10 @@ export default function Login() {
                 )}
 
                 <div className="space-y-2">
-                  <Label htmlFor="username">Username</Label>
+                  <Label htmlFor="username">Email</Label>
                   <Input
                     id="username"
-                    placeholder="Enter your username"
+                    placeholder="Enter your email"
                     autoComplete="username"
                     autoFocus
                     disabled={loading}

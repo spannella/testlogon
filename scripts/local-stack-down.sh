@@ -28,5 +28,6 @@ stop_pid "moto-server"
 stop_pid "localstack"
 stop_pid "dynamodb-local"
 stop_pid "stripe-mock"
+stop_pid "mock-kms"
 
 echo "Local stack stopped."
