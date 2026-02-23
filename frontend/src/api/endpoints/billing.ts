@@ -34,6 +34,18 @@ export const getPaymentMethods = () =>
 export const createCardSetupIntent = () =>
   api.post<{ client_secret: string }>("/ui/billing/setup-intent/card");
 
+export const addCard = (body: {
+  card_number: string;
+  exp_month: number;
+  exp_year: number;
+  cvc: string;
+  cardholder_name?: string;
+}) =>
+  api.post<{ payment_method_id: string; brand?: string; last4?: string; label?: string }>(
+    "/ui/billing/payment-methods/card",
+    body,
+  );
+
 export const createBankSetupIntent = () =>
   api.post<{ client_secret: string }>("/ui/billing/setup-intent/us-bank");
 

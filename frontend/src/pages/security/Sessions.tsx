@@ -17,6 +17,8 @@ export function Sessions() {
   const sessionsQuery = useQuery({
     queryKey: ["sessions"],
     queryFn: getSessions,
+    refetchOnWindowFocus: true,
+    refetchInterval: 30_000,
   });
 
   const revokeMutation = useMutation({
@@ -93,7 +95,9 @@ export function Sessions() {
                     </span>
                     <span className="inline-flex items-center gap-1">
                       <Clock className="h-3 w-3" />
-                      Last seen {new Date(s.last_seen_at * 1000).toLocaleString()}
+                      {s.last_seen_at
+                        ? `Last seen ${new Date(s.last_seen_at * 1000).toLocaleString()}`
+                        : "Not yet seen"}
                     </span>
                   </div>
                 </div>

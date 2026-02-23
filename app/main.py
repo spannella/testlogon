@@ -170,7 +170,11 @@ def create_app() -> FastAPI:
     app.include_router(newsfeed_router)
     app.add_event_handler("startup", validate_startup_root_invariant)
     if _S.dev_mode:
-        _dev_buckets = [b for b in [_S.filemgr_bucket] if b]
+        _dev_buckets = [b for b in [
+            _S.filemgr_bucket,
+            os.environ.get("UPLOAD_BUCKET", ""),
+            os.environ.get("S3_BUCKET_IMAGES", ""),
+        ] if b]
         app.add_event_handler("startup", lambda: _start_s3_mock(_dev_buckets))
 
 

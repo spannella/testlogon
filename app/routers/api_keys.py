@@ -17,7 +17,7 @@ async def ui_list_api_keys(ctx=Depends(require_ui_session)):
 @router.post("/api_keys")
 async def ui_create_api_key(req: Request, body: CreateApiKeyReq, ctx=Depends(require_ui_session)):
     require_fresh_mfa(ctx)
-    created = create_api_key(ctx["user_sub"], body.label or "")
+    created = create_api_key(ctx["user_sub"], body.label or "", expires_in_days=body.expires_in_days)
     audit_event("api_key_create", ctx["user_sub"], req, outcome="success", key_id=created["key_id"])
     return created
 

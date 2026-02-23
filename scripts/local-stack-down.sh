@@ -19,6 +19,13 @@ stop_pid() {
     pid="$(cat "$pid_file")"
     if kill -0 "$pid" >/dev/null 2>&1; then
       kill "$pid" >/dev/null 2>&1 || true
+      # Wait up to 10s for graceful exit, then force-kill
+      local i
+      for i in $(seq 1 10); do
+        kill -0 "$pid" >/dev/null 2>&1 || break
+        sleep 1
+      done
+      kill -9 "$pid" >/dev/null 2>&1 || true
     fi
     rm -f "$pid_file"
   fi
@@ -28,5 +35,10 @@ stop_pid "moto-server"
 stop_pid "localstack"
 stop_pid "dynamodb-local"
 stop_pid "stripe-mock"
+stop_pid "mock-kms"
+
+# Belt-and-suspenders: kill any orphaned DynamoDB Local or moto processes
+pkill -f "DynamoDBLocal.jar" 2>/dev/null || true
+pkill -f "moto_server"       2>/dev/null || true
 
 echo "Local stack stopped."

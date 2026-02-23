@@ -292,7 +292,7 @@ export function Addresses() {
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="addr-country">Country</Label>
-                <Input id="addr-country" {...form.register("country")} />
+                <Input id="addr-country" placeholder="e.g. US" {...form.register("country")} />
               </div>
               <div className="space-y-1.5 sm:col-span-2">
                 <Label htmlFor="addr-notes">Notes</Label>

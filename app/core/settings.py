@@ -159,6 +159,7 @@ class Settings:
     webauthn_rp_id: str = os.environ.get("WEBAUTHN_RP_ID", "")
     webauthn_rp_name: str = os.environ.get("WEBAUTHN_RP_NAME", "YourApp")
     webauthn_origin: str = os.environ.get("WEBAUTHN_ORIGIN", "")
+    totp_issuer: str = os.environ.get("TOTP_ISSUER", os.environ.get("WEBAUTHN_RP_NAME", "YourApp"))
 
     # Push / FCM
     push_devices_table_name: str = os.environ.get("PUSH_DEVICES_TABLE_NAME", "push_devices")

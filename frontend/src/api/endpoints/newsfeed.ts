@@ -7,8 +7,6 @@ import type {
   EditPostReq,
   EditCommentReq,
   HidePostReq,
-  PresignUploadReq,
-  PresignUploadResp,
   TipReq,
 } from "@/api/types";
 
@@ -72,10 +70,13 @@ export const deleteComment = (postId: string, commentId: string) =>
 export const hidePost = (body: HidePostReq) =>
   api.post<{ ok: boolean }>("/feed/hide", body);
 
-// ── Presign upload ─────────────────────────────────────────────
+// ── Image upload ───────────────────────────────────────────────
 
-export const presignUpload = (body: PresignUploadReq) =>
-  api.post<PresignUploadResp>("/uploads/presign", body);
+export const uploadPostImage = (file: File) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  return api.upload<{ url: string; s3_key: string }>("/uploads/image", formData);
+};
 
 // ── Tipping ────────────────────────────────────────────────────
 

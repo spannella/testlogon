@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Loader2, Upload, X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,11 +13,20 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   createCatalogItem,
   updateCatalogItem,
-  uploadItemImage,
 } from "@/api/endpoints/cart";
+import { uploadPostImage } from "@/api/endpoints/newsfeed";
 import type { CatalogItem } from "@/api/types";
+
+const CURRENCIES = ["USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "CNY", "INR", "MXN", "BRL", "SGD", "HKD", "NOK", "SEK", "DKK", "NZD", "ZAR", "KRW", "AED"];
 
 interface ItemEditorProps {
   open: boolean;
@@ -47,8 +56,8 @@ export function ItemEditor({
   const [priceDollars, setPriceDollars] = useState("");
   const [currency, setCurrency] = useState("USD");
   const [attrs, setAttrs] = useState<AttrRow[]>([]);
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imageUrls, setImageUrls] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   // Pre-fill form when editing
@@ -64,27 +73,38 @@ export function ItemEditor({
           ? entries.map(([k, v]) => ({ key: k, value: String(v) }))
           : [{ key: "", value: "" }],
       );
-      setImageFile(null);
-      setImagePreview(null);
+      setImageUrls(item.image_urls ?? []);
     } else if (open) {
       setName("");
       setDescription("");
       setPriceDollars("");
       setCurrency("USD");
       setAttrs([{ key: "", value: "" }]);
-      setImageFile(null);
-      setImagePreview(null);
+      setImageUrls([]);
     }
   }, [open, item]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = "";
     if (!file) return;
-    setImageFile(file);
-    const reader = new FileReader();
-    reader.onload = (ev) => setImagePreview(ev.target?.result as string);
-    reader.readAsDataURL(file);
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please select an image file");
+      return;
+    }
+    setUploading(true);
+    try {
+      const result = await uploadPostImage(file);
+      setImageUrls((prev) => [...prev, result.url]);
+    } catch {
+      toast.error("Failed to upload image");
+    } finally {
+      setUploading(false);
+    }
   };
+
+  const removeImage = (idx: number) =>
+    setImageUrls((prev) => prev.filter((_, i) => i !== idx));
 
   const updateAttr = (idx: number, field: "key" | "value", val: string) => {
     setAttrs((prev) => prev.map((r, i) => (i === idx ? { ...r, [field]: val } : r)));
@@ -114,29 +134,24 @@ export function ItemEditor({
 
     setSaving(true);
     try {
-      let saved: CatalogItem;
       if (isEdit && item) {
-        saved = await updateCatalogItem(categoryId, item.item_id, {
+        await updateCatalogItem(categoryId, item.item_id, {
           name: name.trim(),
           description: description.trim() || undefined,
           price_cents: priceCents,
           currency,
+          image_urls: imageUrls,
           attributes,
         });
       } else {
-        saved = await createCatalogItem(categoryId, {
+        await createCatalogItem(categoryId, {
           name: name.trim(),
           description: description.trim() || undefined,
           price_cents: priceCents,
           currency,
-          image_urls: [],
+          image_urls: imageUrls,
           attributes,
         });
-      }
-
-      // Upload image if provided
-      if (imageFile) {
-        await uploadItemImage(categoryId, saved.item_id, imageFile);
       }
 
       toast.success(isEdit ? "Item updated" : "Item created");
@@ -193,13 +208,16 @@ export function ItemEditor({
             </div>
             <div className="space-y-1">
               <Label htmlFor="item-currency">Currency</Label>
-              <Input
-                id="item-currency"
-                value={currency}
-                onChange={(e) => setCurrency(e.target.value.toUpperCase())}
-                maxLength={3}
-                placeholder="USD"
-              />
+              <Select value={currency} onValueChange={setCurrency}>
+                <SelectTrigger id="item-currency">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CURRENCIES.map((c) => (
+                    <SelectItem key={c} value={c}>{c}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
@@ -235,34 +253,56 @@ export function ItemEditor({
             </Button>
           </div>
 
-          {/* Image upload */}
+          {/* Images */}
           <div className="space-y-2">
-            <Label>Image</Label>
-            {imagePreview && (
-              <img
-                src={imagePreview}
-                alt="Preview"
-                className="h-32 w-full rounded-md border object-contain"
-              />
+            <Label>Images</Label>
+            {imageUrls.length > 0 && (
+              <div className="grid grid-cols-3 gap-2">
+                {imageUrls.map((url, idx) => (
+                  <div key={idx} className="relative">
+                    <img
+                      src={url}
+                      alt={`Image ${idx + 1}`}
+                      className="h-24 w-full rounded-md border object-cover"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeImage(idx)}
+                      className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
             )}
             <label className="flex cursor-pointer items-center gap-2 rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground hover:bg-accent">
-              <Upload className="h-4 w-4" />
-              {imageFile ? imageFile.name : "Choose image..."}
+              {uploading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Uploading…
+                </>
+              ) : (
+                <>
+                  + Add image
+                </>
+              )}
               <input
                 type="file"
                 accept="image/*"
                 className="hidden"
                 onChange={handleFileChange}
+                disabled={uploading}
               />
             </label>
           </div>
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving || uploading}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={saving}>
+          <Button onClick={handleSave} disabled={saving || uploading}>
             {saving && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
             {isEdit ? "Save Changes" : "Create Item"}
           </Button>

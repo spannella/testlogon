@@ -105,7 +105,7 @@ def _normalize_mailing_address(addr: Optional[Dict[str, Any]]) -> Optional[Dict[
         "city": _clean_str(addr.get("city"), max_len=MAX_ADDRESS_LINE_LEN),
         "state": _clean_str(addr.get("state"), max_len=MAX_ADDRESS_LINE_LEN),
         "postal_code": _clean_str(addr.get("postal_code"), max_len=MAX_ADDRESS_LINE_LEN),
-        "country": _clean_str(addr.get("country"), max_len=2),
+        "country": _clean_str(addr.get("country"), max_len=64),
     }
     if not any(cleaned.values()):
         return None

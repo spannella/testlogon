@@ -3,7 +3,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import { Loader2, CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuthStore } from "@/stores/authStore";
-import { passwordlessVerify } from "@/api/endpoints/auth";
+import { getMe, passwordlessVerify } from "@/api/endpoints/auth";
 
 export default function MagicLinkVerify() {
   const [searchParams] = useSearchParams();
@@ -32,7 +32,8 @@ export default function MagicLinkVerify() {
 
         if (resp.status === "ok" && resp.session_id) {
           setStatus("success");
-          login(resp.session_id, "");
+          const me = await getMe();
+          login(me.user_sub, "");
           // Brief delay to show success state before redirect
           setTimeout(() => {
             if (!cancelled) navigate("/", { replace: true });

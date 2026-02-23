@@ -61,6 +61,7 @@ from app.services.messaging_routing import (
 from app.services.filemanager import get_node, get_usage_summary, norm_path
 from app.services.messaging_gallery import fetch_gallery_page
 from app.services.messaging_gallery_index import fetch_gallery_index_page, sync_gallery_index_entries
+from app.services.profile import get_profile_identity
 from app.services.sessions import require_ui_session
 from app.services.subscription_access import require_subscription_access
 from app.services.usage_metering import (
@@ -372,6 +373,40 @@ def _enforce_message_send_quota_precheck(*, user_id: str, conversation_id: str, 
             )
 
 
+def _ensure_user_indexed(user_id: str) -> None:
+    """Lazily sync user into messaging search tables from the main profile store.
+
+    Called on first messaging API access.  The tbl_users.get_item check is
+    fast (single consistent read) so overhead on subsequent calls is minimal.
+    """
+    try:
+        existing = tbl_users.get_item(Key={"user_id": user_id}).get("Item")
+        if existing:
+            return
+        identity = get_profile_identity(user_id)
+        display_name = (identity.get("display_name") or "").strip() or user_id
+        email = (identity.get("email") or "").strip()
+        ts = now_ts()
+        tbl_users.put_item(Item={
+            "user_id": user_id,
+            "display_name": display_name,
+            "email": email,
+            "updated_at": ts,
+        })
+        tokens: set[str] = set(build_prefix_tokens(display_name))
+        if email:
+            tokens |= set(build_prefix_tokens(email))
+        with tbl_search.batch_writer() as bw:
+            for t in tokens:
+                bw.put_item(Item={
+                    "token": t,
+                    "user_id": user_id,
+                    "display_name": display_name,
+                })
+    except Exception:
+        logger.exception("_ensure_user_indexed failed", extra={"user_id": user_id})
+
+
 async def get_messaging_user_id(
     request: Request,
     authorization: Optional[str] = Header(default=None),
@@ -381,8 +416,12 @@ async def get_messaging_user_id(
     if x_session_id or cookies.get(S.ui_session_cookie_name):
         user_sub = await get_authenticated_user_sub(request)
         ctx = await require_ui_session(request, user_sub=user_sub, x_session_id=x_session_id)
-        return ctx["user_sub"]
-    return get_current_user_id(authorization)
+        uid = ctx["user_sub"]
+        _ensure_user_indexed(uid)
+        return uid
+    uid = get_current_user_id(authorization)
+    _ensure_user_indexed(uid)
+    return uid
 
 
 

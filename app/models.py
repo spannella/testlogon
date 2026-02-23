@@ -294,6 +294,7 @@ class WebAuthnAuthFinishResp(BaseModel):
 
 class CreateApiKeyReq(BaseModel):
     label: Optional[str] = None
+    expires_in_days: Optional[int] = None
 
 class RevokeApiKeyReq(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -573,6 +574,7 @@ class TotpDeviceConfirmReq(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     device_id: str
     totp_code: str = Field(validation_alias=AliasChoices("totp_code", "code"))
+    totp_code2: str = Field(validation_alias=AliasChoices("totp_code2", "code2"))
 
 class TotpDeviceRemoveReq(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -1072,6 +1074,13 @@ class VerifyMicrodepositsReq(BaseModel):
     setup_intent_id: str
     amounts: Optional[List[int]] = None
     descriptor_code: Optional[str] = None
+
+class AddCardReq(BaseModel):
+    card_number: str
+    exp_month: int = Field(ge=1, le=12)
+    exp_year: int = Field(ge=2000, le=2100)
+    cvc: str
+    cardholder_name: Optional[str] = None
 
 class AddChargeReq(BaseModel):
     amount_cents: int = Field(ge=1)

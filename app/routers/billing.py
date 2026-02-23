@@ -22,6 +22,7 @@ from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 from app.models import (
+    AddCardReq,
     AddChargeReq,
     BillingCheckoutReq,
     StripePaymentMethodOut,
@@ -388,6 +389,86 @@ def create_us_bank_setup_intent(ctx=Depends(require_ui_session)) -> Dict[str, st
         usage="off_session",
     )
     return {"client_secret": si["client_secret"]}
+
+
+@dual_route("POST", "/billing/payment-methods/card")
+def add_card(body: AddCardReq, req: Request = None, ctx=Depends(require_ui_session)) -> Dict[str, Any]:
+    ensure_stripe_configured()
+    user_id = ctx["user_sub"]
+    customer_id = get_or_create_customer(user_id)
+
+    pm_data: Dict[str, Any] = {
+        "type": "card",
+        "card": {
+            "number": body.card_number.replace(" ", "").replace("-", ""),
+            "exp_month": body.exp_month,
+            "exp_year": body.exp_year,
+            "cvc": body.cvc,
+        },
+    }
+    if body.cardholder_name:
+        pm_data["billing_details"] = {"name": body.cardholder_name}
+
+    try:
+        pm = stripe.PaymentMethod.create(**pm_data)
+    except Exception as exc:
+        logger.warning("add_card PaymentMethod.create failed", extra={"user_id": user_id}, exc_info=exc)
+        raise HTTPException(400, f"Card declined or invalid: {exc}") from exc
+
+    pm_id = pm["id"]
+
+    try:
+        stripe.PaymentMethod.attach(pm_id, customer=customer_id)
+    except Exception as exc:
+        logger.warning("add_card PaymentMethod.attach failed", extra={"user_id": user_id, "pm_id": pm_id}, exc_info=exc)
+        raise HTTPException(400, f"Failed to attach card: {exc}") from exc
+
+    pm_type = pm.get("type", "card")
+    card = pm.get("card", {}) or {}
+    brand = card.get("brand")
+    last4 = card.get("last4")
+    exp_month = card.get("exp_month")
+    exp_year = card.get("exp_year")
+    label = f"{brand} ****{last4}" if brand and last4 else None
+
+    pk = user_pk(user_id)
+    existing = list_payment_methods_ddb(user_id)
+    next_priority = 0 if not existing else (max(int(x.get("priority", 0)) for x in existing) + 1)
+
+    ddb_put(T.billing, {
+        "pk": pk,
+        "sk": pm_sk(pm_id),
+        "payment_method_id": pm_id,
+        "provider": "stripe",
+        "provider_method_id": pm_id,
+        "method_type": pm_type,
+        "label": label,
+        "brand": brand,
+        "last4": last4,
+        "exp_month": exp_month,
+        "exp_year": exp_year,
+        "priority": next_priority,
+        "created_at": now_ts(),
+    })
+
+    if not current_default_pm(user_id):
+        set_default_pm(user_id, pm_id)
+        try:
+            stripe.Customer.modify(customer_id, invoice_settings={"default_payment_method": pm_id})
+        except Exception:
+            pass
+
+    bump_dunning_after_payment_method_update(user_id, "stripe")
+    audit_event("billing_add_card", user_id, req, outcome="success", payment_method_id=pm_id)
+    return {
+        "payment_method_id": pm_id,
+        "method_type": pm_type,
+        "brand": brand,
+        "last4": last4,
+        "exp_month": exp_month,
+        "exp_year": exp_year,
+        "label": label,
+    }
 
 
 @dual_route("POST", "/billing/us-bank/verify-microdeposits")

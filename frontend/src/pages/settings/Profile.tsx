@@ -41,12 +41,6 @@ const profileSchema = z.object({
   location: z.string().optional(),
   displayed_email: z.string().email().or(z.literal("")).optional(),
   displayed_telephone_number: z.string().optional(),
-  mailing_line1: z.string().optional(),
-  mailing_line2: z.string().optional(),
-  mailing_city: z.string().optional(),
-  mailing_state: z.string().optional(),
-  mailing_postal_code: z.string().optional(),
-  mailing_country: z.string().optional(),
 });
 
 type ProfileFormValues = z.infer<typeof profileSchema>;
@@ -94,26 +88,12 @@ export function Profile() {
       location: p.location ?? "",
       displayed_email: p.displayed_email ?? "",
       displayed_telephone_number: p.displayed_telephone_number ?? "",
-      mailing_line1: p.mailing_address?.line1 ?? "",
-      mailing_line2: p.mailing_address?.line2 ?? "",
-      mailing_city: p.mailing_address?.city ?? "",
-      mailing_state: p.mailing_address?.state ?? "",
-      mailing_postal_code: p.mailing_address?.postal_code ?? "",
-      mailing_country: p.mailing_address?.country ?? "",
     });
     setLanguages(p.languages ?? []);
   }, [profileQuery.data, form]);
 
   const saveMutation = useMutation({
     mutationFn: (values: ProfileFormValues) => {
-      const mailing_address = {
-        line1: values.mailing_line1,
-        line2: values.mailing_line2,
-        city: values.mailing_city,
-        state: values.mailing_state,
-        postal_code: values.mailing_postal_code,
-        country: values.mailing_country,
-      };
       return patchProfile({
         display_name: values.display_name,
         first_name: values.first_name,
@@ -126,7 +106,6 @@ export function Profile() {
         location: values.location,
         displayed_email: values.displayed_email,
         displayed_telephone_number: values.displayed_telephone_number,
-        mailing_address,
         languages,
       });
     },
@@ -317,39 +296,6 @@ export function Profile() {
               placeholder="Tell us about yourself..."
               {...form.register("description")}
             />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Mailing address */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Mailing Address</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="mailing_line1">Address Line 1</Label>
-            <Input id="mailing_line1" {...form.register("mailing_line1")} />
-          </div>
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="mailing_line2">Address Line 2</Label>
-            <Input id="mailing_line2" {...form.register("mailing_line2")} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="mailing_city">City</Label>
-            <Input id="mailing_city" {...form.register("mailing_city")} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="mailing_state">State / Province</Label>
-            <Input id="mailing_state" {...form.register("mailing_state")} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="mailing_postal_code">Postal Code</Label>
-            <Input id="mailing_postal_code" {...form.register("mailing_postal_code")} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="mailing_country">Country</Label>
-            <Input id="mailing_country" {...form.register("mailing_country")} />
           </div>
         </CardContent>
       </Card>

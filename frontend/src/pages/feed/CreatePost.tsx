@@ -5,13 +5,15 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
-import { createPost, presignUpload } from "@/api/endpoints/newsfeed";
+import { createPost, uploadPostImage } from "@/api/endpoints/newsfeed";
+
+const MAX_IMAGES = 10;
 
 export function CreatePost() {
   const queryClient = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [body, setBody] = useState("");
-  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const [imageUrls, setImageUrls] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
@@ -19,12 +21,12 @@ export function CreatePost() {
     mutationFn: () =>
       createPost({
         body,
-        ...(imageUrl ? { image_url: imageUrl } : {}),
+        ...(imageUrls.length > 0 ? { image_urls: imageUrls } : {}),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["feed"] });
       setBody("");
-      setImageUrl(null);
+      setImageUrls([]);
       toast.success("Post published");
     },
     onError: () => {
@@ -34,7 +36,7 @@ export function CreatePost() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!body.trim() && !imageUrl) return;
+    if (!body.trim() && imageUrls.length === 0) return;
     mutation.mutate();
   };
 
@@ -56,50 +58,23 @@ export function CreatePost() {
     }
 
     setUploading(true);
-    setUploadProgress(0);
+    setUploadProgress(50);
 
     try {
-      // 1. Get presigned URL
-      const presign = await presignUpload({
-        filename: file.name,
-        content_type: file.type,
-      });
-
-      setUploadProgress(30);
-
-      // 2. Upload to S3 via PUT
-      const headers: Record<string, string> = {
-        "Content-Type": file.type,
-        ...presign.put_headers,
-      };
-
-      const uploadResp = await fetch(presign.put_url, {
-        method: "PUT",
-        headers,
-        body: file,
-      });
-
-      if (!uploadResp.ok) {
-        throw new Error("Upload failed");
-      }
-
+      const result = await uploadPostImage(file);
       setUploadProgress(100);
-
-      // 3. Use the public URL from the attachment, or derive from put_url
-      const publicUrl = presign.attachment.url ?? presign.put_url.split("?")[0];
-      setImageUrl(publicUrl ?? null);
+      setImageUrls((prev) => [...prev, result.url]);
       toast.success("Image uploaded");
     } catch {
       toast.error("Failed to upload image");
-      setImageUrl(null);
     } finally {
       setUploading(false);
       setUploadProgress(0);
     }
   };
 
-  const removeImage = () => {
-    setImageUrl(null);
+  const removeImage = (index: number) => {
+    setImageUrls((prev) => prev.filter((_, i) => i !== index));
   };
 
   return (
@@ -129,21 +104,25 @@ export function CreatePost() {
             </div>
           )}
 
-          {/* Image preview */}
-          {imageUrl && !uploading && (
-            <div className="relative inline-block">
-              <img
-                src={imageUrl}
-                alt="Attachment preview"
-                className="h-24 w-24 rounded-lg object-cover"
-              />
-              <button
-                type="button"
-                onClick={removeImage}
-                className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow-sm"
-              >
-                <X className="h-3 w-3" />
-              </button>
+          {/* Image thumbnails */}
+          {imageUrls.length > 0 && !uploading && (
+            <div className="flex flex-wrap gap-2">
+              {imageUrls.map((url, i) => (
+                <div key={i} className="relative inline-block">
+                  <img
+                    src={url}
+                    alt={`Attachment ${i + 1}`}
+                    className="h-24 w-24 rounded-lg object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeImage(i)}
+                    className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow-sm"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
 
@@ -154,10 +133,15 @@ export function CreatePost() {
               variant="ghost"
               size="sm"
               onClick={() => fileRef.current?.click()}
-              disabled={uploading || !!imageUrl}
+              disabled={uploading || imageUrls.length >= MAX_IMAGES}
             >
               <ImagePlus className="mr-1 h-3.5 w-3.5" />
               Photo
+              {imageUrls.length > 0 && (
+                <span className="ml-1 text-xs text-muted-foreground">
+                  ({imageUrls.length}/{MAX_IMAGES})
+                </span>
+              )}
             </Button>
 
             <input
@@ -171,7 +155,7 @@ export function CreatePost() {
             <Button
               type="submit"
               size="sm"
-              disabled={(!body.trim() && !imageUrl) || mutation.isPending || uploading}
+              disabled={(!body.trim() && imageUrls.length === 0) || mutation.isPending || uploading}
             >
               <Send className="mr-1 h-3.5 w-3.5" />
               {mutation.isPending ? "Posting..." : "Post"}

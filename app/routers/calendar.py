@@ -894,10 +894,10 @@ async def create_calendar(body: CalendarCreateIn, ctx: Dict[str, str] = Depends(
     )
 
 
-@router.get("/calendars", response_model=list[CalendarAccessOut])
-async def list_calendars(ctx: Dict[str, str] = Depends(require_ui_session)):
+def _build_calendar_list(user_sub: str) -> list[CalendarAccessOut]:
+    """Return all calendars accessible to the user (owned + shared)."""
     access_response = T.calendar.query(
-        KeyConditionExpression=Key("calendar_id").eq(_access_partition(ctx["user_sub"])) & Key("sk").begins_with("calendar#"),
+        KeyConditionExpression=Key("calendar_id").eq(_access_partition(user_sub)) & Key("sk").begins_with("calendar#"),
         ScanIndexForward=True,
     )
     access_items = access_response.get("Items", [])
@@ -905,13 +905,13 @@ async def list_calendars(ctx: Dict[str, str] = Depends(require_ui_session)):
     owner_scan = T.calendar.scan(
         FilterExpression=Attr("sk").eq("meta")
         & Attr("type").eq("calendar")
-        & Attr("owner_user_sub").eq(ctx["user_sub"])
+        & Attr("owner_user_sub").eq(user_sub)
     )
     for item in owner_scan.get("Items", []):
         calendar_id = item.get("calendar_id")
         if not calendar_id or calendar_id in access_by_calendar:
             continue
-        access_item = _calendar_access_item(ctx["user_sub"], calendar_id, "owner")
+        access_item = _calendar_access_item(user_sub, calendar_id, "owner")
         access_by_calendar[calendar_id] = access_item
         T.calendar.put_item(Item=access_item)
     result: list[CalendarAccessOut] = []
@@ -931,6 +931,43 @@ async def list_calendars(ctx: Dict[str, str] = Depends(require_ui_session)):
                 permission=permission if permission in {"owner", "read", "write"} else "read",
             )
         )
+    return result
+
+
+def _create_default_calendar(user_sub: str) -> CalendarAccessOut:
+    """Create and return a default 'My Calendar' for the user."""
+    calendar_id = uuid.uuid4().hex
+    now = iso_utc(utc_now())
+    item = {
+        "calendar_id": calendar_id,
+        "sk": "meta",
+        "type": "calendar",
+        "name": "My Calendar",
+        "timezone": "UTC",
+        "conflict_detection": False,
+        "working_hours": None,
+        "buffer_before_minutes": 0,
+        "buffer_after_minutes": 0,
+        "owner_user_sub": user_sub,
+        "created_at_utc": now,
+    }
+    T.calendar.put_item(Item=item)
+    access_item = _calendar_access_item(user_sub, calendar_id, "owner")
+    T.calendar.put_item(Item=access_item)
+    return CalendarAccessOut(
+        calendar_id=calendar_id,
+        name="My Calendar",
+        timezone="UTC",
+        owner_user_id=user_sub,
+        permission="owner",
+    )
+
+
+@router.get("/calendars", response_model=list[CalendarAccessOut])
+async def list_calendars(ctx: Dict[str, str] = Depends(require_ui_session)):
+    result = _build_calendar_list(ctx["user_sub"])
+    if not result:
+        result = [_create_default_calendar(ctx["user_sub"])]
     return result
 
 

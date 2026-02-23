@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Search, Package, Star } from "lucide-react";
+import { Search, Package } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -176,18 +176,7 @@ export function Catalog() {
                     <p className="mt-1 text-base font-semibold text-primary">
                       {formatPrice(item.price_cents, item.currency)}
                     </p>
-                    {/* Star rating placeholder */}
-                    <div className="mt-1 flex items-center gap-0.5">
-                      {Array.from({ length: 5 }).map((_, i) => (
-                        <Star
-                          key={i}
-                          className="h-3 w-3 fill-yellow-400 text-yellow-400"
-                        />
-                      ))}
-                      <span className="ml-1 text-[10px] text-muted-foreground">
-                        5.0
-                      </span>
-                    </div>
+                    <p className="mt-1 text-[10px] text-muted-foreground">No reviews yet</p>
                   </div>
                 </CardContent>
               </Card>

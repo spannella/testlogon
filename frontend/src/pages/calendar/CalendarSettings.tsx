@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/select";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { TimezoneCombobox } from "@/components/shared/TimezoneCombobox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getCalendars, updateCalendar, deleteCalendar } from "@/api/endpoints/calendar";
 import type { Calendar, WorkingHoursWindow } from "@/api/types";
@@ -187,13 +188,8 @@ export function CalendarSettings() {
             <Input id="cal-name" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="cal-tz">Timezone</Label>
-            <Input
-              id="cal-tz"
-              placeholder="e.g. America/New_York"
-              value={timezone}
-              onChange={(e) => setTimezone(e.target.value)}
-            />
+            <Label>Timezone</Label>
+            <TimezoneCombobox value={timezone} onChange={setTimezone} />
           </div>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">

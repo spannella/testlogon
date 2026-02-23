@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { ImagePlus, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -10,13 +11,16 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { editPost } from "@/api/endpoints/newsfeed";
+import { editPost, uploadPostImage } from "@/api/endpoints/newsfeed";
+
+const MAX_IMAGES = 10;
 
 interface EditPostDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   postId: string;
   initialBody: string;
+  initialImageUrls?: string[];
 }
 
 export function EditPostDialog({
@@ -24,17 +28,24 @@ export function EditPostDialog({
   onOpenChange,
   postId,
   initialBody,
+  initialImageUrls,
 }: EditPostDialogProps) {
   const queryClient = useQueryClient();
+  const fileRef = useRef<HTMLInputElement>(null);
   const [body, setBody] = useState(initialBody);
+  const [imageUrls, setImageUrls] = useState<string[]>(initialImageUrls ?? []);
+  const [uploading, setUploading] = useState(false);
 
-  // Sync with prop when dialog opens
+  // Sync with props when dialog opens
   useEffect(() => {
-    if (open) setBody(initialBody);
-  }, [open, initialBody]);
+    if (open) {
+      setBody(initialBody);
+      setImageUrls(initialImageUrls ?? []);
+    }
+  }, [open, initialBody, initialImageUrls]);
 
   const mutation = useMutation({
-    mutationFn: () => editPost(postId, { body }),
+    mutationFn: () => editPost(postId, { body, image_urls: imageUrls }),
     onSuccess: () => {
       toast.success("Post updated");
       void queryClient.invalidateQueries({ queryKey: ["feed"] });
@@ -44,8 +55,38 @@ export function EditPostDialog({
   });
 
   const handleSave = () => {
-    if (!body.trim()) return;
+    if (!body.trim() && imageUrls.length === 0) return;
     mutation.mutate();
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+
+    if (!file.type.startsWith("image/")) {
+      toast.error("Please select an image file");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("Image must be under 10 MB");
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const result = await uploadPostImage(file);
+      setImageUrls((prev) => [...prev, result.url]);
+      toast.success("Image uploaded");
+    } catch {
+      toast.error("Failed to upload image");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const removeImage = (index: number) => {
+    setImageUrls((prev) => prev.filter((_, i) => i !== index));
   };
 
   return (
@@ -63,16 +104,70 @@ export function EditPostDialog({
           placeholder="Write something..."
         />
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
+        {/* Upload progress */}
+        {uploading && (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Uploading image...
+          </div>
+        )}
+
+        {/* Image thumbnails */}
+        {imageUrls.length > 0 && !uploading && (
+          <div className="flex flex-wrap gap-2">
+            {imageUrls.map((url, i) => (
+              <div key={i} className="relative inline-block">
+                <img
+                  src={url}
+                  alt={`Attachment ${i + 1}`}
+                  className="h-24 w-24 rounded-lg object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeImage(i)}
+                  className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground shadow-sm"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <DialogFooter className="flex items-center justify-between sm:justify-between">
           <Button
-            onClick={handleSave}
-            disabled={!body.trim() || mutation.isPending}
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading || imageUrls.length >= MAX_IMAGES}
           >
-            {mutation.isPending ? "Saving..." : "Save"}
+            <ImagePlus className="mr-1 h-3.5 w-3.5" />
+            Photo
+            {imageUrls.length > 0 && (
+              <span className="ml-1 text-xs text-muted-foreground">
+                ({imageUrls.length}/{MAX_IMAGES})
+              </span>
+            )}
           </Button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleFileSelect}
+          />
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSave}
+              disabled={(!body.trim() && imageUrls.length === 0) || mutation.isPending || uploading}
+            >
+              {mutation.isPending ? "Saving..." : "Save"}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

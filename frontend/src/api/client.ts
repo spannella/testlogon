@@ -206,6 +206,9 @@ export async function api<T>(
     });
 
     if (!retryRes.ok) {
+      if (retryRes.status === 401) {
+        useAuthStore.getState().logout();
+      }
       const body = await retryRes.json().catch(() => null);
       throw new ApiError(
         retryRes.status,

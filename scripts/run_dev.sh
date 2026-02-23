@@ -158,6 +158,7 @@ mock_component_ready() {
     "dynamodb") probe_http "http://localhost:8001/" ;;
     "cognito") probe_http "http://localhost:4566/health" ;;
     "stripe") probe_http "http://localhost:12111/" ;;
+    "kms") probe_http "http://localhost:7999/health" ;;
     "ccbill") probe_http "http://localhost:8000/openapi.json" ;;
     "ups") probe_http "http://localhost:8000/openapi.json" ;;
     *) return 1 ;;
@@ -166,7 +167,7 @@ mock_component_ready() {
 
 all_mock_components_ready() {
   local component
-  for component in s3 dynamodb cognito stripe ccbill twilio ups; do
+  for component in s3 dynamodb cognito stripe kms ccbill twilio ups; do
     if ! mock_component_ready "$component"; then
       return 1
     fi
@@ -321,6 +322,7 @@ if [[ "$backend_mode" == "mock" ]]; then
   print_mock_component_status "Local DynamoDB" "dynamodb"
   print_mock_component_status "Local Cognito (LocalStack)" "cognito"
   print_mock_component_status "Local Stripe mock" "stripe"
+  print_mock_component_status "Local KMS mock" "kms"
   print_mock_component_status "Local CCBill mock" "ccbill"
   print_mock_component_status "Local Twilio mock" "twilio"
   print_mock_component_status "Local UPS mock" "ups"
