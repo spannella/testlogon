@@ -26,10 +26,13 @@ def _clean_str(value: Optional[str], *, max_len: Optional[int] = None) -> Option
     return trimmed
 
 
+MAX_COUNTRY_LEN = 64
+
+
 def _normalize_country(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
-    cleaned = _clean_str(value, max_len=2)
+    cleaned = _clean_str(value, max_len=MAX_COUNTRY_LEN)
     return cleaned.upper() if cleaned else None
 
 
