@@ -152,9 +152,8 @@ def totp_begin_enroll(user_sub: str, label: Optional[str]) -> Dict[str, Any]:
     secret_ct = kms_encrypt(secret_b32)
     ts = now_ts()
     T.totp.put_item(Item={"user_sub": user_sub, "device_id": device_id, "label": (label or "")[:64], "secret_ct_b64": secret_ct, "enabled": False, "created_at": ts, "last_used_at": 0})
-    issuer = "YourApp"
-    name = f"{user_sub[:8]}@{issuer}"
-    otpauth_uri = pyotp.TOTP(secret_b32).provisioning_uri(name=name, issuer_name=issuer)
+    issuer = S.totp_issuer or "App"
+    otpauth_uri = pyotp.TOTP(secret_b32).provisioning_uri(name=user_sub, issuer_name=issuer)
     try:
         import qrcode  # type: ignore
         import qrcode.image.svg  # type: ignore
@@ -172,14 +171,26 @@ def totp_begin_enroll(user_sub: str, label: Optional[str]) -> Dict[str, Any]:
         store_recovery_codes(user_sub, "totp", codes)
     return {"device_id": device_id, "qr_code_uri": qr_code_uri, "secret": secret_b32, "recovery_codes": codes}
 
-def totp_confirm_enroll(user_sub: str, device_id: str, totp_code: str) -> None:
+def totp_confirm_enroll(user_sub: str, device_id: str, totp_code: str, totp_code2: str) -> None:
+    """Confirm TOTP enrollment by verifying two distinct valid codes."""
     _need_pyotp()
     it = T.totp.get_item(Key={"user_sub": user_sub, "device_id": device_id}).get("Item")
     if not it:
         raise HTTPException(404, "Unknown device")
     secret_b32 = kms_decrypt(it["secret_ct_b64"]).decode("utf-8")
-    if not pyotp.TOTP(secret_b32).verify(totp_code.strip(), valid_window=1):
-        raise HTTPException(401, "Bad TOTP")
+    totp = pyotp.TOTP(secret_b32)
+    code1 = totp_code.strip()
+    code2 = totp_code2.strip()
+
+    # Use a generous window (±5 intervals = ±150 s) to tolerate slow typists and
+    # the required wait between the two codes.
+    if not totp.verify(code1, valid_window=5):
+        raise HTTPException(401, "Invalid first code")
+    if not totp.verify(code2, valid_window=5):
+        raise HTTPException(401, "Invalid second code")
+    if code1 == code2:
+        raise HTTPException(401, "Please enter two different codes")
+
     T.totp.update_item(Key={"user_sub": user_sub, "device_id": device_id}, UpdateExpression="SET enabled = :t, confirmed_at = :now", ExpressionAttributeValues={":t": True, ":now": now_ts()})
 
 def uuid4_hex() -> str:

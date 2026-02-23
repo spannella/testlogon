@@ -49,7 +49,7 @@ def normalize_address_payload(data: Dict[str, Any], *, require_all: bool) -> Dic
     if require_all:
         missing = [
             field
-            for field in ("line1", "city", "state", "postal_code")
+            for field in ("line1",)
             if not out.get(field)
         ]
         if missing:

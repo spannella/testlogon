@@ -10,9 +10,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { OtpInput } from "@/components/ui/otp-input";
 
 import { ApiError } from "@/api/client";
-import { registerConfirm, registerEmailCheck, registerResend, registerStart } from "@/api/endpoints/auth";
+import { getMe, registerConfirm, registerEmailCheck, registerResend, registerStart } from "@/api/endpoints/auth";
 import {
   beginSmsEnrollment,
   beginTotpEnrollment,
@@ -301,7 +302,8 @@ export default function Register() {
         setStep("verify");
       } else {
         if (resp.session_id) {
-          login(resp.session_id, "");
+          const me = await getMe();
+          login(me.user_sub, "");
           navigate("/", { replace: true });
           return;
         }
@@ -334,7 +336,8 @@ export default function Register() {
       localStorage.removeItem(REGISTER_STORAGE_KEY);
       const mfaSetup = resp.mfa_setup ?? [];
       if (resp.session_id) {
-        login(resp.session_id, "");
+        const me = await getMe();
+        login(me.user_sub, "");
         if (mfaSetup.length > 0) {
           setPendingSmsMfa(mfaSetup.includes("sms") || pendingSmsMfa);
           setPendingTotpMfa(mfaSetup.includes("totp") || pendingTotpMfa);
@@ -818,13 +821,16 @@ export default function Register() {
                 )}
 
                 <div className="space-y-2">
-                  <Label htmlFor="confirmation_code">Confirmation code</Label>
-                  <Input
-                    id="confirmation_code"
-                    placeholder="Enter code"
-                    autoComplete="one-time-code"
-                    {...confirmForm.register("confirmation_code")}
-                  />
+                  <Label>Confirmation code</Label>
+                  <div className="flex justify-center">
+                    <OtpInput
+                      value={confirmForm.watch("confirmation_code")}
+                      onChange={(val) => confirmForm.setValue("confirmation_code", val, { shouldValidate: true })}
+                      onComplete={() => confirmForm.handleSubmit(handleConfirm)()}
+                      disabled={confirmLoading}
+                      autoFocus
+                    />
+                  </div>
                   {confirmForm.formState.errors.confirmation_code && (
                     <p className="text-xs text-destructive">
                       {confirmForm.formState.errors.confirmation_code.message}
@@ -907,19 +913,22 @@ export default function Register() {
                         </p>
                       )}
                       {!smsVerified && (
-                        <div className="space-y-2">
-                          <Label htmlFor="sms_code">SMS code</Label>
-                          <Input
-                            id="sms_code"
-                            value={smsCode}
-                            onChange={(e) => setSmsCode(e.target.value)}
-                            placeholder="Enter code"
-                          />
+                        <div className="space-y-3">
+                          <Label>SMS code</Label>
+                          <div className="flex justify-center">
+                            <OtpInput
+                              value={smsCode}
+                              onChange={setSmsCode}
+                              onComplete={() => { void handleSmsConfirm(); }}
+                              disabled={mfaLoading}
+                              autoFocus
+                            />
+                          </div>
                           <Button
                             type="button"
                             className="w-full"
                             onClick={() => { void handleSmsConfirm(); }}
-                            disabled={mfaLoading || smsCode.trim().length === 0}
+                            disabled={mfaLoading || smsCode.length !== 6}
                           >
                             Verify SMS code
                           </Button>
@@ -952,15 +961,17 @@ export default function Register() {
                           </code>
                         </div>
                         {!totpVerified && (
-                          <div className="space-y-2">
-                            <Label htmlFor="totp_code">6-digit code</Label>
-                            <Input
-                              id="totp_code"
-                              value={totpCode}
-                              onChange={(e) => setTotpCode(e.target.value)}
-                              placeholder="000000"
-                              maxLength={6}
-                            />
+                          <div className="space-y-3">
+                            <Label>6-digit code</Label>
+                            <div className="flex justify-center">
+                              <OtpInput
+                                value={totpCode}
+                                onChange={setTotpCode}
+                                onComplete={() => { void handleTotpConfirm(); }}
+                                disabled={mfaLoading}
+                                autoFocus
+                              />
+                            </div>
                             <Button
                               type="button"
                               className="w-full"

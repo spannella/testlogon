@@ -16,6 +16,13 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { getApiKeys, createApiKey, revokeApiKey, setApiKeyIpRules } from "@/api/endpoints/account";
@@ -24,6 +31,7 @@ export function ApiKeys() {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
   const [label, setLabel] = useState("");
+  const [expiresInDays, setExpiresInDays] = useState<string>("none");
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
@@ -37,11 +45,15 @@ export function ApiKeys() {
   });
 
   const createMutation = useMutation({
-    mutationFn: () => createApiKey({ label: label || undefined }),
+    mutationFn: () => createApiKey({
+      label: label || undefined,
+      expires_in_days: expiresInDays === "none" ? undefined : Number(expiresInDays),
+    }),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["apiKeys"] });
       setCreatedSecret(data.key_secret);
       setLabel("");
+      setExpiresInDays("none");
     },
     onError: () => toast.error("Failed to create API key"),
   });
@@ -92,7 +104,7 @@ export function ApiKeys() {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => { setCreateOpen(true); setCreatedSecret(null); setCopied(false); setLabel(""); }}
+            onClick={() => { setCreateOpen(true); setCreatedSecret(null); setCopied(false); setLabel(""); setExpiresInDays("none"); }}
           >
             <Plus className="mr-1 h-3.5 w-3.5" />
             Create Key
@@ -201,6 +213,21 @@ export function ApiKeys() {
                   placeholder="e.g. CI/CD Pipeline"
                   autoFocus
                 />
+              </div>
+              <div>
+                <Label htmlFor="key-expiry">Expiry</Label>
+                <Select value={expiresInDays} onValueChange={setExpiresInDays}>
+                  <SelectTrigger id="key-expiry" className="mt-1">
+                    <SelectValue placeholder="No expiry" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No expiry</SelectItem>
+                    <SelectItem value="30">30 days</SelectItem>
+                    <SelectItem value="90">90 days</SelectItem>
+                    <SelectItem value="180">180 days</SelectItem>
+                    <SelectItem value="365">1 year</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <DialogFooter>
                 <Button type="submit" disabled={createMutation.isPending}>

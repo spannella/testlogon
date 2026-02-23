@@ -117,6 +117,7 @@ export interface TotpDeviceBeginResp {
 export interface TotpDeviceConfirmReq {
   device_id: string;
   totp_code: string;
+  totp_code2: string;
 }
 
 export interface SmsDevice {
@@ -341,6 +342,7 @@ export interface ApiKeyCreated extends ApiKey {
 
 export interface CreateApiKeyReq {
   label?: string;
+  expires_in_days?: number;
 }
 
 export interface RevokeApiKeyReq {
@@ -1210,7 +1212,7 @@ export interface FeedPost {
   post_id: string;
   author_id: string;
   body: string;
-  image_url?: string;
+  image_urls?: string[];
   unlock_price_cents?: number;
   like_count: number;
   comment_count: number;
@@ -1234,7 +1236,7 @@ export interface FeedComment {
 
 export interface CreatePostReq {
   body: string;
-  image_url?: string;
+  image_urls?: string[];
   unlock_price_cents?: number;
 }
 
@@ -1244,6 +1246,7 @@ export interface CreateCommentReq {
 
 export interface EditPostReq {
   body: string;
+  image_urls?: string[] | null;
 }
 
 export interface EditCommentReq {

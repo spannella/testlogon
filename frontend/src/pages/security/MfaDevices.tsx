@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   XCircle,
   Loader2,
+  Download,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -25,6 +26,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { OtpInput } from "@/components/ui/otp-input";
 import {
   getTotpDevices,
   beginTotpEnrollment,
@@ -42,14 +44,40 @@ import {
   confirmEmailRemoval,
 } from "@/api/endpoints/account";
 
+// ─── Helpers ─────────────────────────────────────────────────────
+
+function downloadRecoveryCodes(codes: string[], label = "account") {
+  const lines = [
+    "Recovery Codes",
+    "==============",
+    "",
+    "Store these in a safe place. Each code can only be used once.",
+    "",
+    ...codes,
+    "",
+    `Generated: ${new Date().toLocaleString()}`,
+  ];
+  const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `recovery-codes-${label}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 // ─── TOTP Section ────────────────────────────────────────────────
 
 function TotpSection() {
   const queryClient = useQueryClient();
   const [enrollOpen, setEnrollOpen] = useState(false);
-  const [enrollStep, setEnrollStep] = useState<"qr" | "confirm" | "recovery">("qr");
+  const [enrollStep, setEnrollStep] = useState<"name" | "qr" | "confirm" | "recovery">("name");
+  const [deviceName, setDeviceName] = useState("");
   const [enrollData, setEnrollData] = useState<{ device_id: string; qr_code_uri: string; secret: string } | null>(null);
   const [totpCode, setTotpCode] = useState("");
+  const [totpCode2, setTotpCode2] = useState("");
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [removeTarget, setRemoveTarget] = useState<string | null>(null);
   const [removeCode, setRemoveCode] = useState("");
@@ -60,27 +88,29 @@ function TotpSection() {
   });
 
   const beginMutation = useMutation({
-    mutationFn: () => beginTotpEnrollment({ label: "Authenticator App" }),
+    mutationFn: () => beginTotpEnrollment({ label: deviceName.trim() || "Authenticator App" }),
     onSuccess: (data) => {
       setEnrollData(data);
       setEnrollStep("qr");
-      setEnrollOpen(true);
     },
     onError: () => toast.error("Failed to start TOTP enrollment"),
   });
 
   const confirmMutation = useMutation({
-    mutationFn: () => confirmTotpEnrollment({ device_id: enrollData?.device_id ?? "", totp_code: totpCode }),
+    mutationFn: () => confirmTotpEnrollment({ device_id: enrollData?.device_id ?? "", totp_code: totpCode, totp_code2: totpCode2 }),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["mfa", "totp", "devices"] });
       setTotpCode("");
+      setTotpCode2("");
       if (data.recovery_codes.length > 0) {
         setRecoveryCodes(data.recovery_codes);
         setEnrollStep("recovery");
       } else {
         toast.success("Authenticator added");
         setEnrollOpen(false);
+        setDeviceName("");
         setEnrollData(null);
+        setEnrollStep("name");
       }
     },
     onError: () => toast.error("Invalid code, please try again"),
@@ -110,8 +140,7 @@ function TotpSection() {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => beginMutation.mutate()}
-            disabled={beginMutation.isPending}
+            onClick={() => { setDeviceName(""); setEnrollStep("name"); setEnrollOpen(true); }}
           >
             <Plus className="mr-1 h-3.5 w-3.5" />
             Add
@@ -161,25 +190,42 @@ function TotpSection() {
       <Dialog open={enrollOpen} onOpenChange={(o) => {
         if (!o) {
           setEnrollOpen(false);
+          setDeviceName("");
           setTotpCode("");
+          setTotpCode2("");
           setEnrollData(null);
           setRecoveryCodes([]);
-          setEnrollStep("qr");
+          setEnrollStep("name");
         }
       }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add Authenticator App</DialogTitle>
             <DialogDescription>
-              {enrollStep === "qr"
-                ? "Scan the QR code with your authenticator app, then enter the 6-digit code."
-                : enrollStep === "confirm"
-                  ? "Enter the 6-digit code from your authenticator app to confirm."
-                  : "Save these recovery codes somewhere safe. They can be used to access your account if you lose your authenticator."}
+              {enrollStep === "name"
+                ? "Give your authenticator a name so you can identify it later."
+                : enrollStep === "qr"
+                  ? "Scan the QR code with your authenticator app, then click continue."
+                  : enrollStep === "confirm"
+                    ? "Enter two different codes from your authenticator app to confirm it's working correctly."
+                    : "Save these recovery codes somewhere safe. They can be used to access your account if you lose your authenticator."}
             </DialogDescription>
           </DialogHeader>
           {enrollStep === "recovery" ? (
             <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-muted-foreground">Your recovery codes</p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1.5 text-xs"
+                  onClick={() => downloadRecoveryCodes(recoveryCodes, "totp")}
+                >
+                  <Download className="h-3 w-3" />
+                  Download
+                </Button>
+              </div>
               <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted p-3">
                 {recoveryCodes.map((code) => (
                   <code key={code} className="text-center text-sm font-mono">{code}</code>
@@ -192,14 +238,36 @@ function TotpSection() {
                 <Button className="w-full" onClick={() => {
                   toast.success("Authenticator added");
                   setEnrollOpen(false);
+                  setDeviceName("");
                   setEnrollData(null);
                   setRecoveryCodes([]);
-                  setEnrollStep("qr");
+                  setEnrollStep("name");
                 }}>
                   I&apos;ve saved my recovery codes
                 </Button>
               </DialogFooter>
             </div>
+          ) : enrollStep === "name" ? (
+            <form
+              onSubmit={(e) => { e.preventDefault(); beginMutation.mutate(); }}
+              className="space-y-4"
+            >
+              <div className="space-y-2">
+                <Label htmlFor="totp-device-name">Device name</Label>
+                <Input
+                  id="totp-device-name"
+                  value={deviceName}
+                  onChange={(e) => setDeviceName(e.target.value)}
+                  placeholder="e.g. iPhone, Google Authenticator"
+                  autoFocus
+                />
+              </div>
+              <DialogFooter>
+                <Button type="submit" disabled={beginMutation.isPending}>
+                  {beginMutation.isPending ? <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />Starting...</> : "Continue"}
+                </Button>
+              </DialogFooter>
+            </form>
           ) : enrollData && (
             <div className="space-y-4">
               {enrollStep === "qr" && (
@@ -221,18 +289,21 @@ function TotpSection() {
               {enrollStep === "confirm" && (
                 <form
                   onSubmit={(e) => { e.preventDefault(); confirmMutation.mutate(); }}
-                  className="space-y-3"
+                  className="space-y-5"
                 >
-                  <div>
-                    <Label htmlFor="totp-code">6-digit code</Label>
-                    <Input
-                      id="totp-code"
+                  <div className="space-y-2">
+                    <Label>First code</Label>
+                    <OtpInput
                       value={totpCode}
-                      onChange={(e) => setTotpCode(e.target.value)}
-                      placeholder="000000"
-                      maxLength={6}
-                      pattern="\d{6}"
+                      onChange={setTotpCode}
                       autoFocus
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Second code</Label>
+                    <OtpInput
+                      value={totpCode2}
+                      onChange={setTotpCode2}
                     />
                   </div>
                   <DialogFooter>
@@ -243,7 +314,7 @@ function TotpSection() {
                     >
                       Back
                     </Button>
-                    <Button type="submit" disabled={totpCode.length !== 6 || confirmMutation.isPending}>
+                    <Button type="submit" disabled={totpCode.length !== 6 || totpCode2.length !== 6 || confirmMutation.isPending}>
                       {confirmMutation.isPending ? <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />Verifying...</> : "Verify"}
                     </Button>
                   </DialogFooter>
@@ -256,32 +327,32 @@ function TotpSection() {
 
       {/* Remove dialog - requires re-auth with TOTP code */}
       <Dialog open={!!removeTarget} onOpenChange={(o) => { if (!o) { setRemoveTarget(null); setRemoveCode(""); } }}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Remove TOTP Device</DialogTitle>
+            <DialogTitle>Remove authenticator</DialogTitle>
             <DialogDescription>
-              Enter a valid TOTP code from another device to confirm removal.
+              Enter the 6-digit code from your authenticator app to confirm removal.
             </DialogDescription>
           </DialogHeader>
           <form
             onSubmit={(e) => { e.preventDefault(); removeMutation.mutate(); }}
-            className="space-y-3"
+            className="space-y-5"
           >
-            <div>
-              <Label htmlFor="remove-totp">TOTP code</Label>
-              <Input
-                id="remove-totp"
+            <div className="flex justify-center">
+              <OtpInput
                 value={removeCode}
-                onChange={(e) => setRemoveCode(e.target.value)}
-                placeholder="000000"
-                maxLength={6}
+                onChange={setRemoveCode}
+                onComplete={() => removeMutation.mutate()}
+                disabled={removeMutation.isPending}
                 autoFocus
               />
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setRemoveTarget(null)}>Cancel</Button>
+              <Button type="button" variant="outline" onClick={() => setRemoveTarget(null)}>
+                Cancel
+              </Button>
               <Button type="submit" variant="destructive" disabled={removeCode.length !== 6 || removeMutation.isPending}>
-                {removeMutation.isPending ? "Removing..." : "Remove"}
+                {removeMutation.isPending ? <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />Removing...</> : "Remove"}
               </Button>
             </DialogFooter>
           </form>
@@ -385,7 +456,7 @@ function SmsSection() {
             {devices.map((d) => (
               <li key={d.sms_device_id} className="flex items-center justify-between py-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-medium">{d.label || d.phone_e164}</p>
+                  <p className="text-sm font-medium">{d.phone_e164 || d.label || "SMS device"}</p>
                   <p className="text-xs text-muted-foreground">
                     Added {new Date(d.created_at * 1000).toLocaleDateString()}
                   </p>
@@ -435,6 +506,19 @@ function SmsSection() {
           </DialogHeader>
           {recoveryCodes.length > 0 ? (
             <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-muted-foreground">Your recovery codes</p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1.5 text-xs"
+                  onClick={() => downloadRecoveryCodes(recoveryCodes, "sms")}
+                >
+                  <Download className="h-3 w-3" />
+                  Download
+                </Button>
+              </div>
               <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted p-3">
                 {recoveryCodes.map((code) => (
                   <code key={code} className="text-center text-sm font-mono">{code}</code>
@@ -468,13 +552,18 @@ function SmsSection() {
               </DialogFooter>
             </form>
           ) : (
-            <form onSubmit={(e) => { e.preventDefault(); confirmMutation.mutate(); }} className="space-y-3">
-              <div>
-                <Label htmlFor="sms-code">Verification code</Label>
-                <Input id="sms-code" value={verifyCode} onChange={(e) => setVerifyCode(e.target.value)} placeholder="123456" maxLength={6} autoFocus />
+            <form onSubmit={(e) => { e.preventDefault(); confirmMutation.mutate(); }} className="space-y-4">
+              <div className="flex justify-center">
+                <OtpInput
+                  value={verifyCode}
+                  onChange={setVerifyCode}
+                  onComplete={() => confirmMutation.mutate()}
+                  disabled={confirmMutation.isPending}
+                  autoFocus
+                />
               </div>
               <DialogFooter>
-                <Button type="submit" disabled={!verifyCode.trim() || confirmMutation.isPending}>
+                <Button type="submit" disabled={verifyCode.length !== 6 || confirmMutation.isPending}>
                   {confirmMutation.isPending ? "Verifying..." : "Verify"}
                 </Button>
               </DialogFooter>
@@ -491,14 +580,19 @@ function SmsSection() {
             <DialogDescription>Enter the verification code sent to your phone to confirm removal.</DialogDescription>
           </DialogHeader>
           {removeChallengeId ? (
-            <form onSubmit={(e) => { e.preventDefault(); confirmRemoveMutation.mutate(); }} className="space-y-3">
-              <div>
-                <Label htmlFor="sms-remove-code">Verification code</Label>
-                <Input id="sms-remove-code" value={removeCode} onChange={(e) => setRemoveCode(e.target.value)} placeholder="123456" maxLength={6} autoFocus />
+            <form onSubmit={(e) => { e.preventDefault(); confirmRemoveMutation.mutate(); }} className="space-y-4">
+              <div className="flex justify-center">
+                <OtpInput
+                  value={removeCode}
+                  onChange={setRemoveCode}
+                  onComplete={() => confirmRemoveMutation.mutate()}
+                  disabled={confirmRemoveMutation.isPending}
+                  autoFocus
+                />
               </div>
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setRemoveTarget(null)}>Cancel</Button>
-                <Button type="submit" variant="destructive" disabled={!removeCode.trim() || confirmRemoveMutation.isPending}>
+                <Button type="submit" variant="destructive" disabled={removeCode.length !== 6 || confirmRemoveMutation.isPending}>
                   {confirmRemoveMutation.isPending ? "Removing..." : "Remove"}
                 </Button>
               </DialogFooter>
@@ -608,7 +702,7 @@ function EmailSection() {
             {devices.map((d) => (
               <li key={d.email_device_id} className="flex items-center justify-between py-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-medium">{d.label ?? d.email}</p>
+                  <p className="text-sm font-medium">{d.email || d.label || "Email device"}</p>
                   <p className="text-xs text-muted-foreground">
                     Added {new Date(d.created_at * 1000).toLocaleDateString()}
                   </p>
@@ -658,6 +752,19 @@ function EmailSection() {
           </DialogHeader>
           {recoveryCodes.length > 0 ? (
             <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-muted-foreground">Your recovery codes</p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1.5 text-xs"
+                  onClick={() => downloadRecoveryCodes(recoveryCodes, "email")}
+                >
+                  <Download className="h-3 w-3" />
+                  Download
+                </Button>
+              </div>
               <div className="grid grid-cols-2 gap-2 rounded-lg border bg-muted p-3">
                 {recoveryCodes.map((code) => (
                   <code key={code} className="text-center text-sm font-mono">{code}</code>
@@ -691,13 +798,18 @@ function EmailSection() {
               </DialogFooter>
             </form>
           ) : (
-            <form onSubmit={(e) => { e.preventDefault(); confirmMutation.mutate(); }} className="space-y-3">
-              <div>
-                <Label htmlFor="email-code">Verification code</Label>
-                <Input id="email-code" value={verifyCode} onChange={(e) => setVerifyCode(e.target.value)} placeholder="123456" maxLength={6} autoFocus />
+            <form onSubmit={(e) => { e.preventDefault(); confirmMutation.mutate(); }} className="space-y-4">
+              <div className="flex justify-center">
+                <OtpInput
+                  value={verifyCode}
+                  onChange={setVerifyCode}
+                  onComplete={() => confirmMutation.mutate()}
+                  disabled={confirmMutation.isPending}
+                  autoFocus
+                />
               </div>
               <DialogFooter>
-                <Button type="submit" disabled={!verifyCode.trim() || confirmMutation.isPending}>
+                <Button type="submit" disabled={verifyCode.length !== 6 || confirmMutation.isPending}>
                   {confirmMutation.isPending ? "Verifying..." : "Verify"}
                 </Button>
               </DialogFooter>
@@ -714,14 +826,19 @@ function EmailSection() {
             <DialogDescription>Enter the verification code sent to your email to confirm removal.</DialogDescription>
           </DialogHeader>
           {removeChallengeId ? (
-            <form onSubmit={(e) => { e.preventDefault(); confirmRemoveMutation.mutate(); }} className="space-y-3">
-              <div>
-                <Label htmlFor="email-remove-code">Verification code</Label>
-                <Input id="email-remove-code" value={removeCode} onChange={(e) => setRemoveCode(e.target.value)} placeholder="123456" maxLength={6} autoFocus />
+            <form onSubmit={(e) => { e.preventDefault(); confirmRemoveMutation.mutate(); }} className="space-y-4">
+              <div className="flex justify-center">
+                <OtpInput
+                  value={removeCode}
+                  onChange={setRemoveCode}
+                  onComplete={() => confirmRemoveMutation.mutate()}
+                  disabled={confirmRemoveMutation.isPending}
+                  autoFocus
+                />
               </div>
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => setRemoveTarget(null)}>Cancel</Button>
-                <Button type="submit" variant="destructive" disabled={!removeCode.trim() || confirmRemoveMutation.isPending}>
+                <Button type="submit" variant="destructive" disabled={removeCode.length !== 6 || confirmRemoveMutation.isPending}>
                   {confirmRemoveMutation.isPending ? "Removing..." : "Remove"}
                 </Button>
               </DialogFooter>

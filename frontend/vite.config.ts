@@ -28,6 +28,9 @@ export default defineConfig({
       "/feed": "http://localhost:8000",
       "/posts": "http://localhost:8000",
       "/social": "http://localhost:8000",
+      "/uploads": "http://localhost:8000",
+      "/sse": "http://localhost:8000",
+      "/notifications": "http://localhost:8000",
     },
   },
   build: {

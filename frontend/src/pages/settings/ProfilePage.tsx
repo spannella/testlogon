@@ -6,8 +6,7 @@ import { ProfileAudit } from "./ProfileAudit";
 
 export default function ProfilePage() {
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="mx-auto w-full max-w-3xl space-y-6 p-4 sm:p-6">
+    <div className="mx-auto w-full max-w-3xl space-y-6 p-4 sm:p-6">
         <PageHeader
           title="Profile"
           description="Manage your personal information and addresses"
@@ -29,7 +28,6 @@ export default function ProfilePage() {
             <ProfileAudit />
           </TabsContent>
         </Tabs>
-      </div>
     </div>
   );
 }

@@ -31,13 +31,16 @@ def api_key_hash(secret: str) -> str:
         raise RuntimeError("API_KEY_PEPPER not set")
     return sha256_str(secret + "|" + S.api_key_pepper)
 
-def create_api_key(user_sub: str, label: str) -> Dict[str, Any]:
+def create_api_key(user_sub: str, label: str, expires_in_days: Optional[int] = None) -> Dict[str, Any]:
     ts = now_ts()
     key_id = secrets.token_hex(16)
     secret = new_api_key_secret()
     secret_hash = api_key_hash(secret)
-    ttl_days = max(S.api_key_ttl_days, 0)
-    ttl = ts + ttl_days * 86400 if ttl_days else 0
+    if expires_in_days is not None:
+        ttl = ts + max(expires_in_days, 1) * 86400
+    else:
+        ttl_days = max(S.api_key_ttl_days, 0)
+        ttl = ts + ttl_days * 86400 if ttl_days else 0
 
     item = {
         "key_id": key_id,
@@ -64,7 +67,7 @@ def create_api_key(user_sub: str, label: str) -> Dict[str, Any]:
     T.api_keys.put_item(Item=item)
     return {
         "key_id": key_id,
-        "api_key": f"ak_{key_id}.{secret}",
+        "key_secret": f"ak_{key_id}.{secret}",
         "label": item["label"],
         "created_at": ts,
         "expires_at": item["expires_at"],
@@ -218,6 +221,8 @@ def list_api_keys(user_sub: str) -> List[Dict[str, Any]]:
     r = T.api_keys.query(IndexName=S.api_keys_user_index, KeyConditionExpression=Key("user_sub").eq(user_sub), ScanIndexForward=False, Limit=100)
     out = []
     for it in r.get("Items", []):
+        if it.get("revoked"):
+            continue
         out.append({
             "key_id": it.get("key_id") or it.get("api_key_id"),
             "label": it.get("label",""),

@@ -201,7 +201,7 @@ async def ui_sessions(ctx: Dict[str, str] = Depends(require_ui_session)):
     out = []
     for it in r.get("Items", []):
         sid = it.get("session_id","")
-        if not sid or sid.startswith("chal_") or sid.startswith("rl#"):
+        if not is_real_ui_session_id(sid):
             continue
         out.append({
             "session_id": sid,

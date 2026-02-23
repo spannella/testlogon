@@ -7,9 +7,9 @@ default:
 
 # ── Dev stack ────────────────────────────────────────────────────────────────
 
-# Start the full dev stack (clean wipe by default)
+# Dev stack control: just dev [start|stop|restart|status] [--no-clean]
 dev *args:
-    scripts/dev.sh start {{args}}
+    scripts/dev.sh {{if args == "" { "start" } else { args }}}
 
 # Alias: just start [--no-clean]
 start *args:

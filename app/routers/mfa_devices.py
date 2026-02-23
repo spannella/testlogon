@@ -66,7 +66,7 @@ async def totp_devices_begin(req: Request, body: TotpDeviceBeginReq, ctx=Depends
 async def totp_devices_confirm(req: Request, body: TotpDeviceConfirmReq, ctx=Depends(require_ui_session)):
     user_sub = ctx["user_sub"]
     require_fresh_mfa(ctx)
-    totp_confirm_enroll(user_sub, body.device_id, body.totp_code)
+    totp_confirm_enroll(user_sub, body.device_id, body.totp_code, body.totp_code2)
     r = T.totp.query(KeyConditionExpression=Key("user_sub").eq(user_sub))
     enabled_count = sum(1 for d in r.get("Items", []) if d.get("enabled", False))
     recovery_codes: List[str] = []
@@ -180,7 +180,10 @@ async def sms_devices_remove_begin(req: Request, sms_device_id: str, ctx=Depends
     target = it.get("phone_e164")
     send_to = [n for n in nums if n != target]
     if not send_to:
-        raise HTTPException(400, "No other enabled SMS numbers to confirm removal (use SMS recovery code)")
+        # Only device — confirm via the target number itself
+        if not target:
+            raise HTTPException(400, "SMS device has no phone number")
+        send_to = [target]
     for n in send_to:
         twilio_start_sms(n)
     challenge_id = create_action_challenge(
@@ -302,7 +305,10 @@ async def email_devices_remove_begin(req: Request, email_device_id: str, ctx=Dep
     target = it.get("email")
     send_to = [e for e in enabled if e != target]
     if not send_to:
-        raise HTTPException(400, "No other enabled emails to confirm removal (use email recovery code)")
+        # Only device — confirm via the target email itself
+        if not target:
+            raise HTTPException(400, "Email device has no email address")
+        send_to = [target]
     code = gen_numeric_code(6)
     code_hash = sha256_str(code)
     challenge_id = create_action_challenge(

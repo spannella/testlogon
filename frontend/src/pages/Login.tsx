@@ -25,6 +25,7 @@ import {
   verifyEmail,
   useRecoveryCode,
   passwordlessStart,
+  getMe,
 } from "@/api/endpoints/auth";
 import {
   authenticateBegin,
@@ -129,21 +130,35 @@ export default function Login() {
 
       if (!resp.auth_required && resp.session_id) {
         // No MFA required — login complete
-        login(resp.session_id, "");
+        const me = await getMe();
+        login(me.user_sub, "");
         navigate("/", { replace: true });
         return;
       }
 
       // MFA required
-      setChallengeId(resp.challenge_id ?? null);
+      const cId = resp.challenge_id ?? null;
+      setChallengeId(cId);
       setRequiredFactors(resp.required_factors);
 
       // Pick the best default MFA method
       const factors = resp.required_factors;
-      if (factors.includes("totp")) setActiveMfa("totp");
-      else if (factors.includes("sms")) setActiveMfa("sms");
-      else if (factors.includes("email")) setActiveMfa("email");
-      else setActiveMfa("recovery");
+      let defaultMethod: MfaMethod = "recovery";
+      if (factors.includes("totp")) defaultMethod = "totp";
+      else if (factors.includes("sms")) defaultMethod = "sms";
+      else if (factors.includes("email")) defaultMethod = "email";
+      setActiveMfa(defaultMethod);
+
+      // Auto-send the email code so the user lands directly on the OTP
+      // input without having to click "Send Email Code" first.
+      if (defaultMethod === "email" && cId) {
+        try {
+          await beginEmail({ challenge_id: cId });
+          setEmailSent(true);
+        } catch {
+          // Silent — user can still trigger the send manually via the button.
+        }
+      }
 
       setStep("mfa");
     } catch (err) {
@@ -198,7 +213,8 @@ export default function Login() {
         });
 
         if (finalResp.status === "ok" && finalResp.session_id) {
-          login(finalResp.session_id, "");
+          const me = await getMe();
+          login(me.user_sub, "");
           navigate("/", { replace: true });
         } else if (finalResp.required_factors.length > 0) {
           // More factors needed
@@ -347,7 +363,8 @@ export default function Login() {
       });
 
       if (finishResp.status === "ok" && finishResp.session_id) {
-        login(finishResp.session_id, "");
+        const me = await getMe();
+        login(me.user_sub, "");
         navigate("/", { replace: true });
       } else {
         setError("Authentication failed.");

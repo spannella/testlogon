@@ -294,6 +294,7 @@ class WebAuthnAuthFinishResp(BaseModel):
 
 class CreateApiKeyReq(BaseModel):
     label: Optional[str] = None
+    expires_in_days: Optional[int] = None
 
 class RevokeApiKeyReq(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -573,6 +574,7 @@ class TotpDeviceConfirmReq(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     device_id: str
     totp_code: str = Field(validation_alias=AliasChoices("totp_code", "code"))
+    totp_code2: str = Field(validation_alias=AliasChoices("totp_code2", "code2"))
 
 class TotpDeviceRemoveReq(BaseModel):
     model_config = ConfigDict(populate_by_name=True)

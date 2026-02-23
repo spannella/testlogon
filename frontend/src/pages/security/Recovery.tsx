@@ -15,6 +15,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { passwordRecoveryStart, passwordRecoveryConfirm } from "@/api/endpoints/auth";
+import { OtpInput } from "@/components/ui/otp-input";
 
 export function Recovery() {
   return (
@@ -131,15 +132,16 @@ function PasswordRecoverySection() {
             </form>
           ) : (
             <form onSubmit={(e) => { e.preventDefault(); confirmMutation.mutate(); }} className="space-y-3">
-              <div>
-                <Label htmlFor="recovery-code">Verification code</Label>
-                <Input
-                  id="recovery-code"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  placeholder="123456"
-                  autoFocus
-                />
+              <div className="space-y-2">
+                <Label>Verification code</Label>
+                <div className="flex justify-center">
+                  <OtpInput
+                    value={code}
+                    onChange={setCode}
+                    disabled={confirmMutation.isPending}
+                    autoFocus
+                  />
+                </div>
               </div>
               <div>
                 <Label htmlFor="new-pw">New password</Label>
