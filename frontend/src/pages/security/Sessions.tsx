@@ -17,6 +17,8 @@ export function Sessions() {
   const sessionsQuery = useQuery({
     queryKey: ["sessions"],
     queryFn: getSessions,
+    refetchOnWindowFocus: true,
+    refetchInterval: 30_000,
   });
 
   const revokeMutation = useMutation({

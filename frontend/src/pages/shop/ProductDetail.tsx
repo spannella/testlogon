@@ -26,6 +26,7 @@ import {
   getItemReviews,
   createReview,
   getCarts,
+  createCart,
   addCartItem,
 } from "@/api/endpoints/cart";
 import type { CatalogItem } from "@/api/types";
@@ -79,11 +80,12 @@ export default function ProductDetail() {
   });
 
   const addToCartMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
+      if (!item) throw new Error("No item");
       const carts = Array.isArray(cartsQuery.data) ? cartsQuery.data : [];
-      const activeCart = carts.find((c) => c.status === "active");
-      if (!activeCart || !item) {
-        return Promise.reject(new Error("No active cart or item"));
+      let activeCart = carts.find((c) => c.status === "active");
+      if (!activeCart) {
+        activeCart = await createCart();
       }
       return addCartItem(activeCart.cart_id, {
         sku: item.item_id,

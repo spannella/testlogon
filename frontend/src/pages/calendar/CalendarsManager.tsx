@@ -17,6 +17,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { TimezoneCombobox } from "@/components/shared/TimezoneCombobox";
 import {
   getCalendars,
   createCalendar,
@@ -85,13 +86,8 @@ function CreateCalendarDialog({ open, onOpenChange, onCreated }: CreateDialogPro
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="new-cal-tz">Timezone</Label>
-            <Input
-              id="new-cal-tz"
-              placeholder="e.g. America/New_York"
-              value={timezone}
-              onChange={(e) => setTimezone(e.target.value)}
-            />
+            <Label>Timezone</Label>
+            <TimezoneCombobox value={timezone} onChange={setTimezone} />
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
@@ -148,16 +144,7 @@ function RenameRow({ calendar, onDone }: RenameRowProps) {
           if (e.key === "Escape") onDone();
         }}
       />
-      <Input
-        className="h-8 text-sm w-52"
-        placeholder="Timezone"
-        value={timezone}
-        onChange={(e) => setTimezone(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") saveMutation.mutate();
-          if (e.key === "Escape") onDone();
-        }}
-      />
+      <TimezoneCombobox value={timezone} onChange={setTimezone} className="h-8 w-52 text-sm" />
       <div className="flex gap-1">
         <Button
           size="icon"

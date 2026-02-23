@@ -1075,6 +1075,13 @@ class VerifyMicrodepositsReq(BaseModel):
     amounts: Optional[List[int]] = None
     descriptor_code: Optional[str] = None
 
+class AddCardReq(BaseModel):
+    card_number: str
+    exp_month: int = Field(ge=1, le=12)
+    exp_year: int = Field(ge=2000, le=2100)
+    cvc: str
+    cardholder_name: Optional[str] = None
+
 class AddChargeReq(BaseModel):
     amount_cents: int = Field(ge=1)
     state: str = Field(pattern="^(pending|settled)$")

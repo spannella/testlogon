@@ -39,8 +39,7 @@ def create_api_key(user_sub: str, label: str, expires_in_days: Optional[int] = N
     if expires_in_days is not None:
         ttl = ts + max(expires_in_days, 1) * 86400
     else:
-        ttl_days = max(S.api_key_ttl_days, 0)
-        ttl = ts + ttl_days * 86400 if ttl_days else 0
+        ttl = 0  # user explicitly chose no expiry
 
     item = {
         "key_id": key_id,

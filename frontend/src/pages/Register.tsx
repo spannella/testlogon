@@ -87,7 +87,7 @@ export default function Register() {
   const [resendLoading, setResendLoading] = React.useState(false);
   const [mfaLoading, setMfaLoading] = React.useState(false);
   const [emailStatus, setEmailStatus] = React.useState<
-    "idle" | "checking" | "available" | "invalid" | "error" | "rate_limited"
+    "idle" | "checking" | "available" | "unavailable" | "invalid" | "error" | "rate_limited"
   >("idle");
   const [mfaError, setMfaError] = React.useState<string | null>(null);
   const [smsChallengeId, setSmsChallengeId] = React.useState<string | null>(null);
@@ -172,6 +172,7 @@ export default function Register() {
     || isEmailChecking
     || hasPasswordIssues
     || emailStatus === "invalid"
+    || emailStatus === "unavailable"
     || emailStatus === "rate_limited";
 
   React.useEffect(() => {
@@ -235,12 +236,12 @@ export default function Register() {
       }, EMAIL_CHECK_TIMEOUT_MS);
 
       registerEmailCheck({ email: trimmed })
-        .then(() => {
+        .then((data) => {
           window.clearTimeout(timeoutTimer);
           if (!isActive || didTimeout) {
             return;
           }
-          setEmailStatus("available");
+          setEmailStatus(data.available ? "available" : "unavailable");
         })
         .catch((err) => {
           window.clearTimeout(timeoutTimer);
@@ -602,6 +603,12 @@ export default function Register() {
                     <p className="flex items-center gap-1 text-xs text-emerald-600">
                       <CheckCircle2 className="h-3.5 w-3.5" />
                       Email looks valid.
+                    </p>
+                  )}
+                  {!form.formState.errors.email && emailStatus === "unavailable" && (
+                    <p className="flex items-center gap-1 text-xs text-destructive">
+                      <XCircle className="h-3.5 w-3.5" />
+                      An account with this email already exists.
                     </p>
                   )}
                   {!form.formState.errors.email && emailStatus === "rate_limited" && (

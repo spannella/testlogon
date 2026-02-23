@@ -179,7 +179,7 @@ async def register_check(req: Request, body: RegisterEmailCheckReq) -> Dict[str,
         return generic_response
     clear_lockout(body.email, ip, "register_check")
     audit_event("register_check", body.email, req, outcome="success", available=available)
-    return generic_response
+    return {"status": "ok", "available": available}
 
 
 @router.post("/confirm", response_model=RegisterConfirmResp)

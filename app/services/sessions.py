@@ -136,9 +136,6 @@ def rotate_session_cookies(
     refresh_ttl_seconds: Optional[int] = None,
 ) -> None:
     session = _coerce_session_info(session, user_sub)
-    prior = (getattr(request, "cookies", {}) or {}).get(S.ui_session_cookie_name)
-    if prior and prior != session.session_id:
-        revoke_session(user_sub, prior)
     set_session_cookies(response, session, refresh_ttl_seconds=refresh_ttl_seconds)
     ensure_device_cookie(request, response, user_sub)
 
@@ -254,6 +251,8 @@ def rotate_refresh_token(response: Response, user_sub: str, session_id: str, ref
     if not refresh_token:
         raise HTTPException(400, "Missing refresh token")
     it = T.sessions.get_item(Key={"user_sub": user_sub, "session_id": session_id}).get("Item") or {}
+    if it.get("revoked"):
+        raise HTTPException(401, "Session revoked")
     stored = it.get("refresh_token_hash", "")
     if not stored or not hmac.compare_digest(stored, sha256_str(refresh_token)):
         raise HTTPException(401, "Invalid refresh token")

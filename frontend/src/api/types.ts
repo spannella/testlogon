@@ -334,6 +334,8 @@ export interface ApiKey {
   expires_at?: number;
   last_used_at?: number;
   prefix?: string;
+  allow_cidrs?: string[];
+  deny_cidrs?: string[];
 }
 
 export interface ApiKeyCreated extends ApiKey {

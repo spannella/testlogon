@@ -41,7 +41,7 @@ export const getConversation = async (id: string) => {
 };
 
 export const startConversation = async (body: StartConversationReq) => {
-  const res = await api.post<Conversation>("/messaging/conversations/start", body);
+  const res = await api.post<Conversation>("/messaging/conversations", body);
   return adaptConversation(res);
 };
 

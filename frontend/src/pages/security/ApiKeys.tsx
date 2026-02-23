@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Key, Plus, Trash2, Copy, Check, AlertTriangle, Globe } from "lucide-react";
+import { Key, Plus, Trash2, Copy, Check, AlertTriangle, Globe, Download } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,7 +32,7 @@ export function ApiKeys() {
   const [createOpen, setCreateOpen] = useState(false);
   const [label, setLabel] = useState("");
   const [expiresInDays, setExpiresInDays] = useState<string>("none");
-  const [createdKey, setCreatedKey] = useState<{ key_id: string; key_secret: string } | null>(null);
+  const [createdKey, setCreatedKey] = useState<{ key_id: string; key_secret: string; label: string; expiresInDays: string } | null>(null);
   const [copiedField, setCopiedField] = useState<"key_id" | "key_secret" | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
   const [ipRulesTarget, setIpRulesTarget] = useState<string | null>(null);
@@ -51,7 +51,7 @@ export function ApiKeys() {
     }),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["apiKeys"] });
-      setCreatedKey({ key_id: data.key_id, key_secret: data.key_secret });
+      setCreatedKey({ key_id: data.key_id, key_secret: data.key_secret, label, expiresInDays });
       setLabel("");
       setExpiresInDays("none");
     },
@@ -84,20 +84,74 @@ export function ApiKeys() {
     onError: () => toast.error("Failed to update IP rules"),
   });
 
+  const handleDownload = () => {
+    if (!createdKey) return;
+    const lines = [
+      "API Key Details",
+      "===============",
+      "",
+      `Label:      ${createdKey.label || "(none)"}`,
+      `Key ID:     ${createdKey.key_id}`,
+      `Secret Key: ${createdKey.key_secret}`,
+      "",
+      `Created:    ${new Date().toLocaleString()}`,
+      createdKey.expiresInDays !== "none" ? `Expires in: ${createdKey.expiresInDays} days` : "Expires:    Never",
+      "",
+      "IMPORTANT: Store this file securely and delete it after saving your credentials.",
+      "The Secret Key will not be shown again.",
+    ];
+    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const prefix = createdKey.key_id.slice(0, 8);
+    a.download = `api-key-${prefix}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const keys = keysQuery.data?.keys ?? [];
 
   const handleCopy = async (field: "key_id" | "key_secret") => {
     const text = field === "key_id" ? createdKey?.key_id : createdKey?.key_secret;
     if (!text) return;
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      toast.error("Copy failed — please select and copy manually");
+
+    // Clipboard API only works in secure contexts (HTTPS / localhost).
+    if (window.isSecureContext && navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopiedField(field);
+        toast.success("Copied to clipboard");
+        setTimeout(() => setCopiedField(null), 2000);
+      } catch {
+        toast.error("Copy failed — use the Download button instead");
+      }
       return;
     }
-    setCopiedField(field);
-    toast.success("Copied to clipboard");
-    setTimeout(() => setCopiedField(null), 2000);
+
+    // Plain-HTTP fallback: off-screen textarea + execCommand.
+    // Do NOT use opacity:0 or pointer-events:none — they prevent the browser
+    // from treating the element as selectable and execCommand returns true
+    // but silently does nothing.
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText =
+      "position:fixed;top:-9999px;left:-9999px;width:2px;height:2px;" +
+      "padding:0;border:none;outline:none;box-shadow:none;background:transparent;";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    let success = false;
+    try { success = document.execCommand("copy"); } catch { /* ignore */ }
+    document.body.removeChild(ta);
+
+    if (success) {
+      setCopiedField(field);
+      toast.success("Copied to clipboard");
+      setTimeout(() => setCopiedField(null), 2000);
+    } else {
+      toast.error("Copy failed — use the Download button instead");
+    }
   };
 
   return (
@@ -144,12 +198,12 @@ export function ApiKeys() {
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                     <span>Created {new Date(k.created_at * 1000).toLocaleDateString()}</span>
-                    {k.expires_at && (
+                    {k.expires_at > 0 && (
                       <Badge variant="secondary" className="text-[10px]">
                         Expires {new Date(k.expires_at * 1000).toLocaleDateString()}
                       </Badge>
                     )}
-                    {k.last_used_at && (
+                    {k.last_used_at > 0 && (
                       <span>Last used {new Date(k.last_used_at * 1000).toLocaleDateString()}</span>
                     )}
                   </div>
@@ -160,8 +214,8 @@ export function ApiKeys() {
                     variant="ghost"
                     onClick={() => {
                       setIpRulesTarget(k.key_id);
-                      setAllowCidrs("");
-                      setDenyCidrs("");
+                      setAllowCidrs((k.allow_cidrs ?? []).join("\n"));
+                      setDenyCidrs((k.deny_cidrs ?? []).join("\n"));
                     }}
                     aria-label="Manage IP rules"
                   >
@@ -221,7 +275,11 @@ export function ApiKeys() {
                 <AlertTriangle className="h-4 w-4 shrink-0" />
                 <span>The Secret Key is shown only once. Store it securely.</span>
               </div>
-              <DialogFooter>
+              <DialogFooter className="gap-2">
+                <Button variant="outline" onClick={handleDownload}>
+                  <Download className="mr-1 h-4 w-4" />
+                  Download
+                </Button>
                 <Button onClick={() => setCreateOpen(false)}>Done</Button>
               </DialogFooter>
             </div>

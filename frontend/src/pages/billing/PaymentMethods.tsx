@@ -34,7 +34,7 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
 import {
   getPaymentMethods,
-  createCardSetupIntent,
+  addCard,
   createBankSetupIntent,
   verifyMicrodeposits,
   setDefault,
@@ -343,12 +343,29 @@ function AddBankDialog({ open, onOpenChange, onVerified }: AddBankDialogProps) {
 
 // ─── Main component ───────────────────────────────────────────────
 
+/** Parse "MM / YY" or "MM/YY" → { exp_month, exp_year }. Returns null if invalid. */
+function parseExpiry(raw: string): { exp_month: number; exp_year: number } | null {
+  const parts = raw.replace(/\s/g, "").split("/");
+  if (parts.length !== 2) return null;
+  const month = parseInt(parts[0]!, 10);
+  let year = parseInt(parts[1]!, 10);
+  if (isNaN(month) || isNaN(year)) return null;
+  if (month < 1 || month > 12) return null;
+  if (year < 100) year += 2000;
+  return { exp_month: month, exp_year: year };
+}
+
 export function PaymentMethods() {
   const queryClient = useQueryClient();
   const [addCardOpen, setAddCardOpen] = useState(false);
   const [addBankOpen, setAddBankOpen] = useState(false);
   const [deleting, setDeleting] = useState<PaymentMethod | null>(null);
-  const [setupLoading, setSetupLoading] = useState(false);
+
+  // Add card form state
+  const [cardName, setCardName] = useState("");
+  const [cardNumber, setCardNumber] = useState("");
+  const [cardExpiry, setCardExpiry] = useState("");
+  const [cardCvc, setCardCvc] = useState("");
 
   const hasPendingBank = Boolean(loadPendingBank());
 
@@ -357,18 +374,20 @@ export function PaymentMethods() {
     queryFn: getPaymentMethods,
   });
 
-  const setupMutation = useMutation({
-    mutationFn: () => createCardSetupIntent(),
-    onSuccess: (data) => {
-      // In production, pass data.client_secret to Stripe.js confirmCardSetup
-      toast.success(`Setup intent created: ${data.client_secret.slice(0, 15)}...`);
-      setSetupLoading(false);
+  const addCardMutation = useMutation({
+    mutationFn: (body: { card_number: string; exp_month: number; exp_year: number; cvc: string; cardholder_name?: string }) =>
+      addCard(body),
+    onSuccess: () => {
+      toast.success("Card added successfully");
       setAddCardOpen(false);
+      setCardName("");
+      setCardNumber("");
+      setCardExpiry("");
+      setCardCvc("");
       queryClient.invalidateQueries({ queryKey: ["billing", "payment-methods"] });
     },
-    onError: () => {
-      toast.error("Failed to create setup intent");
-      setSetupLoading(false);
+    onError: (err: any) => {
+      toast.error(err?.message ?? "Failed to add card");
     },
   });
 
@@ -532,7 +551,7 @@ export function PaymentMethods() {
       )}
 
       {/* Add card dialog */}
-      <Dialog open={addCardOpen} onOpenChange={setAddCardOpen}>
+      <Dialog open={addCardOpen} onOpenChange={(o) => { if (!addCardMutation.isPending) setAddCardOpen(o); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add Card</DialogTitle>
@@ -543,35 +562,80 @@ export function PaymentMethods() {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              setSetupLoading(true);
-              setupMutation.mutate();
+              const expiry = parseExpiry(cardExpiry);
+              if (!expiry) {
+                toast.error("Invalid expiry — use MM / YY format");
+                return;
+              }
+              const number = cardNumber.replace(/\s/g, "").replace(/-/g, "");
+              if (number.length < 13 || number.length > 19) {
+                toast.error("Invalid card number");
+                return;
+              }
+              addCardMutation.mutate({
+                card_number: number,
+                exp_month: expiry.exp_month,
+                exp_year: expiry.exp_year,
+                cvc: cardCvc.trim(),
+                cardholder_name: cardName.trim() || undefined,
+              });
             }}
             className="space-y-4 py-2"
           >
             <div className="space-y-1.5">
               <Label htmlFor="card-name">Name on card</Label>
-              <Input id="card-name" placeholder="Jane Doe" autoComplete="cc-name" />
+              <Input
+                id="card-name"
+                placeholder="Jane Doe"
+                autoComplete="cc-name"
+                value={cardName}
+                onChange={(e) => setCardName(e.target.value)}
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="card-number">Card Number</Label>
-              <Input id="card-number" placeholder="4242 4242 4242 4242" autoComplete="cc-number" />
+              <Input
+                id="card-number"
+                placeholder="4242 4242 4242 4242"
+                autoComplete="cc-number"
+                inputMode="numeric"
+                value={cardNumber}
+                onChange={(e) => setCardNumber(e.target.value)}
+                required
+              />
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <Label htmlFor="card-expiry">Expiry</Label>
-                <Input id="card-expiry" placeholder="MM / YY" />
+                <Input
+                  id="card-expiry"
+                  placeholder="MM / YY"
+                  value={cardExpiry}
+                  onChange={(e) => setCardExpiry(e.target.value)}
+                  required
+                />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="card-cvc">CVC</Label>
-                <Input id="card-cvc" placeholder="123" />
+                <Input
+                  id="card-cvc"
+                  placeholder="123"
+                  inputMode="numeric"
+                  value={cardCvc}
+                  onChange={(e) => setCardCvc(e.target.value)}
+                  required
+                />
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
               In production, this form would use Stripe Elements for PCI-compliant card collection.
             </p>
             <DialogFooter>
-              <Button type="submit" disabled={setupLoading}>
-                {setupLoading ? "Processing..." : "Add Card"}
+              <Button type="button" variant="outline" onClick={() => setAddCardOpen(false)} disabled={addCardMutation.isPending}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={addCardMutation.isPending}>
+                {addCardMutation.isPending ? "Adding…" : "Add Card"}
               </Button>
             </DialogFooter>
           </form>
