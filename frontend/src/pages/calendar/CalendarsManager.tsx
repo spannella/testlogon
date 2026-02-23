@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { CalendarDays, Pencil, Plus, Trash2, Loader2, Check, X } from "lucide-react";
 import { toast } from "sonner";
@@ -25,7 +25,6 @@ import {
 } from "@/api/endpoints/calendar";
 import type { Calendar } from "@/api/types";
 
-const DEFAULT_CALENDAR_NAME = "My Calendar";
 const DEFAULT_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
 // ─── Create Calendar Dialog ───────────────────────────────────────
@@ -187,8 +186,6 @@ export function CalendarsManager() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingCalendar, setDeletingCalendar] = useState<Calendar | null>(null);
-  const [autoCreating, setAutoCreating] = useState(false);
-  const autoCreatedRef = useRef(false);
 
   const calendarsQuery = useQuery({
     queryKey: ["calendars"],
@@ -196,32 +193,6 @@ export function CalendarsManager() {
   });
 
   const calendars: Calendar[] = Array.isArray(calendarsQuery.data) ? calendarsQuery.data : [];
-
-  // Auto-create a default calendar if none exist.
-  // Uses a ref (not state) as the guard so that resetting the loading state
-  // doesn't re-trigger the effect and cause an infinite creation loop.
-  useEffect(() => {
-    if (
-      calendarsQuery.isSuccess &&
-      calendars.length === 0 &&
-      !autoCreatedRef.current
-    ) {
-      autoCreatedRef.current = true;
-      setAutoCreating(true);
-      createCalendar({ name: DEFAULT_CALENDAR_NAME, timezone: DEFAULT_TIMEZONE })
-        .then(() => {
-          queryClient.invalidateQueries({ queryKey: ["calendars"] });
-          toast.success(`Default calendar "${DEFAULT_CALENDAR_NAME}" created`);
-        })
-        .catch(() => {
-          toast.error("Failed to create default calendar");
-          autoCreatedRef.current = false;
-        })
-        .finally(() => {
-          setAutoCreating(false);
-        });
-    }
-  }, [calendarsQuery.isSuccess, calendars.length, queryClient]);
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteCalendar(id),
@@ -235,9 +206,7 @@ export function CalendarsManager() {
     },
   });
 
-  const isLoading = calendarsQuery.isLoading || autoCreating;
-
-  if (isLoading) {
+  if (calendarsQuery.isLoading) {
     return (
       <div className="space-y-3">
         <Skeleton className="h-9 w-36" />
