@@ -32,8 +32,8 @@ export function ApiKeys() {
   const [createOpen, setCreateOpen] = useState(false);
   const [label, setLabel] = useState("");
   const [expiresInDays, setExpiresInDays] = useState<string>("none");
-  const [createdSecret, setCreatedSecret] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [createdKey, setCreatedKey] = useState<{ key_id: string; key_secret: string } | null>(null);
+  const [copiedField, setCopiedField] = useState<"key_id" | "key_secret" | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
   const [ipRulesTarget, setIpRulesTarget] = useState<string | null>(null);
   const [allowCidrs, setAllowCidrs] = useState("");
@@ -51,7 +51,7 @@ export function ApiKeys() {
     }),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["apiKeys"] });
-      setCreatedSecret(data.key_secret);
+      setCreatedKey({ key_id: data.key_id, key_secret: data.key_secret });
       setLabel("");
       setExpiresInDays("none");
     },
@@ -86,11 +86,18 @@ export function ApiKeys() {
 
   const keys = keysQuery.data?.keys ?? [];
 
-  const handleCopy = async () => {
-    if (!createdSecret) return;
-    await navigator.clipboard.writeText(createdSecret);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async (field: "key_id" | "key_secret") => {
+    const text = field === "key_id" ? createdKey?.key_id : createdKey?.key_secret;
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      toast.error("Copy failed — please select and copy manually");
+      return;
+    }
+    setCopiedField(field);
+    toast.success("Copied to clipboard");
+    setTimeout(() => setCopiedField(null), 2000);
   };
 
   return (
@@ -104,7 +111,7 @@ export function ApiKeys() {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => { setCreateOpen(true); setCreatedSecret(null); setCopied(false); setLabel(""); setExpiresInDays("none"); }}
+            onClick={() => { setCreateOpen(true); setCreatedKey(null); setCopiedField(null); setLabel(""); setExpiresInDays("none"); }}
           >
             <Plus className="mr-1 h-3.5 w-3.5" />
             Create Key
@@ -176,27 +183,43 @@ export function ApiKeys() {
       </CardContent>
 
       {/* Create key dialog */}
-      <Dialog open={createOpen} onOpenChange={(o) => { if (!o) { setCreateOpen(false); setCreatedSecret(null); } }}>
+      <Dialog open={createOpen} onOpenChange={(o) => { if (!o) { setCreateOpen(false); setCreatedKey(null); } }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{createdSecret ? "API Key Created" : "Create API Key"}</DialogTitle>
+            <DialogTitle>{createdKey ? "API Key Created" : "Create API Key"}</DialogTitle>
             <DialogDescription>
-              {createdSecret
-                ? "Copy your API key now. It won't be shown again."
+              {createdKey
+                ? "Save both values now — the secret won't be shown again."
                 : "Give your key an optional label for identification."}
             </DialogDescription>
           </DialogHeader>
-          {createdSecret ? (
+          {createdKey ? (
             <div className="space-y-3">
-              <div className="flex items-center gap-2 rounded-lg border bg-muted/50 p-3">
-                <code className="flex-1 break-all text-xs font-mono">{createdSecret}</code>
-                <Button size="icon" variant="ghost" onClick={handleCopy} aria-label="Copy key">
-                  {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-                </Button>
-              </div>
+              {([
+                { label: "Key ID", field: "key_id" as const, value: createdKey.key_id },
+                { label: "Secret Key", field: "key_secret" as const, value: createdKey.key_secret },
+              ]).map(({ label: fieldLabel, field, value }) => (
+                <div key={field}>
+                  <p className="mb-1 text-xs font-medium text-muted-foreground">{fieldLabel}</p>
+                  <div className="flex items-center gap-2 rounded-lg border bg-muted/50 p-3">
+                    <code className="flex-1 break-all text-xs font-mono">{value}</code>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      onClick={() => handleCopy(field)}
+                      aria-label={`Copy ${fieldLabel}`}
+                      className={copiedField === field ? "text-green-500" : ""}
+                    >
+                      {copiedField === field
+                        ? <Check className="h-4 w-4" />
+                        : <Copy className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                </div>
+              ))}
               <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
                 <AlertTriangle className="h-4 w-4 shrink-0" />
-                <span>This secret is shown only once. Store it securely.</span>
+                <span>The Secret Key is shown only once. Store it securely.</span>
               </div>
               <DialogFooter>
                 <Button onClick={() => setCreateOpen(false)}>Done</Button>
