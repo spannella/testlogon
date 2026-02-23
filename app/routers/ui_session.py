@@ -203,6 +203,8 @@ async def ui_sessions(ctx: Dict[str, str] = Depends(require_ui_session)):
         sid = it.get("session_id","")
         if not is_real_ui_session_id(sid):
             continue
+        if it.get("revoked") and sid != cur:
+            continue
         out.append({
             "session_id": sid,
             "is_current": sid == cur,
