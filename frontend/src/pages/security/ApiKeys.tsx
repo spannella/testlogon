@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Key, Plus, Trash2, Copy, Check, AlertTriangle, Globe, Download } from "lucide-react";
 import { toast } from "sonner";
@@ -34,6 +34,8 @@ export function ApiKeys() {
   const [expiresInDays, setExpiresInDays] = useState<string>("none");
   const [createdKey, setCreatedKey] = useState<{ key_id: string; key_secret: string; label: string; expiresInDays: string } | null>(null);
   const [copiedField, setCopiedField] = useState<"key_id" | "key_secret" | null>(null);
+  const keyIdInputRef = useRef<HTMLInputElement>(null);
+  const keySecretInputRef = useRef<HTMLInputElement>(null);
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
   const [ipRulesTarget, setIpRulesTarget] = useState<string | null>(null);
   const [allowCidrs, setAllowCidrs] = useState("");
@@ -76,6 +78,7 @@ export function ApiKeys() {
         deny_cidrs: denyCidrs.split("\n").map((s) => s.trim()).filter(Boolean),
       }),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["apiKeys"] });
       toast.success("IP rules updated");
       setIpRulesTarget(null);
       setAllowCidrs("");
@@ -129,29 +132,22 @@ export function ApiKeys() {
       return;
     }
 
-    // Plain-HTTP fallback: off-screen textarea + execCommand.
-    // Do NOT use opacity:0 or pointer-events:none — they prevent the browser
-    // from treating the element as selectable and execCommand returns true
-    // but silently does nothing.
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.cssText =
-      "position:fixed;top:-9999px;left:-9999px;width:2px;height:2px;" +
-      "padding:0;border:none;outline:none;box-shadow:none;background:transparent;";
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    let success = false;
-    try { success = document.execCommand("copy"); } catch { /* ignore */ }
-    document.body.removeChild(ta);
-
-    if (success) {
-      setCopiedField(field);
-      toast.success("Copied to clipboard");
-      setTimeout(() => setCopiedField(null), 2000);
-    } else {
-      toast.error("Copy failed — use the Download button instead");
+    // Plain-HTTP fallback: use a hidden readonly input rendered INSIDE the dialog
+    // (not appended to document.body) to avoid the Radix UI FocusTrap blocking execCommand.
+    const inputRef = field === "key_id" ? keyIdInputRef : keySecretInputRef;
+    const input = inputRef.current;
+    if (input) {
+      input.select();
+      let success = false;
+      try { success = document.execCommand("copy"); } catch { /* ignore */ }
+      if (success) {
+        setCopiedField(field);
+        toast.success("Copied to clipboard");
+        setTimeout(() => setCopiedField(null), 2000);
+        return;
+      }
     }
+    toast.error("Copy failed — use the Download button instead");
   };
 
   return (
@@ -257,6 +253,16 @@ export function ApiKeys() {
                   <p className="mb-1 text-xs font-medium text-muted-foreground">{fieldLabel}</p>
                   <div className="flex items-center gap-2 rounded-lg border bg-muted/50 p-3">
                     <code className="flex-1 break-all text-xs font-mono">{value}</code>
+                    {/* Hidden input for execCommand copy fallback (inside Radix FocusTrap) */}
+                    <input
+                      ref={field === "key_id" ? keyIdInputRef : keySecretInputRef}
+                      type="text"
+                      readOnly
+                      value={value}
+                      aria-hidden
+                      tabIndex={-1}
+                      className="sr-only"
+                    />
                     <Button
                       size="icon"
                       variant="ghost"

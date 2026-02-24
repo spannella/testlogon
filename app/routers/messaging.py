@@ -1850,7 +1850,17 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
     deliver_at = int(merged_item.get("deliver_at", 0)) or None
 
     text = None if content_hidden else merged_item.get("text")
-    image = None if content_hidden else merged_item.get("image")
+    raw_image = None if content_hidden else merged_item.get("image")
+    # In DEV_MODE, add a directly-accessible URL to image messages so the browser
+    # can display them without needing a real AWS S3 endpoint.
+    if raw_image and S.dev_mode and not raw_image.get("url"):
+        from urllib.parse import quote as _url_quote
+        _bucket = raw_image.get("bucket", "")
+        _key = raw_image.get("key", "")
+        if _bucket and _key:
+            raw_image = dict(raw_image)
+            raw_image["url"] = f"/mock/s3/{_bucket}/{_url_quote(_key, safe='/')}"
+    image = raw_image
     file_ = None if content_hidden else merged_item.get("file")
     preview = None if content_hidden else merged_item.get("preview")
 
@@ -4174,12 +4184,19 @@ def send_text_message(
 @router.post("/conversations/{conversation_id}/images/presign", response_model=PresignOut)
 def presign_image_upload(conversation_id: str, inp: SendImagePresignIn, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
+    from urllib.parse import quote as _url_quote
     key = f"{conversation_id}/{user_id}/{now_ts()}_{uuid.uuid4().hex}_{inp.filename}"
-    upload_url = s3.generate_presigned_url(
-        ClientMethod="put_object",
-        Params={"Bucket": S3_BUCKET_IMAGES, "Key": key, "ContentType": inp.content_type},
-        ExpiresIn=900,
-    )
+    if S.dev_mode:
+        # In DEV_MODE, moto presigned URLs point to inaccessible AWS endpoints.
+        # Return a path-relative URL so the browser routes through the Vite proxy
+        # to the in-app mock S3 PUT handler (see s3_mock.py, mounted at /mock/s3).
+        upload_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_url_quote(key, safe='/')}"
+    else:
+        upload_url = s3.generate_presigned_url(
+            ClientMethod="put_object",
+            Params={"Bucket": S3_BUCKET_IMAGES, "Key": key, "ContentType": inp.content_type},
+            ExpiresIn=900,
+        )
     return PresignOut(upload_url=upload_url, bucket=S3_BUCKET_IMAGES, key=key, content_type=inp.content_type)
 
 

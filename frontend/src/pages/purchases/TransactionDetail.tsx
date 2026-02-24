@@ -58,7 +58,8 @@ function formatCurrency(amount: number, currency: string): string {
   }).format(amount);
 }
 
-function formatDate(ts: number): string {
+function formatDate(ts: number | undefined): string {
+  if (!ts) return "—";
   return new Date(ts * 1000).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
@@ -227,7 +228,14 @@ export function TransactionDetail() {
     mutationFn: () => getReceipt(txnId!),
     onSuccess: (data) => {
       if (data.receipt_url) {
-        window.open(data.receipt_url, "_blank", "noopener");
+        // Strip the origin so the request routes through the Vite proxy,
+        // avoiding direct-to-backend calls that bypass session cookies.
+        try {
+          const url = new URL(data.receipt_url);
+          window.open(url.pathname + url.search, "_blank", "noopener");
+        } catch {
+          window.open(data.receipt_url, "_blank", "noopener");
+        }
       } else {
         toast.info("Receipt is being generated. Try again shortly.");
       }

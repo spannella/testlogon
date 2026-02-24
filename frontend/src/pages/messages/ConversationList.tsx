@@ -43,10 +43,23 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
     staleTime: 0,
   });
 
+  const addConvoToCache = (convo: Conversation) => {
+    queryClient.setQueryData(
+      ["conversations"],
+      (old: { conversations: Conversation[]; next_cursor?: string } | Conversation[] | undefined) => {
+        const existing: Conversation[] = Array.isArray(old) ? old : (old?.conversations ?? []);
+        if (existing.some((c) => c.conversation_id === convo.conversation_id)) return old;
+        const updated = [convo, ...existing];
+        return Array.isArray(old) ? updated : { ...(old ?? {}), conversations: updated };
+      },
+    );
+    queryClient.invalidateQueries({ queryKey: ["conversations"] });
+  };
+
   const createConvo = useMutation({
     mutationFn: (pid: string) => startConversation({ participant_ids: [pid], type: "dm" }),
     onSuccess: (convo) => {
-      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      addConvoToCache(convo);
       onSelect(convo);
       setNewConvoOpen(false);
     },
@@ -59,7 +72,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
         title: groupTitle.trim() || undefined,
       }),
     onSuccess: (convo) => {
-      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      addConvoToCache(convo);
       onSelect(convo);
       setNewConvoOpen(false);
       setGroupParticipants([]);

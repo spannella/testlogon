@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Images, Users } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -104,6 +105,9 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: (err: Error) => {
+      toast.error(err.message || "Failed to send message");
     },
   });
 

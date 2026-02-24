@@ -31,6 +31,7 @@ export default defineConfig({
       "/uploads": "http://localhost:8000",
       "/sse": "http://localhost:8000",
       "/notifications": "http://localhost:8000",
+      "/mock": "http://localhost:8000",
     },
   },
   build: {

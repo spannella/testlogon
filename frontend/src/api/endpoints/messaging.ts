@@ -25,13 +25,16 @@ import { adaptConversation, adaptMessage } from "./messagingAdapter";
 import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
 
 export const getConversations = async (cursor?: string) => {
-  const res = await api.get<{ conversations: Conversation[]; next_cursor?: string }>(
+  const res = await api.get<{ conversations: Conversation[]; next_cursor?: string } | Conversation[]>(
     "/messaging/conversations",
     cursor ? { cursor } : undefined,
   );
+  // Backend returns a plain array; handle both array and object shapes
+  const rawConversations = Array.isArray(res) ? res : (res.conversations ?? []);
+  const next_cursor = Array.isArray(res) ? undefined : res.next_cursor;
   return {
-    conversations: (res.conversations ?? []).map(adaptConversation),
-    next_cursor: res.next_cursor,
+    conversations: rawConversations.map(adaptConversation),
+    next_cursor,
   };
 };
 
@@ -51,13 +54,16 @@ export const startGroupConversation = async (body: StartGroupConversationReq) =>
 };
 
 export const getMessages = async (conversationId: string, cursor?: string) => {
-  const res = await api.get<{ messages: Message[]; next_cursor?: string }>(
+  const res = await api.get<{ messages: Message[]; next_cursor?: string } | Message[]>(
     `/messaging/conversations/${conversationId}/messages`,
-    cursor ? { cursor } : undefined,
+    cursor ? { before: cursor } : undefined,
   );
+  // Backend returns a plain array; handle both array and object shapes
+  const rawMessages = Array.isArray(res) ? res : (res.messages ?? []);
+  const next_cursor = Array.isArray(res) ? undefined : res.next_cursor;
   return {
-    messages: (res.messages ?? []).map(adaptMessage),
-    next_cursor: res.next_cursor,
+    messages: rawMessages.map(adaptMessage),
+    next_cursor,
   };
 };
 

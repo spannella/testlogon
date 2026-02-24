@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, Headphones } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, Headphones } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -34,6 +34,8 @@ export function ComposeBar({
   const [encryptEnabled, setEncryptEnabled] = React.useState(false);
   const [password, setPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
+  const [showPassword, setShowPassword] = React.useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = React.useState(false);
   const [encrypting, setEncrypting] = React.useState(false);
   const [encryptError, setEncryptError] = React.useState<string | null>(null);
   const [viewOnceImage, setViewOnceImage] = React.useState(false);
@@ -157,23 +159,58 @@ export function ComposeBar({
           <p className="font-medium">This message will be encrypted locally before sending.</p>
           <p className="mt-1">If password is lost, recipients cannot decrypt this message.</p>
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <input
-              type="password"
-              placeholder="Encryption password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="rounded border border-input bg-background px-2 py-1 text-xs"
-              autoComplete="new-password"
-            />
-            <input
-              type="password"
-              placeholder="Confirm password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="rounded border border-input bg-background px-2 py-1 text-xs"
-              autoComplete="new-password"
-            />
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                placeholder="Encryption password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full rounded border border-input bg-background px-2 py-1 pr-7 text-xs"
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                tabIndex={-1}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+              </button>
+            </div>
+            <div className="relative">
+              <input
+                type={showConfirmPassword ? "text" : "password"}
+                placeholder="Confirm password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className={cn(
+                  "w-full rounded border bg-background px-2 py-1 pr-7 text-xs",
+                  confirmPassword && password
+                    ? password === confirmPassword
+                      ? "border-green-500"
+                      : "border-red-400"
+                    : "border-input",
+                )}
+                autoComplete="new-password"
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPassword((v) => !v)}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                tabIndex={-1}
+                aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+              >
+                {showConfirmPassword ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+              </button>
+            </div>
           </div>
+          {confirmPassword && password && password !== confirmPassword && (
+            <p className="mt-1 text-[11px] text-red-700">Passwords do not match</p>
+          )}
+          {confirmPassword && password && password === confirmPassword && (
+            <p className="mt-1 text-[11px] text-green-700">Passwords match</p>
+          )}
           {encryptError && <p className="mt-2 text-[11px] text-red-700">{encryptError}</p>}
         </div>
       )}
