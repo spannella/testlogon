@@ -46,7 +46,7 @@ describe("messageEncryption", () => {
     const envelope = await encryptMessage("tamper check", "Str0ng!Password");
 
     const bytes = Uint8Array.from(atob(envelope.ciphertext_b64), (ch) => ch.charCodeAt(0));
-    bytes[0] = bytes[0] ^ 0xff;
+    bytes[0] = (bytes[0] ?? 0) ^ 0xff;
     const tamperedB64 = btoa(String.fromCharCode(...bytes));
 
     const tampered = {

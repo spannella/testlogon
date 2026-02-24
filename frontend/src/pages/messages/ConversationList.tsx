@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Search, Plus, MessageSquare, Users } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -85,7 +85,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
   const filtered = search.trim()
     ? conversations.filter((c) => {
         const q = search.toLowerCase();
-        const title = conversationName(c).toLowerCase();
+        const title = conversationName(c, userId ?? undefined).toLowerCase();
         const lastMsg = (c.last_message?.text ?? c.last_message_preview ?? "").toLowerCase();
         return title.includes(q) || lastMsg.includes(q);
       })
@@ -130,7 +130,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
         ) : (
           <div className="space-y-0.5 p-2">
             {filtered.map((convo) => {
-              const name = conversationName(convo);
+              const name = conversationName(convo, userId ?? undefined);
               const initials = name.slice(0, 2).toUpperCase();
               const active = convo.conversation_id === activeId;
               const lastMsg = convo.last_message;
@@ -148,9 +148,15 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
                   onClick={() => onSelect(convo)}
                 >
                   <div className="relative shrink-0">
-                    <Avatar className="h-10 w-10">
-                      <AvatarFallback className="text-xs">{initials}</AvatarFallback>
-                    </Avatar>
+                    {(() => {
+                      const other = convo.type === "dm" ? convo.participants.find((p) => p.user_id !== userId) : undefined;
+                      return (
+                        <Avatar className="h-10 w-10">
+                          {other?.profile_photo_url && <AvatarImage src={other.profile_photo_url} alt={other.display_name ?? other.user_id} />}
+                          <AvatarFallback className="text-xs">{initials}</AvatarFallback>
+                        </Avatar>
+                      );
+                    })()}
                     {convo.type === "dm" && (() => {
                       const other = convo.participants.find((p) => p.user_id !== userId);
                       return other ? <PresenceDot userId={other.user_id} /> : null;
@@ -279,15 +285,13 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
-function conversationName(c: Conversation): string {
+function conversationName(c: Conversation, currentUserId?: string): string {
   if (c.title) return c.title;
-  if (c.participants.length > 0) {
-    return c.participants
-      .slice(0, 3)
-      .map((p) => p.display_name ?? p.user_id)
-      .join(", ");
-  }
-  return "Conversation";
+  const pool = (c.type === "dm" && currentUserId)
+    ? c.participants.filter((p) => p.user_id !== currentUserId)
+    : c.participants;
+  const shown = (pool.length ? pool : c.participants).slice(0, 3);
+  return shown.map((p) => p.display_name ?? p.user_id).join(", ") || "Conversation";
 }
 
 function formatTimestamp(ts: number): string {

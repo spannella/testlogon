@@ -20,6 +20,7 @@ import type {
   ConsumeAttachmentReq,
   ConsumeAttachmentResp,
   CreateAttachmentGrantResp,
+  SendTipReq,
 } from "@/api/types";
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
 import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
@@ -109,19 +110,26 @@ const uploadToPresignedUrl = async (uploadUrl: string, file: File, contentType: 
 export const sendImageMessage = async (
   conversationId: string,
   formData: FormData,
-  options?: { consumption_policy?: "none" | "view_once" },
+  options?: {
+    consumption_policy?: "none" | "view_once";
+    caption?: string;
+    expires_in_seconds?: number;
+    lock_price_cents?: number;
+    lock_description?: string;
+  },
 ) => {
   const file = formData.get("file");
   if (!(file instanceof File)) {
     throw new Error("sendImageMessage requires FormData with a file field");
   }
 
+  const isPdf = file.type === "application/pdf";
   const contentType = file.type || "image/jpeg";
   const presign = await api.post<{ upload_url: string; bucket: string; key: string; content_type: string }>(
     `/messaging/conversations/${conversationId}/images/presign`,
     {
       content_type: contentType,
-      filename: file.name || "image.jpg",
+      filename: file.name || (isPdf ? "document.pdf" : "image.jpg"),
     },
   );
 
@@ -131,16 +139,23 @@ export const sendImageMessage = async (
     bucket: presign.bucket,
     key: presign.key,
     content_type: presign.content_type || contentType,
+    filename: file.name,
+    filesize: file.size,
+    kind: isPdf ? "file" : "image",
   };
   if (options?.consumption_policy) payload.consumption_policy = options.consumption_policy;
+  if (options?.caption) payload.caption = options.caption;
+  if (options?.expires_in_seconds) payload.expires_in_seconds = options.expires_in_seconds;
+  if (options?.lock_price_cents) payload.lock_price_cents = options.lock_price_cents;
+  if (options?.lock_description) payload.lock_description = options.lock_description;
 
   const res = await api.post<Message>(`/messaging/conversations/${conversationId}/messages/image`, payload);
   return adaptMessage(res);
 };
 
 export const editMessage = async (conversationId: string, messageId: string, body: { text: string }) => {
-  const res = await api.post<Message>(
-    `/messaging/conversations/${conversationId}/messages/${messageId}/edit`,
+  const res = await api.patch<Message>(
+    `/messaging/conversations/${conversationId}/messages/${messageId}`,
     body,
   );
   return adaptMessage(res);
@@ -273,6 +288,9 @@ export const updateParticipantRole = (
   );
 
 
+export const unlockMessage = (conversationId: string, messageId: string) =>
+  api.post<{ ok: boolean }>(`/messaging/conversations/${conversationId}/messages/${messageId}/unlock`, {});
+
 export const buildAttachmentDownloadUrl = (
   conversationId: string,
   messageId: string,
@@ -285,3 +303,23 @@ export const buildAttachmentDownloadUrl = (
   const qs = params.toString();
   return `/messaging/conversations/${conversationId}/messages/${messageId}/attachment${qs ? `?${qs}` : ""}`;
 };
+
+// ─── Scheduled Messages ────────────────────────────────────────
+
+export const getScheduledMessages = async (conversationId: string) => {
+  const res = await api.get<Message[]>(
+    `/messaging/conversations/${conversationId}/messages/scheduled`,
+  );
+  return Array.isArray(res) ? res.map(adaptMessage) : [];
+};
+
+export const cancelScheduledMessage = (conversationId: string, messageId: string) =>
+  api.del(`/messaging/conversations/${conversationId}/messages/${messageId}/schedule`);
+
+// ─── Tips ──────────────────────────────────────────────────────
+
+export const sendMessageTip = (conversationId: string, messageId: string, body: SendTipReq) =>
+  api.post<{ ok: boolean; tip_payment_id: string; amount_cents: number; currency: string }>(
+    `/messaging/conversations/${conversationId}/messages/${messageId}/tip`,
+    body,
+  );

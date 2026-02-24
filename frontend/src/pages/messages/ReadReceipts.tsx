@@ -31,6 +31,7 @@ function ReadReceiptsInner({
     queryKey: ["message-views", conversationId, messageId],
     queryFn: () => getViewers(conversationId, messageId),
     staleTime: 30_000,
+    enabled: !messageId.startsWith("optimistic-"),
   });
 
   const items: MessageViewer[] = viewers ?? [];
@@ -77,8 +78,9 @@ export function ViewTracker({ conversationId, messageId, isOwn }: ViewTrackerPro
   const markedRef = useRef(false);
 
   useEffect(() => {
-    // Don't track own messages
+    // Don't track own messages or optimistic messages
     if (isOwn) return;
+    if (messageId.startsWith("optimistic-")) return;
 
     const el = ref.current;
     if (!el) return;

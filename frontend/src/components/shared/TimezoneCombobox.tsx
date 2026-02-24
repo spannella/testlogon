@@ -18,7 +18,8 @@ import { cn } from "@/lib/utils";
 
 const TIMEZONES: string[] = (() => {
   try {
-    return [...Intl.supportedValuesOf("timeZone")].sort();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return [...(Intl as any).supportedValuesOf("timeZone") as string[]].sort();
   } catch {
     return ["UTC"];
   }

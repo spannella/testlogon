@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MoreHorizontal, Forward, Trash2, Lock, Loader2 } from "lucide-react";
+import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -31,18 +31,27 @@ import {
   consumeOnceMediaAttachment,
   createOnceMediaAttachmentGrant,
   deleteMessage,
+  editMessage,
+  reactToMessage,
+  sendMessageTip,
+  unlockMessage,
 } from "@/api/endpoints/messaging";
 import { ApiError } from "@/api/client";
 import type { Message } from "@/api/types";
 import { FileMessageCard } from "./FileMessageCard";
 import { ReadReceipts, ViewTracker } from "./ReadReceipts";
 import { ForwardDialog } from "./ForwardDialog";
+import { MessageDetailsSheet } from "./MessageDetailsSheet";
+
+const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
 interface MessageBubbleProps {
   message: Message;
   isOwn: boolean;
   showSender?: boolean;
   conversationId: string;
+  onReply?: (message: Message) => void;
+  replyToMessage?: Message;
 }
 
 const onceLabel = (message: Message): string | undefined => {
@@ -84,7 +93,16 @@ const openBlobInEphemeralWindow = (blob: Blob) => {
   }
 };
 
-export function MessageBubble({ message, isOwn, showSender, conversationId }: MessageBubbleProps) {
+function replyPreviewText(msg: Message): string {
+  if (msg.kind === "image") return "[Image]";
+  if (msg.kind === "video") return "[Video]";
+  if (msg.kind === "audio") return "[Audio]";
+  if (msg.kind === "file") return msg.file?.name ? `[File: ${msg.file.name}]` : "[File]";
+  if (msg.is_encrypted) return "[Encrypted message]";
+  return (msg.text ?? "").slice(0, 80) || "[Message]";
+}
+
+export function MessageBubble({ message, isOwn, showSender, conversationId, onReply, replyToMessage }: MessageBubbleProps) {
   const queryClient = useQueryClient();
   const [forwardOpen, setForwardOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -95,6 +113,14 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
   const [decryptedText, setDecryptedText] = useState<string | null>(null);
   const [openingOnce, setOpeningOnce] = useState(false);
   const [onceError, setOnceError] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState("");
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [tipOpen, setTipOpen] = useState(false);
+  const [tipAmount, setTipAmount] = useState("");
+  const [viewOnceTextRevealed, setViewOnceTextRevealed] = useState(false);
 
   const deleteMut = useMutation({
     mutationFn: () => deleteMessage(conversationId, message.message_id),
@@ -104,6 +130,50 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
       setDeleteConfirmOpen(false);
     },
     onError: () => toast.error("Failed to delete message"),
+  });
+
+  const editMut = useMutation({
+    mutationFn: (text: string) => editMessage(conversationId, message.message_id, { text }),
+    onSuccess: () => {
+      toast.success("Message edited");
+      void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+      setIsEditing(false);
+    },
+    onError: () => toast.error("Failed to edit message"),
+  });
+
+  const reactMut = useMutation({
+    mutationFn: (emoji: string) => {
+      const alreadyReacted = (message.my_reactions ?? []).includes(emoji);
+      return reactToMessage(conversationId, message.message_id, emoji).then(() => {
+        void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+        if (alreadyReacted) return;
+      });
+    },
+    onError: () => toast.error("Failed to react"),
+  });
+
+  const unlockMut = useMutation({
+    mutationFn: () => unlockMessage(conversationId, message.message_id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+    },
+    onError: () => toast.error("Failed to unlock message"),
+  });
+
+  const tipMut = useMutation({
+    mutationFn: () => {
+      const cents = Math.round(parseFloat(tipAmount) * 100);
+      if (isNaN(cents) || cents < 1) throw new Error("Invalid tip amount");
+      return sendMessageTip(conversationId, message.message_id, { amount_cents: cents, currency: "USD" });
+    },
+    onSuccess: () => {
+      toast.success("Tip sent!");
+      setTipOpen(false);
+      setTipAmount("");
+      void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+    },
+    onError: (err: Error) => toast.error(err.message || "Failed to send tip"),
   });
 
   const time = new Date(message.created_at * 1000).toLocaleTimeString(undefined, {
@@ -152,13 +222,10 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
     setOpeningOnce(true);
     setOnceError(null);
     try {
+      // Step 1: Create grant (validates state is pending)
       const grant = await createOnceMediaAttachmentGrant(conversationId, message.message_id);
-      const trigger = consumeTrigger(message);
-      await consumeOnceMediaAttachment(conversationId, message.message_id, grant.grant_token, {
-        consumption_attempt_id: `attempt-${message.message_id}-${Date.now()}`,
-        trigger,
-        playback_seconds: playbackThresholdSeconds(message),
-      });
+
+      // Step 2: Download BEFORE consuming — the download endpoint validates state == pending
       const url = buildAttachmentDownloadUrl(conversationId, message.message_id, grant.grant_token);
       const response = await fetch(url, {
         method: "GET",
@@ -170,6 +237,16 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
         throw new Error("once_media_fetch_failed");
       }
       const blob = await response.blob();
+
+      // Step 3: Consume (mark as used) AFTER downloading
+      const trigger = consumeTrigger(message);
+      await consumeOnceMediaAttachment(conversationId, message.message_id, grant.grant_token, {
+        consumption_attempt_id: `attempt-${message.message_id}-${Date.now()}`,
+        trigger,
+        playback_seconds: playbackThresholdSeconds(message),
+      });
+
+      // Step 4: Open the blob in an ephemeral window
       openBlobInEphemeralWindow(blob);
       await queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
     } catch (err) {
@@ -203,9 +280,55 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
           )}
         >
           <div className={cn(
-            "absolute -top-2 opacity-0 transition-opacity group-hover:opacity-100",
+            "absolute -top-2 opacity-0 transition-opacity group-hover:opacity-100 flex items-center gap-0.5",
             isOwn ? "left-0 -translate-x-full pr-1" : "right-0 translate-x-full pl-1",
           )}>
+            {/* Quick emoji reactions */}
+            <div className="relative">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 rounded-full bg-background shadow-sm"
+                onClick={() => setEmojiPickerOpen((v) => !v)}
+                aria-label="React"
+              >
+                <Smile className="h-3.5 w-3.5" />
+              </Button>
+              {emojiPickerOpen && (
+                <div className={cn(
+                  "absolute top-full mt-1 z-50 flex gap-1 rounded-full border border-border bg-popover p-1 shadow-lg",
+                  isOwn ? "right-0" : "left-0",
+                )}>
+                  {QUICK_EMOJIS.map((emoji) => (
+                    <button
+                      key={emoji}
+                      onClick={() => { reactMut.mutate(emoji); setEmojiPickerOpen(false); }}
+                      className={cn(
+                        "flex h-7 w-7 items-center justify-center rounded-full text-base transition-colors hover:bg-accent",
+                        (message.my_reactions ?? []).includes(emoji) && "bg-primary/10",
+                      )}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Reply button */}
+            {onReply && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 rounded-full bg-background shadow-sm"
+                onClick={() => onReply(message)}
+                aria-label="Reply"
+              >
+                <Reply className="h-3.5 w-3.5" />
+              </Button>
+            )}
+
+            {/* More actions dropdown */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full bg-background shadow-sm">
@@ -213,9 +336,27 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align={isOwn ? "start" : "end"}>
+                <DropdownMenuItem onClick={() => setDetailsOpen(true)}>
+                  <Info className="mr-2 h-4 w-4" /> Details
+                </DropdownMenuItem>
                 {canForward && (
                   <DropdownMenuItem onClick={() => setForwardOpen(true)}>
                     <Forward className="mr-2 h-4 w-4" /> Forward
+                  </DropdownMenuItem>
+                )}
+                {onReply && (
+                  <DropdownMenuItem onClick={() => onReply(message)}>
+                    <Reply className="mr-2 h-4 w-4" /> Reply
+                  </DropdownMenuItem>
+                )}
+                {!isOwn && (
+                  <DropdownMenuItem onClick={() => setTipOpen(true)}>
+                    <DollarSign className="mr-2 h-4 w-4" /> Send Tip
+                  </DropdownMenuItem>
+                )}
+                {isOwn && !message.is_encrypted && !message.lock_price_cents && message.kind === "text" && (
+                  <DropdownMenuItem onClick={() => { setEditText(message.text ?? ""); setIsEditing(true); }}>
+                    <Pencil className="mr-2 h-4 w-4" /> Edit
                   </DropdownMenuItem>
                 )}
                 {isOwn && (
@@ -229,6 +370,18 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
+
+          {replyToMessage && (
+            <div className={cn(
+              "mb-1.5 rounded-lg border-l-2 px-2 py-1 text-xs",
+              isOwn
+                ? "border-primary-foreground/40 bg-primary-foreground/10"
+                : "border-primary/40 bg-muted",
+            )}>
+              <p className="font-semibold opacity-70 mb-0.5">{replyToMessage.sender_id}</p>
+              <p className="line-clamp-2 opacity-60">{replyPreviewText(replyToMessage)}</p>
+            </div>
+          )}
 
           {showSender && !isOwn && (
             <p className="mb-0.5 text-xs font-semibold text-primary">
@@ -285,29 +438,129 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
                 </>
               )}
             </div>
+          ) : message.lock_price_cents && !message.unlocked_at && !isOwn ? (
+            // Recipient view: locked message with unlock button
+            <div className="space-y-2">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
+                <Lock className="h-3 w-3" />
+                {`Lock · $${(message.lock_price_cents / 100).toFixed(2)}`}
+              </div>
+              {message.lock_description && (
+                <p className="text-xs text-muted-foreground italic">{message.lock_description}</p>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="h-7 px-2 text-xs"
+                onClick={() => unlockMut.mutate()}
+                disabled={unlockMut.isPending}
+              >
+                {unlockMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : `Unlock for $${(message.lock_price_cents / 100).toFixed(2)}`}
+              </Button>
+            </div>
+          ) : message.lock_price_cents && isOwn ? (
+            // Sender view: show lock badge + the original text they sent
+            <div className="space-y-1.5">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
+                <Lock className="h-3 w-3" />
+                {`Locked · $${(message.lock_price_cents / 100).toFixed(2)}`}
+              </div>
+              {message.text && <p className="whitespace-pre-wrap break-words text-sm">{message.text}</p>}
+              {message.lock_description && (
+                <p className="text-xs opacity-70 italic">{message.lock_description}</p>
+              )}
+            </div>
+          ) : isEditing ? (
+            <div className="space-y-1.5">
+              <textarea
+                value={editText}
+                onChange={(e) => setEditText(e.target.value)}
+                rows={3}
+                className="w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground"
+                autoFocus
+              />
+              <div className="flex gap-1.5">
+                <Button
+                  size="sm"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => editMut.mutate(editText.trim())}
+                  disabled={editMut.isPending || !editText.trim()}
+                >
+                  {editMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setIsEditing(false)}
+                  disabled={editMut.isPending}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : message.view_once && !isOwn && message.kind === "text" ? (
+            viewOnceTextRevealed ? (
+              <p className="whitespace-pre-wrap break-words text-sm">{message.text}</p>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setViewOnceTextRevealed(true)}
+                className="flex items-center gap-1.5 rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 px-3 py-2 text-sm text-primary hover:bg-primary/10"
+              >
+                <Eye className="h-4 w-4" />
+                Tap to view once
+              </button>
+            )
           ) : message.text ? (
             <p className="whitespace-pre-wrap break-words text-sm">{message.text}</p>
           ) : null}
 
-          {message.kind === "image" && typeof message.image?.url === "string" && (
-            <button
-              type="button"
-              disabled={message.consumption_state === "consumed" || openingOnce}
-              onClick={() => {
-                if (message.consumption_policy) {
-                  void handleOpenOnceAttachment();
-                } else {
-                  window.open(message.image?.url, "_blank", "noopener,noreferrer");
-                }
-              }}
-              className={cn("mt-1 block", message.consumption_state === "consumed" && "opacity-60 cursor-not-allowed")}
-            >
-              <img
-                src={message.image.url}
-                alt="Shared image"
-                className="max-h-64 rounded-lg object-cover"
-              />
-            </button>
+          {message.kind === "image" && (
+            message.consumption_policy === "view_once" && !isOwn ? (
+              // View-once image for recipient: show tap-to-view, not the actual image
+              message.consumption_state === "consumed" || !message.image?.url ? (
+                <div className="mt-1 flex h-24 w-48 items-center justify-center rounded-lg bg-muted/50 text-xs text-muted-foreground">
+                  Already viewed
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={openingOnce}
+                  onClick={() => void handleOpenOnceAttachment()}
+                  className="mt-1 flex h-24 w-48 flex-col items-center justify-center gap-1 rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 hover:bg-primary/10 text-primary"
+                >
+                  {openingOnce ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <>
+                      <Lock className="h-5 w-5" />
+                      <span className="text-xs font-medium">Tap to view once</span>
+                    </>
+                  )}
+                </button>
+              )
+            ) : typeof message.image?.url === "string" ? (
+              // Normal image or own view-once: show actual image
+              <button
+                type="button"
+                onClick={() => {
+                  if (message.consumption_policy && !isOwn) {
+                    void handleOpenOnceAttachment();
+                  } else {
+                    setLightboxOpen(true);
+                  }
+                }}
+                className="mt-1 block"
+              >
+                <img
+                  src={message.image.url}
+                  alt="Shared image"
+                  className="max-h-64 rounded-lg object-cover"
+                />
+              </button>
+            ) : null
           )}
 
           {isFileKind && typeof message.file?.name === "string" && (
@@ -331,15 +584,27 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
             />
           )}
 
+          {message.tip_amount_cents && message.tip_amount_cents > 0 && (
+            <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-green-500/20 px-2 py-0.5 text-xs font-medium text-green-700">
+              <DollarSign className="h-3 w-3" />
+              Tip: ${(message.tip_amount_cents / 100).toFixed(2)}
+            </div>
+          )}
+
           {message.reactions_counts && Object.keys(message.reactions_counts).length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1">
               {Object.entries(message.reactions_counts).map(([emoji, count]) => (
-                <span
+                <button
                   key={emoji}
-                  className="inline-flex items-center rounded-full bg-background/80 px-1.5 py-0.5 text-xs"
+                  type="button"
+                  onClick={() => reactMut.mutate(emoji)}
+                  className={cn(
+                    "inline-flex items-center rounded-full bg-background/80 px-1.5 py-0.5 text-xs transition-colors hover:bg-accent",
+                    (message.my_reactions ?? []).includes(emoji) && "bg-primary/20 ring-1 ring-primary/40",
+                  )}
                 >
-                  {emoji} {count > 1 && count}
-                </span>
+                  {emoji} {count > 1 && <span className="ml-0.5">{count}</span>}
+                </button>
               ))}
             </div>
           )}
@@ -349,6 +614,12 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
             isOwn ? "text-primary-foreground/60 justify-end" : "text-muted-foreground",
           )}>
             {(message.edited_at || message.edited) && <span>edited</span>}
+            {message.expires_at && (
+              <span className="rounded bg-orange-500/20 px-1 text-orange-600">
+                expires {new Date(message.expires_at * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+              </span>
+            )}
+            {message.view_once && <span className="rounded bg-purple-500/20 px-1 text-purple-600">view once</span>}
             <span>{time}</span>
           </div>
         </div>
@@ -416,6 +687,73 @@ export function MessageBubble({ message, isOwn, showSender, conversationId }: Me
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <MessageDetailsSheet
+        open={detailsOpen}
+        onOpenChange={setDetailsOpen}
+        message={message}
+        conversationId={conversationId}
+      />
+
+      <Dialog open={tipOpen} onOpenChange={(open) => { setTipOpen(open); if (!open) setTipAmount(""); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send Tip</DialogTitle>
+            <DialogDescription>Send a monetary tip to the message author.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Amount (USD)</label>
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={tipAmount}
+              onChange={(e) => setTipAmount(e.target.value)}
+              placeholder="e.g. 5.00"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTipOpen(false)} disabled={tipMut.isPending}>Cancel</Button>
+            <Button onClick={() => tipMut.mutate()} disabled={tipMut.isPending || !tipAmount}>
+              {tipMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Send Tip"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Image lightbox */}
+      {message.kind === "image" && typeof message.image?.url === "string" && (
+        <Dialog open={lightboxOpen} onOpenChange={setLightboxOpen}>
+          <DialogContent className="max-w-4xl p-0 overflow-hidden bg-black/90 border-none">
+            <DialogHeader className="absolute top-0 right-0 z-10 flex flex-row items-center gap-2 p-3">
+              <a
+                href={message.image.url}
+                download
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Download className="h-4 w-4" />
+              </a>
+              <button
+                onClick={() => setLightboxOpen(false)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </DialogHeader>
+            <DialogTitle className="sr-only">Image preview</DialogTitle>
+            <DialogDescription className="sr-only">Full-size image view</DialogDescription>
+            <div className="flex items-center justify-center min-h-[60vh] p-4">
+              <img
+                src={message.image.url}
+                alt="Full size image"
+                className="max-h-[80vh] max-w-full object-contain rounded-lg"
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </>
   );
 }

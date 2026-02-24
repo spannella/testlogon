@@ -1,9 +1,9 @@
 import * as React from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { ArrowLeft, Images, Users } from "lucide-react";
+import { ArrowLeft, Images, Users, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
@@ -21,6 +21,7 @@ import { TypingIndicator, useTypingSignal } from "./TypingIndicator";
 import { ParticipantsPanel } from "./ParticipantsPanel";
 import { isMessagingGalleryEnabled } from "@/lib/featureFlags";
 import { ConversationGallery } from "./ConversationGallery";
+import { ScheduledMessages } from "./ScheduledMessages";
 
 interface ConversationViewProps {
   conversation: Conversation;
@@ -37,9 +38,11 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
   const isGroup = conversation.type === "group";
   const [participantsOpen, setParticipantsOpen] = React.useState(false);
   const [galleryOpen, setGalleryOpen] = React.useState(false);
+  const [scheduledOpen, setScheduledOpen] = React.useState(false);
   const galleryEnabled = isMessagingGalleryEnabled();
   const [jumpTargetMessageId, setJumpTargetMessageId] = React.useState<string | null>(null);
   const [highlightMessageId, setHighlightMessageId] = React.useState<string | null>(null);
+  const [replyingTo, setReplyingTo] = React.useState<Message | null>(null);
 
   // ── Messages query ──────────────────────────────────────────────
 
@@ -48,14 +51,24 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
 
   const allMessages = React.useMemo(() => {
     if (!data?.pages) return [];
-    // Pages come newest-first from the API; reverse to display oldest at top
+    // Pages come newest-first from the API (each page itself is also newest-first).
+    // Iterate pages oldest→newest, and reverse each page's messages so the final
+    // array is chronological oldest→newest for top-to-bottom display.
     const msgs: Message[] = [];
     for (let i = data.pages.length - 1; i >= 0; i--) {
       const page = data.pages[i];
-      if (page) msgs.push(...(page.messages ?? []));
+      if (page) msgs.push(...(page.messages ?? []).slice().reverse());
     }
     return msgs;
   }, [data]);
+
+  // ── Message lookup map for reply previews ──────────────────────
+
+  const messageById = React.useMemo(() => {
+    const map = new Map<string, Message>();
+    for (const msg of allMessages) map.set(msg.message_id, msg);
+    return map;
+  }, [allMessages]);
 
   // ── Auto-scroll to bottom on new messages ───────────────────────
 
@@ -105,6 +118,9 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
   const sendText = useMutation({
     mutationFn: (payload: SendTextMessageReq) => sendTextMessage(convoId, payload),
     onMutate: async (payload) => {
+      // Skip optimistic update for scheduled messages - they won't appear until send_at
+      if (payload.send_at) return { snapshot: undefined, isScheduled: true };
+
       await queryClient.cancelQueries({ queryKey: ["messages", convoId] });
       const snapshot = queryClient.getQueryData(["messages", convoId]);
 
@@ -118,6 +134,7 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
         encryption: payload.encryption,
         created_at: Date.now() / 1000,
         reactions_counts: {},
+        reply_to_message_id: payload.reply_to_message_id,
       };
 
       queryClient.setQueryData<InfiniteData<MessagesPage>>(
@@ -131,9 +148,23 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
         },
       );
 
-      return { snapshot };
+      return { snapshot, isScheduled: false };
     },
-    onSuccess: () => {
+    onSuccess: (_data, payload, context) => {
+      if (context?.isScheduled) {
+        // Show toast for scheduled messages instead of adding to chat
+        const scheduledDate = new Date((payload.send_at ?? 0) * 1000);
+        toast.success(
+          `Message scheduled for ${scheduledDate.toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            timeZoneName: "short",
+          })}`,
+        );
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
     },
@@ -146,10 +177,23 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
   });
 
   const sendImage = useMutation({
-    mutationFn: (args: { file: File; consumptionPolicy?: "none" | "view_once" }) => {
+    mutationFn: (args: {
+      file: File;
+      consumptionPolicy?: "none" | "view_once";
+      caption?: string;
+      expires_in_seconds?: number;
+      lock_price_cents?: number;
+      lock_description?: string;
+    }) => {
       const fd = new FormData();
       fd.append("file", args.file);
-      return sendImageMessage(convoId, fd, { consumption_policy: args.consumptionPolicy ?? "none" });
+      return sendImageMessage(convoId, fd, {
+        consumption_policy: args.consumptionPolicy ?? "none",
+        caption: args.caption,
+        expires_in_seconds: args.expires_in_seconds,
+        lock_price_cents: args.lock_price_cents,
+        lock_description: args.lock_description,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
@@ -221,6 +265,9 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
         )}
         <div className="relative">
           <Avatar className="h-9 w-9">
+            {dmPartner?.profile_photo_url && (
+              <AvatarImage src={dmPartner.profile_photo_url} alt={dmPartner.display_name ?? dmPartner.user_id} />
+            )}
             <AvatarFallback className="text-xs">
               {title.slice(0, 2).toUpperCase()}
             </AvatarFallback>
@@ -248,6 +295,15 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
             Media & Links
           </Button>
         )}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          onClick={() => setScheduledOpen(true)}
+          aria-label="Scheduled messages"
+        >
+          <Clock className="h-4 w-4" />
+        </Button>
         {isGroup && (
           <Button
             variant="ghost"
@@ -304,6 +360,8 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
                 isOwn={msg.sender_id === userId}
                 showSender={isGroup}
                 conversationId={convoId}
+                onReply={(m) => setReplyingTo(m)}
+                replyToMessage={msg.reply_to_message_id ? messageById.get(msg.reply_to_message_id) : undefined}
               />
             </div>
           ))
@@ -315,10 +373,25 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
 
       {/* Compose */}
       <ComposeBar
-        onSendText={(payload) => sendText.mutate(payload)}
-        onSendImage={(file, options) => sendImage.mutate({ file, consumptionPolicy: options?.consumption_policy })}
+        onSendText={(payload) => {
+          sendText.mutate({
+            ...payload,
+            reply_to_message_id: replyingTo?.message_id,
+          });
+          setReplyingTo(null);
+        }}
+        onSendImage={(file, options) => sendImage.mutate({
+          file,
+          consumptionPolicy: options?.consumption_policy,
+          caption: options?.caption,
+          expires_in_seconds: options?.expires_in_seconds,
+          lock_price_cents: options?.lock_price_cents,
+          lock_description: options?.lock_description,
+        })}
         sending={sendText.isPending || sendImage.isPending}
         onKeystroke={onKeystroke}
+        replyingTo={replyingTo}
+        onCancelReply={() => setReplyingTo(null)}
       />
 
 
@@ -333,6 +406,13 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
           }}
         />
       )}
+
+      {/* Scheduled messages panel */}
+      <ScheduledMessages
+        open={scheduledOpen}
+        onOpenChange={setScheduledOpen}
+        conversationId={convoId}
+      />
 
       {/* Group participants panel */}
       {isGroup && (

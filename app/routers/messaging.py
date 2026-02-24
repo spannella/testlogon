@@ -551,6 +551,7 @@ class ConversationOut(BaseModel):
     active_agent_user_id: Optional[str] = None
     active_agent_claimed_at: Optional[int] = None
     assignment_version: Optional[int] = None
+    participants: List["ParticipantOut"] = Field(default_factory=list)
 
 
 class RoutingEventOut(BaseModel):
@@ -694,6 +695,10 @@ class CreateImageMessageIn(BaseModel):
     content_type: str = "image/jpeg"
     width: Optional[int] = None
     height: Optional[int] = None
+    filename: Optional[str] = Field(default=None, max_length=255)
+    filesize: Optional[int] = None
+    caption: Optional[str] = Field(default=None, max_length=MESSAGE_TEXT_MAX_CHARS)
+    kind: Literal["image", "file"] = "image"
     reply_to_message_id: Optional[str] = None
     consumption_policy: Literal["none", "view_once"] = "none"
     expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=604800)
@@ -770,6 +775,12 @@ class ParticipantOut(BaseModel):
     assignment_state: Optional[str] = None
     assignment_owner_user_id: Optional[str] = None
     is_assignment_owner: Optional[bool] = None
+    display_name: Optional[str] = None
+    profile_photo_url: Optional[str] = None
+
+
+# Rebuild ConversationOut now that ParticipantOut is fully defined
+ConversationOut.model_rebuild()
 
 
 class ReactIn(BaseModel):
@@ -2141,6 +2152,37 @@ def _conversation_out_from_items(*, conversation_id: str, convo: dict, participa
     return out
 
 
+def _enrich_participant_out(p: dict, profile_cache: Dict[str, Any]) -> "ParticipantOut":
+    pid = p["user_id"]
+    if pid not in profile_cache:
+        try:
+            profile_cache[pid] = get_profile_identity(pid)
+        except Exception:
+            profile_cache[pid] = {}
+    identity = profile_cache[pid]
+    display_name = identity.get("display_name")
+    if not display_name:
+        display_name = tbl_users.get_item(Key={"user_id": pid}).get("Item", {}).get("display_name")
+    return ParticipantOut(
+        user_id=pid,
+        status=p.get("status", "pending"),
+        role=p.get("role", "member"),
+        muted_until=int(p.get("muted_until", 0) or 0),
+        last_read_at=int(p.get("last_read_at", 0) or 0),
+        joined_at=int(p.get("joined_at", 0) or 0),
+        left_at=int(p.get("left_at", 0) or 0),
+        display_name=display_name or None,
+        profile_photo_url=identity.get("profile_photo_url") or None,
+    )
+
+
+def _get_conversation_participants_enriched(conversation_id: str, profile_cache: Dict[str, Any]) -> List["ParticipantOut"]:
+    items = tbl_parts.query(
+        IndexName="GSI1",
+        KeyConditionExpression=Key("GSI1PK").eq(conversation_id),
+        Limit=50,
+    ).get("Items", [])
+    return [_enrich_participant_out(p, profile_cache) for p in items if p.get("status") != "left"]
 
 
 def _helpdesk_lifecycle_event_payload(*, conversation: Mapping[str, Any], event_item: Mapping[str, Any]) -> dict:
@@ -2483,8 +2525,16 @@ def _ensure_can_revoke_message(user_id: str, conversation_id: str, message_item:
     require_participant_role(user_id, conversation_id, {"admin"})
 
 
+class _DecimalEncoder(json.JSONEncoder):
+    def default(self, o):
+        from decimal import Decimal as _Decimal
+        if isinstance(o, _Decimal):
+            return float(o) if o % 1 else int(o)
+        return super().default(o)
+
+
 def _sse_pack(data: dict, event: str = "message") -> str:
-    return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
+    return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'), cls=_DecimalEncoder)}\n\n"
 
 
 def _ddb_fetch_events(user_id: str, after: Optional[str], limit: int) -> list[dict]:
@@ -3068,7 +3118,7 @@ def start_conversation(
     tbl_convos.put_item(Item=convo_item, ConditionExpression="attribute_not_exists(conversation_id)")
 
     for pid in participant_ids:
-        status = "active" if pid == user_id else "pending"
+        status = "active" if (pid == user_id or inp.type == "dm") else "pending"
         tbl_parts.put_item(
             Item={
                 "user_id": pid,
@@ -3090,6 +3140,7 @@ def start_conversation(
         if delivered == 0:
             _emit_no_agents_online_notice(conversation_id=cid, user_id=user_id, now=created_at)
 
+    profile_cache: Dict[str, Any] = {}
     convo = ConversationOut(
         conversation_id=cid,
         type=inp.type,
@@ -3108,6 +3159,7 @@ def start_conversation(
         last_read_at=0,
         unread_count=0,
     )
+    convo.participants = _get_conversation_participants_enriched(cid, profile_cache)
     audit_event(
         "messaging_conversation_started",
         user_id,
@@ -3174,16 +3226,31 @@ def list_conversations(user_id: str = Depends(get_messaging_user_id)):
     resp = tbl_parts.query(KeyConditionExpression=Key("user_id").eq(user_id), Limit=200)
     parts = resp.get("Items", [])
     out: List[ConversationOut] = []
+    profile_cache: Dict[str, Any] = {}
 
     for p in parts:
         cid = p["conversation_id"]
         convo = tbl_convos.get_item(Key={"conversation_id": cid}).get("Item")
         if not convo:
             continue
-        out.append(_conversation_out_from_items(conversation_id=cid, convo=convo, participant=p, viewer_user_id=user_id))
+        convo_out = _conversation_out_from_items(conversation_id=cid, convo=convo, participant=p, viewer_user_id=user_id)
+        convo_out.participants = _get_conversation_participants_enriched(cid, profile_cache)
+        out.append(convo_out)
 
     out.sort(key=lambda x: (x.last_message_at or 0, x.created_at), reverse=True)
     return out
+
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationOut)
+def get_conversation(conversation_id: str, user_id: str = Depends(get_messaging_user_id)):
+    part = get_participant_any(user_id, conversation_id)
+    if not part:
+        raise HTTPException(404, "Conversation not found")
+    convo = _get_conversation_or_404(conversation_id)
+    profile_cache: Dict[str, Any] = {}
+    convo_out = _conversation_out_from_items(conversation_id=conversation_id, convo=convo, participant=part, viewer_user_id=user_id)
+    convo_out.participants = _get_conversation_participants_enriched(conversation_id, profile_cache)
+    return convo_out
 
 
 @router.post("/conversations/{conversation_id}/mute")
@@ -3682,16 +3749,9 @@ def list_participants(conversation_id: str, user_id: str = Depends(get_messaging
 
     assignment_state = str(convo.get("routing_state") or "") if str(convo.get("routing_mode") or "") == "helpdesk_bridge" else ""
     assignment_owner = str(convo.get("active_agent_user_id") or "") if assignment_state else ""
+    profile_cache: Dict[str, Any] = {}
     for p in items:
-        participant_out = ParticipantOut(
-            user_id=p["user_id"],
-            status=p.get("status", "pending"),
-            role=p.get("role", "member"),
-            muted_until=int(p.get("muted_until", 0) or 0),
-            last_read_at=int(p.get("last_read_at", 0) or 0),
-            joined_at=int(p.get("joined_at", 0) or 0),
-            left_at=int(p.get("left_at", 0) or 0),
-        )
+        participant_out = _enrich_participant_out(p, profile_cache)
         if helpdesk_agent_view and assignment_state:
             participant_out.assignment_state = assignment_state
             participant_out.assignment_owner_user_id = assignment_owner
@@ -4152,17 +4212,18 @@ def send_text_message(
     if not is_scheduled:
         message = _apply_message_receipts(message, item, participants)
 
-    fanout_event_to_conversation(
-        conversation_id=conversation_id,
-        sender_id=user_id,
-        event_type="message:new",
-        payload={
-            "message_id": mid,
-            "created_at": ts,
-            "message": _serialize_message_event_payload(item, user_id),
-        },
-        respect_mute=False,
-    )
+    if not is_scheduled:
+        fanout_event_to_conversation(
+            conversation_id=conversation_id,
+            sender_id=user_id,
+            event_type="message:new",
+            payload={
+                "message_id": mid,
+                "created_at": ts,
+                "message": _serialize_message_event_payload(item, user_id),
+            },
+            respect_mute=False,
+        )
 
     audit_event(
         "messaging_message_sent",
@@ -4231,16 +4292,29 @@ def create_image_message(
         "message_id": mid,
         "sender_id": user_id,
         "created_at": ts,
-        "kind": "image",
-        "image": {
+        "kind": inp.kind,
+        "reactions": {},
+    }
+    if inp.kind == "file":
+        item["file"] = {
+            "bucket": inp.bucket,
+            "key": inp.key,
+            "content_type": inp.content_type,
+            "name": inp.filename,
+            "size": inp.filesize,
+        }
+    else:
+        item["image"] = {
             "bucket": inp.bucket,
             "key": inp.key,
             "content_type": inp.content_type,
             "width": inp.width,
             "height": inp.height,
-        },
-        "reactions": {},
-    }
+            "filename": inp.filename,
+            "filesize": inp.filesize,
+        }
+    if inp.caption:
+        item["text"] = inp.caption
     # Expiry
     expires_at = None
     if inp.expires_in_seconds:
@@ -4279,10 +4353,11 @@ def create_image_message(
         created_at=ts,
     )
 
+    _preview = inp.caption or ("[file]" if inp.kind == "file" else "[image]")
     tbl_convos.update_item(
         Key={"conversation_id": conversation_id},
         UpdateExpression="SET last_message_at = :ts, last_message_preview = :p",
-        ExpressionAttributeValues={":ts": ts, ":p": "[image]"},
+        ExpressionAttributeValues={":ts": ts, ":p": _preview},
     )
 
     message = MessageOut(
@@ -4290,8 +4365,10 @@ def create_image_message(
         message_id=mid,
         sender_id=user_id,
         created_at=ts,
-        kind="image",
-        image=item["image"],
+        kind=inp.kind,
+        image=item.get("image"),
+        file=item.get("file"),
+        text=inp.caption,
         reply_to_message_id=inp.reply_to_message_id,
         consumption_policy=inp.consumption_policy if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
         media_kind="image" if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
@@ -4792,6 +4869,15 @@ def revoke_message_for_all(
     revoked_item["revoked_at"] = ts
     revoked_item["revoked_by"] = user_id
     _sync_gallery_index_message(revoked_item)
+
+    # If this was the last message, update conversation preview to show it was deleted
+    convo = tbl_convos.get_item(Key={"conversation_id": conversation_id}).get("Item") or {}
+    if convo.get("last_message_at") == msg.get("created_at"):
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="SET last_message_preview = :p",
+            ExpressionAttributeValues={":p": "[Message deleted]"},
+        )
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,

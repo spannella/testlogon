@@ -40,7 +40,7 @@ describe("useMessagingStream", () => {
       </QueryClientProvider>,
     );
 
-    const es = MockEventSource.instances[0];
+    const es = MockEventSource.instances[0]!;
     expect(es).toBeTruthy();
 
     es.onmessage?.({
@@ -62,7 +62,7 @@ describe("useMessagingStream", () => {
       </QueryClientProvider>,
     );
 
-    const es = MockEventSource.instances[0];
+    const es = MockEventSource.instances[0]!;
     es.onmessage?.({
       data: JSON.stringify({ type: "new_message", conversation_id: "c-2" }),
     } as MessageEvent);

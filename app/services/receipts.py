@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from app.core.tables import T
@@ -24,6 +25,11 @@ class ReceiptPayload:
     merchant_id: Optional[str]
     profile: Dict[str, Any]
     payment_record: Optional[Dict[str, Any]]
+    cart_items: Optional[List[Dict[str, Any]]] = None
+
+
+def _fmt_ts(ts: int) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%B %d, %Y %H:%M:%S UTC")
 
 
 def _pdf_escape(text: str) -> str:
@@ -101,31 +107,45 @@ def _build_receipt_payload(txn_item: Dict[str, Any]) -> ReceiptPayload:
     user_sub = txn_item["user_sub"]
     profile = get_profile(user_sub)
     payment_record = _find_payment_record(user_sub, txn_item["txn_id"])
+
+    # Attempt to fetch cart items if a cart_id is stored in metadata
+    cart_items: Optional[List[Dict[str, Any]]] = None
+    metadata = txn_item.get("metadata") or {}
+    cart_id = metadata.get("cart_id") if isinstance(metadata, dict) else None
+    if cart_id:
+        try:
+            from app.services.shoppingcart import list_items as list_cart_items  # local import avoids circular dep
+            cart_items = list_cart_items(user_sub, cart_id)
+        except Exception:
+            cart_items = None
+
     return ReceiptPayload(
         txn_id=txn_item["txn_id"],
         status=txn_item.get("status", ""),
         amount=str(txn_item.get("amount", "")),
         currency=str(txn_item.get("currency", "")),
         created_at=int(txn_item.get("created_at", 0)),
-        completed_at=txn_item.get("completed_at"),
+        completed_at=int(txn_item["completed_at"]) if txn_item.get("completed_at") else None,
         description=txn_item.get("description"),
         external_ref=txn_item.get("external_ref"),
         merchant_id=txn_item.get("merchant_id"),
         profile=profile,
         payment_record=payment_record,
+        cart_items=cart_items,
     )
 
 
 def _render_receipt_lines(payload: ReceiptPayload) -> List[str]:
     lines = [
-        "Receipt",
-        f"Transaction ID: {payload.txn_id}",
-        f"Status: {payload.status}",
-        f"Amount: {payload.amount} {payload.currency.upper()}",
-        f"Created At: {payload.created_at}",
+        "RECEIPT",
+        "-" * 40,
+        f"Transaction ID : {payload.txn_id}",
+        f"Status         : {payload.status}",
+        f"Amount         : {payload.amount} {payload.currency.upper()}",
+        f"Date           : {_fmt_ts(payload.created_at)}",
     ]
     if payload.completed_at:
-        lines.append(f"Completed At: {payload.completed_at}")
+        lines.append(f"Completed      : {_fmt_ts(payload.completed_at)}")
     if payload.description:
         lines.append(f"Description: {payload.description}")
     if payload.external_ref:
@@ -150,21 +170,35 @@ def _render_receipt_lines(payload: ReceiptPayload) -> List[str]:
         method = payload.payment_record.get("payment_method_type") or payload.payment_record.get("kind")
         if method:
             lines.append(f"Payment Method: {method}")
+
+    if payload.cart_items:
+        lines.append("")
+        lines.append("ITEMS ORDERED")
+        lines.append("-" * 40)
+        for item in payload.cart_items:
+            name = item.get("name") or item.get("item_name") or item.get("item_id") or "Item"
+            qty = int(item.get("quantity") or 1)
+            unit_price = item.get("unit_price_cents") or item.get("price_cents") or 0
+            try:
+                unit_price = int(unit_price)
+            except (TypeError, ValueError):
+                unit_price = 0
+            subtotal = unit_price * qty
+            price_str = f"${unit_price / 100:.2f}"
+            subtotal_str = f"${subtotal / 100:.2f}"
+            if qty > 1:
+                lines.append(f"  {name}")
+                lines.append(f"    Qty: {qty}  x {price_str} = {subtotal_str}")
+            else:
+                lines.append(f"  {name}  {price_str}")
+        lines.append("-" * 40)
+
     return lines
 
 
 def get_or_create_receipt(user_sub: str, txn_id: str) -> Dict[str, Any]:
     txn_item = get_transaction_item(user_sub, txn_id)
-    receipt_path = txn_item.get("receipt_path")
-    receipt_generated_at = txn_item.get("receipt_generated_at")
-    if receipt_path:
-        generated_at = int(receipt_generated_at) if receipt_generated_at else now_ts()
-        return {
-            "txn_id": txn_id,
-            "receipt_path": receipt_path,
-            "receipt_url": build_download_url(receipt_path),
-            "generated_at": generated_at,
-        }
+    # Always regenerate so receipts include the latest data (cart items, etc.).
 
     payload = _build_receipt_payload(txn_item)
     pdf = _render_pdf(_render_receipt_lines(payload))

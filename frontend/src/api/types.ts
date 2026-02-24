@@ -117,7 +117,7 @@ export interface TotpDeviceBeginResp {
 export interface TotpDeviceConfirmReq {
   device_id: string;
   totp_code: string;
-  totp_code2: string;
+  totp_code2?: string;
 }
 
 export interface SmsDevice {
@@ -591,6 +591,7 @@ export interface Participant {
   last_read_at?: number;
   joined_at?: number;
   left_at?: number;
+  profile_photo_url?: string;
 }
 
 export interface MessageImage {
@@ -655,6 +656,13 @@ export interface Message {
   media_kind?: MessageMediaKind;
   consumption_state?: MessageConsumptionState;
   consumed_at?: number;
+  lock_price_cents?: number;
+  lock_description?: string;
+  unlocked_at?: number;
+  tip_amount_cents?: number;
+  tip_currency?: string;
+  view_once?: boolean;
+  expires_at?: number;
   // UI convenience fields (derived client-side)
   edited?: boolean;
   revoked?: boolean;
@@ -673,6 +681,11 @@ export interface SendTextMessageReq {
   encryption?: MessageEncryptionEnvelope;
   reply_to_message_id?: string;
   preview?: LinkPreview;
+  lock_price_cents?: number;
+  lock_description?: string;
+  send_at?: number;
+  view_once?: boolean;
+  expires_in_seconds?: number;
 }
 
 export interface SendImageMessageReq {
@@ -681,8 +694,21 @@ export interface SendImageMessageReq {
   content_type?: string;
   width?: number;
   height?: number;
+  filename?: string;
+  filesize?: number;
+  caption?: string;
+  kind?: "image" | "file";
   reply_to_message_id?: string;
   consumption_policy?: Extract<MessageConsumptionPolicy, "none" | "view_once">;
+  expires_in_seconds?: number;
+  lock_price_cents?: number;
+  lock_description?: string;
+}
+
+export interface SendTipReq {
+  amount_cents: number;
+  currency?: string;
+  note?: string;
 }
 
 export interface SendFileMessageReq {

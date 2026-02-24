@@ -176,13 +176,13 @@ export function ApiKeys() {
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                     <span>Created {new Date(k.created_at * 1000).toLocaleDateString()}</span>
-                    {k.expires_at > 0 && (
+                    {(k.expires_at ?? 0) > 0 && (
                       <Badge variant="secondary" className="text-[10px]">
-                        Expires {new Date(k.expires_at * 1000).toLocaleDateString()}
+                        Expires {new Date((k.expires_at ?? 0) * 1000).toLocaleDateString()}
                       </Badge>
                     )}
-                    {k.last_used_at > 0 && (
-                      <span>Last used {new Date(k.last_used_at * 1000).toLocaleDateString()}</span>
+                    {(k.last_used_at ?? 0) > 0 && (
+                      <span>Last used {new Date((k.last_used_at ?? 0) * 1000).toLocaleDateString()}</span>
                     )}
                   </div>
                 </div>

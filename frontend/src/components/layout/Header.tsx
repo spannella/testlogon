@@ -287,7 +287,7 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
                         </p>
                         {alert.details && (
                           <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                            {alert.details}
+                            {JSON.stringify(alert.details)}
                           </p>
                         )}
                         <p className="mt-1 text-[10px] text-muted-foreground">
