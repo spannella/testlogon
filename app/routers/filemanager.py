@@ -945,13 +945,18 @@ def share_fs_node(
     to_user: str = Body(..., embed=True),
     permission: Annotated[str, Body(embed=True)] = "read",
     expires_at: Annotated[Optional[str], Body(embed=True)] = None,
+    signature_packet_id: Annotated[Optional[str], Body(embed=True)] = None,
     req: Request = None,
     user: str = Depends(_current_user),
 ):
-    if permission == "read" and expires_at is None:
-        share_node(user, path, to_user)
-    else:
-        share_node(user, path, to_user, permission=permission, expires_at=expires_at)
+    share_node(
+        user,
+        path,
+        to_user,
+        permission=permission,
+        expires_at=expires_at,
+        signature_packet_id=signature_packet_id,
+    )
     audit_event(
         "filemgr_node_shared",
         user,
@@ -961,6 +966,7 @@ def share_fs_node(
         shared_with=to_user,
         permission=permission,
         expires_at=expires_at,
+        signature_packet_id=signature_packet_id,
         **_file_audit_fields(file_path=norm_path(path, is_folder=None), owner=user),
     )
     return {"ok": True}

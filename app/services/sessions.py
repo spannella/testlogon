@@ -367,7 +367,12 @@ async def require_ui_session(
         request.state.effective_sub = impersonation_ctx["effective_sub"]
         request.state.impersonation_id = impersonation_ctx["impersonation_id"]
 
-    out = {"user_sub": resolved_user_sub, "session_id": session_id, "role": role.value}
+    out = {
+        "user_sub": resolved_user_sub,
+        "session_id": session_id,
+        "role": role.value,
+        "ip": str(it.get("ip") or ""),
+    }
     out.update(impersonation_ctx)
     return out
 

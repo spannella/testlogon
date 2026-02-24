@@ -1,0 +1,62 @@
+{
+  "title": "Signature Packet Ops",
+  "uid": "signature-packet-ops",
+  "tags": [
+    "signature",
+    "pdf",
+    "sfp-062"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Packet lifecycle funnel (events/min)",
+      "targets": [
+        {
+          "expr": "sum by (event_type) (rate(signature_packet_events_total{event_type=~\"packet_created|packet_sent|signer_completed|packet_completed|packet_finalized\"}[5m]))",
+          "legendFormat": "{{event_type}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Render job failures by reason",
+      "targets": [
+        {
+          "expr": "sum by (reason) (rate(signature_packet_render_jobs_total{outcome=\"failed\"}[10m]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Render p95 latency (seconds)",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, outcome) (rate(signature_packet_render_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Potentially stuck packets (sent/partially_signed minus completed)",
+      "targets": [
+        {
+          "expr": "clamp_min(sum(increase(signature_packet_events_total{event_type=~\"packet_sent|signer_completed\"}[24h])) - sum(increase(signature_packet_events_total{event_type=\"packet_completed\"}[24h])), 0)",
+          "legendFormat": "stuck_proxy_24h"
+        }
+      ]
+    }
+  ],
+  "annotations": {
+    "list": []
+  }
+}

@@ -127,6 +127,63 @@
   </div>
 </div>
 
+
+<div class="row" id="signaturePacketSection">
+  <div class="card">
+    <h3>Signature Form Composer</h3>
+    <div class="muted">Create draft signature packets from uploaded PDFs, place fields, and send for signing.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <input id="sigSourcePath" placeholder="Source PDF path (e.g. /contracts/nda.pdf)" style="flex:1;" />
+      <select id="sigOriginChannel">
+        <option value="share">share</option>
+        <option value="message">message</option>
+      </select>
+      <button id="sigCreateDraftBtn" class="primary">Create draft</button>
+    </div>
+    <div class="row-inline" style="margin-top:8px;">
+      <input id="sigPacketId" placeholder="Packet ID" style="flex:1;" />
+      <button id="sigLoadPacketBtn">Load</button>
+      <button id="sigSendPacketBtn">Send packet</button>
+    </div>
+    <div class="muted" id="sigComposerStatus" style="margin-top:8px;"></div>
+
+    <div class="hr"></div>
+    <div class="row-inline">
+      <label class="muted">Field type</label>
+      <select id="sigFieldType">
+        <option value="signature">signature</option>
+        <option value="initials">initials</option>
+        <option value="date">date</option>
+        <option value="text">text</option>
+      </select>
+      <label class="muted">Signer</label>
+      <select id="sigAssignedSignerId">
+        <option value="">Unassigned</option>
+      </select>
+      <label class="muted">Required</label>
+      <input id="sigFieldRequired" type="checkbox" checked style="width:auto; margin-top:0;" />
+    </div>
+    <div class="muted" style="margin-top:6px;">Click inside the page to place a field box.</div>
+    <div id="sigCanvas" class="signature-composer-canvas" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card">
+    <h3>Composer Details</h3>
+    <div class="row-inline">
+      <span class="pill" id="sigPacketStatus">No packet</span>
+      <span class="muted" id="sigPacketRole"></span>
+    </div>
+    <div class="section">
+      <h4 style="margin:0 0 6px 0;">Signers</h4>
+      <div id="sigSignersList" class="list"></div>
+    </div>
+    <div class="section">
+      <h4 style="margin:0 0 6px 0;">Fields</h4>
+      <div id="sigFieldsList" class="list"></div>
+    </div>
+  </div>
+</div>
+
 <div class="row" id="newsfeedSection">
   <div class="card">
     <h3>Newsfeed</h3>

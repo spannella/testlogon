@@ -3084,6 +3084,7 @@ def share_node(
     to_user: str,
     permission: str = "read",
     expires_at: Optional[str] = None,
+    signature_packet_id: Optional[str] = None,
 ) -> None:
     if permission not in {"read", "write"}:
         raise HTTPException(status_code=400, detail="permission must be read or write")
@@ -3102,6 +3103,8 @@ def share_node(
     }
     if expires_at:
         owner_item["expires_at"] = expires_at
+    if signature_packet_id:
+        owner_item["signature_packet_id"] = signature_packet_id
     tbl.put_item(Item=owner_item)
 
     recipient_item = {
@@ -3114,6 +3117,8 @@ def share_node(
     }
     if expires_at:
         recipient_item["expires_at"] = expires_at
+    if signature_packet_id:
+        recipient_item["signature_packet_id"] = signature_packet_id
     tbl.put_item(Item=recipient_item)
 
 
@@ -3126,6 +3131,17 @@ def unshare_node(user: str, path: str, to_user: str) -> None:
     tbl.delete_item(Key={"PK": pk_user(to_user), "SK": f"SHARED#FROM#{user}#PATH#{node['path']}"})
 
 
+def _signature_packet_progress(packet_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    if not packet_id:
+        return None
+    try:
+        from app.services.signature_packet_store import get_signature_packet_progress_for_user
+
+        return get_signature_packet_progress_for_user(packet_id, user_id)
+    except Exception:
+        return None
+
+
 def list_shared_with(user: str, path: str) -> List[Dict[str, Any]]:
     tbl = _table()
     p = norm_path(path, is_folder=None)
@@ -3135,12 +3151,19 @@ def list_shared_with(user: str, path: str) -> List[Dict[str, Any]]:
     )
     items = []
     for it in resp.get("Items", []):
-        items.append({
+        item = {
             "to_user": it["to_user"],
             "permission": it.get("permission", "read"),
             "expires_at": it.get("expires_at"),
             "shared_at": it.get("shared_at"),
-        })
+            "signature_packet_id": it.get("signature_packet_id"),
+        }
+        packet_id = str(it.get("signature_packet_id") or "")
+        if packet_id:
+            progress = _signature_packet_progress(packet_id, user)
+            if progress:
+                item.update(progress)
+        items.append(item)
     items.sort(key=lambda x: x["to_user"].lower())
     return items
 
@@ -3158,9 +3181,16 @@ def list_shared_with_me(user: str) -> List[Dict[str, Any]]:
             "owner": owner,
             "path": path,
             "shared_at": it.get("shared_at"),
+            "signature_packet_id": it.get("signature_packet_id"),
             "permission": it.get("permission", "read"),
             "expires_at": it.get("expires_at"),
         }
+        packet_id = str(it.get("signature_packet_id") or "")
+        if packet_id:
+            progress = _signature_packet_progress(packet_id, user)
+            if progress:
+                item.update(progress)
+
         try:
             node = get_node(owner, path)
             item.update({
@@ -3185,13 +3215,20 @@ def list_shared_with_me_by_owner(user: str, owner: str) -> List[Dict[str, Any]]:
     )
     items = []
     for it in resp.get("Items", []):
-        items.append({
+        item = {
             "owner": it["owner"],
             "path": it["path"],
             "shared_at": it.get("shared_at"),
+            "signature_packet_id": it.get("signature_packet_id"),
             "permission": it.get("permission", "read"),
             "expires_at": it.get("expires_at"),
-        })
+        }
+        packet_id = str(it.get("signature_packet_id") or "")
+        if packet_id:
+            progress = _signature_packet_progress(packet_id, user)
+            if progress:
+                item.update(progress)
+        items.append(item)
     items.sort(key=lambda x: x["path"])
     return items
 

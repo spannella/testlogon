@@ -75,3 +75,27 @@ a.btnlink.primary { background:#111; color:#fff; border-color:#111; }
 .toast{padding:12px 14px;border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.18);background:rgba(30,30,30,.92);color:#fff}
 .toast .t-title{font-weight:700;margin-bottom:4px}
 .toast .t-sub{opacity:.85;font-size:12px}
+
+.signature-composer-canvas {
+  position: relative;
+  width: 100%;
+  height: 540px;
+  border: 1px dashed #d5d5d5;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fff 0%, #f8fafc 100%);
+  cursor: crosshair;
+  overflow: hidden;
+}
+.signature-composer-field {
+  position: absolute;
+  border: 2px solid #2563eb;
+  background: rgba(37, 99, 235, 0.1);
+  color: #1e3a8a;
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 6px;
+  box-sizing: border-box;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

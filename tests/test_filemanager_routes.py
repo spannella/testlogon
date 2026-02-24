@@ -517,7 +517,26 @@ class TestFileManagerRoutes(unittest.TestCase):
         with patch.object(filemanager, "share_node") as share_node:
             resp = filemanager.share_fs_node(path="/a", to_user="bob", user="user")
             self.assertTrue(resp["ok"])
-            share_node.assert_called_once_with("user", "/a", "bob")
+            share_node.assert_called_once_with(
+                "user",
+                "/a",
+                "bob",
+                permission="read",
+                expires_at=None,
+                signature_packet_id=None,
+            )
+
+        with patch.object(filemanager, "share_node") as share_node:
+            resp = filemanager.share_fs_node(path="/a", to_user="bob", signature_packet_id="sp_123", user="user")
+            self.assertTrue(resp["ok"])
+            share_node.assert_called_once_with(
+                "user",
+                "/a",
+                "bob",
+                permission="read",
+                expires_at=None,
+                signature_packet_id="sp_123",
+            )
 
         with patch.object(filemanager, "list_shared_with", return_value=["bob"]):
             resp = filemanager.list_shared(path="/a", user="user")
@@ -529,11 +548,13 @@ class TestFileManagerRoutes(unittest.TestCase):
             "is_encrypted": True,
             "enc_version": 1,
             "enc_alg": "AES-256-GCM",
+            "signature_packet_id": "sp_123",
         }]):
             resp = filemanager.list_shared_me(user="user")
             self.assertEqual(resp["items"][0]["owner"], "alice")
             self.assertTrue(resp["items"][0]["is_encrypted"])
             self.assertEqual(resp["items"][0]["enc_alg"], "AES-256-GCM")
+            self.assertEqual(resp["items"][0]["signature_packet_id"], "sp_123")
 
 
     def test_shared_list_and_info_include_preview_contract(self):

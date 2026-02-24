@@ -16,6 +16,11 @@ This service uses multiple DynamoDB tables to store sessions, MFA devices, recov
 | Alert preferences | `ALERT_PREFS_TABLE_NAME` | Default: `alert_prefs`. |
 | Billing data | `BILLING_TABLE_NAME` | Required for Stripe/PayPal/CCBill billing features. |
 | API usage events | `API_USAGE_TABLE_NAME` | Append-only API metering events + GSIs for period/key/route queries. |
+| Signature packets | `SIGNATURE_PACKETS_TABLE_NAME` | Packet metadata and sender-owner lookup (`OWNER_CREATED_INDEX`). |
+| Signature packet signers | `SIGNATURE_PACKET_SIGNERS_TABLE_NAME` | Signer assignments and signer inbox lookup (`SIGNER_STATUS_INDEX`). |
+| Signature packet fields | `SIGNATURE_PACKET_FIELDS_TABLE_NAME` | Field geometry/type/assignment keyed by packet. |
+| Signature packet events | `SIGNATURE_PACKET_EVENTS_TABLE_NAME` | Append-only audit timeline per packet. |
+| Signature packet artifacts | `SIGNATURE_PACKET_ARTIFACTS_TABLE_NAME` | Immutable draft/final artifact references per packet. |
 | Newsfeed (single-table) | `APP_TABLE` | Required for the newsfeed demo endpoints; default: `app_single_table`. |
 
 ## Table schema overview
@@ -60,3 +65,11 @@ API keys are stored by user and often rely on a secondary index for user lookup 
 - **GSI_API_KEY**: query by API key across period windows.
 - **GSI_ROUTE**: query by route-level usage.
 - **TTL**: event rows carry `ttl_epoch`; configure `API_USAGE_EVENT_RETENTION_DAYS` and enable TTL on `DDB_TTL_ATTR` (default `ttl_epoch`).
+
+
+### Signature packet tables
+- **signature_packets**: `packet_id` PK with `OWNER_CREATED_INDEX` (`owner_user_id` + `created_at`) for sender list queries.
+- **signature_packet_signers**: `packet_id` + `signer_id` with `SIGNER_STATUS_INDEX` (`signer_id` + `status_key`) for signer inbox/status queries.
+- **signature_packet_fields**: `packet_id` + `field_id` for packet field placement/fill state.
+- **signature_packet_events**: `packet_id` + `event_id` append-only audit log.
+- **signature_packet_artifacts**: `packet_id` PK for draft/final PDF artifact references.

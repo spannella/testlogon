@@ -64,6 +64,43 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(
+            _resolve_table_name(S.signature_packets_table_name, "signature_packets"),
+            "packet_id",
+            gsi=[
+                {
+                    "index_name": "OWNER_CREATED_INDEX",
+                    "partition_key": "owner_user_id",
+                    "sort_key": "created_at",
+                }
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.signature_packet_signers_table_name, "signature_packet_signers"),
+            "packet_id",
+            "signer_id",
+            gsi=[
+                {
+                    "index_name": "SIGNER_STATUS_INDEX",
+                    "partition_key": "signer_id",
+                    "sort_key": "status_key",
+                }
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.signature_packet_fields_table_name, "signature_packet_fields"),
+            "packet_id",
+            "field_id",
+        ),
+        TableDef(
+            _resolve_table_name(S.signature_packet_events_table_name, "signature_packet_events"),
+            "packet_id",
+            "event_id",
+        ),
+        TableDef(
+            _resolve_table_name(S.signature_packet_artifacts_table_name, "signature_packet_artifacts"),
+            "packet_id",
+        ),
+        TableDef(
             _resolve_table_name(S.api_usage_table_name, "api_usage_events"),
             "PK",
             "SK",
