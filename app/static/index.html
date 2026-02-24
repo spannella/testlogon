@@ -1531,6 +1531,102 @@
     <div id="stripe_ledger" class="list" style="margin-top:10px"></div>
   </div>
 </div>
+<div class="row" id="ticketsSection">
+  <div class="card">
+    <h3>Support Tickets</h3>
+    <div class="muted">Open, view, and reply to your support tickets.</div>
+    <div class="muted">Auto-refresh every ~15 seconds.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <button id="ticketRefreshBtn">Refresh my tickets</button>
+      <button id="ticketLoadMoreBtn">Load more</button>
+      <span id="ticketListStatus" class="muted"></span>
+    </div>
+    <div id="ticketList" class="list" style="margin-top:8px;"></div>
+
+    <div class="hr"></div>
+    <h4 style="margin:0 0 6px 0;">Open ticket</h4>
+    <input id="ticketNewSubject" placeholder="Subject" />
+    <textarea id="ticketNewDescription" placeholder="Describe your issue..."></textarea>
+    <div class="row-inline" style="margin-top:8px;">
+      <button id="ticketCreateBtn">Open ticket</button>
+      <span id="ticketCreateStatus" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Ticket Thread</h3>
+    <div class="row-inline">
+      <span id="ticketActiveLabel" class="pill">No ticket selected</span>
+      <button id="ticketThreadRefreshBtn">Refresh thread</button>
+    </div>
+    <div id="ticketThreadMeta" class="muted" style="margin-top:8px;"></div>
+    <div id="ticketThreadMessages" class="section"></div>
+    <textarea id="ticketReplyBody" placeholder="Write a reply..."></textarea>
+    <div class="row-inline" style="margin-top:8px;">
+      <button id="ticketReplyBtn">Send reply</button>
+      <span id="ticketReplyStatus" class="muted"></span>
+    </div>
+  </div>
+</div>
+
+<div class="row" id="adminTicketsSection">
+  <div class="card">
+    <h3>Admin Ticket Dashboard</h3>
+    <div class="muted">Queue triage with filters, assignment, replies, and status updates.</div>
+    <div class="muted">Queue and selected thread auto-refresh every ~15 seconds.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <label class="muted">Status</label>
+      <select id="adminTicketFilterStatus">
+        <option value="">(any)</option>
+        <option value="open">open</option>
+        <option value="in_progress">in_progress</option>
+        <option value="waiting_on_user">waiting_on_user</option>
+        <option value="done">done</option>
+      </select>
+      <input id="adminTicketFilterAssignee" placeholder="Assignee sub (optional)" style="flex:1;" />
+      <input id="adminTicketFilterOwner" placeholder="Owner sub (optional)" style="flex:1;" />
+      <button id="adminTicketFilterApplyBtn">Apply</button>
+      <button id="adminTicketQueueLoadMoreBtn">Load more</button>
+    </div>
+    <div id="adminTicketQueueStatus" class="muted" style="margin-top:8px;"></div>
+    <div id="adminTicketQueueList" class="list" style="margin-top:8px;"></div>
+  </div>
+
+  <div class="card">
+    <h3>Admin Ticket Actions</h3>
+    <div class="row-inline">
+      <span id="adminTicketActiveLabel" class="pill">No ticket selected</span>
+      <button id="adminTicketThreadRefreshBtn">Refresh</button>
+    </div>
+    <div id="adminTicketMeta" class="muted" style="margin-top:8px;"></div>
+
+    <div class="hr"></div>
+    <h4 style="margin:0 0 6px 0;">Assignment</h4>
+    <div class="row-inline">
+      <button id="adminTicketAssignSelfBtn">Assign to me</button>
+      <input id="adminTicketAssignOtherInput" placeholder="Assign to admin sub" style="flex:1;" />
+      <button id="adminTicketAssignOtherBtn">Assign</button>
+    </div>
+
+    <div class="hr"></div>
+    <h4 style="margin:0 0 6px 0;">Reply</h4>
+    <textarea id="adminTicketReplyBody" placeholder="Reply to ticket..."></textarea>
+    <div class="row-inline" style="margin-top:8px;">
+      <button id="adminTicketReplyBtn">Send admin reply</button>
+    </div>
+
+    <div class="hr"></div>
+    <h4 style="margin:0 0 6px 0;">Status</h4>
+    <div class="row-inline">
+      <button id="adminTicketMarkDoneBtn">Mark done</button>
+      <button id="adminTicketReopenBtn">Reopen</button>
+    </div>
+    <div id="adminTicketActionStatus" class="muted" style="margin-top:8px;"></div>
+
+    <div id="adminTicketThreadMessages" class="section"></div>
+  </div>
+</div>
+
 <div class="err" id="globalErr" style="margin-top:12px;"></div>
 
 <div id="toastContainer" class="toast-container"></div>

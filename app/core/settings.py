@@ -240,6 +240,16 @@ class Settings:
     billing_dunning_retry_schedule_seconds: str = os.environ.get("BILLING_DUNNING_RETRY_SCHEDULE_SECONDS", "3600,86400,172800")
     billing_dunning_scan_limit: int = int(os.environ.get("BILLING_DUNNING_SCAN_LIMIT", "200"))
 
+    # Tickets
+    tickets_table_name: str = os.environ.get("TICKETS_TABLE_NAME", "tickets")
+    tickets_owner_index_name: str = os.environ.get("TICKETS_OWNER_INDEX_NAME", "owner_sub-updated_at-index")
+    tickets_assignee_index_name: str = os.environ.get("TICKETS_ASSIGNEE_INDEX_NAME", "assigned_admin_sub-updated_at-index")
+    tickets_status_index_name: str = os.environ.get("TICKETS_STATUS_INDEX_NAME", "status-updated_at-index")
+    tickets_space_index_name: str = os.environ.get("TICKETS_SPACE_INDEX_NAME", "space_id-updated_at-index")
+    tickets_space_status_index_name: str = os.environ.get("TICKETS_SPACE_STATUS_INDEX_NAME", "space_status-updated_at-index")
+    tickets_space_assignee_index_name: str = os.environ.get("TICKETS_SPACE_ASSIGNEE_INDEX_NAME", "space_assignee-updated_at-index")
+    tickets_member_spaces_index_name: str = os.environ.get("TICKETS_MEMBER_SPACES_INDEX_NAME", "member_sub-space_id-index")
+
     # Profile
     profile_table_name: str = os.environ.get("PROFILE_TABLE_NAME", "profiles")
     addresses_table_name: str = os.environ.get("ADDRESSES_TABLE_NAME", "addresses")

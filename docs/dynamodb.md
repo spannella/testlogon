@@ -60,3 +60,7 @@ API keys are stored by user and often rely on a secondary index for user lookup 
 - **GSI_API_KEY**: query by API key across period windows.
 - **GSI_ROUTE**: query by route-level usage.
 - **TTL**: event rows carry `ttl_epoch`; configure `API_USAGE_EVENT_RETENTION_DAYS` and enable TTL on `DDB_TTL_ATTR` (default `ttl_epoch`).
+
+
+### Ticketing schema and access patterns
+- See [Ticketing DynamoDB schema](ticketing-dynamodb-schema.md) for `pk`/`sk` item families (`META`, `MSG`, `ACT`), owner/status/assignee GSIs, and optimistic concurrency (`version` + conditional updates).

@@ -77,7 +77,10 @@ describe("ComposeBar once-media toggles", () => {
     await userEvent.upload(fileInput, file);
 
     expect(onSendImage).toHaveBeenCalledTimes(1);
-    expect(onSendImage.mock.calls[0][1]).toEqual({ consumption_policy: "view_once" });
+    const firstCall = onSendImage.mock.calls[0];
+    expect(firstCall).toBeTruthy();
+    const metadata = firstCall?.[1];
+    expect(metadata).toEqual({ consumption_policy: "view_once" });
   });
 
   it("does not render once-media toggles when feature flags are disabled", () => {

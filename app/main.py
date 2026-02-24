@@ -47,6 +47,8 @@ from app.routers.catalog import router as catalog_router
 from app.routers.subscription_server import router as subscription_server_router
 from app.routers.admin_usage import router as admin_usage_router
 from app.routers.ups import router as ups_router
+from app.routers.tickets import router as tickets_router
+from app.routers.ticket_spaces import router as ticket_spaces_router
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
@@ -167,6 +169,8 @@ def create_app() -> FastAPI:
     app.include_router(subscription_server_router)
     app.include_router(admin_usage_router)
     app.include_router(ups_router)
+    app.include_router(tickets_router)
+    app.include_router(ticket_spaces_router)
     app.add_event_handler("startup", start_billing_reconcile_task)
 
     return app

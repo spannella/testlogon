@@ -30,6 +30,7 @@ ALERT_EVENT_TYPES: List[str] = [
     "totp_device_added","totp_device_removed","rate_limited","access_denied","security_event",
     "device_new","device_location_mismatch","device_trust","device_revoke",
     "calendar_event_created","calendar_event_updated","calendar_event_deleted",
+    "ticket_created","ticket_assigned","ticket_replied","ticket_status_changed","ticket_reopened",
 ]
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.
@@ -94,11 +95,65 @@ def event_to_type(event: str, outcome: str, status_code: Optional[int] = None) -
         return "calendar_event_updated"
     if e == "calendar_event_delete":
         return "calendar_event_deleted"
+    if e == "ticket_created":
+        return "ticket_created"
+    if e == "ticket_assigned":
+        return "ticket_assigned"
+    if e == "ticket_replied":
+        return "ticket_replied"
+    if e == "ticket_status_changed":
+        return "ticket_status_changed"
+    if e == "ticket_reopened":
+        return "ticket_reopened"
     if e.startswith("ui_rate_limited") or (status_code == 429):
         return "rate_limited"
     if status_code in (401, 403):
         return "access_denied"
     return "security_event"
+
+def _ticket_thread_url(ticket_id: str) -> str:
+    base = (S.public_base_url or "").rstrip("/")
+    if not base:
+        return f"/tickets/{ticket_id}"
+    return f"{base}/tickets/{ticket_id}"
+
+
+def render_ticket_email_template(*, alert_type: str, payload: Dict[str, Any], outcome: str) -> Tuple[str, str] | None:
+    if alert_type not in {"ticket_created", "ticket_assigned", "ticket_replied", "ticket_status_changed", "ticket_reopened"}:
+        return None
+    ticket_id = str(payload.get("ticket_id") or "").strip()
+    if not ticket_id:
+        return None
+    ticket_subject = str(payload.get("ticket_subject") or "(no subject)").strip()
+    actor = str(payload.get("actor_sub") or payload.get("user_sub") or "system").strip()
+    status = str(payload.get("status") or "").strip()
+    assignee = str(payload.get("assignee_admin_sub") or "").strip()
+    url = _ticket_thread_url(ticket_id)
+
+    subjects = {
+        "ticket_created": f"[Ticket #{ticket_id}] Created: {ticket_subject}",
+        "ticket_assigned": f"[Ticket #{ticket_id}] Assignment updated",
+        "ticket_replied": f"[Ticket #{ticket_id}] New reply",
+        "ticket_status_changed": f"[Ticket #{ticket_id}] Status updated",
+        "ticket_reopened": f"[Ticket #{ticket_id}] Reopened",
+    }
+    subject = subjects.get(alert_type, f"[Ticket #{ticket_id}] Update")
+
+    lines = [
+        f"Ticket ID: {ticket_id}",
+        f"Subject: {ticket_subject}",
+        f"Actor: {actor}",
+        f"Event: {alert_type}",
+        f"Outcome: {outcome}",
+    ]
+    if status:
+        lines.append(f"Status: {status}")
+    if assignee:
+        lines.append(f"Assignee: {assignee}")
+    lines.append("")
+    lines.append(f"Open ticket thread: {url}")
+    return subject, "\n".join(lines)
+
 
 def get_alert_prefs(user_sub: str) -> Dict[str, Any]:
     it = T.alert_prefs.get_item(Key={"user_sub": user_sub}).get("Item")
@@ -504,31 +559,36 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
         emails = prefs.get("emails") or []
         enabled = set(prefs.get("email_event_types") or [])
         if emails and (alert_type in enabled) and can_send_alert_channel(user_sub, "email"):
-            subj = f"[Alert] {alert_type}: {event} ({outcome})"
-            lines = [
-                f"Type: {alert_type}",
-                f"Event: {event}",
-                f"Outcome: {outcome}",
-                f"Time: {payload.get('ts')}",
-            ]
-            if identity:
-                display_name = identity.get("display_name")
-                if display_name:
-                    lines.append(f"User: {display_name}")
-                email = identity.get("email")
-                if email:
-                    lines.append(f"Profile email: {email}")
-            if request is not None:
-                lines.append(f"IP: {payload.get('ip','')}")
-                lines.append(f"User-Agent: {payload.get('user_agent','')}")
-            if alert_id:
-                lines.append(f"Alert-ID: {alert_id}")
-            reason = fields.get("reason")
-            if reason:
-                lines.append(f"Reason: {str(reason)[:200]}")
-            lines.append("")
-            lines.append(json.dumps(payload, indent=2)[:4000])
-            send_alert_email(emails, subj, "\n".join(lines))
+            ticket_template = render_ticket_email_template(alert_type=alert_type, payload=payload, outcome=outcome)
+            if ticket_template is not None:
+                subj, body = ticket_template
+                send_alert_email(emails, subj, body)
+            else:
+                subj = f"[Alert] {alert_type}: {event} ({outcome})"
+                lines = [
+                    f"Type: {alert_type}",
+                    f"Event: {event}",
+                    f"Outcome: {outcome}",
+                    f"Time: {payload.get('ts')}",
+                ]
+                if identity:
+                    display_name = identity.get("display_name")
+                    if display_name:
+                        lines.append(f"User: {display_name}")
+                    email = identity.get("email")
+                    if email:
+                        lines.append(f"Profile email: {email}")
+                if request is not None:
+                    lines.append(f"IP: {payload.get('ip','')}")
+                    lines.append(f"User-Agent: {payload.get('user_agent','')}")
+                if alert_id:
+                    lines.append(f"Alert-ID: {alert_id}")
+                reason = fields.get("reason")
+                if reason:
+                    lines.append(f"Reason: {str(reason)[:200]}")
+                lines.append("")
+                lines.append(json.dumps(payload, indent=2)[:4000])
+                send_alert_email(emails, subj, "\n".join(lines))
     except Exception:
         pass
 
