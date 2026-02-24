@@ -667,6 +667,9 @@ class ShoppingCartItemIn(BaseModel):
     name: str = Field(min_length=1, max_length=256)
     quantity: conint(ge=1, le=1000) = 1
     unit_price_cents: conint(ge=0, le=100000000)
+    image_url: Optional[str] = None
+    category_id: Optional[str] = None
+    item_id: Optional[str] = None
 
 
 class CatalogCartItemIn(BaseModel):
@@ -682,6 +685,9 @@ class ShoppingCartItemOut(BaseModel):
     unit_price_cents: int
     line_total_cents: int
     updated_at: str
+    image_url: Optional[str] = None
+    category_id: Optional[str] = None
+    item_id: Optional[str] = None
 
 
 class ShoppingCartItemsOut(BaseModel):

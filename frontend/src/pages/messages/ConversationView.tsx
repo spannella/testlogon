@@ -1,5 +1,5 @@
 import * as React from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { ArrowLeft, Images, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -100,13 +100,47 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
 
   // ── Send mutations ─────────────────────────────────────────────
 
+  type MessagesPage = { messages: Message[]; next_cursor?: string };
+
   const sendText = useMutation({
     mutationFn: (payload: SendTextMessageReq) => sendTextMessage(convoId, payload),
+    onMutate: async (payload) => {
+      await queryClient.cancelQueries({ queryKey: ["messages", convoId] });
+      const snapshot = queryClient.getQueryData(["messages", convoId]);
+
+      const optimistic: Message = {
+        message_id: `optimistic-${Date.now()}`,
+        conversation_id: convoId,
+        sender_id: userId ?? "",
+        kind: "text",
+        text: payload.encryption ? "" : (payload.text ?? ""),
+        is_encrypted: !!payload.encryption,
+        encryption: payload.encryption,
+        created_at: Date.now() / 1000,
+        reactions_counts: {},
+      };
+
+      queryClient.setQueryData<InfiniteData<MessagesPage>>(
+        ["messages", convoId],
+        (old) => {
+          if (!old?.pages.length) return old;
+          const pages = old.pages.map((p, i) =>
+            i === 0 ? { ...p, messages: [...(p.messages ?? []), optimistic] } : p,
+          );
+          return { ...old, pages };
+        },
+      );
+
+      return { snapshot };
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _payload, context) => {
+      if (context?.snapshot) {
+        queryClient.setQueryData(["messages", convoId], context.snapshot);
+      }
       toast.error(err.message || "Failed to send message");
     },
   });

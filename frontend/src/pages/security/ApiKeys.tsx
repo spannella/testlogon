@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Key, Plus, Trash2, Copy, Check, AlertTriangle, Globe, Download } from "lucide-react";
 import { toast } from "sonner";
@@ -34,8 +34,6 @@ export function ApiKeys() {
   const [expiresInDays, setExpiresInDays] = useState<string>("none");
   const [createdKey, setCreatedKey] = useState<{ key_id: string; key_secret: string; label: string; expiresInDays: string } | null>(null);
   const [copiedField, setCopiedField] = useState<"key_id" | "key_secret" | null>(null);
-  const keyIdInputRef = useRef<HTMLInputElement>(null);
-  const keySecretInputRef = useRef<HTMLInputElement>(null);
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
   const [ipRulesTarget, setIpRulesTarget] = useState<string | null>(null);
   const [allowCidrs, setAllowCidrs] = useState("");
@@ -119,35 +117,19 @@ export function ApiKeys() {
     const text = field === "key_id" ? createdKey?.key_id : createdKey?.key_secret;
     if (!text) return;
 
-    // Clipboard API only works in secure contexts (HTTPS / localhost).
-    if (window.isSecureContext && navigator.clipboard) {
-      try {
-        await navigator.clipboard.writeText(text);
-        setCopiedField(field);
-        toast.success("Copied to clipboard");
-        setTimeout(() => setCopiedField(null), 2000);
-      } catch {
-        toast.error("Copy failed — use the Download button instead");
-      }
+    if (!window.isSecureContext) {
+      toast.error("Clipboard copy requires HTTPS. Use the Download button to save your key.");
       return;
     }
 
-    // Plain-HTTP fallback: use a hidden readonly input rendered INSIDE the dialog
-    // (not appended to document.body) to avoid the Radix UI FocusTrap blocking execCommand.
-    const inputRef = field === "key_id" ? keyIdInputRef : keySecretInputRef;
-    const input = inputRef.current;
-    if (input) {
-      input.select();
-      let success = false;
-      try { success = document.execCommand("copy"); } catch { /* ignore */ }
-      if (success) {
-        setCopiedField(field);
-        toast.success("Copied to clipboard");
-        setTimeout(() => setCopiedField(null), 2000);
-        return;
-      }
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedField(field);
+      toast.success("Copied to clipboard");
+      setTimeout(() => setCopiedField(null), 2000);
+    } catch {
+      toast.error("Copy failed — use the Download button instead");
     }
-    toast.error("Copy failed — use the Download button instead");
   };
 
   return (
@@ -253,16 +235,6 @@ export function ApiKeys() {
                   <p className="mb-1 text-xs font-medium text-muted-foreground">{fieldLabel}</p>
                   <div className="flex items-center gap-2 rounded-lg border bg-muted/50 p-3">
                     <code className="flex-1 break-all text-xs font-mono">{value}</code>
-                    {/* Hidden input for execCommand copy fallback (inside Radix FocusTrap) */}
-                    <input
-                      ref={field === "key_id" ? keyIdInputRef : keySecretInputRef}
-                      type="text"
-                      readOnly
-                      value={value}
-                      aria-hidden
-                      tabIndex={-1}
-                      className="sr-only"
-                    />
                     <Button
                       size="icon"
                       variant="ghost"

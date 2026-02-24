@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, Headphones } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, Headphones, X, ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -41,6 +41,7 @@ export function ComposeBar({
   const [viewOnceImage, setViewOnceImage] = React.useState(false);
   const [viewOnceVideo, setViewOnceVideo] = React.useState(false);
   const [listenOnceAudio, setListenOnceAudio] = React.useState(false);
+  const [pendingFile, setPendingFile] = React.useState<{ file: File; previewUrl: string; kind: "image" | "video" | "audio" } | null>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -83,19 +84,42 @@ export function ComposeBar({
     }
   };
 
+  const clearPendingFile = () => {
+    if (pendingFile) {
+      URL.revokeObjectURL(pendingFile.previewUrl);
+      setPendingFile(null);
+    }
+  };
+
   const handleSubmit = async () => {
+    if (sending || encrypting) return;
     const trimmed = text.trim();
-    if (!trimmed || sending || encrypting) return;
+    if (!trimmed && !pendingFile) return;
 
-    const payload = await buildEncryptedPayload(trimmed);
-    if (!payload) return;
+    // Send pending image/video/audio first
+    if (pendingFile) {
+      const { file, kind } = pendingFile;
+      if (kind === "image" && onSendImage) {
+        onSendImage(file, { consumption_policy: viewOnceImage ? "view_once" : "none" });
+      } else if (kind === "video" && onSendVideoAttachment) {
+        onSendVideoAttachment(file, { consumption_policy: viewOnceVideo ? "view_once" : "none" });
+      } else if (kind === "audio" && onSendAudioRecording) {
+        onSendAudioRecording(file, { consumption_policy: listenOnceAudio ? "listen_once" : "none" });
+      }
+      clearPendingFile();
+    }
 
-    onSendText(payload);
-    setText("");
-    resetTextArea();
-    if (encryptEnabled) {
-      setPassword("");
-      setConfirmPassword("");
+    // Send text if present
+    if (trimmed) {
+      const payload = await buildEncryptedPayload(trimmed);
+      if (!payload) return;
+      onSendText(payload);
+      setText("");
+      resetTextArea();
+      if (encryptEnabled) {
+        setPassword("");
+        setConfirmPassword("");
+      }
     }
   };
 
@@ -115,20 +139,21 @@ export function ComposeBar({
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) {
-      e.target.value = "";
-      return;
-    }
-
-    if (file.type.startsWith("image/") && onSendImage) {
-      onSendImage(file, { consumption_policy: viewOnceImage ? "view_once" : "none" });
-    } else if (file.type.startsWith("video/") && onSendVideoAttachment) {
-      onSendVideoAttachment(file, { consumption_policy: viewOnceVideo ? "view_once" : "none" });
-    } else if (file.type.startsWith("audio/") && onSendAudioRecording) {
-      onSendAudioRecording(file, { consumption_policy: listenOnceAudio ? "listen_once" : "none" });
-    }
-
     e.target.value = "";
+    if (!file) return;
+
+    // Clear any existing pending file
+    if (pendingFile) URL.revokeObjectURL(pendingFile.previewUrl);
+
+    let kind: "image" | "video" | "audio" | null = null;
+    if (file.type.startsWith("image/") && onSendImage) kind = "image";
+    else if (file.type.startsWith("video/") && onSendVideoAttachment) kind = "video";
+    else if (file.type.startsWith("audio/") && onSendAudioRecording) kind = "audio";
+
+    if (!kind) return;
+
+    const previewUrl = URL.createObjectURL(file);
+    setPendingFile({ file, previewUrl, kind });
   };
 
   return (
@@ -256,6 +281,35 @@ export function ComposeBar({
         </div>
       )}
 
+      {/* Pending file preview */}
+      {pendingFile && (
+        <div className="mb-2 flex items-center gap-2 rounded-lg border border-border bg-muted/40 p-2">
+          {pendingFile.kind === "image" ? (
+            <img
+              src={pendingFile.previewUrl}
+              alt="Attachment preview"
+              className="h-16 w-16 rounded-md object-cover shrink-0"
+            />
+          ) : (
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md bg-muted">
+              <ImageIcon className="h-6 w-6 text-muted-foreground" />
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-medium">{pendingFile.file.name}</p>
+            <p className="text-xs text-muted-foreground capitalize">{pendingFile.kind} • ready to send</p>
+          </div>
+          <button
+            type="button"
+            onClick={clearPendingFile}
+            className="shrink-0 rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Remove attachment"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       <div className="flex items-end gap-2">
         {onSendImage && (
           <>
@@ -264,7 +318,7 @@ export function ComposeBar({
               size="icon"
               className="h-9 w-9 shrink-0"
               onClick={() => fileInputRef.current?.click()}
-              disabled={disabled || sending || encrypting}
+              disabled={disabled || sending || encrypting || !!pendingFile}
               aria-label="Attach file"
             >
               <Paperclip className="h-4 w-4" />
@@ -303,7 +357,7 @@ export function ComposeBar({
           size="icon"
           className="h-9 w-9 shrink-0 rounded-full"
           onClick={() => void handleSubmit()}
-          disabled={disabled || sending || encrypting || !text.trim()}
+          disabled={disabled || sending || encrypting || (!text.trim() && !pendingFile)}
           aria-label="Send message"
         >
           {sending || encrypting ? (
