@@ -1,10 +1,11 @@
 import * as React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Search, Plus, MessageSquare } from "lucide-react";
+import { Search, Plus, MessageSquare, Users } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -13,8 +14,8 @@ import {
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { cn } from "@/lib/utils";
-import { getConversations, startConversation } from "@/api/endpoints/messaging";
-import type { Conversation } from "@/api/types";
+import { getConversations, startConversation, startGroupConversation } from "@/api/endpoints/messaging";
+import type { Conversation, UserSearchResult } from "@/api/types";
 import { PresenceDot } from "./PresenceDot";
 import { UserSearch } from "./UserSearch";
 import { useAuthStore } from "@/stores/authStore";
@@ -27,6 +28,9 @@ interface ConversationListProps {
 export function ConversationList({ activeId, onSelect }: ConversationListProps) {
   const [search, setSearch] = React.useState("");
   const [newConvoOpen, setNewConvoOpen] = React.useState(false);
+  const [isGroupMode, setIsGroupMode] = React.useState(false);
+  const [groupTitle, setGroupTitle] = React.useState("");
+  const [groupParticipants, setGroupParticipants] = React.useState<UserSearchResult[]>([]);
   const userId = useAuthStore((s) => s.userId);
 
   const queryClient = useQueryClient();
@@ -34,6 +38,9 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
   const { data, isLoading } = useQuery({
     queryKey: ["conversations"],
     queryFn: () => getConversations(),
+    refetchOnWindowFocus: true,
+    refetchOnMount: true,
+    staleTime: 0,
   });
 
   const createConvo = useMutation({
@@ -42,6 +49,21 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
       onSelect(convo);
       setNewConvoOpen(false);
+    },
+  });
+
+  const createGroupConvo = useMutation({
+    mutationFn: () =>
+      startGroupConversation({
+        participant_ids: groupParticipants.map((p) => p.user_id),
+        title: groupTitle.trim() || undefined,
+      }),
+    onSuccess: (convo) => {
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      onSelect(convo);
+      setNewConvoOpen(false);
+      setGroupParticipants([]);
+      setGroupTitle("");
     },
   });
 
@@ -154,14 +176,22 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
       </div>
 
       {/* New conversation button */}
-      <div className="border-t border-border p-3">
+      <div className="border-t border-border p-3 flex gap-2">
         <Button
           variant="outline"
-          className="w-full"
-          onClick={() => setNewConvoOpen(true)}
+          className="flex-1"
+          onClick={() => { setIsGroupMode(false); setNewConvoOpen(true); }}
         >
           <Plus className="h-4 w-4" />
-          New conversation
+          New DM
+        </Button>
+        <Button
+          variant="outline"
+          className="flex-1"
+          onClick={() => { setIsGroupMode(true); setGroupParticipants([]); setGroupTitle(""); setNewConvoOpen(true); }}
+        >
+          <Users className="h-4 w-4" />
+          New Group
         </Button>
       </div>
 
@@ -169,15 +199,63 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
       <Dialog open={newConvoOpen} onOpenChange={setNewConvoOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>New Conversation</DialogTitle>
+            <DialogTitle>{isGroupMode ? "New Group Conversation" : "New Direct Message"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <UserSearch
-              placeholder="Search for a user..."
-              onSelect={(user) => createConvo.mutate(user.user_id)}
-            />
-            {createConvo.isPending && (
-              <p className="text-sm text-muted-foreground">Starting conversation...</p>
+            {isGroupMode ? (
+              <>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Group name (optional)</label>
+                  <Input
+                    placeholder="e.g. Team Chat"
+                    value={groupTitle}
+                    onChange={(e) => setGroupTitle(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Add participants</label>
+                  <UserSearch
+                    placeholder="Search for users..."
+                    onSelect={(user) => {
+                      if (!groupParticipants.find((p) => p.user_id === user.user_id)) {
+                        setGroupParticipants((prev) => [...prev, user]);
+                      }
+                    }}
+                  />
+                </div>
+                {groupParticipants.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {groupParticipants.map((p) => (
+                      <Badge key={p.user_id} variant="secondary" className="gap-1">
+                        {p.display_name ?? p.user_id}
+                        <button
+                          onClick={() => setGroupParticipants((prev) => prev.filter((x) => x.user_id !== p.user_id))}
+                          className="ml-1 text-muted-foreground hover:text-foreground"
+                        >
+                          ×
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                <Button
+                  className="w-full"
+                  onClick={() => createGroupConvo.mutate()}
+                  disabled={groupParticipants.length === 0 || createGroupConvo.isPending}
+                >
+                  {createGroupConvo.isPending ? "Creating..." : `Create Group (${groupParticipants.length} participant${groupParticipants.length !== 1 ? "s" : ""})`}
+                </Button>
+              </>
+            ) : (
+              <>
+                <UserSearch
+                  placeholder="Search for a user..."
+                  onSelect={(user) => createConvo.mutate(user.user_id)}
+                />
+                {createConvo.isPending && (
+                  <p className="text-sm text-muted-foreground">Starting conversation...</p>
+                )}
+              </>
             )}
           </div>
         </DialogContent>

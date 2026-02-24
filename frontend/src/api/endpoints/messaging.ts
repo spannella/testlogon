@@ -78,7 +78,7 @@ export const sendTextMessage = async (conversationId: string, body: SendTextMess
     throw new Error("Encrypted messaging is disabled");
   }
   const res = await api.post<Message>(
-    `/messaging/conversations/${conversationId}/messages/text`,
+    `/messaging/conversations/${conversationId}/messages`,
     body,
   );
   return adaptMessage(res);
@@ -112,7 +112,7 @@ export const sendImageMessage = async (
 
   const contentType = file.type || "image/jpeg";
   const presign = await api.post<{ upload_url: string; bucket: string; key: string; content_type: string }>(
-    `/messaging/conversations/${conversationId}/messages/image/presign`,
+    `/messaging/conversations/${conversationId}/images/presign`,
     {
       content_type: contentType,
       filename: file.name || "image.jpg",

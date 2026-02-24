@@ -68,7 +68,8 @@ function formatDate(ts: number): string {
   });
 }
 
-function formatEventName(name: string): string {
+function formatEventName(name: string | undefined): string {
+  if (!name) return "Unknown Event";
   return name
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());

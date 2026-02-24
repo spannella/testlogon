@@ -1116,6 +1116,9 @@ export interface CartItemIn {
   name: string;
   quantity?: number;
   unit_price_cents: number;
+  image_url?: string;
+  category_id?: string;
+  item_id?: string;
 }
 
 export interface CartItem {
@@ -1125,6 +1128,9 @@ export interface CartItem {
   unit_price_cents: number;
   line_total_cents: number;
   updated_at: string;
+  image_url?: string;
+  category_id?: string;
+  item_id?: string;
 }
 
 export interface CartItemsResp {

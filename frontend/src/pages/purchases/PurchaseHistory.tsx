@@ -72,7 +72,7 @@ export function PurchaseHistory() {
     queryFn: () =>
       listTransactions({
         limit: 50,
-        status: statusFilter !== "all" ? statusFilter : undefined,
+        status: statusFilter !== "all" ? statusFilter.toUpperCase() : undefined,
       }),
     enabled: !isSearchMode,
   });

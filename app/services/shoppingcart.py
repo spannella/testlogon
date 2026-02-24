@@ -55,7 +55,7 @@ def _cart_from_item(item: Dict[str, Any]) -> Dict[str, Any]:
 def _item_from_item(item: Dict[str, Any]) -> Dict[str, Any]:
     qty = _ddb_int(item.get("quantity", 0))
     unit = _ddb_int(item.get("unit_price_cents", 0))
-    return {
+    out: Dict[str, Any] = {
         "sku": item.get("sku"),
         "name": item.get("name"),
         "quantity": qty,
@@ -63,6 +63,13 @@ def _item_from_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "line_total_cents": qty * unit,
         "updated_at": item.get("updated_at"),
     }
+    if item.get("image_url"):
+        out["image_url"] = item["image_url"]
+    if item.get("category_id"):
+        out["category_id"] = item["category_id"]
+    if item.get("item_id"):
+        out["item_id"] = item["item_id"]
+    return out
 
 
 def _search_tokens(text: str) -> List[str]:
@@ -204,6 +211,12 @@ def add_item(user_sub: str, cart_id: str, payload: Dict[str, Any]) -> Dict[str, 
         "unit_price_cents": int(payload.get("unit_price_cents", 0)),
         "updated_at": now,
     }
+    if payload.get("image_url"):
+        item["image_url"] = payload["image_url"]
+    if payload.get("category_id"):
+        item["category_id"] = payload["category_id"]
+    if payload.get("item_id"):
+        item["item_id"] = payload["item_id"]
     T.shopping_cart.put_item(Item=item)
     return _item_from_item(item)
 

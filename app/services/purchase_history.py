@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from app.core.tables import T
 from app.core.time import now_ts
 from app.services.profile import get_profile
+from app.services.billing_shared import new_ledger_entry, ddb_put, user_pk
 
 
 def _safe_profile(user_sub: str) -> Dict[str, Any]:
@@ -267,6 +268,22 @@ def record_cart_purchase(
         pass
 
     _record_event(txn_id, user_sub, "cart_purchased", {"cart_id": cart_id, "order_id": order_id})
+
+    # Write a billing ledger entry so the purchase appears in the billing ledger
+    try:
+        led_sk, led_item = new_ledger_entry(
+            key_name="pk",
+            key_value=user_pk(user_sub),
+            entry_type="purchase",
+            amount_cents=-total_cents,
+            state="settled",
+            reason=f"Cart purchase – order {order_id}",
+            meta={"cart_id": cart_id, "order_id": order_id, "txn_id": txn_id},
+        )
+        ddb_put(T.billing, led_item)
+    except Exception:
+        pass  # Ledger write failure is non-fatal
+
     return txn_id
 
 

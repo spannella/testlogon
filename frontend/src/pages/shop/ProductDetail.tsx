@@ -52,6 +52,7 @@ export default function ProductDetail() {
   const queryClient = useQueryClient();
   const [quantity, setQuantity] = useState(1);
   const [hoverRating, setHoverRating] = useState(0);
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
 
   const form = useForm<ReviewFormValues>({
     resolver: zodResolver(reviewSchema),
@@ -92,6 +93,9 @@ export default function ProductDetail() {
         name: item.name,
         quantity,
         unit_price_cents: item.price_cents,
+        image_url: item.image_urls?.[0],
+        category_id: categoryId,
+        item_id: item.item_id,
       });
     },
     onSuccess: () => {
@@ -160,16 +164,35 @@ export default function ProductDetail() {
 
       {/* Product info */}
       <div className="grid gap-6 sm:grid-cols-2">
-        {/* Image */}
-        <div className="flex items-center justify-center rounded-xl bg-muted aspect-square">
-          {item.image_urls.length > 0 ? (
-            <img
-              src={item.image_urls[0]}
-              alt={item.name}
-              className="h-full w-full rounded-xl object-cover"
-            />
-          ) : (
-            <Package className="h-16 w-16 text-muted-foreground/50" />
+        {/* Image gallery */}
+        <div className="space-y-2">
+          <div className="flex aspect-square items-center justify-center rounded-xl bg-muted overflow-hidden">
+            {item.image_urls.length > 0 ? (
+              <img
+                src={item.image_urls[activeImageIndex]}
+                alt={item.name}
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <Package className="h-16 w-16 text-muted-foreground/50" />
+            )}
+          </div>
+          {item.image_urls.length > 1 && (
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {item.image_urls.map((url, i) => (
+                <button
+                  key={i}
+                  onClick={() => setActiveImageIndex(i)}
+                  className={`h-14 w-14 shrink-0 overflow-hidden rounded-lg border-2 transition-colors ${
+                    i === activeImageIndex
+                      ? "border-primary"
+                      : "border-transparent opacity-60 hover:opacity-100"
+                  }`}
+                >
+                  <img src={url} alt={`${item.name} ${i + 1}`} className="h-full w-full object-cover" />
+                </button>
+              ))}
+            </div>
           )}
         </div>
 
