@@ -22,6 +22,25 @@ class TestFileManagerRoutes(unittest.TestCase):
             filemanager.list_files(path="/", cursor=bad2, sort_by="name", user="user")
         self.assertEqual(ctx2.exception.status_code, 400)
 
+    def test_filemanager_internal_entitlement_hook_applied(self):
+        with (
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement") as enforce_internal,
+            patch.object(filemanager, "list_children", return_value=[]),
+        ):
+            filemanager.list_files(path="/", user="user")
+        enforce_internal.assert_called_once_with(user="user", action="list_directory")
+
+    def test_filemanager_internal_entitlement_denial_propagates(self):
+        with patch.object(
+            filemanager,
+            "_enforce_filemanager_internal_entitlement",
+            side_effect=HTTPException(status_code=403, detail={"code": "internal_api_entitlement_denied", "reason": "exhausted"}),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.list_files(path="/", user="user")
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail["reason"], "exhausted")
+
     def test_list_and_info(self):
         items = [
             {"path": "/docs/", "type": "folder", "name": "docs", "parent": "/", "updated_at": "t1"},
@@ -381,10 +400,13 @@ class TestFileManagerRoutes(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 403)
 
     def test_delete_and_move(self):
-        with patch.object(filemanager, "remove_file") as remove_file:
+        with patch.object(filemanager, "remove_file") as remove_file, patch.object(
+            filemanager, "_enforce_filemanager_internal_entitlement"
+        ) as enforce_internal:
             resp = filemanager.remove_fs_file(path="/docs/a.txt", user="user")
             self.assertTrue(resp["ok"])
             remove_file.assert_called_once_with("user", "/docs/a.txt")
+            enforce_internal.assert_called_once_with(user="user", action="delete_file", request_id=None)
 
         with patch.object(filemanager, "remove_folder", return_value=3):
             resp = filemanager.remove_fs_folder(path="/docs/", user="user")
@@ -579,3 +601,48 @@ class TestFileManagerRoutes(unittest.TestCase):
             resp = filemanager.usage_storage(top_n=5, user="user")
             self.assertEqual(resp["storage_bytes_current"], 123)
             storage.assert_called_once_with("user", top_n=5)
+
+
+    def test_download_denied_by_file_bundle_entitlement_payload(self):
+        obj = {"Body": io.BytesIO(b"hello")}
+        node = {"name": "a.txt", "content_type": "text/plain", "is_encrypted": False, "path": "/docs/a.txt", "size": 5}
+        deny = HTTPException(
+            status_code=403,
+            detail={
+                "code": "file_bundle_access_denied",
+                "reason": "out_of_scope",
+                "message": "File timestamp is outside entitled date range",
+                "required_product_type": "file_bundle",
+            },
+        )
+        with (
+            patch.object(filemanager, "download_file", return_value={"node": node, "object": obj}),
+            patch.object(filemanager, "assert_file_bundle_access", side_effect=deny),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.download_fs_file(path="/docs/a.txt", user="user")
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail["code"], "file_bundle_access_denied")
+        self.assertEqual(ctx.exception.detail["reason"], "out_of_scope")
+
+    def test_preview_denied_by_expired_file_bundle_entitlement_payload(self):
+        obj = {"Body": io.BytesIO(b"hello")}
+        node = {"name": "a.txt", "type": "file", "content_type": "text/plain", "is_encrypted": False, "path": "/docs/a.txt", "size": 5}
+        deny = HTTPException(
+            status_code=403,
+            detail={
+                "code": "file_bundle_access_denied",
+                "reason": "expired_entitlement",
+                "message": "File bundle entitlement has expired",
+                "required_product_type": "file_bundle",
+            },
+        )
+        with (
+            patch.object(filemanager, "download_file", return_value={"node": node, "object": obj}),
+            patch.object(filemanager, "assert_file_bundle_access", side_effect=deny),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.preview_fs_file(path="/docs/a.txt", user="user")
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail["code"], "file_bundle_access_denied")
+        self.assertEqual(ctx.exception.detail["reason"], "expired_entitlement")

@@ -1,0 +1,17 @@
+{
+  "schema_version": "v1",
+  "sku": "internal-msg-pro",
+  "product_type": "internal_api_package",
+  "billing_model": "subscription",
+  "source_system": "commercial_direct",
+  "quantity": 1,
+  "scope": {
+    "internal_namespaces": ["messaging.*", "filemanager.*"],
+    "allowed_actions": ["send_message", "download_file"]
+  },
+  "pricing_ref": {
+    "currency": "USD",
+    "amount_cents": 9900,
+    "catalog_version": "v3"
+  }
+}

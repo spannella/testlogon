@@ -1816,3 +1816,51 @@ class TestMessagingRoutes(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 409)
         record_claim.assert_called_once_with("conflict")
+
+    def test_send_text_message_enforces_internal_entitlement_when_enabled(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        req = SimpleNamespace(headers={"x-request-id": "req-allow"})
+        with (
+            patch.object(messaging, "S") as settings,
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "now_ts", return_value=55),
+            patch.object(messaging, "new_id", return_value="xyz"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "_enforce_messaging_internal_entitlement") as enforce_internal,
+            patch.object(messaging, "fanout_event_to_conversation"),
+            patch.object(messaging, "audit_event"),
+        ):
+            settings.catalog_commercialization_enabled = True
+            messaging.send_text_message(
+                "c1",
+                messaging.SendTextMessageIn(text="Hello world"),
+                req=req,
+                user_id="user-1",
+            )
+
+        enforce_internal.assert_called_once_with(user_id="user-1", action="send_message", request_id="req-allow")
+
+    def test_send_text_message_denied_by_internal_entitlement(self):
+        req = SimpleNamespace(headers={"x-request-id": "req-deny"})
+        with (
+            patch.object(messaging, "S") as settings,
+            patch.object(
+                messaging,
+                "_enforce_messaging_internal_entitlement",
+                side_effect=HTTPException(status_code=403, detail={"code": "internal_api_entitlement_denied", "reason": "exhausted"}),
+            ),
+        ):
+            settings.catalog_commercialization_enabled = True
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.send_text_message(
+                    "c1",
+                    messaging.SendTextMessageIn(text="blocked"),
+                    req=req,
+                    user_id="user-1",
+                )
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail["reason"], "exhausted")

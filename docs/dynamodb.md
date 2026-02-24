@@ -60,3 +60,26 @@ API keys are stored by user and often rely on a secondary index for user lookup 
 - **GSI_API_KEY**: query by API key across period windows.
 - **GSI_ROUTE**: query by route-level usage.
 - **TTL**: event rows carry `ttl_epoch`; configure `API_USAGE_EVENT_RETENTION_DAYS` and enable TTL on `DDB_TTL_ATTR` (default `ttl_epoch`).
+
+
+### Commercialization and entitlement tables (CCE-010)
+The local/bootstrap migration script (`scripts/local-ddb-init.py`) provisions the following tables for checkout + entitlement workflows:
+
+- `CATALOG_PRODUCTS_TABLE_NAME` (`catalog_products`): product metadata (`PK`/`SK`) with `GSI_PRODUCT_TYPE` for product-family browsing.
+- `CATALOG_PRODUCT_VERSIONS_TABLE_NAME` (`catalog_product_versions`): versioned product snapshots keyed by `sku` + `effective_at`.
+- `ORDERS_TABLE_NAME` (`orders`): order headers keyed by `order_id`, with `GSI_USER` and `GSI_STATUS` for support and ops queries.
+- `ORDER_ITEMS_TABLE_NAME` (`order_items`): line items keyed by `order_id` + `item_id`.
+- `PAYMENTS_TABLE_NAME` (`payments`): provider payment events keyed by `payment_id` + `event_id`, with:
+  - `GSI_ORDER` for order reconciliation,
+  - `GSI_PROVIDER_EVENT_IDEMPOTENCY` for webhook idempotency lookups.
+- `ENTITLEMENTS_TABLE_NAME` (`entitlements`): entitlement records keyed by `user_id` + `entitlement_id`, with:
+  - `GSI_STATUS` for lifecycle scans,
+  - `GSI_SKU` for catalog-impact analysis.
+- `ENTITLEMENT_USAGE_EVENTS_TABLE_NAME` (`entitlement_usage_events`): append-only usage events keyed by `entitlement_id` + `event_id`, with:
+  - `GSI_IDEMPOTENCY` for usage consume idempotency,
+  - `GSI_TIMESTAMP` for period/time-window reads.
+
+#### Migration safety notes
+- Bootstrap is **forward/backward safe** for local/staging because table creation is idempotent and missing GSIs are added in place.
+- Uniqueness/idempotency is enforced via write-path conditional expressions using `provider_event_idempotency_key` and `idempotency_key` lookup indexes.
+- Validate critical-path query latency in staging against `GSI_USER`, `GSI_STATUS`, `GSI_ORDER`, `GSI_IDEMPOTENCY`, and `GSI_TIMESTAMP` before production cutover.
