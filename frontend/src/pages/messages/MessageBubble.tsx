@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye, EyeOff } from "lucide-react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye, EyeOff, CreditCard, Check } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
@@ -38,11 +38,13 @@ import {
   unlockMessage,
 } from "@/api/endpoints/messaging";
 import { ApiError } from "@/api/client";
-import type { Message } from "@/api/types";
+import type { Message, PaymentMethod } from "@/api/types";
+import { getPaymentMethods } from "@/api/endpoints/billing";
 import { FileMessageCard } from "./FileMessageCard";
 import { ReadReceipts, ViewTracker } from "./ReadReceipts";
 import { ForwardDialog } from "./ForwardDialog";
 import { MessageDetailsSheet } from "./MessageDetailsSheet";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
@@ -121,12 +123,22 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
-  const [tipOpen, setTipOpen] = useState(false);
+  const [tipStep, setTipStep] = useState<null | "amount" | "confirm">(null);
   const [tipAmount, setTipAmount] = useState("");
+  const [selectedPaymentMethodId, setSelectedPaymentMethodId] = useState<string | null>(null);
   const [showDecryptPassword, setShowDecryptPassword] = useState(false);
   const [expiryCountdown, setExpiryCountdown] = useState<string | null>(null);
+  const [unlockDialogOpen, setUnlockDialogOpen] = useState(false);
+  const [unlockPaymentMethodId, setUnlockPaymentMethodId] = useState<string | null>(null);
 
   const viewOnceTextRevealed = viewedOnceIds?.has(message.message_id) ?? false;
+
+  const { data: paymentMethods = [] } = useQuery<PaymentMethod[]>({
+    queryKey: ["payment-methods"],
+    queryFn: getPaymentMethods,
+    staleTime: 5 * 60 * 1000,
+    enabled: !isOwn, // only needed for recipient bubbles (Send Tip, Unlock)
+  });
 
   useEffect(() => {
     if (!message.expires_at) return;
@@ -177,8 +189,11 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   });
 
   const unlockMut = useMutation({
-    mutationFn: () => unlockMessage(conversationId, message.message_id),
+    mutationFn: (paymentMethodId?: string | null) =>
+      unlockMessage(conversationId, message.message_id, paymentMethodId ?? undefined),
     onSuccess: () => {
+      toast.success("Message unlocked!");
+      setUnlockDialogOpen(false);
       void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
     },
     onError: () => toast.error("Failed to unlock message"),
@@ -188,12 +203,18 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
     mutationFn: () => {
       const cents = Math.round(parseFloat(tipAmount) * 100);
       if (isNaN(cents) || cents < 1) throw new Error("Invalid tip amount");
-      return sendMessageTip(conversationId, message.message_id, { amount_cents: cents, currency: "USD" });
+      if (!selectedPaymentMethodId) throw new Error("Select a payment method");
+      return sendMessageTip(conversationId, message.message_id, {
+        amount_cents: cents,
+        currency: "USD",
+        payment_method_id: selectedPaymentMethodId,
+      });
     },
     onSuccess: () => {
       toast.success("Tip sent!");
-      setTipOpen(false);
+      setTipStep(null);
       setTipAmount("");
+      setSelectedPaymentMethodId(null);
       void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
     },
     onError: (err: Error) => toast.error(err.message || "Failed to send tip"),
@@ -373,9 +394,30 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                   </DropdownMenuItem>
                 )}
                 {!isOwn && (
-                  <DropdownMenuItem onClick={() => setTipOpen(true)}>
-                    <DollarSign className="mr-2 h-4 w-4" /> Send Tip
-                  </DropdownMenuItem>
+                  paymentMethods.length === 0 ? (
+                    <TooltipProvider delayDuration={100}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div>
+                            <DropdownMenuItem disabled className="cursor-not-allowed opacity-50">
+                              <DollarSign className="mr-2 h-4 w-4" /> Send Tip
+                            </DropdownMenuItem>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent side="right">
+                          Add a payment method in Billing to send tips
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  ) : (
+                    <DropdownMenuItem onClick={() => {
+                      const def = paymentMethods.find((m) => m.is_default) ?? paymentMethods[0];
+                      setSelectedPaymentMethodId(def?.payment_method_id ?? null);
+                      setTipStep("amount");
+                    }}>
+                      <DollarSign className="mr-2 h-4 w-4" /> Send Tip
+                    </DropdownMenuItem>
+                  )
                 )}
                 {isOwn && !message.is_encrypted && !message.lock_price_cents && message.kind === "text" && (
                   <DropdownMenuItem onClick={() => { setEditText(message.text ?? ""); setIsEditing(true); }}>
@@ -421,7 +463,12 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             </div>
           )}
 
-          {message.is_encrypted ? (
+          {expiryCountdown === "expired" ? (
+            <div className="flex items-center gap-1.5 rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground italic">
+              <EyeOff className="h-3.5 w-3.5 shrink-0" />
+              This message has expired
+            </div>
+          ) : message.is_encrypted ? (
             <div className="space-y-1">
               <span className="inline-flex items-center gap-1 rounded-full bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
                 <Lock className="h-3 w-3" /> Encrypted
@@ -471,16 +518,36 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
               {message.lock_description && (
                 <p className="text-xs text-muted-foreground italic">{message.lock_description}</p>
               )}
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                className="h-7 px-2 text-xs"
-                onClick={() => unlockMut.mutate()}
-                disabled={unlockMut.isPending}
-              >
-                {unlockMut.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : `Unlock for $${(message.lock_price_cents / 100).toFixed(2)}`}
-              </Button>
+              {paymentMethods.length === 0 ? (
+                <TooltipProvider delayDuration={100}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div>
+                        <Button type="button" size="sm" variant="secondary" className="h-7 px-2 text-xs cursor-not-allowed opacity-50" disabled>
+                          <CreditCard className="mr-1 h-3 w-3" />
+                          {`Unlock for $${(message.lock_price_cents / 100).toFixed(2)}`}
+                        </Button>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>Add a payment method in Billing to unlock this message</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => {
+                    const def = paymentMethods.find((m) => m.is_default) ?? paymentMethods[0];
+                    setUnlockPaymentMethodId(def?.payment_method_id ?? null);
+                    setUnlockDialogOpen(true);
+                  }}
+                >
+                  <CreditCard className="mr-1 h-3 w-3" />
+                  {`Unlock for $${(message.lock_price_cents / 100).toFixed(2)}`}
+                </Button>
+              )}
             </div>
           ) : message.lock_price_cents && isOwn ? (
             // Sender view: show lock badge + the original text they sent
@@ -524,12 +591,23 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
               </div>
             </div>
           ) : message.view_once && !isOwn && message.kind === "text" ? (
-            viewOnceTextRevealed ? (
+            // text === null means backend has already consumed this view-once — always show stub
+            message.text === null ? (
+              <div className="flex items-center gap-1.5 rounded-lg border-2 border-dashed border-muted-foreground/30 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+                <EyeOff className="h-4 w-4" />
+                Already viewed
+              </div>
+            ) : viewOnceTextRevealed ? (
               <p className="whitespace-pre-wrap break-words text-sm">{message.text}</p>
             ) : (
               <button
                 type="button"
-                onClick={() => onViewOnce?.(message.message_id)}
+                onClick={() => {
+                  onViewOnce?.(message.message_id);
+                  if (!message.message_id.startsWith("optimistic-")) {
+                    markViewed(conversationId, message.message_id).catch(() => {});
+                  }
+                }}
                 className="flex items-center gap-1.5 rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 px-3 py-2 text-sm text-primary hover:bg-primary/10"
               >
                 <Eye className="h-4 w-4" />
@@ -654,7 +732,12 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
 
       <ReadReceipts conversationId={conversationId} messageId={message.message_id} isOwn={isOwn} />
 
-      <ViewTracker conversationId={conversationId} messageId={message.message_id} isOwn={isOwn} />
+      <ViewTracker
+        conversationId={conversationId}
+        messageId={message.message_id}
+        isOwn={isOwn}
+        skipMarkViewed={message.view_once && message.kind === "text"}
+      />
 
       <ForwardDialog
         open={forwardOpen}
@@ -733,28 +816,187 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
         conversationId={conversationId}
       />
 
-      <Dialog open={tipOpen} onOpenChange={(open) => { setTipOpen(open); if (!open) setTipAmount(""); }}>
-        <DialogContent>
+      <Dialog
+        open={tipStep !== null}
+        onOpenChange={(open) => {
+          if (!open) { setTipStep(null); setTipAmount(""); setSelectedPaymentMethodId(null); }
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          {tipStep === "amount" && (
+            <>
+              <DialogHeader>
+                <DialogTitle>Send Tip</DialogTitle>
+                <DialogDescription>Choose an amount and payment method.</DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                {/* Amount */}
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Amount (USD)</label>
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={tipAmount}
+                    onChange={(e) => setTipAmount(e.target.value)}
+                    placeholder="e.g. 5.00"
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    autoFocus
+                  />
+                </div>
+
+                {/* Payment method selector */}
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Payment method</label>
+                  <div className="space-y-2">
+                    {paymentMethods.map((pm) => {
+                      const label = pm.brand
+                        ? `${pm.brand.charAt(0).toUpperCase() + pm.brand.slice(1)} •••• ${pm.last4}`
+                        : (pm.label ?? pm.method_type);
+                      const isSelected = selectedPaymentMethodId === pm.payment_method_id;
+                      return (
+                        <button
+                          key={pm.payment_method_id}
+                          type="button"
+                          onClick={() => setSelectedPaymentMethodId(pm.payment_method_id)}
+                          className={cn(
+                            "flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-sm transition-colors hover:bg-accent",
+                            isSelected ? "border-primary bg-primary/5" : "border-border",
+                          )}
+                        >
+                          <CreditCard className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          <span className="flex-1 text-left">{label}</span>
+                          {pm.is_default && (
+                            <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">Default</span>
+                          )}
+                          {isSelected && <Check className="h-4 w-4 text-primary" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setTipStep(null)}>Cancel</Button>
+                <Button
+                  onClick={() => setTipStep("confirm")}
+                  disabled={!tipAmount || parseFloat(tipAmount) < 0.01 || !selectedPaymentMethodId}
+                >
+                  Continue
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+
+          {tipStep === "confirm" && (() => {
+            const pm = paymentMethods.find((m) => m.payment_method_id === selectedPaymentMethodId);
+            const pmLabel = pm?.brand
+              ? `${pm.brand.charAt(0).toUpperCase() + pm.brand.slice(1)} •••• ${pm.last4}`
+              : (pm?.label ?? pm?.method_type ?? "selected card");
+            const dollars = parseFloat(tipAmount).toFixed(2);
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle>Confirm tip</DialogTitle>
+                  <DialogDescription>Please review before sending.</DialogDescription>
+                </DialogHeader>
+
+                <div className="rounded-lg border border-border bg-muted/40 p-4 space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Amount</span>
+                    <span className="font-semibold">${dollars} USD</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Payment</span>
+                    <span className="flex items-center gap-1.5">
+                      <CreditCard className="h-3.5 w-3.5 text-muted-foreground" />
+                      {pmLabel}
+                    </span>
+                  </div>
+                </div>
+
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setTipStep("amount")} disabled={tipMut.isPending}>
+                    Back
+                  </Button>
+                  <Button onClick={() => tipMut.mutate()} disabled={tipMut.isPending}>
+                    {tipMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : `Send $${dollars} tip`}
+                  </Button>
+                </DialogFooter>
+              </>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* Unlock dialog */}
+      <Dialog
+        open={unlockDialogOpen}
+        onOpenChange={(open) => { if (!open) { setUnlockDialogOpen(false); setUnlockPaymentMethodId(null); } }}
+      >
+        <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Send Tip</DialogTitle>
-            <DialogDescription>Send a monetary tip to the message author.</DialogDescription>
+            <DialogTitle className="flex items-center gap-2">
+              <Lock className="h-4 w-4" />
+              Unlock message
+            </DialogTitle>
+            <DialogDescription>
+              Pay ${((message.lock_price_cents ?? 0) / 100).toFixed(2)} to unlock this message.
+            </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <label className="text-sm font-medium">Amount (USD)</label>
-            <input
-              type="number"
-              min="0.01"
-              step="0.01"
-              value={tipAmount}
-              onChange={(e) => setTipAmount(e.target.value)}
-              placeholder="e.g. 5.00"
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-            />
+          <div className="space-y-3">
+            {message.lock_description && (
+              <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground italic">
+                {message.lock_description}
+              </p>
+            )}
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Payment method</label>
+              <div className="space-y-2">
+                {paymentMethods.map((pm) => {
+                  const label = pm.brand
+                    ? `${pm.brand.charAt(0).toUpperCase() + pm.brand.slice(1)} •••• ${pm.last4}`
+                    : (pm.label ?? pm.method_type);
+                  const isSelected = unlockPaymentMethodId === pm.payment_method_id;
+                  return (
+                    <button
+                      key={pm.payment_method_id}
+                      type="button"
+                      onClick={() => setUnlockPaymentMethodId(pm.payment_method_id)}
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-sm transition-colors hover:bg-accent",
+                        isSelected ? "border-primary bg-primary/5" : "border-border",
+                      )}
+                    >
+                      <CreditCard className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="flex-1 text-left">{label}</span>
+                      {pm.is_default && (
+                        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">Default</span>
+                      )}
+                      {isSelected && <Check className="h-4 w-4 text-primary" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Total charge</span>
+                <span className="font-semibold">${((message.lock_price_cents ?? 0) / 100).toFixed(2)} USD</span>
+              </div>
+            </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTipOpen(false)} disabled={tipMut.isPending}>Cancel</Button>
-            <Button onClick={() => tipMut.mutate()} disabled={tipMut.isPending || !tipAmount}>
-              {tipMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Send Tip"}
+            <Button variant="outline" onClick={() => setUnlockDialogOpen(false)} disabled={unlockMut.isPending}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => unlockMut.mutate(unlockPaymentMethodId)}
+              disabled={unlockMut.isPending || !unlockPaymentMethodId}
+            >
+              {unlockMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : `Pay & Unlock`}
             </Button>
           </DialogFooter>
         </DialogContent>

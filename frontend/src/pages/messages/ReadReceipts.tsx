@@ -71,9 +71,11 @@ interface ViewTrackerProps {
   conversationId: string;
   messageId: string;
   isOwn: boolean;
+  /** Set to true to skip auto-marking as viewed (e.g. view-once text, which requires explicit tap) */
+  skipMarkViewed?: boolean;
 }
 
-export function ViewTracker({ conversationId, messageId, isOwn }: ViewTrackerProps) {
+export function ViewTracker({ conversationId, messageId, isOwn, skipMarkViewed }: ViewTrackerProps) {
   const ref = useRef<HTMLDivElement>(null);
   const markedRef = useRef(false);
 
@@ -81,6 +83,7 @@ export function ViewTracker({ conversationId, messageId, isOwn }: ViewTrackerPro
     // Don't track own messages or optimistic messages
     if (isOwn) return;
     if (messageId.startsWith("optimistic-")) return;
+    if (skipMarkViewed) return;
 
     const el = ref.current;
     if (!el) return;

@@ -316,8 +316,10 @@ export const updateParticipantRole = (
   );
 
 
-export const unlockMessage = (conversationId: string, messageId: string) =>
-  api.post<{ ok: boolean }>(`/messaging/conversations/${conversationId}/messages/${messageId}/unlock`, {});
+export const unlockMessage = (conversationId: string, messageId: string, paymentMethodId?: string) =>
+  api.post<{ ok: boolean }>(`/messaging/conversations/${conversationId}/messages/${messageId}/unlock`, {
+    payment_method_id: paymentMethodId ?? null,
+  });
 
 export const buildAttachmentDownloadUrl = (
   conversationId: string,

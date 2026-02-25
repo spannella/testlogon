@@ -32,7 +32,8 @@ export function useMessagingStream(enabled = true) {
           eventType === "message:revoked" ||
           eventType === "message:edited" ||
           eventType === "conversation_updated" ||
-          eventType === "message:reaction"
+          eventType === "message:reaction" ||
+          eventType === "message:expired"
         ) {
           queryClient.invalidateQueries({ queryKey: ["conversations"] });
         }
@@ -54,6 +55,7 @@ export function useMessagingStream(enabled = true) {
       "message:reaction",
       "message:locked",
       "message:unlocked",
+      "message:expired",
       "once_media_consumed",
       "once_media_state_changed",
       "conversation_updated",

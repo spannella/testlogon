@@ -1,5 +1,6 @@
 import * as React from "react";
 import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -9,7 +10,9 @@ import {
   isMessagingViewOnceVideoEnabled,
 } from "@/lib/featureFlags";
 import { encryptMessage, type MessageEncryptionEnvelope } from "@/lib/messageEncryption";
-import type { Message, SendTextMessageReq } from "@/api/types";
+import type { Message, PaymentMethod, SendTextMessageReq } from "@/api/types";
+import { getPaymentMethods } from "@/api/endpoints/billing";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface ComposeBarProps {
   onSendText: (payload: SendTextMessageReq) => void;
@@ -92,6 +95,13 @@ export function ComposeBar({
   const onceImageEnabled = isMessagingViewOnceImageEnabled();
   const onceVideoEnabled = isMessagingViewOnceVideoEnabled();
   const onceAudioEnabled = isMessagingListenOnceAudioEnabled();
+
+  const { data: paymentMethods = [] } = useQuery<PaymentMethod[]>({
+    queryKey: ["payment-methods"],
+    queryFn: getPaymentMethods,
+    staleTime: 5 * 60 * 1000,
+  });
+  const hasPaymentMethods = paymentMethods.length > 0;
 
   const resetTextArea = () => {
     if (textareaRef.current) {
@@ -356,19 +366,29 @@ export function ComposeBar({
           <Lock className="h-3.5 w-3.5" />
           Require tip to unlock
         </label>
-        <label className="inline-flex items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={tipEnabled}
-            onChange={(e) => {
-              setTipEnabled(e.target.checked);
-              if (e.target.checked) setLockEnabled(false);
-            }}
-            disabled={disabled || sending || encrypting}
-          />
-          <DollarSign className="h-3.5 w-3.5" />
-          Attach tip
-        </label>
+        <TooltipProvider delayDuration={100}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <label className={cn("inline-flex items-center gap-1.5", !hasPaymentMethods && "cursor-not-allowed opacity-50")}>
+                <input
+                  type="checkbox"
+                  checked={tipEnabled}
+                  onChange={(e) => {
+                    if (!hasPaymentMethods) return;
+                    setTipEnabled(e.target.checked);
+                    if (e.target.checked) setLockEnabled(false);
+                  }}
+                  disabled={disabled || sending || encrypting || !hasPaymentMethods}
+                />
+                <DollarSign className="h-3.5 w-3.5" />
+                Attach tip
+              </label>
+            </TooltipTrigger>
+            {!hasPaymentMethods && (
+              <TooltipContent>Add a payment method in Billing to attach tips</TooltipContent>
+            )}
+          </Tooltip>
+        </TooltipProvider>
         <label className="inline-flex items-center gap-1.5">
           <input
             type="checkbox"

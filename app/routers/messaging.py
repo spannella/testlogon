@@ -684,6 +684,7 @@ class SendTipIn(BaseModel):
     amount_cents: int = Field(ge=1, le=100_000)
     currency: str = "USD"
     note: Optional[str] = Field(default=None, max_length=500)
+    payment_method_id: Optional[str] = None
 
 
 class SendImagePresignIn(BaseModel):
@@ -987,7 +988,7 @@ HELPDESK_MASKED_SENDER_ID = "Helpdesk"
 
 
 class UnlockMessageIn(BaseModel):
-    pass  # body intentionally empty; amount comes from message's lock_price_cents
+    payment_method_id: Optional[str] = None
 
 
 class UnlockOut(BaseModel):
@@ -5664,6 +5665,18 @@ def _deliver_scheduled_message(item: dict) -> None:
         event_type="message:new",
         payload={"conversation_id": conversation_id, "message_id": message_id},
     )
+    # Also notify the sender — fanout excludes them by default, but they need
+    # to know their scheduled message was promoted so their chat view refreshes.
+    ts_notify = now_ts()
+    tbl_events.put_item(Item={
+        "user_id": user_id,
+        "event_id": _event_id(),
+        "type": "message:new",
+        "created_at": ts_notify,
+        "conversation_id": conversation_id,
+        "payload": {"conversation_id": conversation_id, "message_id": message_id},
+        "ttl": ts_notify + 7 * 24 * 3600,
+    })
     logger.info("Delivered scheduled message %s in conversation %s", message_id, conversation_id)
 
 
@@ -5767,23 +5780,45 @@ def send_message_tip(
     if msg.get("sender_id") == user_id:
         raise HTTPException(400, "Cannot tip your own message")
 
+    # Validate the chosen payment method belongs to this user
+    if inp.payment_method_id:
+        billing_tbl = ddb.Table(S.billing_table_name)
+        billing_pk = f"USER#{user_id}"
+        billing_items = billing_tbl.query(
+            KeyConditionExpression="pk = :pk",
+            ExpressionAttributeValues={":pk": billing_pk},
+        ).get("Items", [])
+        pm_ids = {
+            it["payment_method_id"]
+            for it in billing_items
+            if it.get("sk", "").startswith("PM#") and "payment_method_id" in it
+        }
+        if inp.payment_method_id not in pm_ids:
+            raise HTTPException(400, "Payment method not found")
+
     # Mock payment in dev mode; real payment processor in production
     tip_payment_id = "tip_" + new_id()
     ts = now_ts()
 
+    update_expr = (
+        "SET tip_amount_cents = if_not_exists(tip_amount_cents, :zero) + :amt, "
+        "tip_currency = :cur, tip_payment_id = :pid, tip_updated_at = :ts"
+    )
+    expr_values: dict = {
+        ":zero": 0,
+        ":amt": inp.amount_cents,
+        ":cur": inp.currency,
+        ":pid": tip_payment_id,
+        ":ts": ts,
+    }
+    if inp.payment_method_id:
+        update_expr += ", tip_payment_method_id = :pmid"
+        expr_values[":pmid"] = inp.payment_method_id
+
     tbl_msgs.update_item(
         Key={"conversation_id": conversation_id, "message_id": message_id},
-        UpdateExpression=(
-            "SET tip_amount_cents = if_not_exists(tip_amount_cents, :zero) + :amt, "
-            "tip_currency = :cur, tip_payment_id = :pid, tip_updated_at = :ts"
-        ),
-        ExpressionAttributeValues={
-            ":zero": 0,
-            ":amt": inp.amount_cents,
-            ":cur": inp.currency,
-            ":pid": tip_payment_id,
-            ":ts": ts,
-        },
+        UpdateExpression=update_expr,
+        ExpressionAttributeValues=expr_values,
     )
 
     fanout_event_to_conversation(
@@ -5846,6 +5881,23 @@ def unlock_message(
         raise HTTPException(400, "Already unlocked")
 
     amount_cents = int(msg["lock_price_cents"])
+
+    # Validate the chosen payment method belongs to this user
+    if inp.payment_method_id:
+        billing_tbl = ddb.Table(S.billing_table_name)
+        billing_pk = f"USER#{user_id}"
+        billing_items = billing_tbl.query(
+            KeyConditionExpression="pk = :pk",
+            ExpressionAttributeValues={":pk": billing_pk},
+        ).get("Items", [])
+        pm_ids = {
+            it["payment_method_id"]
+            for it in billing_items
+            if it.get("sk", "").startswith("PM#") and "payment_method_id" in it
+        }
+        if inp.payment_method_id not in pm_ids:
+            raise HTTPException(400, "Payment method not found")
+
     # Dev-mode: mock payment; production would call a real payment processor
     unlock_payment_id = "unlock_" + new_id()
 

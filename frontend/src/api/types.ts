@@ -719,6 +719,7 @@ export interface SendTipReq {
   amount_cents: number;
   currency?: string;
   note?: string;
+  payment_method_id?: string;
 }
 
 export interface SendFileMessageReq {
