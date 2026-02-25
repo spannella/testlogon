@@ -96,6 +96,7 @@ export default function Register() {
   const [smsVerified, setSmsVerified] = React.useState(false);
   const [totpEnrollData, setTotpEnrollData] = React.useState<{ device_id: string; secret: string; qr_code_uri: string } | null>(null);
   const [totpCode, setTotpCode] = React.useState("");
+  const [totpCode2, setTotpCode2] = React.useState("");
   const [totpVerified, setTotpVerified] = React.useState(false);
   const [showPassword, setShowPassword] = React.useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = React.useState(false);
@@ -479,7 +480,7 @@ export default function Register() {
     setMfaLoading(true);
     setMfaError(null);
     try {
-      await confirmTotpEnrollment({ device_id: totpEnrollData.device_id, totp_code: totpCode });
+      await confirmTotpEnrollment({ device_id: totpEnrollData.device_id, totp_code: totpCode, totp_code2: totpCode2 });
       setTotpVerified(true);
     } catch (err) {
       if (err instanceof ApiError) {
@@ -969,21 +970,35 @@ export default function Register() {
                         </div>
                         {!totpVerified && (
                           <div className="space-y-3">
-                            <Label>6-digit code</Label>
+                            <div>
+                              <Label>First 6-digit code</Label>
+                              <p className="text-xs text-muted-foreground">Enter a code from your authenticator app.</p>
+                            </div>
                             <div className="flex justify-center">
                               <OtpInput
                                 value={totpCode}
                                 onChange={setTotpCode}
-                                onComplete={() => { void handleTotpConfirm(); }}
                                 disabled={mfaLoading}
                                 autoFocus
+                              />
+                            </div>
+                            <div>
+                              <Label>Second 6-digit code</Label>
+                              <p className="text-xs text-muted-foreground">Wait for a new code, then enter it to confirm the device.</p>
+                            </div>
+                            <div className="flex justify-center">
+                              <OtpInput
+                                value={totpCode2}
+                                onChange={setTotpCode2}
+                                onComplete={() => { void handleTotpConfirm(); }}
+                                disabled={mfaLoading}
                               />
                             </div>
                             <Button
                               type="button"
                               className="w-full"
                               onClick={() => { void handleTotpConfirm(); }}
-                              disabled={mfaLoading || totpCode.length !== 6}
+                              disabled={mfaLoading || totpCode.length !== 6 || totpCode2.length !== 6}
                             >
                               Verify authenticator
                             </Button>

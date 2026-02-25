@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye } from "lucide-react";
+import { useState, useEffect } from "react";
+import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye, EyeOff } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -53,6 +53,8 @@ interface MessageBubbleProps {
   conversationId: string;
   onReply?: (message: Message) => void;
   replyToMessage?: Message;
+  viewedOnceIds?: Set<string>;
+  onViewOnce?: (messageId: string) => void;
 }
 
 const onceLabel = (message: Message): string | undefined => {
@@ -103,7 +105,7 @@ function replyPreviewText(msg: Message): string {
   return (msg.text ?? "").slice(0, 80) || "[Message]";
 }
 
-export function MessageBubble({ message, isOwn, showSender, conversationId, onReply, replyToMessage }: MessageBubbleProps) {
+export function MessageBubble({ message, isOwn, showSender, conversationId, onReply, replyToMessage, viewedOnceIds, onViewOnce }: MessageBubbleProps) {
   const queryClient = useQueryClient();
   const [forwardOpen, setForwardOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -121,7 +123,27 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [tipOpen, setTipOpen] = useState(false);
   const [tipAmount, setTipAmount] = useState("");
-  const [viewOnceTextRevealed, setViewOnceTextRevealed] = useState(false);
+  const [showDecryptPassword, setShowDecryptPassword] = useState(false);
+  const [expiryCountdown, setExpiryCountdown] = useState<string | null>(null);
+
+  const viewOnceTextRevealed = viewedOnceIds?.has(message.message_id) ?? false;
+
+  useEffect(() => {
+    if (!message.expires_at) return;
+    const compute = () => {
+      const diffSec = Math.floor(message.expires_at! - Date.now() / 1000);
+      if (diffSec <= 0) { setExpiryCountdown("expired"); return; }
+      const h = Math.floor(diffSec / 3600);
+      const m = Math.floor((diffSec % 3600) / 60);
+      const s = diffSec % 60;
+      if (h > 0) setExpiryCountdown(`in ${h}h ${m}m`);
+      else if (m > 0) setExpiryCountdown(`in ${m}m ${s}s`);
+      else setExpiryCountdown(`in ${s}s`);
+    };
+    compute();
+    const id = setInterval(compute, 1000);
+    return () => clearInterval(id);
+  }, [message.expires_at]);
 
   const deleteMut = useMutation({
     mutationFn: () => deleteMessage(conversationId, message.message_id),
@@ -507,7 +529,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             ) : (
               <button
                 type="button"
-                onClick={() => setViewOnceTextRevealed(true)}
+                onClick={() => onViewOnce?.(message.message_id)}
                 className="flex items-center gap-1.5 rounded-lg border-2 border-dashed border-primary/40 bg-primary/5 px-3 py-2 text-sm text-primary hover:bg-primary/10"
               >
                 <Eye className="h-4 w-4" />
@@ -619,9 +641,9 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             isOwn ? "text-primary-foreground/60 justify-end" : "text-muted-foreground",
           )}>
             {(message.edited_at || message.edited) && <span>edited</span>}
-            {message.expires_at && (
+            {expiryCountdown && (
               <span className="rounded bg-orange-500/20 px-1 text-orange-600">
-                expires {new Date(message.expires_at * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                expires {expiryCountdown}
               </span>
             )}
             {message.view_once && <span className="rounded bg-purple-500/20 px-1 text-purple-600">view once</span>}
@@ -659,6 +681,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
           if (!open) {
             setDecryptPassword("");
             setDecryptError(null);
+            setShowDecryptPassword(false);
           }
         }}
       >
@@ -671,14 +694,24 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
           </DialogHeader>
 
           <div className="space-y-2">
-            <input
-              type="password"
-              value={decryptPassword}
-              onChange={(e) => setDecryptPassword(e.target.value)}
-              placeholder="Password"
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              autoComplete="off"
-            />
+            <div className="relative">
+              <input
+                type={showDecryptPassword ? "text" : "password"}
+                value={decryptPassword}
+                onChange={(e) => setDecryptPassword(e.target.value)}
+                placeholder="Password"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 pr-9 text-sm"
+                autoComplete="off"
+              />
+              <button
+                type="button"
+                onClick={() => setShowDecryptPassword((v) => !v)}
+                className="absolute inset-y-0 right-2 flex items-center text-muted-foreground hover:text-foreground"
+                tabIndex={-1}
+              >
+                {showDecryptPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
             {decryptError && <p className="text-xs text-red-600">{decryptError}</p>}
           </div>
 

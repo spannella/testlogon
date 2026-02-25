@@ -43,6 +43,10 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
   const [jumpTargetMessageId, setJumpTargetMessageId] = React.useState<string | null>(null);
   const [highlightMessageId, setHighlightMessageId] = React.useState<string | null>(null);
   const [replyingTo, setReplyingTo] = React.useState<Message | null>(null);
+  const [viewedOnceIds, setViewedOnceIds] = React.useState<Set<string>>(new Set());
+  const handleViewOnce = React.useCallback((id: string) => {
+    setViewedOnceIds((prev) => new Set([...prev, id]));
+  }, []);
 
   // ── Messages query ──────────────────────────────────────────────
 
@@ -411,6 +415,8 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
                 conversationId={convoId}
                 onReply={(m) => setReplyingTo(m)}
                 replyToMessage={msg.reply_to_message_id ? messageById.get(msg.reply_to_message_id) : undefined}
+                viewedOnceIds={viewedOnceIds}
+                onViewOnce={handleViewOnce}
               />
             </div>
           ))

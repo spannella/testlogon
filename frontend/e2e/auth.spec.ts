@@ -532,10 +532,23 @@ test.describe("10. TOTP MFA at registration", () => {
     expect(secretText!.length).toBeGreaterThan(10);
   });
 
-  test("'Verify authenticator' button is present", async () => {
-    await expect(
-      page.getByRole("button", { name: /verify authenticator/i }),
-    ).toBeVisible({ timeout: 5000 });
+  test("'First 6-digit code' label is visible", async () => {
+    await expect(page.getByText("First 6-digit code", { exact: true })).toBeVisible({
+      timeout: 5000,
+    });
+  });
+
+  test("'Second 6-digit code' label is visible", async () => {
+    await expect(page.getByText("Second 6-digit code", { exact: true })).toBeVisible({
+      timeout: 5000,
+    });
+  });
+
+  test("'Verify authenticator' button is present and disabled until both codes entered", async () => {
+    const btn = page.getByRole("button", { name: /verify authenticator/i });
+    await expect(btn).toBeVisible({ timeout: 5000 });
+    // Button should be disabled when no codes have been entered
+    await expect(btn).toBeDisabled();
   });
 });
 

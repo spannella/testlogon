@@ -256,6 +256,16 @@ def rotate_refresh_token(response: Response, user_sub: str, session_id: str, ref
     stored = it.get("refresh_token_hash", "")
     if not stored or not hmac.compare_digest(stored, sha256_str(refresh_token)):
         raise HTTPException(401, "Invalid refresh token")
+    # Reset inactivity clock so the first post-refresh request doesn't immediately
+    # hit the inactivity check in require_ui_session.
+    try:
+        T.sessions.update_item(
+            Key={"user_sub": user_sub, "session_id": session_id},
+            UpdateExpression="SET last_seen_at = :now",
+            ExpressionAttributeValues={":now": now_ts()},
+        )
+    except Exception:
+        pass
     refresh_ttl = int(it.get("refresh_ttl_seconds") or 0)
     _issue_refresh_token(response, session_id, user_sub, refresh_ttl_seconds=refresh_ttl or None)
     access = mint_access_token(user_sub, session_id)
