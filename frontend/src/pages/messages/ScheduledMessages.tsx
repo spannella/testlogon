@@ -50,7 +50,7 @@ function ScheduledMessageRow({
   });
 
   // deliver_at is the scheduled send time; fall back to created_at
-  const sendAt = (message as unknown as { deliver_at?: number }).deliver_at ?? message.created_at;
+  const sendAt = message.deliver_at ?? message.created_at;
 
   return (
     <div className="flex items-start gap-3 rounded-lg border border-border bg-card p-3">

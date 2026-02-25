@@ -594,6 +594,15 @@ class MessageEncryptionEnvelope(BaseModel):
     iv_b64: str = Field(min_length=4, max_length=128)
     ciphertext_b64: str = Field(min_length=4, max_length=12000)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_decimals(cls, data: Any) -> Any:
+        """DynamoDB returns numbers as Decimal; coerce to native int for Literal/int fields."""
+        from decimal import Decimal as _Decimal
+        if isinstance(data, dict):
+            return {k: int(v) if isinstance(v, _Decimal) else v for k, v in data.items()}
+        return data
+
     @model_validator(mode="after")
     def _validate_binary_fields(self):
         try:
@@ -697,6 +706,7 @@ class CreateImageMessageIn(BaseModel):
     height: Optional[int] = None
     filename: Optional[str] = Field(default=None, max_length=255)
     filesize: Optional[int] = None
+    file_created_at: Optional[int] = None  # Unix seconds from file.lastModified
     caption: Optional[str] = Field(default=None, max_length=MESSAGE_TEXT_MAX_CHARS)
     kind: Literal["image", "file"] = "image"
     reply_to_message_id: Optional[str] = None
@@ -705,6 +715,7 @@ class CreateImageMessageIn(BaseModel):
     view_once: bool = False
     lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
     lock_description: Optional[str] = Field(default=None, max_length=200)
+    tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
 
 
 class MarkReadIn(BaseModel):
@@ -3798,6 +3809,9 @@ def list_messages(
             continue
         msg = _message_out_from_item(m, user_id)
         out.append(_apply_message_receipts(msg, m, parts))
+    # Sort by created_at descending (newest first) so the response is in
+    # chronological order regardless of DynamoDB sort-key (message_id) ordering.
+    out.sort(key=lambda m: m.created_at, reverse=True)
     return out
 
 
@@ -4312,6 +4326,7 @@ def create_image_message(
             "height": inp.height,
             "filename": inp.filename,
             "filesize": inp.filesize,
+            "file_created_at": inp.file_created_at,
         }
     if inp.caption:
         item["text"] = inp.caption
@@ -4329,6 +4344,16 @@ def create_image_message(
         item["unlocked_by"] = {}  # pre-initialize so nested SET path works
         if inp.lock_description:
             item["lock_description"] = inp.lock_description
+
+    # Tip attached to message
+    tip_amount_cents: Optional[int] = None
+    if inp.tip_amount_cents:
+        if inp.lock_price_cents:
+            raise HTTPException(400, "Cannot combine lock_price_cents with tip_amount_cents")
+        tip_amount_cents = inp.tip_amount_cents
+        item["tip_amount_cents"] = tip_amount_cents
+        item["tip_currency"] = "USD"
+        item["tip_payment_id"] = "tip_" + new_id()
 
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
@@ -4360,6 +4385,18 @@ def create_image_message(
         ExpressionAttributeValues={":ts": ts, ":p": _preview},
     )
 
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="message:new",
+        payload={
+            "message_id": mid,
+            "created_at": ts,
+            "message": _serialize_message_event_payload(item, user_id),
+        },
+        respect_mute=False,
+    )
+
     message = MessageOut(
         conversation_id=conversation_id,
         message_id=mid,
@@ -4379,6 +4416,8 @@ def create_image_message(
         lock_price_cents=inp.lock_price_cents,
         lock_description=inp.lock_description,
         is_unlocked=True,  # sender always sees their own content
+        tip_amount_cents=tip_amount_cents,
+        tip_currency="USD" if tip_amount_cents else None,
     )
     message = _apply_message_receipts(message, item, participants)
     audit_event(
@@ -4390,6 +4429,7 @@ def create_image_message(
         message_id=mid,
         kind="image",
         reply_to_message_id=inp.reply_to_message_id,
+        tip_amount_cents=tip_amount_cents,
     )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     _meter_messaging_attachment_upload(

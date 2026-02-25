@@ -32,6 +32,7 @@ import {
   createOnceMediaAttachmentGrant,
   deleteMessage,
   editMessage,
+  markViewed,
   reactToMessage,
   sendMessageTip,
   unlockMessage,
@@ -145,9 +146,9 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   const reactMut = useMutation({
     mutationFn: (emoji: string) => {
       const alreadyReacted = (message.my_reactions ?? []).includes(emoji);
-      return reactToMessage(conversationId, message.message_id, emoji).then(() => {
+      const action = alreadyReacted ? "remove" : "add";
+      return reactToMessage(conversationId, message.message_id, emoji, action).then(() => {
         void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
-        if (alreadyReacted) return;
       });
     },
     onError: () => toast.error("Failed to react"),
@@ -438,7 +439,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 </>
               )}
             </div>
-          ) : message.lock_price_cents && !message.unlocked_at && !isOwn ? (
+          ) : message.lock_price_cents && !message.is_unlocked && !isOwn ? (
             // Recipient view: locked message with unlock button
             <div className="space-y-2">
               <div className="inline-flex items-center gap-1.5 rounded-full bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
@@ -550,6 +551,10 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                     void handleOpenOnceAttachment();
                   } else {
                     setLightboxOpen(true);
+                    // Track that this user viewed/opened the image
+                    if (!message.message_id.startsWith("optimistic-")) {
+                      markViewed(conversationId, message.message_id).catch(() => {});
+                    }
                   }
                 }}
                 className="mt-1 block"
@@ -731,7 +736,12 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 href={message.image.url}
                 download
                 className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
-                onClick={(e) => e.stopPropagation()}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!message.message_id.startsWith("optimistic-")) {
+                    markViewed(conversationId, message.message_id).catch(() => {});
+                  }
+                }}
               >
                 <Download className="h-4 w-4" />
               </a>

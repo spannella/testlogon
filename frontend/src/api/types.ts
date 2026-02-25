@@ -601,6 +601,9 @@ export interface MessageImage {
   width?: number;
   height?: number;
   url?: string;
+  filename?: string;
+  filesize?: number;
+  file_created_at?: number;
 }
 
 export interface MessageEncryptionEnvelope {
@@ -658,11 +661,15 @@ export interface Message {
   consumed_at?: number;
   lock_price_cents?: number;
   lock_description?: string;
-  unlocked_at?: number;
+  is_unlocked?: boolean;
+  locked?: boolean;
   tip_amount_cents?: number;
   tip_currency?: string;
   view_once?: boolean;
   expires_at?: number;
+  expired?: boolean;
+  scheduled?: boolean;
+  deliver_at?: number;
   // UI convenience fields (derived client-side)
   edited?: boolean;
   revoked?: boolean;
@@ -686,6 +693,7 @@ export interface SendTextMessageReq {
   send_at?: number;
   view_once?: boolean;
   expires_in_seconds?: number;
+  tip_amount_cents?: number;
 }
 
 export interface SendImageMessageReq {
@@ -696,6 +704,7 @@ export interface SendImageMessageReq {
   height?: number;
   filename?: string;
   filesize?: number;
+  file_created_at?: number;
   caption?: string;
   kind?: "image" | "file";
   reply_to_message_id?: string;
@@ -703,6 +712,7 @@ export interface SendImageMessageReq {
   expires_in_seconds?: number;
   lock_price_cents?: number;
   lock_description?: string;
+  tip_amount_cents?: number;
 }
 
 export interface SendTipReq {

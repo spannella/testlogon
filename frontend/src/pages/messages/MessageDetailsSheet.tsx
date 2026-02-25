@@ -70,10 +70,10 @@ export function MessageDetailsSheet({
             <div>
               <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Image Info</p>
               <div className="space-y-1 text-sm">
-                {(imageDetails as { filename?: string }).filename && (
+                {imageDetails.filename && (
                   <div className="flex justify-between gap-2">
                     <span className="text-muted-foreground">Filename</span>
-                    <span className="max-w-[60%] truncate text-right">{(imageDetails as { filename?: string }).filename}</span>
+                    <span className="max-w-[60%] truncate text-right">{imageDetails.filename}</span>
                   </div>
                 )}
                 {imageDetails.width && imageDetails.height && (
@@ -82,16 +82,27 @@ export function MessageDetailsSheet({
                     <span>{imageDetails.width} × {imageDetails.height} px</span>
                   </div>
                 )}
-                {(imageDetails as { filesize?: number }).filesize && (
+                {imageDetails.filesize && (
                   <div className="flex justify-between gap-2">
                     <span className="text-muted-foreground">File size</span>
-                    <span>{formatBytes((imageDetails as { filesize?: number }).filesize)}</span>
+                    <span>{formatBytes(imageDetails.filesize)}</span>
                   </div>
                 )}
                 {imageDetails.content_type && (
                   <div className="flex justify-between gap-2">
                     <span className="text-muted-foreground">Type</span>
                     <span>{imageDetails.content_type}</span>
+                  </div>
+                )}
+                {imageDetails.file_created_at ? (
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground">File created</span>
+                    <span className="text-right">{formatTs(imageDetails.file_created_at)}</span>
+                  </div>
+                ) : (
+                  <div className="flex justify-between gap-2">
+                    <span className="text-muted-foreground">Sent at</span>
+                    <span>{formatTs(message.created_at)}</span>
                   </div>
                 )}
               </div>

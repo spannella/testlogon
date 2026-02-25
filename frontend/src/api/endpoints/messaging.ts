@@ -107,6 +107,24 @@ const uploadToPresignedUrl = async (uploadUrl: string, file: File, contentType: 
   }
 };
 
+/** Read natural width/height from an image File. Returns undefined for non-images (e.g. PDFs). */
+const readImageDimensions = (file: File): Promise<{ width: number; height: number } | undefined> => {
+  if (!file.type.startsWith("image/")) return Promise.resolve(undefined);
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      resolve({ width: img.naturalWidth, height: img.naturalHeight });
+      URL.revokeObjectURL(url);
+    };
+    img.onerror = () => {
+      resolve(undefined);
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  });
+};
+
 export const sendImageMessage = async (
   conversationId: string,
   formData: FormData,
@@ -116,6 +134,7 @@ export const sendImageMessage = async (
     expires_in_seconds?: number;
     lock_price_cents?: number;
     lock_description?: string;
+    tip_amount_cents?: number;
   },
 ) => {
   const file = formData.get("file");
@@ -125,6 +144,10 @@ export const sendImageMessage = async (
 
   const isPdf = file.type === "application/pdf";
   const contentType = file.type || "image/jpeg";
+
+  // Read image dimensions before upload (non-blocking, resolves quickly from local file)
+  const dims = await readImageDimensions(file);
+
   const presign = await api.post<{ upload_url: string; bucket: string; key: string; content_type: string }>(
     `/messaging/conversations/${conversationId}/images/presign`,
     {
@@ -141,13 +164,18 @@ export const sendImageMessage = async (
     content_type: presign.content_type || contentType,
     filename: file.name,
     filesize: file.size,
+    // file.lastModified is ms since epoch; convert to Unix seconds
+    file_created_at: file.lastModified > 0 ? Math.floor(file.lastModified / 1000) : undefined,
     kind: isPdf ? "file" : "image",
+    width: dims?.width,
+    height: dims?.height,
   };
   if (options?.consumption_policy) payload.consumption_policy = options.consumption_policy;
   if (options?.caption) payload.caption = options.caption;
   if (options?.expires_in_seconds) payload.expires_in_seconds = options.expires_in_seconds;
   if (options?.lock_price_cents) payload.lock_price_cents = options.lock_price_cents;
   if (options?.lock_description) payload.lock_description = options.lock_description;
+  if (options?.tip_amount_cents) payload.tip_amount_cents = options.tip_amount_cents;
 
   const res = await api.post<Message>(`/messaging/conversations/${conversationId}/messages/image`, payload);
   return adaptMessage(res);
@@ -161,8 +189,8 @@ export const editMessage = async (conversationId: string, messageId: string, bod
   return adaptMessage(res);
 };
 
-export const reactToMessage = (conversationId: string, messageId: string, emoji: string) =>
-  api.post(`/messaging/conversations/${conversationId}/messages/${messageId}/react`, { emoji });
+export const reactToMessage = (conversationId: string, messageId: string, emoji: string, action: "add" | "remove" = "add") =>
+  api.post(`/messaging/conversations/${conversationId}/messages/${messageId}/reactions`, { emoji, action });
 
 export const deleteMessage = (conversationId: string, messageId: string) =>
   api.del(`/messaging/conversations/${conversationId}/messages/${messageId}`);

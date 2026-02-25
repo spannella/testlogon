@@ -141,8 +141,11 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
         ["messages", convoId],
         (old) => {
           if (!old?.pages.length) return old;
+          // pages[0] is the newest page and its messages are newest-first.
+          // Prepend the optimistic message so that after allMessages reversal
+          // it appears at the bottom (newest position) rather than the top.
           const pages = old.pages.map((p, i) =>
-            i === 0 ? { ...p, messages: [...(p.messages ?? []), optimistic] } : p,
+            i === 0 ? { ...p, messages: [optimistic, ...(p.messages ?? [])] } : p,
           );
           return { ...old, pages };
         },
@@ -184,6 +187,7 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
       expires_in_seconds?: number;
       lock_price_cents?: number;
       lock_description?: string;
+      tip_amount_cents?: number;
     }) => {
       const fd = new FormData();
       fd.append("file", args.file);
@@ -193,11 +197,56 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
         expires_in_seconds: args.expires_in_seconds,
         lock_price_cents: args.lock_price_cents,
         lock_description: args.lock_description,
+        tip_amount_cents: args.tip_amount_cents,
       });
     },
-    onSuccess: () => {
+    onMutate: async (args) => {
+      await queryClient.cancelQueries({ queryKey: ["messages", convoId] });
+      const snapshot = queryClient.getQueryData(["messages", convoId]);
+
+      // Optimistic placeholder so the user sees immediate feedback during upload
+      const optimistic: Message = {
+        message_id: `optimistic-img-${Date.now()}`,
+        conversation_id: convoId,
+        sender_id: userId ?? "",
+        kind: args.file.type === "application/pdf" ? "file" : "image",
+        text: args.caption,
+        created_at: Date.now() / 1000,
+        reactions_counts: {},
+        // Show a local object URL as preview (will be replaced by the real URL after success)
+        image: args.file.type.startsWith("image/")
+          ? { url: URL.createObjectURL(args.file) }
+          : undefined,
+        file: args.file.type === "application/pdf"
+          ? { name: args.file.name, size: args.file.size, content_type: args.file.type }
+          : undefined,
+      };
+
+      queryClient.setQueryData<InfiniteData<MessagesPage>>(
+        ["messages", convoId],
+        (old) => {
+          if (!old?.pages.length) return old;
+          const pages = old.pages.map((p, i) =>
+            i === 0 ? { ...p, messages: [optimistic, ...(p.messages ?? [])] } : p,
+          );
+          return { ...old, pages };
+        },
+      );
+
+      return { snapshot, optimisticUrl: optimistic.image?.url };
+    },
+    onSuccess: (_data, _args, context) => {
+      // Revoke the temporary object URL if we created one
+      if (context?.optimisticUrl) URL.revokeObjectURL(context.optimisticUrl);
       queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: (_err, _args, context) => {
+      if (context?.optimisticUrl) URL.revokeObjectURL(context.optimisticUrl);
+      if (context?.snapshot) {
+        queryClient.setQueryData(["messages", convoId], context.snapshot);
+      }
+      toast.error("Failed to send image");
     },
   });
 
@@ -387,6 +436,7 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
           expires_in_seconds: options?.expires_in_seconds,
           lock_price_cents: options?.lock_price_cents,
           lock_description: options?.lock_description,
+          tip_amount_cents: options?.tip_amount_cents,
         })}
         sending={sendText.isPending || sendImage.isPending}
         onKeystroke={onKeystroke}

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -19,6 +19,7 @@ interface ComposeBarProps {
     expires_in_seconds?: number;
     lock_price_cents?: number;
     lock_description?: string;
+    tip_amount_cents?: number;
   }) => void;
   onSendVideoAttachment?: (file: File, options?: { consumption_policy?: "none" | "view_once" }) => void;
   onSendAudioRecording?: (file: File, options?: { consumption_policy?: "none" | "listen_once" }) => void;
@@ -55,6 +56,9 @@ export function ComposeBar({
   const [lockEnabled, setLockEnabled] = React.useState(false);
   const [lockPrice, setLockPrice] = React.useState("");
   const [lockDescription, setLockDescription] = React.useState("");
+  const [tipEnabled, setTipEnabled] = React.useState(false);
+  const [tipAmount, setTipAmount] = React.useState("");
+  const [scheduledInput, setScheduledInput] = React.useState<string>("");  // raw "YYYY-MM-DDTHH:mm"
   const [scheduledAt, setScheduledAt] = React.useState<Date | null>(null);
   const [scheduleOpen, setScheduleOpen] = React.useState(false);
   const [scheduleTimezone, setScheduleTimezone] = React.useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
@@ -63,6 +67,26 @@ export function ComposeBar({
   const [expiresDuration, setExpiresDuration] = React.useState("3600");
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Parse a datetime-local string ("YYYY-MM-DDTHH:mm") as the given timezone,
+  // returning the equivalent UTC Date.
+  const parseDateTimeInTz = React.useCallback((localStr: string, tz: string): Date => {
+    // Treat localStr as UTC first, then find the offset so that the UTC Date
+    // maps back to exactly localStr when formatted in tz.
+    const asUtc = new Date(localStr + ":00Z");
+    // Format the guess in target TZ (sv locale gives "YYYY-MM-DD HH:mm:ss")
+    const fmtResult = new Intl.DateTimeFormat("sv", {
+      timeZone: tz,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hour12: false,
+    }).format(asUtc);
+    // Parse that as UTC so we can diff
+    const tzAsUtc = new Date(fmtResult.replace(" ", "T") + "Z");
+    // diff = how many ms asUtc is ahead of what TZ actually shows
+    const diff = asUtc.getTime() - tzAsUtc.getTime();
+    return new Date(asUtc.getTime() + diff);
+  }, []);
 
   const featureEnabled = isMessagingEncryptionEnabled();
   const onceImageEnabled = isMessagingViewOnceImageEnabled();
@@ -75,12 +99,16 @@ export function ComposeBar({
     }
   };
 
-  const buildExtraPayload = (): Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds"> => {
-    const extra: Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds"> = {};
+  const buildExtraPayload = (): Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents"> => {
+    const extra: Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents"> = {};
     if (lockEnabled) {
       const cents = Math.round(parseFloat(lockPrice) * 100);
       if (!isNaN(cents) && cents > 0) extra.lock_price_cents = cents;
       if (lockDescription.trim()) extra.lock_description = lockDescription.trim();
+    }
+    if (tipEnabled) {
+      const cents = Math.round(parseFloat(tipAmount) * 100);
+      if (!isNaN(cents) && cents > 0) extra.tip_amount_cents = cents;
     }
     if (scheduledAt) {
       extra.send_at = Math.floor(scheduledAt.getTime() / 1000);
@@ -116,7 +144,8 @@ export function ComposeBar({
     try {
       const envelope: MessageEncryptionEnvelope = await encryptMessage(trimmed, password);
       return { encryption: envelope, ...extra };
-    } catch {
+    } catch (err) {
+      console.error("[encryption] encryptMessage threw:", err);
       setEncryptError("Failed to encrypt message locally. Please try again.");
       return null;
     } finally {
@@ -141,7 +170,8 @@ export function ComposeBar({
       resetTextArea();
       if (encryptEnabled) { setPassword(""); setConfirmPassword(""); }
       if (lockEnabled) { setLockEnabled(false); setLockPrice(""); setLockDescription(""); }
-      if (scheduledAt) { setScheduledAt(null); setScheduleOpen(false); }
+      if (tipEnabled) { setTipEnabled(false); setTipAmount(""); }
+      if (scheduledAt) { setScheduledAt(null); setScheduledInput(""); setScheduleOpen(false); }
       if (viewOnceText) setViewOnceText(false);
       if (expiresEnabled) { setExpiresEnabled(false); setExpiresDuration("3600"); }
     };
@@ -155,6 +185,7 @@ export function ComposeBar({
         expires_in_seconds: extraPayload.expires_in_seconds,
         lock_price_cents: extraPayload.lock_price_cents,
         lock_description: extraPayload.lock_description,
+        tip_amount_cents: extraPayload.tip_amount_cents,
       });
       clearPendingFile();
       resetTextState();
@@ -300,7 +331,7 @@ export function ComposeBar({
         </div>
       )}
 
-      {/* View-once text + Lock + Expiry controls row */}
+      {/* View-once text + Lock + Tip + Expiry controls row */}
       <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <label className="inline-flex items-center gap-1.5">
           <input
@@ -316,11 +347,27 @@ export function ComposeBar({
           <input
             type="checkbox"
             checked={lockEnabled}
-            onChange={(e) => setLockEnabled(e.target.checked)}
+            onChange={(e) => {
+              setLockEnabled(e.target.checked);
+              if (e.target.checked) setTipEnabled(false);
+            }}
             disabled={disabled || sending || encrypting}
           />
           <Lock className="h-3.5 w-3.5" />
           Require tip to unlock
+        </label>
+        <label className="inline-flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={tipEnabled}
+            onChange={(e) => {
+              setTipEnabled(e.target.checked);
+              if (e.target.checked) setLockEnabled(false);
+            }}
+            disabled={disabled || sending || encrypting}
+          />
+          <DollarSign className="h-3.5 w-3.5" />
+          Attach tip
         </label>
         <label className="inline-flex items-center gap-1.5">
           <input
@@ -369,6 +416,24 @@ export function ComposeBar({
             className="w-full resize-none rounded border border-input bg-background px-2 py-1 text-xs"
             disabled={disabled || sending}
           />
+        </div>
+      )}
+      {tipEnabled && (
+        <div className="mb-2 rounded-md border border-green-200 bg-green-50 p-2 text-xs">
+          <p className="mb-1.5 font-medium text-green-800">Attach a tip to this message</p>
+          <div className="flex items-center gap-2">
+            <label className="shrink-0 text-green-700">Amount ($)</label>
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={tipAmount}
+              onChange={(e) => setTipAmount(e.target.value)}
+              placeholder="e.g. 5.00"
+              className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
+              disabled={disabled || sending}
+            />
+          </div>
         </div>
       )}
 
@@ -420,7 +485,7 @@ export function ComposeBar({
       {pendingFile && (
         <div className="mb-2 flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-2">
           <div className="flex items-center gap-2">
-            {pendingFile.kind === "image" ? (
+            {pendingFile.kind === "image" && !pendingFile.file.type.includes("pdf") ? (
               <img
                 src={pendingFile.previewUrl}
                 alt="Attachment preview"
@@ -428,7 +493,11 @@ export function ComposeBar({
               />
             ) : (
               <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md bg-muted">
-                <ImageIcon className="h-6 w-6 text-muted-foreground" />
+                {pendingFile.file.type.includes("pdf") ? (
+                  <FileText className="h-6 w-6 text-red-500" />
+                ) : (
+                  <ImageIcon className="h-6 w-6 text-muted-foreground" />
+                )}
               </div>
             )}
             <div className="min-w-0 flex-1">
@@ -543,13 +612,13 @@ export function ComposeBar({
               <p className="mb-2 text-xs font-medium">Schedule send</p>
               <input
                 type="datetime-local"
+                value={scheduledInput}
                 className="mb-2 w-full rounded border border-input bg-background px-2 py-1 text-xs"
                 onChange={(e) => {
                   const val = e.target.value;
+                  setScheduledInput(val);
                   if (val) {
-                    // Parse local datetime in the selected timezone
-                    const localDate = new Date(val);
-                    setScheduledAt(localDate);
+                    setScheduledAt(parseDateTimeInTz(val, scheduleTimezone));
                   } else {
                     setScheduledAt(null);
                   }
@@ -559,7 +628,12 @@ export function ComposeBar({
                 <Globe className="h-3 w-3 shrink-0 text-muted-foreground" />
                 <select
                   value={scheduleTimezone}
-                  onChange={(e) => setScheduleTimezone(e.target.value)}
+                  onChange={(e) => {
+                    const tz = e.target.value;
+                    setScheduleTimezone(tz);
+                    // Re-parse the existing input with the new timezone
+                    if (scheduledInput) setScheduledAt(parseDateTimeInTz(scheduledInput, tz));
+                  }}
                   className="flex-1 rounded border border-input bg-background px-1 py-0.5 text-xs"
                 >
                   {[
