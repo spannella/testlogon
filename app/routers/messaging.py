@@ -4213,9 +4213,13 @@ def send_text_message(
         raise HTTPException(400, "Cannot combine lock_price_cents with tip_amount_cents")
 
     # Expiry
+    # When the message is scheduled, start the timer from the scheduled delivery time
+    # (deliver_at) rather than the current request time, so the recipient gets the full
+    # expiry window after the message actually arrives.
     expires_at = None
     if inp.expires_in_seconds:
-        expires_at = ts + inp.expires_in_seconds
+        expiry_base = deliver_at if is_scheduled else ts
+        expires_at = expiry_base + inp.expires_in_seconds
         item["expires_at"] = expires_at
     if inp.view_once:
         item["view_once"] = True
@@ -4397,9 +4401,12 @@ def create_image_message(
     if inp.caption:
         item["text"] = inp.caption
     # Expiry
+    # When the message is scheduled, start the timer from the scheduled delivery time
+    # (deliver_at_img) rather than the current request time.
     expires_at = None
     if inp.expires_in_seconds:
-        expires_at = ts + inp.expires_in_seconds
+        expiry_base = deliver_at_img if is_scheduled_img else ts
+        expires_at = expiry_base + inp.expires_in_seconds
         item["expires_at"] = expires_at
     if inp.view_once:
         item["view_once"] = True

@@ -13,6 +13,8 @@
  * Fix 10: Scheduled image message returns scheduled:true, not delivered immediately
  * Fix 11: File messages have a URL in dev mode (PDF files are clickable)
  * Fix 12: Scheduled messages support encryption (text + image, with or without attachment)
+ * Fix 13: Expiry timer starts at delivery time, not request time, for scheduled messages
+ * Fix 14: Scheduled messages support view-once (flag preserved through delivery)
  *
  * Tests for fixes 1 & 2 (registration flow) are covered at the API level.
  * Tests for fixes 9, 10, 11 that require real file uploads are at API level.
@@ -1083,5 +1085,148 @@ test.describe("24. Scheduled encrypted messages — text and image", () => {
       encryptedImages.length,
       "at least one scheduled image must have is_encrypted=true",
     ).toBeGreaterThan(0);
+  });
+});
+
+// ─── 25. Fix 13+14: Expiry timer starts at delivery time; view-once + scheduled ─
+
+test.describe("25. Scheduled messages — expiry timer and view-once", () => {
+  let page: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    page = await browser.newPage();
+    await injectAuth(page, ALICE_ID);
+    await getOrCreateDm(page);
+  });
+
+  test.afterAll(async () => page?.close());
+
+  // ── 25a. Expiry timer starts at scheduled delivery time, not request time ──
+
+  test("expires_at is based on deliver_at (not request time) when send_at is set", async () => {
+    const session    = getSessions()[ALICE_ID];
+    const deliverAt  = Math.floor(Date.now() / 1000) + 120; // 2 min from now
+    const expiresIn  = 3600;                                  // 1-hour expiry
+    const expectedExpiresAt = deliverAt + expiresIn;
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data:    { text: `sched-expiry-${Date.now()}`, send_at: deliverAt, expires_in_seconds: expiresIn },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+
+    expect(body.scheduled,  "must be scheduled").toBe(true);
+    expect(body.deliver_at, "deliver_at must match send_at").toBe(deliverAt);
+
+    // The expiry must be anchored to deliver_at, not the current request time.
+    // If it were anchored to request time, expires_at would equal (now + 3600)
+    // which is 120 seconds LESS than the expected value.
+    expect(body.expires_at, "expires_at must equal deliver_at + expires_in_seconds").toBe(expectedExpiresAt);
+    expect(
+      (body.expires_at as number) > Math.floor(Date.now() / 1000) + expiresIn,
+      "expires_at must be strictly greater than (now + expires_in_seconds), proving it was NOT anchored to request time",
+    ).toBe(true);
+  });
+
+  test("Scheduled + expiry image: expires_at anchored to deliver_at", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+    const expiresIn = 1800;
+
+    // Presign
+    const presign = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/images/presign`,
+      {
+        data:    { filename: "sched-expiry.png", content_type: "image/png" },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(presign.status()).toBe(200);
+    const { upload_url, bucket, key } = await presign.json() as {
+      upload_url: string; bucket: string; key: string;
+    };
+    // Upload
+    await page.request.put(`http://localhost:8000${upload_url}`, {
+      data: Buffer.alloc(32), headers: { "Content-Type": "image/png" },
+    });
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages/image`,
+      {
+        data: {
+          bucket, key, filename: "sched-expiry.png", content_type: "image/png",
+          size: 32, width: 10, height: 10, kind: "image",
+          send_at: deliverAt, expires_in_seconds: expiresIn,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled).toBe(true);
+    expect(body.expires_at).toBe(deliverAt + expiresIn);
+  });
+
+  // ── 25b. View-once works with scheduled send ──────────────────────────────
+
+  test("Scheduled + view-once text: response has scheduled=true AND view_once=true", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data:    { text: `sched-viewonce-${Date.now()}`, send_at: deliverAt, view_once: true },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled,  "must be scheduled").toBe(true);
+    expect(body.view_once,  "must be view_once").toBe(true);
+    expect(body.deliver_at, "deliver_at must match send_at").toBe(deliverAt);
+  });
+
+  test("Scheduled + view-once text appears in /messages/scheduled with view_once=true", async () => {
+    const session = getSessions()[ALICE_ID];
+    const r = await page.request.get(
+      `${API}/messaging/conversations/${_dmConvoId}/messages/scheduled`,
+      { headers: { "x-csrf-token": session.csrf_token } },
+    );
+    expect(r.ok()).toBe(true);
+    const list = await r.json() as Array<Record<string, unknown>>;
+    const viewOnceScheduled = list.filter((m) => m.view_once === true);
+    expect(
+      viewOnceScheduled.length,
+      "at least one scheduled message must have view_once=true",
+    ).toBeGreaterThan(0);
+  });
+
+  test("Scheduled + view-once + expiry: all three fields correct", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+    const expiresIn = 7200;
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: {
+          text: `sched-vo-exp-${Date.now()}`,
+          send_at: deliverAt,
+          view_once: true,
+          expires_in_seconds: expiresIn,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled).toBe(true);
+    expect(body.view_once).toBe(true);
+    expect(body.expires_at).toBe(deliverAt + expiresIn);
   });
 });
