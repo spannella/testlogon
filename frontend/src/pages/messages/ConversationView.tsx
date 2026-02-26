@@ -192,6 +192,8 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
       lock_price_cents?: number;
       lock_description?: string;
       tip_amount_cents?: number;
+      tip_payment_method_id?: string;
+      send_at?: number;
     }) => {
       const fd = new FormData();
       fd.append("file", args.file);
@@ -202,9 +204,14 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
         lock_price_cents: args.lock_price_cents,
         lock_description: args.lock_description,
         tip_amount_cents: args.tip_amount_cents,
+        tip_payment_method_id: args.tip_payment_method_id,
+        send_at: args.send_at,
       });
     },
     onMutate: async (args) => {
+      // Skip optimistic update for scheduled image messages
+      if (args.send_at) return { snapshot: undefined, optimisticUrl: undefined, isScheduled: true };
+
       await queryClient.cancelQueries({ queryKey: ["messages", convoId] });
       const snapshot = queryClient.getQueryData(["messages", convoId]);
 
@@ -237,11 +244,23 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
         },
       );
 
-      return { snapshot, optimisticUrl: optimistic.image?.url };
+      return { snapshot, optimisticUrl: optimistic.image?.url, isScheduled: false };
     },
-    onSuccess: (_data, _args, context) => {
-      // Revoke the temporary object URL if we created one
+    onSuccess: (_data, args, context) => {
       if (context?.optimisticUrl) URL.revokeObjectURL(context.optimisticUrl);
+      if (context?.isScheduled) {
+        const scheduledDate = new Date((args.send_at ?? 0) * 1000);
+        toast.success(
+          `Image scheduled for ${scheduledDate.toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            timeZoneName: "short",
+          })}`,
+        );
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
     },
@@ -443,6 +462,8 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
           lock_price_cents: options?.lock_price_cents,
           lock_description: options?.lock_description,
           tip_amount_cents: options?.tip_amount_cents,
+          tip_payment_method_id: options?.tip_payment_method_id,
+          send_at: options?.send_at,
         })}
         sending={sendText.isPending || sendImage.isPending}
         onKeystroke={onKeystroke}

@@ -98,6 +98,7 @@ export default function Register() {
   const [totpCode, setTotpCode] = React.useState("");
   const [totpCode2, setTotpCode2] = React.useState("");
   const [totpVerified, setTotpVerified] = React.useState(false);
+  const [recoveryCodes, setRecoveryCodes] = React.useState<string[]>([]);
   const [showPassword, setShowPassword] = React.useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = React.useState(false);
 
@@ -452,16 +453,18 @@ export default function Register() {
     }
   };
 
-  const handleSmsConfirm = async () => {
+  const handleSmsConfirm = async (codeOverride?: string) => {
     if (!smsChallengeId) {
       setMfaError("Send a verification code first.");
       return;
     }
+    const finalCode = codeOverride ?? smsCode;
     setMfaLoading(true);
     setMfaError(null);
     try {
-      await confirmSmsEnrollment({ challenge_id: smsChallengeId, code: smsCode });
+      const resp = await confirmSmsEnrollment({ challenge_id: smsChallengeId, code: finalCode });
       setSmsVerified(true);
+      if (resp.recovery_codes?.length) setRecoveryCodes(resp.recovery_codes);
     } catch (err) {
       if (err instanceof ApiError) {
         setMfaError(err.detail || "Invalid SMS code.");
@@ -473,15 +476,17 @@ export default function Register() {
     }
   };
 
-  const handleTotpConfirm = async () => {
+  const handleTotpConfirm = async (code2Override?: string) => {
     if (!totpEnrollData) {
       return;
     }
+    const finalCode2 = code2Override ?? totpCode2;
     setMfaLoading(true);
     setMfaError(null);
     try {
-      await confirmTotpEnrollment({ device_id: totpEnrollData.device_id, totp_code: totpCode, totp_code2: totpCode2 });
+      const resp = await confirmTotpEnrollment({ device_id: totpEnrollData.device_id, totp_code: totpCode, totp_code2: finalCode2 });
       setTotpVerified(true);
+      if (resp.recovery_codes?.length) setRecoveryCodes(resp.recovery_codes);
     } catch (err) {
       if (err instanceof ApiError) {
         setMfaError(err.detail || "Invalid TOTP code.");
@@ -927,7 +932,7 @@ export default function Register() {
                             <OtpInput
                               value={smsCode}
                               onChange={setSmsCode}
-                              onComplete={() => { void handleSmsConfirm(); }}
+                              onComplete={(val) => { void handleSmsConfirm(val); }}
                               disabled={mfaLoading}
                               autoFocus
                             />
@@ -935,7 +940,7 @@ export default function Register() {
                           <Button
                             type="button"
                             className="w-full"
-                            onClick={() => { void handleSmsConfirm(); }}
+                            onClick={() => { void handleSmsConfirm(smsCode); }}
                             disabled={mfaLoading || smsCode.length !== 6}
                           >
                             Verify SMS code
@@ -990,14 +995,14 @@ export default function Register() {
                               <OtpInput
                                 value={totpCode2}
                                 onChange={setTotpCode2}
-                                onComplete={() => { void handleTotpConfirm(); }}
+                                onComplete={(val) => { void handleTotpConfirm(val); }}
                                 disabled={mfaLoading}
                               />
                             </div>
                             <Button
                               type="button"
                               className="w-full"
-                              onClick={() => { void handleTotpConfirm(); }}
+                              onClick={() => { void handleTotpConfirm(totpCode2); }}
                               disabled={mfaLoading || totpCode.length !== 6 || totpCode2.length !== 6}
                             >
                               Verify authenticator
@@ -1012,6 +1017,35 @@ export default function Register() {
                   </div>
                 )}
               </CardContent>
+              {recoveryCodes.length > 0 && (
+                <div className="mx-6 mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3">
+                  <p className="mb-2 text-sm font-semibold text-amber-900">Save your recovery codes</p>
+                  <p className="mb-2 text-xs text-amber-800">
+                    Store these codes somewhere safe. Each can be used once to regain access if you lose your MFA device.
+                  </p>
+                  <div className="grid grid-cols-2 gap-1 font-mono text-xs">
+                    {recoveryCodes.map((code) => (
+                      <span key={code} className="rounded bg-amber-100 px-2 py-0.5 text-center text-amber-900">{code}</span>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="mt-2 text-xs text-amber-700 underline hover:text-amber-900"
+                    onClick={() => {
+                      const text = `Recovery Codes\n\n${recoveryCodes.join("\n")}\n\nGenerated: ${new Date().toISOString()}`;
+                      const blob = new Blob([text], { type: "text/plain" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = "recovery-codes.txt";
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                  >
+                    Download as .txt
+                  </button>
+                </div>
+              )}
               <CardFooter className="flex flex-col gap-3">
                 <Button
                   type="button"

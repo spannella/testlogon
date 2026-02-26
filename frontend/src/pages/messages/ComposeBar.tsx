@@ -23,6 +23,8 @@ interface ComposeBarProps {
     lock_price_cents?: number;
     lock_description?: string;
     tip_amount_cents?: number;
+    tip_payment_method_id?: string;
+    send_at?: number;
   }) => void;
   onSendVideoAttachment?: (file: File, options?: { consumption_policy?: "none" | "view_once" }) => void;
   onSendAudioRecording?: (file: File, options?: { consumption_policy?: "none" | "listen_once" }) => void;
@@ -61,6 +63,7 @@ export function ComposeBar({
   const [lockDescription, setLockDescription] = React.useState("");
   const [tipEnabled, setTipEnabled] = React.useState(false);
   const [tipAmount, setTipAmount] = React.useState("");
+  const [tipPaymentMethodId, setTipPaymentMethodId] = React.useState<string | null>(null);
   const [scheduledInput, setScheduledInput] = React.useState<string>("");  // raw "YYYY-MM-DDTHH:mm"
   const [scheduledAt, setScheduledAt] = React.useState<Date | null>(null);
   const [scheduleOpen, setScheduleOpen] = React.useState(false);
@@ -97,7 +100,7 @@ export function ComposeBar({
   const onceAudioEnabled = isMessagingListenOnceAudioEnabled();
 
   const { data: paymentMethods = [] } = useQuery<PaymentMethod[]>({
-    queryKey: ["payment-methods"],
+    queryKey: ["billing", "payment-methods"],
     queryFn: getPaymentMethods,
     staleTime: 5 * 60 * 1000,
   });
@@ -109,8 +112,8 @@ export function ComposeBar({
     }
   };
 
-  const buildExtraPayload = (): Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents"> => {
-    const extra: Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents"> = {};
+  const buildExtraPayload = (): Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents" | "tip_payment_method_id"> => {
+    const extra: Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents" | "tip_payment_method_id"> = {};
     if (lockEnabled) {
       const cents = Math.round(parseFloat(lockPrice) * 100);
       if (!isNaN(cents) && cents > 0) extra.lock_price_cents = cents;
@@ -119,6 +122,7 @@ export function ComposeBar({
     if (tipEnabled) {
       const cents = Math.round(parseFloat(tipAmount) * 100);
       if (!isNaN(cents) && cents > 0) extra.tip_amount_cents = cents;
+      if (tipPaymentMethodId) extra.tip_payment_method_id = tipPaymentMethodId;
     }
     if (scheduledAt) {
       extra.send_at = Math.floor(scheduledAt.getTime() / 1000);
@@ -180,7 +184,7 @@ export function ComposeBar({
       resetTextArea();
       if (encryptEnabled) { setPassword(""); setConfirmPassword(""); }
       if (lockEnabled) { setLockEnabled(false); setLockPrice(""); setLockDescription(""); }
-      if (tipEnabled) { setTipEnabled(false); setTipAmount(""); }
+      if (tipEnabled) { setTipEnabled(false); setTipAmount(""); setTipPaymentMethodId(null); }
       if (scheduledAt) { setScheduledAt(null); setScheduledInput(""); setScheduleOpen(false); }
       if (viewOnceText) setViewOnceText(false);
       if (expiresEnabled) { setExpiresEnabled(false); setExpiresDuration("3600"); }
@@ -196,6 +200,8 @@ export function ComposeBar({
         lock_price_cents: extraPayload.lock_price_cents,
         lock_description: extraPayload.lock_description,
         tip_amount_cents: extraPayload.tip_amount_cents,
+        tip_payment_method_id: tipPaymentMethodId ?? undefined,
+        send_at: extraPayload.send_at,
       });
       clearPendingFile();
       resetTextState();
@@ -258,19 +264,29 @@ export function ComposeBar({
   return (
     <div className="border-t border-border bg-card px-4 py-3">
       <div className="mb-2 flex items-center justify-between">
-        <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={encryptEnabled}
-            onChange={(e) => {
-              setEncryptEnabled(e.target.checked);
-              setEncryptError(null);
-            }}
-            disabled={disabled || sending || encrypting || !featureEnabled}
-          />
-          <Lock className="h-3.5 w-3.5" />
-          Encrypt message
-        </label>
+        <TooltipProvider delayDuration={0}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <label className={cn("inline-flex items-center gap-2 text-xs text-muted-foreground", !!pendingFile && "cursor-not-allowed opacity-50")}>
+                <input
+                  type="checkbox"
+                  checked={encryptEnabled}
+                  onChange={(e) => {
+                    setEncryptEnabled(e.target.checked);
+                    setEncryptError(null);
+                  }}
+                  disabled={disabled || sending || encrypting || !featureEnabled || !!pendingFile}
+                  className={cn(!!pendingFile && "pointer-events-none")}
+                />
+                <Lock className="h-3.5 w-3.5" />
+                Encrypt message
+              </label>
+            </TooltipTrigger>
+            {!!pendingFile && (
+              <TooltipContent>Encryption applies to text messages only</TooltipContent>
+            )}
+          </Tooltip>
+        </TooltipProvider>
         {encryptEnabled && (
           <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
             Encrypted send enabled
@@ -343,16 +359,18 @@ export function ComposeBar({
 
       {/* View-once text + Lock + Tip + Expiry controls row */}
       <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <label className="inline-flex items-center gap-1.5">
-          <input
-            type="checkbox"
-            checked={viewOnceText}
-            onChange={(e) => setViewOnceText(e.target.checked)}
-            disabled={disabled || sending || encrypting || !!pendingFile}
-          />
-          <Eye className="h-3.5 w-3.5" />
-          View once
-        </label>
+        {!pendingFile && (
+          <label className="inline-flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={viewOnceText}
+              onChange={(e) => setViewOnceText(e.target.checked)}
+              disabled={disabled || sending || encrypting}
+            />
+            <Eye className="h-3.5 w-3.5" />
+            View once
+          </label>
+        )}
         <label className="inline-flex items-center gap-1.5">
           <input
             type="checkbox"
@@ -440,8 +458,8 @@ export function ComposeBar({
         </div>
       )}
       {tipEnabled && (
-        <div className="mb-2 rounded-md border border-green-200 bg-green-50 p-2 text-xs">
-          <p className="mb-1.5 font-medium text-green-800">Attach a tip to this message</p>
+        <div className="mb-2 rounded-md border border-green-200 bg-green-50 p-2 text-xs space-y-2">
+          <p className="font-medium text-green-800">Attach a tip to this message</p>
           <div className="flex items-center gap-2">
             <label className="shrink-0 text-green-700">Amount ($)</label>
             <input
@@ -455,6 +473,34 @@ export function ComposeBar({
               disabled={disabled || sending}
             />
           </div>
+          {paymentMethods.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-green-700">Pay with:</p>
+              <div className="space-y-1">
+                {paymentMethods.map((pm) => {
+                  const label = pm.brand
+                    ? `${pm.brand.charAt(0).toUpperCase() + pm.brand.slice(1)} •••• ${pm.last4}`
+                    : (pm.label ?? pm.method_type);
+                  const isSelected = tipPaymentMethodId === pm.payment_method_id;
+                  return (
+                    <button
+                      key={pm.payment_method_id}
+                      type="button"
+                      onClick={() => setTipPaymentMethodId(pm.payment_method_id)}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded border px-2 py-1 text-xs transition-colors hover:bg-green-100",
+                        isSelected ? "border-green-500 bg-green-100" : "border-green-200 bg-white",
+                      )}
+                    >
+                      <span className="flex-1 text-left">{label}</span>
+                      {pm.is_default && <span className="text-[10px] text-green-600">Default</span>}
+                      {isSelected && <span className="text-[10px] font-bold text-green-700">✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -690,7 +736,7 @@ export function ComposeBar({
           size="icon"
           className="h-9 w-9 shrink-0 rounded-full"
           onClick={() => void handleSubmit()}
-          disabled={disabled || sending || encrypting || (!text.trim() && !pendingFile)}
+          disabled={disabled || sending || encrypting || (!text.trim() && !pendingFile) || (tipEnabled && (!tipAmount || !tipPaymentMethodId))}
           aria-label="Send message"
         >
           {sending || encrypting ? (

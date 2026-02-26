@@ -157,6 +157,15 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
     return () => clearInterval(id);
   }, [message.expires_at]);
 
+  // When the message expires client-side, refresh both messages and conversations
+  // so the backend expired state propagates to the sidebar preview.
+  useEffect(() => {
+    if (expiryCountdown === "expired") {
+      void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    }
+  }, [expiryCountdown, queryClient, conversationId]);
+
   const deleteMut = useMutation({
     mutationFn: () => deleteMessage(conversationId, message.message_id),
     onSuccess: () => {
@@ -195,6 +204,8 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
       toast.success("Message unlocked!");
       setUnlockDialogOpen(false);
       void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+      // Also refresh sidebar so the preview shows the unlocked text instead of "[Locked message]"
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
     },
     onError: () => toast.error("Failed to unlock message"),
   });
@@ -466,7 +477,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             </div>
           )}
 
-          {expiryCountdown === "expired" ? (
+          {(expiryCountdown === "expired" || message.expired) ? (
             <div className="flex items-center gap-1.5 rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground italic">
               <EyeOff className="h-3.5 w-3.5 shrink-0" />
               This message has expired
@@ -621,7 +632,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             <p className="whitespace-pre-wrap break-words text-sm">{message.text}</p>
           ) : null}
 
-          {message.kind === "image" && (
+          {message.kind === "image" && expiryCountdown !== "expired" && !message.expired && (
             message.consumption_policy === "view_once" && !isOwn ? (
               // View-once image for recipient: show tap-to-view, not the actual image
               message.consumption_state === "consumed" || !message.image?.url ? (
@@ -671,7 +682,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             ) : null
           )}
 
-          {isFileKind && typeof message.file?.name === "string" && (
+          {isFileKind && expiryCountdown !== "expired" && !message.expired && typeof message.file?.name === "string" && (
             <FileMessageCard
               fileName={message.file.name}
               fileUrl={typeof message.file?.url === "string" ? message.file.url : undefined}
@@ -733,7 +744,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 expires {expiryCountdown}
               </span>
             )}
-            {message.view_once && (
+            {message.view_once && message.kind === "text" && (
               <span className={cn(
                 "rounded px-1",
                 isOwn ? "bg-purple-400/30 text-purple-200" : "bg-purple-500/20 text-purple-600",

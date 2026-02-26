@@ -694,6 +694,7 @@ export interface SendTextMessageReq {
   view_once?: boolean;
   expires_in_seconds?: number;
   tip_amount_cents?: number;
+  tip_payment_method_id?: string;
 }
 
 export interface SendImageMessageReq {
@@ -713,6 +714,8 @@ export interface SendImageMessageReq {
   lock_price_cents?: number;
   lock_description?: string;
   tip_amount_cents?: number;
+  tip_payment_method_id?: string;
+  send_at?: number;
 }
 
 export interface SendTipReq {

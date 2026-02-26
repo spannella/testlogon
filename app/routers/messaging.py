@@ -645,6 +645,7 @@ class SendTextMessageIn(BaseModel):
     encryption: Optional[MessageEncryptionEnvelope] = None
     send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)  # e.g. 500 = $5.00
+    tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
     expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=604800)  # 10s–7d
     view_once: bool = False
     lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
@@ -718,6 +719,8 @@ class CreateImageMessageIn(BaseModel):
     lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
     lock_description: Optional[str] = Field(default=None, max_length=200)
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
+    tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
+    send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
 
 
 class MarkReadIn(BaseModel):
@@ -1891,7 +1894,17 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
             raw_image = dict(raw_image)
             raw_image["url"] = f"/mock/s3/{_bucket}/{_url_quote(_key, safe='/')}"
     image = raw_image
-    file_ = None if content_hidden else merged_item.get("file")
+    raw_file = None if content_hidden else merged_item.get("file")
+    # In DEV_MODE, add a directly-accessible URL to file messages (PDF, audio, video)
+    # so the browser can open them without needing a real AWS S3 endpoint.
+    if raw_file and S.dev_mode and not raw_file.get("url"):
+        _bucket_f = raw_file.get("bucket", "")
+        _key_f = raw_file.get("key", "")
+        if _bucket_f and _key_f:
+            from urllib.parse import quote as _url_quote_f
+            raw_file = dict(raw_file)
+            raw_file["url"] = f"/mock/s3/{_bucket_f}/{_url_quote_f(_key_f, safe='/')}"
+    file_ = raw_file
     preview = None if content_hidden else merged_item.get("preview")
 
     return MessageOut(
@@ -4171,6 +4184,25 @@ def send_text_message(
         item["tip_amount_cents"] = tip_amount_cents
         item["tip_currency"] = tip_currency
         item["tip_payment_id"] = tip_payment_id
+        # Write billing ledger debit entry for the tip attached to the message
+        try:
+            billing_tbl_tip = ddb.Table(S.billing_table_name)
+            _tip_led_id = uuid.uuid4().hex
+            billing_tbl_tip.put_item(Item={
+                "pk": f"USER#{user_id}",
+                "sk": f"LEDGER#{ts}#{_tip_led_id}",
+                "entry_id": _tip_led_id,
+                "ts": ts,
+                "type": "debit",
+                "amount_cents": tip_amount_cents,
+                "currency": "USD",
+                "state": "settled",
+                "reason": "Tip attached to message",
+                "meta": {"conversation_id": conversation_id, "message_id": mid, "tip_payment_id": tip_payment_id,
+                         "payment_method_id": inp.tip_payment_method_id},
+            })
+        except Exception:
+            pass  # Best-effort; do not fail the send if billing write fails
 
     # Validate: lock_price_cents and tip_amount_cents cannot both be set
     if inp.lock_price_cents and inp.tip_amount_cents:
@@ -4319,9 +4351,17 @@ def create_image_message(
     _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
+    # Validate send_at: must be in the future (at least 5 seconds from now)
+    ts = now_ts()
+    deliver_at_img: Optional[int] = None
+    is_scheduled_img = False
+    if inp.send_at is not None:
+        if inp.send_at <= ts + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        deliver_at_img = inp.send_at
+        is_scheduled_img = True
 
     mid = "m_" + new_id()
-    ts = now_ts()
 
     item: Dict[str, Any] = {
         "conversation_id": conversation_id,
@@ -4367,15 +4407,39 @@ def create_image_message(
         if inp.lock_description:
             item["lock_description"] = inp.lock_description
 
+    # Scheduling
+    if is_scheduled_img:
+        item["status"] = "scheduled"
+        item["deliver_at"] = deliver_at_img
+
     # Tip attached to message
     tip_amount_cents: Optional[int] = None
     if inp.tip_amount_cents:
         if inp.lock_price_cents:
             raise HTTPException(400, "Cannot combine lock_price_cents with tip_amount_cents")
         tip_amount_cents = inp.tip_amount_cents
+        _img_tip_payment_id = "tip_" + new_id()
         item["tip_amount_cents"] = tip_amount_cents
         item["tip_currency"] = "USD"
-        item["tip_payment_id"] = "tip_" + new_id()
+        item["tip_payment_id"] = _img_tip_payment_id
+        # Write billing ledger debit entry for the tip attached to the message
+        try:
+            billing_tbl_tip_img = ddb.Table(S.billing_table_name)
+            _img_tip_led_id = uuid.uuid4().hex
+            billing_tbl_tip_img.put_item(Item={
+                "pk": f"USER#{user_id}",
+                "sk": f"LEDGER#{ts}#{_img_tip_led_id}",
+                "entry_id": _img_tip_led_id,
+                "ts": ts,
+                "type": "debit",
+                "amount_cents": tip_amount_cents,
+                "currency": "USD",
+                "state": "settled",
+                "reason": "Tip attached to message",
+                "meta": {"conversation_id": conversation_id, "message_id": mid, "tip_payment_id": _img_tip_payment_id},
+            })
+        except Exception:
+            pass  # Best-effort; do not fail the send if billing write fails
 
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
@@ -4388,36 +4452,38 @@ def create_image_message(
 
     tbl_msgs.put_item(Item=item)
     _sync_gallery_index_message(item)
-    _bump_unread_counts(conversation_id, user_id, participants)
-    _record_delivery_receipts(conversation_id, mid, user_id, participants)
-    _put_message_consumption_records(
-        conversation_id=conversation_id,
-        message_id=mid,
-        sender_id=user_id,
-        participants=participants,
-        consumption_policy=inp.consumption_policy,
-        media_kind="image",
-        created_at=ts,
-    )
 
-    _preview = inp.caption or ("[file]" if inp.kind == "file" else "[image]")
-    tbl_convos.update_item(
-        Key={"conversation_id": conversation_id},
-        UpdateExpression="SET last_message_at = :ts, last_message_preview = :p",
-        ExpressionAttributeValues={":ts": ts, ":p": _preview},
-    )
+    if not is_scheduled_img:
+        _bump_unread_counts(conversation_id, user_id, participants)
+        _record_delivery_receipts(conversation_id, mid, user_id, participants)
+        _put_message_consumption_records(
+            conversation_id=conversation_id,
+            message_id=mid,
+            sender_id=user_id,
+            participants=participants,
+            consumption_policy=inp.consumption_policy,
+            media_kind="image",
+            created_at=ts,
+        )
 
-    fanout_event_to_conversation(
-        conversation_id=conversation_id,
-        sender_id=user_id,
-        event_type="message:new",
-        payload={
-            "message_id": mid,
-            "created_at": ts,
-            "message": _serialize_message_event_payload(item, user_id),
-        },
-        respect_mute=False,
-    )
+        _preview = inp.caption or ("[file]" if inp.kind == "file" else "[image]")
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+            ExpressionAttributeValues={":ts": ts, ":p": _preview, ":mid": mid},
+        )
+
+        fanout_event_to_conversation(
+            conversation_id=conversation_id,
+            sender_id=user_id,
+            event_type="message:new",
+            payload={
+                "message_id": mid,
+                "created_at": ts,
+                "message": _serialize_message_event_payload(item, user_id),
+            },
+            respect_mute=False,
+        )
 
     message = MessageOut(
         conversation_id=conversation_id,
@@ -4440,8 +4506,11 @@ def create_image_message(
         is_unlocked=True,  # sender always sees their own content
         tip_amount_cents=tip_amount_cents,
         tip_currency="USD" if tip_amount_cents else None,
+        scheduled=is_scheduled_img,
+        deliver_at=deliver_at_img,
     )
-    message = _apply_message_receipts(message, item, participants)
+    if not is_scheduled_img:
+        message = _apply_message_receipts(message, item, participants)
     audit_event(
         "messaging_message_sent",
         user_id,

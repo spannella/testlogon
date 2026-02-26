@@ -135,6 +135,8 @@ export const sendImageMessage = async (
     lock_price_cents?: number;
     lock_description?: string;
     tip_amount_cents?: number;
+    tip_payment_method_id?: string;
+    send_at?: number;
   },
 ) => {
   const file = formData.get("file");
@@ -176,6 +178,8 @@ export const sendImageMessage = async (
   if (options?.lock_price_cents) payload.lock_price_cents = options.lock_price_cents;
   if (options?.lock_description) payload.lock_description = options.lock_description;
   if (options?.tip_amount_cents) payload.tip_amount_cents = options.tip_amount_cents;
+  if (options?.tip_payment_method_id) payload.tip_payment_method_id = options.tip_payment_method_id;
+  if (options?.send_at) payload.send_at = options.send_at;
 
   const res = await api.post<Message>(`/messaging/conversations/${conversationId}/messages/image`, payload);
   return adaptMessage(res);
