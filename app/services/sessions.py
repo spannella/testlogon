@@ -346,8 +346,6 @@ async def require_ui_session(
         ):
             if compute_required_factors(user_sub):
                 require_fresh_mfa({"user_sub": resolved_user_sub, "session_id": session_id})
-            else:
-                raise HTTPException(401, "Re-auth required")
 
     csrf_header_name = getattr(S, "ui_csrf_header_name", "")
     csrf_cookie_name = getattr(S, "ui_csrf_cookie_name", "")

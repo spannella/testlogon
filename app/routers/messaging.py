@@ -552,6 +552,7 @@ class ConversationOut(BaseModel):
     active_agent_claimed_at: Optional[int] = None
     assignment_version: Optional[int] = None
     participants: List["ParticipantOut"] = Field(default_factory=list)
+    last_message: Optional["MessageOut"] = None
 
 
 class RoutingEventOut(BaseModel):
@@ -791,8 +792,8 @@ class ParticipantOut(BaseModel):
     profile_photo_url: Optional[str] = None
 
 
-# Rebuild ConversationOut now that ParticipantOut is fully defined
-ConversationOut.model_rebuild()
+# Partial rebuild now that ParticipantOut is defined; MessageOut not yet defined.
+ConversationOut.model_rebuild(raise_errors=False)
 
 
 class ReactIn(BaseModel):
@@ -960,6 +961,9 @@ class MessageOut(BaseModel):
     lock_description: Optional[str] = None
     is_unlocked: bool = False              # viewer-specific: True once paid
 
+
+# Rebuild ConversationOut now that MessageOut is also fully defined
+ConversationOut.model_rebuild()
 
 GalleryType = Literal["image", "video", "file", "link"]
 GALLERY_TYPES: set[str] = {"image", "video", "file", "link"}
@@ -3250,6 +3254,20 @@ def list_conversations(user_id: str = Depends(get_messaging_user_id)):
             continue
         convo_out = _conversation_out_from_items(conversation_id=cid, convo=convo, participant=p, viewer_user_id=user_id)
         convo_out.participants = _get_conversation_participants_enriched(cid, profile_cache)
+
+        # Include the last message object so the conversation list can render
+        # accurate preview text for expired/view-once/locked messages.
+        last_msg_id = convo.get("last_message_id")
+        if last_msg_id:
+            try:
+                last_msg_item = tbl_msgs.get_item(
+                    Key={"conversation_id": cid, "message_id": last_msg_id}
+                ).get("Item")
+                if last_msg_item:
+                    convo_out.last_message = _message_out_from_item(last_msg_item, user_id)
+            except Exception:
+                pass  # Best-effort; don't fail if last message can't be fetched
+
         out.append(convo_out)
 
     out.sort(key=lambda x: (x.last_message_at or 0, x.created_at), reverse=True)
@@ -4200,8 +4218,8 @@ def send_text_message(
         preview_text = "[Encrypted message]" if is_encrypted else message_text[:140]
         tbl_convos.update_item(
             Key={"conversation_id": conversation_id},
-            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p",
-            ExpressionAttributeValues={":ts": ts, ":p": preview_text},
+            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+            ExpressionAttributeValues={":ts": ts, ":p": preview_text, ":mid": mid},
         )
 
     message = MessageOut(
@@ -5821,6 +5839,30 @@ def send_message_tip(
         ExpressionAttributeValues=expr_values,
     )
 
+    # Write billing ledger debit entry for the tip
+    try:
+        billing_tbl_led = ddb.Table(S.billing_table_name)
+        led_entry_id = uuid.uuid4().hex
+        led_sk = f"LEDGER#{ts}#{led_entry_id}"
+        billing_tbl_led.put_item(Item={
+            "pk": f"USER#{user_id}",
+            "sk": led_sk,
+            "entry_id": led_entry_id,
+            "ts": ts,
+            "type": "debit",
+            "amount_cents": inp.amount_cents,
+            "currency": inp.currency,
+            "state": "settled",
+            "reason": "Tip sent",
+            "meta": {
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "tip_payment_id": tip_payment_id,
+            },
+        })
+    except Exception:
+        pass  # Best-effort ledger write; do not fail the tip if billing is unavailable
+
     fanout_event_to_conversation(
         conversation_id=conversation_id,
         sender_id=user_id,
@@ -5900,6 +5942,7 @@ def unlock_message(
 
     # Dev-mode: mock payment; production would call a real payment processor
     unlock_payment_id = "unlock_" + new_id()
+    unlock_ts = now_ts()
 
     tbl_msgs.update_item(
         Key={"conversation_id": conversation_id, "message_id": message_id},
@@ -5907,6 +5950,30 @@ def unlock_message(
         ExpressionAttributeNames={"#uid": user_id},
         ExpressionAttributeValues={":pid": unlock_payment_id},
     )
+
+    # Write billing ledger debit entry for the unlock
+    try:
+        billing_tbl_led = ddb.Table(S.billing_table_name)
+        led_entry_id = uuid.uuid4().hex
+        led_sk = f"LEDGER#{unlock_ts}#{led_entry_id}"
+        billing_tbl_led.put_item(Item={
+            "pk": f"USER#{user_id}",
+            "sk": led_sk,
+            "entry_id": led_entry_id,
+            "ts": unlock_ts,
+            "type": "debit",
+            "amount_cents": amount_cents,
+            "currency": "USD",
+            "state": "settled",
+            "reason": "Message unlock",
+            "meta": {
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "unlock_payment_id": unlock_payment_id,
+            },
+        })
+    except Exception:
+        pass  # Best-effort ledger write
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,

@@ -15,7 +15,7 @@ import {
 import { EmptyState } from "@/components/shared/EmptyState";
 import { cn } from "@/lib/utils";
 import { getConversations, startConversation, startGroupConversation } from "@/api/endpoints/messaging";
-import type { Conversation, UserSearchResult } from "@/api/types";
+import type { Conversation, Message, UserSearchResult } from "@/api/types";
 import { PresenceDot } from "./PresenceDot";
 import { UserSearch } from "./UserSearch";
 import { useAuthStore } from "@/stores/authStore";
@@ -178,7 +178,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
                         "truncate text-xs",
                         unread ? "font-medium text-foreground" : "text-muted-foreground",
                       )}>
-                        {lastMsg?.text ?? convo.last_message_preview ?? "No messages yet"}
+                        {getPreviewText(lastMsg, convo)}
                       </span>
                       {unread && (
                         <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
@@ -284,6 +284,14 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────
+
+function getPreviewText(lastMsg: Message | undefined, convo: Conversation): string {
+  if (!lastMsg) return convo.last_message_preview ?? "No messages yet";
+  if (lastMsg.expired) return "[This message has expired]";
+  if (lastMsg.view_once && lastMsg.text === null) return "[Already viewed]";
+  if (lastMsg.locked && !lastMsg.is_unlocked) return "[Locked message]";
+  return lastMsg.text ?? convo.last_message_preview ?? "No messages yet";
+}
 
 function conversationName(c: Conversation, currentUserId?: string): string {
   if (c.title) return c.title;

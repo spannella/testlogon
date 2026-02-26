@@ -134,7 +134,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   const viewOnceTextRevealed = viewedOnceIds?.has(message.message_id) ?? false;
 
   const { data: paymentMethods = [] } = useQuery<PaymentMethod[]>({
-    queryKey: ["payment-methods"],
+    queryKey: ["billing", "payment-methods"],
     queryFn: getPaymentMethods,
     staleTime: 5 * 60 * 1000,
     enabled: !isOwn, // only needed for recipient bubbles (Send Tip, Unlock)
@@ -456,7 +456,10 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
 
           {onceMediaLabel && (
             <div className="mb-1 text-[10px] uppercase tracking-wide">
-              <span className="rounded-full bg-background/70 px-2 py-0.5 font-semibold">{onceMediaLabel}</span>
+              <span className={cn(
+                "rounded-full px-2 py-0.5 font-semibold",
+                isOwn ? "bg-primary-foreground/20 text-primary-foreground" : "bg-background/70",
+              )}>{onceMediaLabel}</span>
               {message.consumption_state && (
                 <span className="ml-2 text-muted-foreground">{message.consumption_state}</span>
               )}
@@ -552,7 +555,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
           ) : message.lock_price_cents && isOwn ? (
             // Sender view: show lock badge + the original text they sent
             <div className="space-y-1.5">
-              <div className="inline-flex items-center gap-1.5 rounded-full bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-primary-foreground/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-foreground">
                 <Lock className="h-3 w-3" />
                 {`Locked · $${(message.lock_price_cents / 100).toFixed(2)}`}
               </div>
@@ -690,7 +693,10 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
           )}
 
           {message.tip_amount_cents && message.tip_amount_cents > 0 && (
-            <div className="mt-1 inline-flex items-center gap-1 rounded-full bg-green-500/20 px-2 py-0.5 text-xs font-medium text-green-700">
+            <div className={cn(
+              "mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium",
+              isOwn ? "bg-green-400/30 text-green-200" : "bg-green-500/20 text-green-700",
+            )}>
               <DollarSign className="h-3 w-3" />
               Tip: ${(message.tip_amount_cents / 100).toFixed(2)}
             </div>
@@ -720,11 +726,21 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
           )}>
             {(message.edited_at || message.edited) && <span>edited</span>}
             {expiryCountdown && (
-              <span className="rounded bg-orange-500/20 px-1 text-orange-600">
+              <span className={cn(
+                "rounded px-1",
+                isOwn ? "bg-orange-400/30 text-orange-200" : "bg-orange-500/20 text-orange-600",
+              )}>
                 expires {expiryCountdown}
               </span>
             )}
-            {message.view_once && <span className="rounded bg-purple-500/20 px-1 text-purple-600">view once</span>}
+            {message.view_once && (
+              <span className={cn(
+                "rounded px-1",
+                isOwn ? "bg-purple-400/30 text-purple-200" : "bg-purple-500/20 text-purple-600",
+              )}>
+                view once
+              </span>
+            )}
             <span>{time}</span>
           </div>
         </div>

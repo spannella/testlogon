@@ -32,6 +32,9 @@ import { execSync } from "child_process";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
+// Python interpreter that has boto3 installed.
+const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+
 const BASE = "http://localhost:3000";
 const API  = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
@@ -141,6 +144,98 @@ async function apiGetBearer(
   return req.get(`${API}${path}`, {
     headers: { Authorization: `Bearer ${userId}` },
   });
+}
+
+// ─── Payment method helpers ───────────────────────────────────────────────────
+
+/**
+ * Inject a test payment method for the given user directly into DynamoDB.
+ * Needed so that UI features gated on "has payment method" (Attach tip,
+ * Unlock for) become enabled without requiring a full billing flow.
+ */
+function injectPaymentMethod(userSub: string, pmId: string): void {
+  execSync(
+    `${PYTHON} -c "
+import boto3, os, time
+from pathlib import Path
+env_file = Path('/home/ubuntu/testlogon/.env.local')
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+ddb = boto3.resource(
+    'dynamodb',
+    endpoint_url=os.environ.get('DDB_ENDPOINT_URL', 'http://localhost:8001'),
+    region_name='us-east-1',
+    aws_access_key_id='test',
+    aws_secret_access_key='test',
+)
+tbl = ddb.Table('billing')
+pk = 'USER#${userSub}'
+pm_id = '${pmId}'
+sk = 'PM#' + pm_id
+tbl.put_item(Item={
+    'pk': pk,
+    'sk': sk,
+    'payment_method_id': pm_id,
+    'provider': 'stripe',
+    'provider_method_id': pm_id,
+    'method_type': 'card',
+    'label': 'Test Card ****4242',
+    'brand': 'visa',
+    'last4': '4242',
+    'exp_month': 12,
+    'exp_year': 2099,
+    'priority': 0,
+    'created_at': int(time.time()),
+})
+tbl.put_item(Item={
+    'pk': pk,
+    'sk': 'BILLING',
+    'autopay_enabled': False,
+    'currency': 'usd',
+    'default_payment_method_id': pm_id,
+})
+print('injected')
+"`,
+    { timeout: 10_000 },
+  );
+}
+
+/** Remove a test payment method from DynamoDB (best-effort cleanup). */
+function removePaymentMethod(userSub: string, pmId: string): void {
+  try {
+    execSync(
+      `${PYTHON} -c "
+import boto3, os
+from pathlib import Path
+env_file = Path('/home/ubuntu/testlogon/.env.local')
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+ddb = boto3.resource(
+    'dynamodb',
+    endpoint_url=os.environ.get('DDB_ENDPOINT_URL', 'http://localhost:8001'),
+    region_name='us-east-1',
+    aws_access_key_id='test',
+    aws_secret_access_key='test',
+)
+tbl = ddb.Table('billing')
+pk = 'USER#${userSub}'
+tbl.delete_item(Key={'pk': pk, 'sk': 'PM#${pmId}'})
+tbl.delete_item(Key={'pk': pk, 'sk': 'BILLING'})
+print('removed')
+"`,
+      { timeout: 10_000 },
+    );
+  } catch {
+    /* best-effort cleanup */
+  }
 }
 
 // ─── DM conversation bootstrap ───────────────────────────────────────────────
@@ -1192,7 +1287,19 @@ test.describe("11. Tips and locked messages", () => {
   let lockedMsgId: string; // Alice's API-locked message ID (Bob will unlock via API + UI)
   let tipMsgId: string;    // Alice's attached-tip message ID (for self-tip rejection test)
 
+  let _alicePmId: string;
+  let _bobPmId: string;
+
   test.beforeAll(async ({ browser, request }) => {
+    // Inject payment methods for Alice and Bob so that "Attach tip" and
+    // "Unlock for" UI features are enabled (they are gated on having a PM).
+    const aliceSub = getSessions()[ALICE_ID].user_sub;
+    const bobSub   = getSessions()[BOB_ID].user_sub;
+    _alicePmId = `pm-alice-${Date.now()}`;
+    _bobPmId   = `pm-bob-${Date.now()}`;
+    injectPaymentMethod(aliceSub, _alicePmId);
+    injectPaymentMethod(bobSub,   _bobPmId);
+
     // ── Alice's page ──
     alicePage = await browser.newPage();
     await openDmWithBob(alicePage); // also sets _dmConvoId
@@ -1228,6 +1335,12 @@ test.describe("11. Tips and locked messages", () => {
   });
 
   test.afterAll(async () => {
+    // Clean up the injected payment methods so other test sections that check
+    // "no payment method" behaviour still work correctly.
+    const aliceSub = getSessions()[ALICE_ID].user_sub;
+    const bobSub   = getSessions()[BOB_ID].user_sub;
+    if (_alicePmId) removePaymentMethod(aliceSub, _alicePmId);
+    if (_bobPmId)   removePaymentMethod(bobSub,   _bobPmId);
     await alicePage?.close();
     await bobPage?.close();
   });
@@ -1505,11 +1618,16 @@ test.describe("11. Tips and locked messages", () => {
     const lockedBubble = bobPage.locator("div.group").filter({ hasText: UI_LOCK_DESC }).last();
     const unlockBtn = lockedBubble.getByRole("button", { name: /unlock for/i });
     await expect(unlockBtn).toBeVisible({ timeout: 5000 });
+    // Clicking "Unlock for" opens a dialog (not a direct mutation).
+    await unlockBtn.click();
+    const dialog = bobPage.getByRole("dialog");
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    // "Pay & Unlock" confirms and calls the API.
     const unlockDone = bobPage.waitForResponse(
       (r) => r.url().includes("/unlock") && r.request().method() === "POST",
       { timeout: 10_000 },
     );
-    await unlockBtn.click();
+    await dialog.getByRole("button", { name: /pay.*unlock/i }).click();
     await unlockDone;
     // After successful unlock the query is invalidated; message text should appear
     await expect(

@@ -366,7 +366,7 @@ export function ComposeBar({
           <Lock className="h-3.5 w-3.5" />
           Require tip to unlock
         </label>
-        <TooltipProvider delayDuration={100}>
+        <TooltipProvider delayDuration={0}>
           <Tooltip>
             <TooltipTrigger asChild>
               <label className={cn("inline-flex items-center gap-1.5", !hasPaymentMethods && "cursor-not-allowed opacity-50")}>
@@ -379,6 +379,7 @@ export function ComposeBar({
                     if (e.target.checked) setLockEnabled(false);
                   }}
                   disabled={disabled || sending || encrypting || !hasPaymentMethods}
+                  className={cn(!hasPaymentMethods && "pointer-events-none")}
                 />
                 <DollarSign className="h-3.5 w-3.5" />
                 Attach tip

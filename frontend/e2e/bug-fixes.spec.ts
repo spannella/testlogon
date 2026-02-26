@@ -284,6 +284,34 @@ print('injected')
   );
 }
 
+/**
+ * Remove ALL payment methods for a user from DynamoDB (best-effort).
+ * Scans for every PM# item and the BILLING row and deletes them.
+ * Use this at the start of any test that asserts "no payment method present"
+ * to avoid pollution from previous test runs or other spec files.
+ */
+function cleanupAllPaymentMethods(userSub: string): void {
+  try {
+    execSync(
+      `${PYTHON} -c "
+${DDB_HELPER_PRELUDE.trim()}
+from boto3.dynamodb.conditions import Key
+tbl = ddb.Table('billing')
+pk = 'USER#${userSub}'
+resp = tbl.query(KeyConditionExpression=Key('pk').eq(pk))
+for item in resp['Items']:
+    sk = item['sk']
+    if sk.startswith('PM#') or sk == 'BILLING':
+        tbl.delete_item(Key={'pk': pk, 'sk': sk})
+print('cleaned up all PMs')
+"`,
+      { timeout: 10_000 },
+    );
+  } catch {
+    /* best-effort cleanup */
+  }
+}
+
 /** Remove the injected test payment method from DynamoDB (best-effort cleanup). */
 function removePaymentMethod(userSub: string, pmId: string): void {
   try {
@@ -424,8 +452,9 @@ test.describe("2. Expired message — stub visible without page reload", () => {
     await sleep(16_000);
 
     // WITHOUT any navigation, the "This message has expired" stub must appear.
+    // Use exact:true to avoid matching sidebar preview spans like "[This message has expired]".
     await expect(
-      page.getByText("This message has expired"),
+      page.getByText("This message has expired", { exact: true }),
     ).toBeVisible({ timeout: 5000 });
 
     // Original text must be gone.
@@ -542,7 +571,8 @@ test.describe("4. View-once text — 'Already viewed' stub after consuming", () 
     ).not.toBeVisible({ timeout: 5000 });
 
     // "Already viewed" stub must appear.
-    await expect(page.getByText("Already viewed")).toBeVisible({ timeout: 5000 });
+    // Use exact:true to avoid matching sidebar preview spans like "[Already viewed]".
+    await expect(page.getByText("Already viewed", { exact: true })).toBeVisible({ timeout: 5000 });
   });
 });
 
@@ -571,7 +601,11 @@ test.describe("5. Compose bar — Attach tip disabled when no payment method", (
 
   test("Hovering 'Attach tip' shows a tooltip about missing payment method", async () => {
     const tipLabel = page.locator("label", { hasText: "Attach tip" });
-    await tipLabel.hover();
+    await expect(tipLabel).toBeVisible({ timeout: 3000 });
+    // Hover over the text portion specifically — the label's left side has a
+    // disabled <input> which can absorb pointer events before they reach the
+    // Radix TooltipTrigger. Force-hover ensures the trigger fires.
+    await tipLabel.hover({ force: true });
     await expect(
       page.getByText(/add a payment method in billing/i),
     ).toBeVisible({ timeout: 4000 });
@@ -849,5 +883,454 @@ test.describe("8. API Keys — 'View key details' dialog and CIDR list UI", () =
 
     // Close the dialog.
     await page.keyboard.press("Escape");
+  });
+});
+
+// ─── 9. Bug fix: Device trust — no 401 for users without MFA ─────────────────
+
+test.describe("9. Device trust — API request succeeds for user without MFA", () => {
+  test("First API call from a fresh browser context succeeds (no MFA configured)", async ({ browser }) => {
+    test.setTimeout(15_000);
+
+    // A brand-new browser context simulates a new device.
+    // Before the fix: users with no MFA factors received 401 "Re-auth required"
+    // on new-device requests.  After the fix: they proceed normally.
+    const ctx = await browser.newContext();
+    const freshPage = await ctx.newPage();
+    try {
+      await injectAuth(freshPage, ALICE_ID);
+
+      // First API call to the backend (no prior warmup).
+      const session = getSessions()[ALICE_ID];
+      const resp = await freshPage.request.get(`${API}/messaging/conversations`, {
+        headers: { "x-csrf-token": session.csrf_token },
+      });
+
+      // Must NOT return 401.
+      expect(resp.status()).not.toBe(401);
+      expect(resp.ok()).toBe(true);
+    } finally {
+      await ctx.close();
+    }
+  });
+});
+
+// ─── 10. Bug fix: Expired message — sidebar preview shows stub ────────────────
+
+test.describe("10. Expired message — conversation list preview shows '[This message has expired]'", () => {
+  let page: Page;
+  const TS       = Date.now();
+  const MSG_TEXT = `exp-sidebar-${TS}`;
+
+  test.beforeAll(async ({ browser, request }) => {
+    page = await browser.newPage();
+    await openDmWithBob(page);
+
+    // Bob sends a message that expires in 12 seconds.
+    const r = await apiPostBearer(
+      request,
+      `/messaging/conversations/${_dmConvoId}/messages`,
+      { text: MSG_TEXT, expires_in_seconds: 12 },
+      BOB_ID,
+    );
+    if (!r.ok()) throw new Error(`Bob expiry send failed: ${r.status()} — ${await r.text()}`);
+
+    // Navigate to the conversation list so we see sidebar previews.
+    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
+    await page.waitForTimeout(800);
+  });
+
+  test.afterAll(async () => page?.close());
+
+  test("Sidebar preview changes to '[This message has expired]' after TTL elapses", async () => {
+    test.setTimeout(45_000);
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+    // Trigger a refetch so the conversation list picks up the new message.
+    await triggerRefetch(page);
+
+    // The most-recent-active DM with Bob should now show Bob's text as preview.
+    const convoRow = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
+    await expect(convoRow).toBeVisible({ timeout: 5000 });
+
+    // Wait for the 12-second TTL + 4-second buffer.
+    await sleep(16_000);
+
+    // Trigger another refetch after expiry.
+    await triggerRefetch(page);
+
+    // The sidebar preview must now show the stub text — NOT the original message.
+    // 15 s timeout: the backend refetch + React re-render can take several seconds.
+    await expect(convoRow).toContainText("[This message has expired]", { timeout: 15_000 });
+  });
+});
+
+// ─── 11. Bug fix: View-once consumed — sidebar preview shows stub ─────────────
+
+test.describe("11. View-once consumed — conversation list preview shows '[Already viewed]'", () => {
+  let page: Page;
+  const TS      = Date.now();
+  const VO_TEXT = `vo-sidebar-${TS}`;
+
+  test.beforeAll(async ({ browser, request }) => {
+    page = await browser.newPage();
+    await openDmWithBob(page);  // Alice opens the DM conversation
+
+    // Bob sends a view-once message (becomes the most-recent message).
+    const r = await apiPostBearer(
+      request,
+      `/messaging/conversations/${_dmConvoId}/messages`,
+      { text: VO_TEXT, view_once: true },
+      BOB_ID,
+    );
+    if (!r.ok()) throw new Error(`Bob view-once failed: ${r.status()} — ${await r.text()}`);
+
+    // Trigger refetch so Alice's conversation view picks up the message.
+    // Wait for the messages GET to complete before looking for the button.
+    const voMsgLoaded = page.waitForResponse(
+      (resp) =>
+        resp.url().includes(`/messaging/conversations/${_dmConvoId}/messages`) &&
+        resp.status() === 200,
+    );
+    await triggerRefetch(page);
+    await voMsgLoaded;
+
+    // Alice taps to view once.
+    await expect(
+      page.getByRole("button", { name: /tap to view once/i }).last(),
+    ).toBeVisible({ timeout: 10000 });
+
+    // ViewTracker sends POST /view for every VISIBLE non-view-once message when
+    // the IntersectionObserver fires (shortly after mount).  We wait 1.5 s here
+    // to ensure those automatic calls have completed, so the waitForResponse below
+    // only catches the click-triggered POST (which is the view-once consumption).
+    await page.waitForTimeout(1500);
+
+    // Register the listener for the view-once consumption POST BEFORE clicking.
+    const markViewedResp = page.waitForResponse(
+      (resp) =>
+        resp.url().includes(`/conversations/${_dmConvoId}/messages/`) &&
+        resp.url().endsWith("/view") &&
+        resp.request().method() === "POST" &&
+        resp.status() === 200,
+    );
+    await page.getByRole("button", { name: /tap to view once/i }).last().click();
+    // Waiting for the POST ensures view_once_seen is updated before we navigate.
+    await markViewedResp;
+
+    // Confirm content is visible (client-side reveal via viewedOnceIds).
+    await expect(
+      page.locator("p").filter({ hasText: VO_TEXT }),
+    ).toBeVisible({ timeout: 5000 });
+
+    // Navigate to the conversation list and wait for the conversations GET to finish.
+    // With view_once_seen updated, list_conversations returns text=null → "[Already viewed]".
+    const convoListLoaded = page.waitForResponse(
+      (resp) =>
+        resp.url().includes("/messaging/conversations") &&
+        !resp.url().includes("/messages") &&
+        resp.status() === 200,
+    );
+    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
+    await convoListLoaded;
+  });
+
+  test.afterAll(async () => page?.close());
+
+  test("Sidebar preview shows '[Already viewed]' after view-once message is consumed", async () => {
+    // beforeAll navigated to /messages and waited for the conversations GET.
+    // The backend returned text=null for the consumed view-once → sidebar already
+    // shows "[Already viewed]".  Just assert it is present.
+    const convoRow = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
+    await expect(convoRow).toBeVisible({ timeout: 5000 });
+    await expect(convoRow).toContainText("[Already viewed]", { timeout: 15_000 });
+  });
+});
+
+// ─── 12. Bug fix: Payment method cache — unlock button reflects PM state ──────
+
+test.describe("12. Payment method cache — unlock enabled after PM added + billing nav", () => {
+  const TS        = Date.now();
+  const LOCK_TEXT = `pm-cache-lock-${TS}`;
+  const LOCK_DESC = `pm-cache-desc-${TS}`;
+  const ALICE_PM  = `e2e-pm-cache-${TS}`;
+
+  let alicePage: Page;
+  let aliceSub = "";
+
+  test.beforeAll(async ({ browser, request }) => {
+    aliceSub = getSessions()[ALICE_ID].user_sub;
+
+    // Remove any leftover payment methods from previous runs/spec files so
+    // test 1 ("Unlock disabled – no PM") starts with a clean slate.
+    cleanupAllPaymentMethods(aliceSub);
+
+    alicePage = await browser.newPage();
+    await openDmWithBob(alicePage);
+
+    // Bob sends a locked message ($1.00) for Alice to unlock.
+    const r = await apiPostBearer(
+      request,
+      `/messaging/conversations/${_dmConvoId}/messages`,
+      { text: LOCK_TEXT, lock_price_cents: 100, lock_description: LOCK_DESC },
+      BOB_ID,
+    );
+    if (!r.ok()) throw new Error(`Bob locked send failed: ${r.status()}`);
+
+    // Trigger refetch so Alice sees the locked message.
+    await triggerRefetch(alicePage);
+    await expect(alicePage.getByText(LOCK_DESC)).toBeVisible({ timeout: 8000 });
+  });
+
+  test.afterAll(async () => {
+    if (aliceSub && ALICE_PM) removePaymentMethod(aliceSub, ALICE_PM);
+    await alicePage?.close();
+  });
+
+  test("'Unlock for' button is disabled when Alice has no payment method", async () => {
+    const unlockBtn = alicePage.getByRole("button", { name: /unlock for/i });
+    await expect(unlockBtn).toBeDisabled({ timeout: 5000 });
+  });
+
+  test("After adding PM and navigating billing→messages, 'Unlock for' becomes active", async () => {
+    // Inject a payment method for Alice.
+    injectPaymentMethod(aliceSub, ALICE_PM);
+
+    // Navigate to the billing page — this triggers the ["billing", "payment-methods"]
+    // React Query and populates the shared cache used by MessageBubble.
+    await alicePage.goto(`${BASE}/billing`, { waitUntil: "load" });
+    await alicePage.waitForTimeout(1000);
+
+    // Navigate back to messages and open the DM.
+    await alicePage.goto(`${BASE}/messages`, { waitUntil: "load" });
+    await alicePage.waitForTimeout(800);
+    const row = alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first();
+    await expect(row).toBeVisible({ timeout: 8000 });
+    await row.click();
+    await expect(
+      alicePage.getByPlaceholder("Type a message...").or(
+        alicePage.getByPlaceholder("Type an encrypted message..."),
+      ),
+    ).toBeVisible({ timeout: 5000 });
+    await triggerRefetch(alicePage);
+
+    // MessageBubble now uses ["billing", "payment-methods"] (same key as billing
+    // page) — so the freshly fetched PM data is already in cache.
+    const unlockBtn = alicePage.getByRole("button", { name: /unlock for/i });
+    await expect(unlockBtn).toBeEnabled({ timeout: 5000 });
+  });
+});
+
+// ─── 13. Bug fix: Tip billing ledger — debit entry created on tip ─────────────
+
+test.describe("13. Tip — billing ledger has a debit entry after sending a tip", () => {
+  const TS     = Date.now();
+  const BOB_MSG = `tip-ledger-msg-${TS}`;
+  const ALICE_PM = `e2e-pm-tip-${TS}`;
+
+  let page: Page;
+  let aliceSub = "";
+
+  test.beforeAll(async ({ browser, request }) => {
+    aliceSub = getSessions()[ALICE_ID].user_sub;
+    injectPaymentMethod(aliceSub, ALICE_PM);
+
+    page = await browser.newPage();
+    await openDmWithBob(page);
+
+    // Bob sends a plain message for Alice to tip.
+    const r = await apiPostBearer(
+      request,
+      `/messaging/conversations/${_dmConvoId}/messages`,
+      { text: BOB_MSG },
+      BOB_ID,
+    );
+    if (!r.ok()) throw new Error(`Bob message failed: ${r.status()}`);
+    const { message_id: msgId } = (await r.json()) as { message_id: string };
+
+    // Alice sends a $1.00 tip on Bob's message.
+    const tipResp = await apiPost(
+      page,
+      `/messaging/conversations/${_dmConvoId}/messages/${msgId}/tip`,
+      { amount_cents: 100, currency: "USD" },
+    );
+    if (!tipResp.ok()) throw new Error(`Tip failed: ${tipResp.status()} — ${await tipResp.text()}`);
+  });
+
+  test.afterAll(async () => {
+    if (aliceSub && ALICE_PM) removePaymentMethod(aliceSub, ALICE_PM);
+    await page?.close();
+  });
+
+  test("Billing ledger contains a 'Tip sent' debit entry for Alice", () => {
+    const result = execSync(
+      `${PYTHON} -c "
+${DDB_HELPER_PRELUDE}
+from boto3.dynamodb.conditions import Key, Attr
+tbl = ddb.Table('billing')
+pk = 'USER#${aliceSub}'
+resp = tbl.query(
+    KeyConditionExpression=Key('pk').eq(pk) & Key('sk').begins_with('LEDGER#'),
+    FilterExpression=Attr('reason').eq('Tip sent') & Attr('type').eq('debit'),
+)
+print(len(resp['Items']))
+"`,
+      { timeout: 10_000 },
+    ).toString().trim();
+
+    expect(parseInt(result, 10)).toBeGreaterThan(0);
+  });
+});
+
+// ─── 14. Bug fix: Unlock billing ledger — debit entry created on unlock ────────
+
+test.describe("14. Unlock — billing ledger has a debit entry after unlocking a message", () => {
+  const TS       = Date.now();
+  const LOCK_TEXT = `unlock-ledger-${TS}`;
+  const LOCK_DESC = `unlock-ledger-desc-${TS}`;
+  const ALICE_PM  = `e2e-pm-unlock-${TS}`;
+
+  let page: Page;
+  let aliceSub = "";
+  let msgId    = "";
+
+  test.beforeAll(async ({ browser, request }) => {
+    aliceSub = getSessions()[ALICE_ID].user_sub;
+    injectPaymentMethod(aliceSub, ALICE_PM);
+
+    page = await browser.newPage();
+    await openDmWithBob(page);
+
+    // Bob sends a locked message ($1.00).
+    const r = await apiPostBearer(
+      request,
+      `/messaging/conversations/${_dmConvoId}/messages`,
+      { text: LOCK_TEXT, lock_price_cents: 100, lock_description: LOCK_DESC },
+      BOB_ID,
+    );
+    if (!r.ok()) throw new Error(`Bob locked send failed: ${r.status()}`);
+    const body = (await r.json()) as { message_id: string };
+    msgId = body.message_id;
+
+    // Alice unlocks the message via the API.
+    const unlockResp = await apiPost(
+      page,
+      `/messaging/conversations/${_dmConvoId}/messages/${msgId}/unlock`,
+      { payment_method_id: ALICE_PM },
+    );
+    if (!unlockResp.ok()) {
+      throw new Error(`Unlock failed: ${unlockResp.status()} — ${await unlockResp.text()}`);
+    }
+  });
+
+  test.afterAll(async () => {
+    if (aliceSub && ALICE_PM) removePaymentMethod(aliceSub, ALICE_PM);
+    await page?.close();
+  });
+
+  test("Billing ledger contains a 'Message unlock' debit entry for Alice", () => {
+    const result = execSync(
+      `${PYTHON} -c "
+${DDB_HELPER_PRELUDE}
+from boto3.dynamodb.conditions import Key, Attr
+tbl = ddb.Table('billing')
+pk = 'USER#${aliceSub}'
+resp = tbl.query(
+    KeyConditionExpression=Key('pk').eq(pk) & Key('sk').begins_with('LEDGER#'),
+    FilterExpression=Attr('reason').eq('Message unlock') & Attr('type').eq('debit'),
+)
+print(len(resp['Items']))
+"`,
+      { timeout: 10_000 },
+    ).toString().trim();
+
+    expect(parseInt(result, 10)).toBeGreaterThan(0);
+  });
+});
+
+// ─── 15. Bug fix: Badge colors — badges readable on own (blue) messages ────────
+
+test.describe("15. Badge colors — tip/expiry badges visible on own (blue) message bubbles", () => {
+  let page: Page;
+  const TS    = Date.now();
+  const PM_ID = `e2e-pm-badge-${TS}`;
+  let aliceSub = "";
+
+  test.beforeAll(async ({ browser }) => {
+    aliceSub = getSessions()[ALICE_ID].user_sub;
+    injectPaymentMethod(aliceSub, PM_ID);
+
+    page = await browser.newPage();
+    await openDmWithBob(page);
+
+    // Send a message via UI with "Attach tip" enabled to get a tip badge on an
+    // own (blue) bubble, and a message with expiry for an expiry badge.
+    // Reload so the ComposeBar picks up the injected payment method.
+    await page.reload({ waitUntil: "load" });
+    await page.waitForTimeout(800);
+    const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
+    await expect(row).toBeVisible({ timeout: 8000 });
+    await row.click();
+    await expect(
+      page.getByPlaceholder("Type a message..."),
+    ).toBeVisible({ timeout: 5000 });
+  });
+
+  test.afterAll(async () => {
+    if (aliceSub && PM_ID) removePaymentMethod(aliceSub, PM_ID);
+    await page?.close();
+  });
+
+  test("Tip badge is visible with a light color class on Alice's own (blue) message", async () => {
+    // Send a message with an attached tip via the API (tip_amount_cents on the send).
+    const session = getSessions()[ALICE_ID];
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: { text: `badge-tip-${TS}`, tip_amount_cents: 100 },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    if (!r.ok()) throw new Error(`Alice tip-message failed: ${r.status()}`);
+
+    // Register the waitForResponse BEFORE triggering the refetch to avoid
+    // a race condition where the GET completes before the listener is set.
+    const messagesRefetched = page.waitForResponse(
+      (resp) =>
+        resp.url().includes(`/messaging/conversations/${_dmConvoId}/messages`) &&
+        resp.status() === 200,
+    );
+    await triggerRefetch(page);
+    await messagesRefetched;
+
+    // Alice's own message bubble should show a "Tip: $1.00" badge.
+    // The fix makes own-message badges use light text (e.g. text-green-200)
+    // so they're readable on the blue primary background.
+    const tipBadge = page.locator('[class*="text-green-200"]').filter({ hasText: /tip.*\$/i });
+    await expect(tipBadge).toBeVisible({ timeout: 8000 });
+  });
+
+  test("Expiry badge is visible with a light color class on Alice's own message", async () => {
+    const session = getSessions()[ALICE_ID];
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: { text: `badge-exp-${TS}`, expires_in_seconds: 3600 },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    if (!r.ok()) throw new Error(`Alice expiry-message failed: ${r.status()}`);
+
+    const messagesRefetched2 = page.waitForResponse(
+      (resp) =>
+        resp.url().includes(`/messaging/conversations/${_dmConvoId}/messages`) &&
+        resp.status() === 200,
+    );
+    await triggerRefetch(page);
+    await messagesRefetched2;
+
+    // The expiry countdown badge on own messages uses text-orange-200 after the fix.
+    const expiryBadge = page.locator('[class*="text-orange-200"]').filter({ hasText: /\d+[smhd]/i });
+    await expect(expiryBadge).toBeVisible({ timeout: 12_000 });
   });
 });
