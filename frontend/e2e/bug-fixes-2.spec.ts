@@ -1396,3 +1396,161 @@ test.describe("26. Tipped messages — encryption, view-once, scheduled, expiry"
     expect(body.expires_at).toBe(deliverAt + expiresIn);
   });
 });
+
+// ─── 27. Locked messages — encryption, view-once, scheduled, expiry ───────────
+//
+// lock_price_cents can be combined with encryption, view-once, scheduling, and
+// expiry with no backend validation errors.
+//
+// Critical display invariant (fixed in MessageBubble.tsx): for a non-owner
+// recipient, the lock paywall must appear BEFORE the decrypt button — a
+// recipient must pay to unlock before they can decrypt encrypted content.
+
+test.describe("27. Locked messages — encryption, view-once, scheduled, expiry", () => {
+  let page: Page;
+
+  const SALT_B64       = Buffer.alloc(16).toString("base64");
+  const IV_B64         = Buffer.alloc(12).toString("base64");
+  const CIPHERTEXT_B64 = Buffer.alloc(32).toString("base64");
+  const textEnvelope   = {
+    version: 1, alg: "AES-256-GCM", kdf: "PBKDF2-SHA256", iterations: 100_000,
+    salt_b64: SALT_B64, iv_b64: IV_B64, ciphertext_b64: CIPHERTEXT_B64,
+  };
+
+  test.beforeAll(async ({ browser }) => {
+    page = await browser.newPage();
+    await injectAuth(page, ALICE_ID);
+    await getOrCreateDm(page);
+  });
+
+  test.afterAll(async () => page?.close());
+
+  // ── 27a. Lock + encryption ─────────────────────────────────────────────────
+
+  test("Lock + encrypted: response has lock_price_cents and is_encrypted=true", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: { send_at: deliverAt, lock_price_cents: 199, encryption: textEnvelope },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.is_encrypted,    "must be encrypted").toBe(true);
+    expect(body.lock_price_cents,"lock_price_cents must be preserved").toBe(199);
+    expect(body.scheduled).toBe(true);
+  });
+
+  // ── 27b. Lock + view-once ─────────────────────────────────────────────────
+
+  test("Lock + view-once: response has lock_price_cents and view_once=true", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: { text: `lock-vo-${Date.now()}`, send_at: deliverAt, lock_price_cents: 99, view_once: true },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.view_once,       "must be view_once").toBe(true);
+    expect(body.lock_price_cents,"lock_price_cents must be preserved").toBe(99);
+    expect(body.scheduled).toBe(true);
+  });
+
+  // ── 27c. Lock + scheduled ─────────────────────────────────────────────────
+
+  test("Lock + scheduled: lock persists in scheduled queue", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: { text: `lock-sched-${Date.now()}`, send_at: deliverAt, lock_price_cents: 149 },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled).toBe(true);
+    expect(body.lock_price_cents).toBe(149);
+
+    const sched = await page.request.get(
+      `${API}/messaging/conversations/${_dmConvoId}/messages/scheduled`,
+      { headers: { "x-csrf-token": session.csrf_token } },
+    );
+    const list = await sched.json() as Array<Record<string, unknown>>;
+    expect(list.some((m) => (m.lock_price_cents as number) > 0)).toBe(true);
+  });
+
+  // ── 27d. Lock + expiry (timer anchored to deliver_at) ─────────────────────
+
+  test("Lock + expiry: expires_at anchored to deliver_at", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+    const expiresIn = 3600;
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: { text: `lock-exp-${Date.now()}`, send_at: deliverAt, lock_price_cents: 299, expires_in_seconds: expiresIn },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.lock_price_cents).toBe(299);
+    expect(body.expires_at).toBe(deliverAt + expiresIn);
+  });
+
+  // ── 27e. All five together ────────────────────────────────────────────────
+
+  test("All five: lock + encrypted + view-once + scheduled + expiry coexist", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+    const expiresIn = 7200;
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: {
+          send_at:            deliverAt,
+          lock_price_cents:   499,
+          encryption:         textEnvelope,
+          view_once:          true,
+          expires_in_seconds: expiresIn,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled).toBe(true);
+    expect(body.is_encrypted).toBe(true);
+    expect(body.view_once).toBe(true);
+    expect(body.lock_price_cents).toBe(499);
+    expect(body.expires_at).toBe(deliverAt + expiresIn);
+  });
+
+  // ── 27f. Lock + tip still rejected ────────────────────────────────────────
+
+  test("Lock + tip combination is still rejected (400)", async () => {
+    const session = getSessions()[ALICE_ID];
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: { text: "should fail", lock_price_cents: 100, tip_amount_cents: 50 },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBeGreaterThanOrEqual(400);
+  });
+});

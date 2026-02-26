@@ -497,7 +497,50 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
               <EyeOff className="h-3.5 w-3.5 shrink-0" />
               This message has expired
             </div>
+          ) : message.lock_price_cents && !message.is_unlocked && !isOwn ? (
+            // Recipient view: locked message — show paywall BEFORE any decrypt UI so that
+            // encryption does not bypass the unlock requirement.
+            <div className="space-y-2">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
+                <Lock className="h-3 w-3" />
+                {`Lock · $${(message.lock_price_cents / 100).toFixed(2)}`}
+              </div>
+              {message.lock_description && (
+                <p className="text-xs text-muted-foreground italic">{message.lock_description}</p>
+              )}
+              {paymentMethods.length === 0 ? (
+                <TooltipProvider delayDuration={100}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <div>
+                        <Button type="button" size="sm" variant="secondary" className="h-7 px-2 text-xs cursor-not-allowed opacity-50" disabled>
+                          <CreditCard className="mr-1 h-3 w-3" />
+                          {`Unlock for $${(message.lock_price_cents / 100).toFixed(2)}`}
+                        </Button>
+                      </div>
+                    </TooltipTrigger>
+                    <TooltipContent>Add a payment method in Billing to unlock this message</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => {
+                    const def = paymentMethods.find((m) => m.is_default) ?? paymentMethods[0];
+                    setUnlockPaymentMethodId(def?.payment_method_id ?? null);
+                    setUnlockDialogOpen(true);
+                  }}
+                >
+                  <CreditCard className="mr-1 h-3 w-3" />
+                  {`Unlock for $${(message.lock_price_cents / 100).toFixed(2)}`}
+                </Button>
+              )}
+            </div>
           ) : message.is_encrypted ? (
+            // Encrypted message — shown after lock is cleared (non-owner has paid, or sender, or no lock)
             <div className="space-y-1">
               <span className="inline-flex items-center gap-1 rounded-full bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
                 <Lock className="h-3 w-3" /> Encrypted
@@ -568,47 +611,6 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                     </div>
                   )}
                 </>
-              )}
-            </div>
-          ) : message.lock_price_cents && !message.is_unlocked && !isOwn ? (
-            // Recipient view: locked message with unlock button
-            <div className="space-y-2">
-              <div className="inline-flex items-center gap-1.5 rounded-full bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
-                <Lock className="h-3 w-3" />
-                {`Lock · $${(message.lock_price_cents / 100).toFixed(2)}`}
-              </div>
-              {message.lock_description && (
-                <p className="text-xs text-muted-foreground italic">{message.lock_description}</p>
-              )}
-              {paymentMethods.length === 0 ? (
-                <TooltipProvider delayDuration={100}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <div>
-                        <Button type="button" size="sm" variant="secondary" className="h-7 px-2 text-xs cursor-not-allowed opacity-50" disabled>
-                          <CreditCard className="mr-1 h-3 w-3" />
-                          {`Unlock for $${(message.lock_price_cents / 100).toFixed(2)}`}
-                        </Button>
-                      </div>
-                    </TooltipTrigger>
-                    <TooltipContent>Add a payment method in Billing to unlock this message</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              ) : (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => {
-                    const def = paymentMethods.find((m) => m.is_default) ?? paymentMethods[0];
-                    setUnlockPaymentMethodId(def?.payment_method_id ?? null);
-                    setUnlockDialogOpen(true);
-                  }}
-                >
-                  <CreditCard className="mr-1 h-3 w-3" />
-                  {`Unlock for $${(message.lock_price_cents / 100).toFixed(2)}`}
-                </Button>
               )}
             </div>
           ) : message.lock_price_cents && isOwn ? (
