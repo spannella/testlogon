@@ -1646,6 +1646,10 @@ test.describe("11. Tips and locked messages", () => {
     await expect(tipCheck).toBeVisible({ timeout: 5000 });
     await tipCheck.check();
     await alicePage.locator("input[placeholder='e.g. 5.00']").fill("1");
+    // Select the injected payment method (required since the tip panel now gates
+    // the Send button on having both an amount and a selected PM).
+    await expect(alicePage.getByRole("button", { name: /visa.*4242/i })).toBeVisible({ timeout: 5000 });
+    await alicePage.getByRole("button", { name: /visa.*4242/i }).click();
     await alicePage.getByPlaceholder("Type a message...").fill(UI_TIP);
     const postDone = alicePage.waitForResponse(
       (r) => r.url().includes("/messages") && r.request().method() === "POST",

@@ -593,7 +593,8 @@ class MessageEncryptionEnvelope(BaseModel):
     iterations: int = Field(ge=100000, le=2000000)
     salt_b64: str = Field(min_length=4, max_length=256)
     iv_b64: str = Field(min_length=4, max_length=128)
-    ciphertext_b64: str = Field(min_length=4, max_length=12000)
+    # For text messages: ciphertext is stored here. For media messages: ciphertext lives in S3.
+    ciphertext_b64: Optional[str] = Field(default=None, min_length=4, max_length=12000)
 
     @model_validator(mode="before")
     @classmethod
@@ -620,20 +621,22 @@ class MessageEncryptionEnvelope(BaseModel):
         if len(iv) != 12:
             raise PydanticCustomError("enc_iv_length", "iv_b64 must decode to exactly 12 bytes")
 
-        try:
-            ciphertext = base64.b64decode(self.ciphertext_b64, validate=True)
-        except binascii.Error as exc:
-            raise PydanticCustomError("enc_ciphertext_invalid", "ciphertext_b64 must be valid base64") from exc
-        if len(ciphertext) <= 16:
-            raise PydanticCustomError(
-                "enc_ciphertext_length",
-                "ciphertext_b64 must include ciphertext bytes plus authentication tag",
-            )
-        if len(ciphertext) > ENCRYPTED_CIPHERTEXT_MAX_BYTES:
-            raise PydanticCustomError(
-                "enc_ciphertext_too_large",
-                f"ciphertext payload exceeds {ENCRYPTED_CIPHERTEXT_MAX_BYTES} byte limit",
-            )
+        # ciphertext_b64 is optional for media messages (encrypted binary lives in S3)
+        if self.ciphertext_b64 is not None:
+            try:
+                ciphertext = base64.b64decode(self.ciphertext_b64, validate=True)
+            except binascii.Error as exc:
+                raise PydanticCustomError("enc_ciphertext_invalid", "ciphertext_b64 must be valid base64") from exc
+            if len(ciphertext) <= 16:
+                raise PydanticCustomError(
+                    "enc_ciphertext_length",
+                    "ciphertext_b64 must include ciphertext bytes plus authentication tag",
+                )
+            if len(ciphertext) > ENCRYPTED_CIPHERTEXT_MAX_BYTES:
+                raise PydanticCustomError(
+                    "enc_ciphertext_too_large",
+                    f"ciphertext payload exceeds {ENCRYPTED_CIPHERTEXT_MAX_BYTES} byte limit",
+                )
         return self
 
 
@@ -721,6 +724,7 @@ class CreateImageMessageIn(BaseModel):
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
     tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
     send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
+    encryption: Optional[MessageEncryptionEnvelope] = None
 
 
 class MarkReadIn(BaseModel):
@@ -4450,6 +4454,12 @@ def create_image_message(
         item["consumption_policy"] = inp.consumption_policy
         item["media_kind"] = "image"
 
+    # Encryption: store envelope without ciphertext_b64 (encrypted binary lives in S3)
+    is_encrypted_img = inp.encryption is not None
+    if is_encrypted_img:
+        item["is_encrypted"] = True
+        item["encryption"] = inp.encryption.model_dump(exclude_none=True)
+
     tbl_msgs.put_item(Item=item)
     _sync_gallery_index_message(item)
 
@@ -4508,6 +4518,8 @@ def create_image_message(
         tip_currency="USD" if tip_amount_cents else None,
         scheduled=is_scheduled_img,
         deliver_at=deliver_at_img,
+        is_encrypted=is_encrypted_img,
+        encryption=inp.encryption,
     )
     if not is_scheduled_img:
         message = _apply_message_receipts(message, item, participants)

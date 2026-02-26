@@ -25,6 +25,7 @@ interface ComposeBarProps {
     tip_amount_cents?: number;
     tip_payment_method_id?: string;
     send_at?: number;
+    encryption_password?: string;
   }) => void;
   onSendVideoAttachment?: (file: File, options?: { consumption_policy?: "none" | "view_once" }) => void;
   onSendAudioRecording?: (file: File, options?: { consumption_policy?: "none" | "listen_once" }) => void;
@@ -202,6 +203,7 @@ export function ComposeBar({
         tip_amount_cents: extraPayload.tip_amount_cents,
         tip_payment_method_id: tipPaymentMethodId ?? undefined,
         send_at: extraPayload.send_at,
+        encryption_password: encryptEnabled ? password : undefined,
       });
       clearPendingFile();
       resetTextState();
@@ -267,7 +269,7 @@ export function ComposeBar({
         <TooltipProvider delayDuration={0}>
           <Tooltip>
             <TooltipTrigger asChild>
-              <label className={cn("inline-flex items-center gap-2 text-xs text-muted-foreground", !!pendingFile && "cursor-not-allowed opacity-50")}>
+              <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
                 <input
                   type="checkbox"
                   checked={encryptEnabled}
@@ -275,16 +277,12 @@ export function ComposeBar({
                     setEncryptEnabled(e.target.checked);
                     setEncryptError(null);
                   }}
-                  disabled={disabled || sending || encrypting || !featureEnabled || !!pendingFile}
-                  className={cn(!!pendingFile && "pointer-events-none")}
+                  disabled={disabled || sending || encrypting || !featureEnabled}
                 />
                 <Lock className="h-3.5 w-3.5" />
                 Encrypt message
               </label>
             </TooltipTrigger>
-            {!!pendingFile && (
-              <TooltipContent>Encryption applies to text messages only</TooltipContent>
-            )}
           </Tooltip>
         </TooltipProvider>
         {encryptEnabled && (

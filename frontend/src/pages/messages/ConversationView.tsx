@@ -194,6 +194,7 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
       tip_amount_cents?: number;
       tip_payment_method_id?: string;
       send_at?: number;
+      encryption_password?: string;
     }) => {
       const fd = new FormData();
       fd.append("file", args.file);
@@ -206,6 +207,7 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
         tip_amount_cents: args.tip_amount_cents,
         tip_payment_method_id: args.tip_payment_method_id,
         send_at: args.send_at,
+        encryption_password: args.encryption_password,
       });
     },
     onMutate: async (args) => {
@@ -464,6 +466,7 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
           tip_amount_cents: options?.tip_amount_cents,
           tip_payment_method_id: options?.tip_payment_method_id,
           send_at: options?.send_at,
+          encryption_password: options?.encryption_password,
         })}
         sending={sendText.isPending || sendImage.isPending}
         onKeystroke={onKeystroke}

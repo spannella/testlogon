@@ -613,7 +613,8 @@ export interface MessageEncryptionEnvelope {
   iterations: number;
   salt_b64: string;
   iv_b64: string;
-  ciphertext_b64: string;
+  // For text messages: ciphertext stored inline. For media: absent (binary lives in S3).
+  ciphertext_b64?: string;
 }
 
 export interface MessageFile {
@@ -716,6 +717,7 @@ export interface SendImageMessageReq {
   tip_amount_cents?: number;
   tip_payment_method_id?: string;
   send_at?: number;
+  encryption?: MessageEncryptionEnvelope;
 }
 
 export interface SendTipReq {

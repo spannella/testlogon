@@ -16,9 +16,13 @@ export interface MessageEncryptionEnvelope {
   iterations: number;
   salt_b64: string;
   iv_b64: string;
-  ciphertext_b64: string;
+  // For text messages: ciphertext stored inline. For media: absent (encrypted binary lives in S3).
+  ciphertext_b64?: string;
   ciphertext_sha256_b64?: string;
 }
+
+/** Envelope for media encryption: same as MessageEncryptionEnvelope but ciphertext_b64 is absent. */
+export type MediaEncryptionEnvelope = Omit<MessageEncryptionEnvelope, "ciphertext_b64" | "ciphertext_sha256_b64">;
 
 export type MessageCryptoErrorCode =
   | "crypto_unavailable"
@@ -91,10 +95,18 @@ function assertEnvelopeShape(value: unknown): asserts value is MessageEncryption
   if (!env.iterations || Number.isNaN(env.iterations) || env.iterations < 100_000) {
     throw new MessageCryptoError("invalid_envelope", "Invalid PBKDF2 iteration count.");
   }
-  for (const field of ["salt_b64", "iv_b64", "ciphertext_b64"] as const) {
+  for (const field of ["salt_b64", "iv_b64"] as const) {
     if (!env[field] || typeof env[field] !== "string") {
       throw new MessageCryptoError("invalid_envelope", `Missing encryption envelope field: ${field}`);
     }
+  }
+}
+
+function assertTextEnvelopeShape(value: unknown): asserts value is Required<Pick<MessageEncryptionEnvelope, "ciphertext_b64">> & MessageEncryptionEnvelope {
+  assertEnvelopeShape(value);
+  const env = value as MessageEncryptionEnvelope;
+  if (!env.ciphertext_b64 || typeof env.ciphertext_b64 !== "string") {
+    throw new MessageCryptoError("invalid_envelope", "Missing encryption envelope field: ciphertext_b64");
   }
 }
 
@@ -261,7 +273,7 @@ export async function decryptMessage(
   envelope: MessageEncryptionEnvelope,
   password: string,
 ): Promise<string> {
-  assertEnvelopeShape(envelope);
+  assertTextEnvelopeShape(envelope);
 
   const salt = fromB64(envelope.salt_b64);
   const iv = fromB64(envelope.iv_b64);
@@ -292,6 +304,59 @@ export async function decryptMessage(
   } catch {
     throw new MessageCryptoError("tampered_payload", "Decrypted message contained invalid UTF-8 content.");
   }
+}
+
+/**
+ * Encrypt arbitrary bytes with AES-256-GCM + PBKDF2-SHA256.
+ * Returns the envelope (KDF params only — no ciphertext_b64) and the encrypted bytes separately.
+ * Use for media attachments where encrypted binary is uploaded to S3.
+ */
+export async function encryptBytes(
+  data: Uint8Array,
+  password: string,
+  options?: { iterations?: number },
+): Promise<{ envelope: MediaEncryptionEnvelope; encryptedBytes: Uint8Array }> {
+  const iterations = Math.max(100_000, options?.iterations ?? DEFAULT_ITERATIONS);
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+
+  const encryptedBytes = hasWebCrypto()
+    ? await webcryptoEncrypt(data, password, salt, iv, iterations)
+    : await nobleEncrypt(data, password, salt, iv, iterations);
+
+  const envelope: MediaEncryptionEnvelope = {
+    version: 1,
+    alg: "AES-256-GCM",
+    kdf: "PBKDF2-SHA256",
+    iterations,
+    salt_b64: toB64(salt),
+    iv_b64: toB64(iv),
+  };
+
+  return { envelope, encryptedBytes };
+}
+
+/**
+ * Decrypt bytes previously encrypted with `encryptBytes`.
+ * The envelope must contain KDF params (salt_b64, iv_b64, iterations) but NOT ciphertext_b64.
+ */
+export async function decryptBytes(
+  encryptedBytes: Uint8Array,
+  envelope: MessageEncryptionEnvelope,
+  password: string,
+): Promise<Uint8Array> {
+  assertEnvelopeShape(envelope);
+
+  const salt = fromB64(envelope.salt_b64);
+  const iv = fromB64(envelope.iv_b64);
+
+  if (salt.byteLength !== 16 || iv.byteLength !== 12 || encryptedBytes.byteLength <= 16) {
+    throw new MessageCryptoError("invalid_envelope", "Encryption envelope or data failed basic length validation.");
+  }
+
+  return hasWebCrypto()
+    ? webcryptoDecrypt(encryptedBytes, password, salt, iv, envelope.iterations)
+    : nobleDecrypt(encryptedBytes, password, salt, iv, envelope.iterations);
 }
 
 // Keep for backwards compat — now unused internally but may be imported elsewhere.

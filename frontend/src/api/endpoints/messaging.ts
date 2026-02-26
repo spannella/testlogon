@@ -24,6 +24,7 @@ import type {
 } from "@/api/types";
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
 import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
+import { encryptBytes } from "@/lib/messageEncryption";
 
 export const getConversations = async (cursor?: string) => {
   const res = await api.get<{ conversations: Conversation[]; next_cursor?: string } | Conversation[]>(
@@ -137,6 +138,7 @@ export const sendImageMessage = async (
     tip_amount_cents?: number;
     tip_payment_method_id?: string;
     send_at?: number;
+    encryption_password?: string;
   },
 ) => {
   const file = formData.get("file");
@@ -158,7 +160,22 @@ export const sendImageMessage = async (
     },
   );
 
-  await uploadToPresignedUrl(presign.upload_url, file, presign.content_type || contentType);
+  // Encrypt before upload if password provided
+  let encryptionEnvelope: SendImageMessageReq["encryption"] | undefined;
+  if (options?.encryption_password) {
+    const fileBytes = new Uint8Array(await file.arrayBuffer());
+    const { envelope, encryptedBytes } = await encryptBytes(fileBytes, options.encryption_password);
+    encryptionEnvelope = { ...envelope };
+    const encryptedBlob = new Blob([encryptedBytes], { type: "application/octet-stream" });
+    const resp = await fetch(presign.upload_url, {
+      method: "PUT",
+      body: encryptedBlob,
+      headers: { "Content-Type": "application/octet-stream" },
+    });
+    if (!resp.ok) throw new Error("Failed to upload encrypted media");
+  } else {
+    await uploadToPresignedUrl(presign.upload_url, file, presign.content_type || contentType);
+  }
 
   const payload: SendImageMessageReq = {
     bucket: presign.bucket,
@@ -180,6 +197,7 @@ export const sendImageMessage = async (
   if (options?.tip_amount_cents) payload.tip_amount_cents = options.tip_amount_cents;
   if (options?.tip_payment_method_id) payload.tip_payment_method_id = options.tip_payment_method_id;
   if (options?.send_at) payload.send_at = options.send_at;
+  if (encryptionEnvelope) payload.encryption = encryptionEnvelope;
 
   const res = await api.post<Message>(`/messaging/conversations/${conversationId}/messages/image`, payload);
   return adaptMessage(res);

@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
 import {
   decryptMessage,
+  decryptBytes,
   isMessageCryptoSupported,
   MessageCryptoError,
   type MessageEncryptionEnvelope,
@@ -116,6 +117,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   const [decryptPassword, setDecryptPassword] = useState("");
   const [decryptError, setDecryptError] = useState<string | null>(null);
   const [decryptedText, setDecryptedText] = useState<string | null>(null);
+  const [decryptedMediaUrl, setDecryptedMediaUrl] = useState<string | null>(null);
   const [openingOnce, setOpeningOnce] = useState(false);
   const [onceError, setOnceError] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -254,8 +256,21 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
     setDecryptError(null);
     setDecrypting(true);
     try {
-      const decrypted = await decryptMessage(message.encryption as MessageEncryptionEnvelope, decryptPassword);
-      setDecryptedText(decrypted);
+      const isMedia = message.kind === "image" || message.kind === "file";
+      if (isMedia) {
+        const url = message.image?.url ?? message.file?.url;
+        if (!url) throw new Error("No URL for encrypted media");
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error("Failed to fetch encrypted media");
+        const encryptedBytes = new Uint8Array(await resp.arrayBuffer());
+        const decryptedBytesResult = await decryptBytes(encryptedBytes, message.encryption as MessageEncryptionEnvelope, decryptPassword);
+        const contentType = message.image?.content_type ?? message.file?.content_type ?? "application/octet-stream";
+        const blob = new Blob([decryptedBytesResult], { type: contentType });
+        setDecryptedMediaUrl(URL.createObjectURL(blob));
+      } else {
+        const decrypted = await decryptMessage(message.encryption as MessageEncryptionEnvelope, decryptPassword);
+        setDecryptedText(decrypted);
+      }
       setDecryptOpen(false);
       setDecryptPassword("");
       setDecryptError(null);
@@ -487,7 +502,40 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
               <span className="inline-flex items-center gap-1 rounded-full bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
                 <Lock className="h-3 w-3" /> Encrypted
               </span>
-              {decryptedText ? (
+              {(message.kind === "image" || isFileKind) ? (
+                decryptedMediaUrl ? (
+                  message.kind === "image" ? (
+                    <img src={decryptedMediaUrl} alt="Decrypted image" className="max-h-64 rounded-lg object-cover mt-1" />
+                  ) : (
+                    <a
+                      href={decryptedMediaUrl}
+                      download={message.file?.name ?? "file"}
+                      className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-background/60 px-3 py-1.5 text-sm hover:bg-background/80"
+                    >
+                      <Download className="h-4 w-4" />
+                      Download {message.file?.name ?? "file"}
+                    </a>
+                  )
+                ) : (
+                  <>
+                    <p className="whitespace-pre-wrap break-words text-sm italic">
+                      {message.kind === "image" ? "Encrypted image" : "Encrypted file"}
+                    </p>
+                    {!showUnsupportedEncryptedState && (
+                      <div>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => { setDecryptOpen(true); setDecryptError(null); }}
+                        >
+                          Decrypt to view
+                        </Button>
+                      </div>
+                    )}
+                  </>
+                )
+              ) : decryptedText ? (
                 <p className="whitespace-pre-wrap break-words text-sm">{decryptedText}</p>
               ) : (
                 <>
@@ -632,7 +680,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             <p className="whitespace-pre-wrap break-words text-sm">{message.text}</p>
           ) : null}
 
-          {message.kind === "image" && expiryCountdown !== "expired" && !message.expired && (
+          {message.kind === "image" && !message.is_encrypted && expiryCountdown !== "expired" && !message.expired && (
             message.consumption_policy === "view_once" && !isOwn ? (
               // View-once image for recipient: show tap-to-view, not the actual image
               message.consumption_state === "consumed" || !message.image?.url ? (
@@ -682,7 +730,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             ) : null
           )}
 
-          {isFileKind && expiryCountdown !== "expired" && !message.expired && typeof message.file?.name === "string" && (
+          {isFileKind && !message.is_encrypted && expiryCountdown !== "expired" && !message.expired && typeof message.file?.name === "string" && (
             <FileMessageCard
               fileName={message.file.name}
               fileUrl={typeof message.file?.url === "string" ? message.file.url : undefined}
@@ -797,9 +845,11 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Decrypt message</DialogTitle>
+            <DialogTitle>
+              {message.kind === "image" ? "Decrypt image" : isFileKind ? "Decrypt file" : "Decrypt message"}
+            </DialogTitle>
             <DialogDescription>
-              Enter the shared password to decrypt this message locally on your device.
+              Enter the shared password to decrypt this {message.kind === "image" ? "image" : isFileKind ? "file" : "message"} locally on your device.
             </DialogDescription>
           </DialogHeader>
 
