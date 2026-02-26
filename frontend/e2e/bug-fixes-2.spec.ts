@@ -12,6 +12,7 @@
  * Fix 9: Image/file content hidden immediately when expiry timer hits zero
  * Fix 10: Scheduled image message returns scheduled:true, not delivered immediately
  * Fix 11: File messages have a URL in dev mode (PDF files are clickable)
+ * Fix 12: Scheduled messages support encryption (text + image, with or without attachment)
  *
  * Tests for fixes 1 & 2 (registration flow) are covered at the API level.
  * Tests for fixes 9, 10, 11 that require real file uploads are at API level.
@@ -926,5 +927,161 @@ test.describe("23. Scheduled text message — send_at field accepted (proxy for 
     const list = (await schedGet.json()) as Array<{ message_id?: string; text?: string }>;
     const found = list.find((m) => m.text === SCHED_TXT);
     expect(found, "Scheduled message must appear in /messages/scheduled").toBeTruthy();
+  });
+});
+
+// ─── 24. Fix 12: Scheduled messages support encryption ────────────────────────
+//
+// Tests that send_at and encryption can both be set on text and image messages.
+// Both fields must coexist: the message is stored as scheduled=true AND
+// is_encrypted=true simultaneously.
+//
+// Encryption envelope shape:
+//   - Text messages:  must include ciphertext_b64 (cipher stored in envelope)
+//   - Image messages: must omit  ciphertext_b64 (cipher stored in S3 object)
+
+test.describe("24. Scheduled encrypted messages — text and image", () => {
+  let page: Page;
+
+  // Minimal but structurally valid AES-256-GCM envelope values (fake ciphertext;
+  // we only test that the server stores and echoes the fields, not that the cipher
+  // can actually be decrypted).
+  const SALT_B64       = Buffer.alloc(16).toString("base64"); // 16 zero bytes → valid base64
+  const IV_B64         = Buffer.alloc(12).toString("base64"); // 12 zero bytes → valid base64
+  const CIPHERTEXT_B64 = Buffer.alloc(32).toString("base64"); // 32 zero bytes → valid base64
+
+  const textEnvelope = {
+    version:        1,
+    alg:            "AES-256-GCM",
+    kdf:            "PBKDF2-SHA256",
+    iterations:     100_000,
+    salt_b64:       SALT_B64,
+    iv_b64:         IV_B64,
+    ciphertext_b64: CIPHERTEXT_B64,
+  };
+
+  // Image envelope omits ciphertext_b64 — encrypted bytes live in S3.
+  const imageEnvelope = {
+    version:    1,
+    alg:        "AES-256-GCM",
+    kdf:        "PBKDF2-SHA256",
+    iterations: 100_000,
+    salt_b64:   SALT_B64,
+    iv_b64:     IV_B64,
+  };
+
+  test.beforeAll(async ({ browser }) => {
+    page = await browser.newPage();
+    await injectAuth(page, ALICE_ID);
+    await getOrCreateDm(page);
+  });
+
+  test.afterAll(async () => page?.close());
+
+  // ── 24a. Scheduled encrypted TEXT ─────────────────────────────────────────
+
+  test("Scheduled + encrypted text message: response has scheduled=true AND is_encrypted=true", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverTs = Math.floor(Date.now() / 1000) + 120;
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data:    { encryption: textEnvelope, send_at: deliverTs },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled,    "must be scheduled").toBe(true);
+    expect(body.is_encrypted, "must be encrypted").toBe(true);
+    expect(body.deliver_at,   "deliver_at must match send_at").toBe(deliverTs);
+    expect(body.encryption,   "encryption envelope must be echoed back").toBeTruthy();
+  });
+
+  test("Scheduled + encrypted text message appears in /messages/scheduled with is_encrypted=true", async () => {
+    const session = getSessions()[ALICE_ID];
+    const r = await page.request.get(
+      `${API}/messaging/conversations/${_dmConvoId}/messages/scheduled`,
+      { headers: { "x-csrf-token": session.csrf_token } },
+    );
+    expect(r.ok()).toBe(true);
+    const list = await r.json() as Array<Record<string, unknown>>;
+    const encryptedScheduled = list.filter((m) => m.is_encrypted === true);
+    expect(
+      encryptedScheduled.length,
+      "at least one scheduled message must have is_encrypted=true",
+    ).toBeGreaterThan(0);
+  });
+
+  // ── 24b. Scheduled encrypted IMAGE ────────────────────────────────────────
+
+  test("Scheduled + encrypted image message: response has scheduled=true AND is_encrypted=true", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverTs = Math.floor(Date.now() / 1000) + 120;
+
+    // 1. Presign an upload URL (encrypted bytes treated as application/octet-stream)
+    const presign = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/images/presign`,
+      {
+        data:    { filename: "encrypted.png", content_type: "application/octet-stream" },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(presign.status()).toBe(200);
+    const { upload_url, bucket, key } = await presign.json() as {
+      upload_url: string; bucket: string; key: string;
+    };
+
+    // 2. Upload fake encrypted bytes to the mock S3 endpoint
+    const putResp = await page.request.put(`http://localhost:8000${upload_url}`, {
+      data:    Buffer.alloc(64), // 64 zero bytes simulating encrypted image data
+      headers: { "Content-Type": "application/octet-stream" },
+    });
+    expect(putResp.status()).toBeLessThan(300);
+
+    // 3. Send image message with both send_at and encryption
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages/image`,
+      {
+        data: {
+          bucket,
+          key,
+          filename:     "encrypted.png",
+          content_type: "application/octet-stream",
+          size:         64,
+          width:        10,
+          height:       10,
+          kind:         "image",
+          send_at:      deliverTs,
+          encryption:   imageEnvelope,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled,    "image must be scheduled").toBe(true);
+    expect(body.is_encrypted, "image must be encrypted").toBe(true);
+    expect(body.deliver_at,   "deliver_at must match send_at").toBe(deliverTs);
+    expect(body.kind,         "kind must be image").toBe("image");
+    expect(body.encryption,   "encryption envelope must be echoed back").toBeTruthy();
+  });
+
+  test("Scheduled + encrypted image appears in /messages/scheduled with is_encrypted=true", async () => {
+    const session = getSessions()[ALICE_ID];
+    const r = await page.request.get(
+      `${API}/messaging/conversations/${_dmConvoId}/messages/scheduled`,
+      { headers: { "x-csrf-token": session.csrf_token } },
+    );
+    expect(r.ok()).toBe(true);
+    const list = await r.json() as Array<Record<string, unknown>>;
+    const encryptedImages = list.filter(
+      (m) => m.is_encrypted === true && m.kind === "image",
+    );
+    expect(
+      encryptedImages.length,
+      "at least one scheduled image must have is_encrypted=true",
+    ).toBeGreaterThan(0);
   });
 });
