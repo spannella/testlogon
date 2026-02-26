@@ -4188,25 +4188,32 @@ def send_text_message(
         item["tip_amount_cents"] = tip_amount_cents
         item["tip_currency"] = tip_currency
         item["tip_payment_id"] = tip_payment_id
-        # Write billing ledger debit entry for the tip attached to the message
-        try:
-            billing_tbl_tip = ddb.Table(S.billing_table_name)
-            _tip_led_id = uuid.uuid4().hex
-            billing_tbl_tip.put_item(Item={
-                "pk": f"USER#{user_id}",
-                "sk": f"LEDGER#{ts}#{_tip_led_id}",
-                "entry_id": _tip_led_id,
-                "ts": ts,
-                "type": "debit",
-                "amount_cents": tip_amount_cents,
-                "currency": "USD",
-                "state": "settled",
-                "reason": "Tip attached to message",
-                "meta": {"conversation_id": conversation_id, "message_id": mid, "tip_payment_id": tip_payment_id,
-                         "payment_method_id": inp.tip_payment_method_id},
-            })
-        except Exception:
-            pass  # Best-effort; do not fail the send if billing write fails
+        # Store the payment method on the item so the delivery loop can include it
+        # in the billing entry meta when the message is eventually promoted.
+        if inp.tip_payment_method_id:
+            item["tip_payment_method_id"] = inp.tip_payment_method_id
+        if not is_scheduled:
+            # Write billing immediately only for messages delivered right now.
+            # Scheduled messages defer billing to _deliver_scheduled_message so
+            # that cancelling a scheduled tipped message does not charge the sender.
+            try:
+                billing_tbl_tip = ddb.Table(S.billing_table_name)
+                _tip_led_id = uuid.uuid4().hex
+                billing_tbl_tip.put_item(Item={
+                    "pk": f"USER#{user_id}",
+                    "sk": f"LEDGER#{ts}#{_tip_led_id}",
+                    "entry_id": _tip_led_id,
+                    "ts": ts,
+                    "type": "debit",
+                    "amount_cents": tip_amount_cents,
+                    "currency": "USD",
+                    "state": "settled",
+                    "reason": "Tip attached to message",
+                    "meta": {"conversation_id": conversation_id, "message_id": mid, "tip_payment_id": tip_payment_id,
+                             "payment_method_id": inp.tip_payment_method_id},
+                })
+            except Exception:
+                pass  # Best-effort; do not fail the send if billing write fails
 
     # Validate: lock_price_cents and tip_amount_cents cannot both be set
     if inp.lock_price_cents and inp.tip_amount_cents:
@@ -4433,24 +4440,29 @@ def create_image_message(
         item["tip_amount_cents"] = tip_amount_cents
         item["tip_currency"] = "USD"
         item["tip_payment_id"] = _img_tip_payment_id
-        # Write billing ledger debit entry for the tip attached to the message
-        try:
-            billing_tbl_tip_img = ddb.Table(S.billing_table_name)
-            _img_tip_led_id = uuid.uuid4().hex
-            billing_tbl_tip_img.put_item(Item={
-                "pk": f"USER#{user_id}",
-                "sk": f"LEDGER#{ts}#{_img_tip_led_id}",
-                "entry_id": _img_tip_led_id,
-                "ts": ts,
-                "type": "debit",
-                "amount_cents": tip_amount_cents,
-                "currency": "USD",
-                "state": "settled",
-                "reason": "Tip attached to message",
-                "meta": {"conversation_id": conversation_id, "message_id": mid, "tip_payment_id": _img_tip_payment_id},
-            })
-        except Exception:
-            pass  # Best-effort; do not fail the send if billing write fails
+        if inp.tip_payment_method_id:
+            item["tip_payment_method_id"] = inp.tip_payment_method_id
+        if not is_scheduled_img:
+            # Write billing immediately only for messages delivered right now.
+            # Scheduled messages defer billing to _deliver_scheduled_message.
+            try:
+                billing_tbl_tip_img = ddb.Table(S.billing_table_name)
+                _img_tip_led_id = uuid.uuid4().hex
+                billing_tbl_tip_img.put_item(Item={
+                    "pk": f"USER#{user_id}",
+                    "sk": f"LEDGER#{ts}#{_img_tip_led_id}",
+                    "entry_id": _img_tip_led_id,
+                    "ts": ts,
+                    "type": "debit",
+                    "amount_cents": tip_amount_cents,
+                    "currency": "USD",
+                    "state": "settled",
+                    "reason": "Tip attached to message",
+                    "meta": {"conversation_id": conversation_id, "message_id": mid, "tip_payment_id": _img_tip_payment_id,
+                             "payment_method_id": inp.tip_payment_method_id},
+                })
+            except Exception:
+                pass  # Best-effort; do not fail the send if billing write fails
 
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
@@ -5743,6 +5755,33 @@ def _deliver_scheduled_message(item: dict) -> None:
         ExpressionAttributeNames={"#s": "status"},
         ExpressionAttributeValues={":ts": ts},
     )
+
+    # Write deferred tip billing now that the message is actually delivered.
+    # (Billing was intentionally skipped at schedule time so that cancelling
+    # a scheduled tipped message does not charge the sender.)
+    if item.get("tip_amount_cents"):
+        try:
+            billing_tbl = ddb.Table(S.billing_table_name)
+            _led_id = uuid.uuid4().hex
+            billing_tbl.put_item(Item={
+                "pk": f"USER#{user_id}",
+                "sk": f"LEDGER#{ts}#{_led_id}",
+                "entry_id": _led_id,
+                "ts": ts,
+                "type": "debit",
+                "amount_cents": int(item["tip_amount_cents"]),
+                "currency": item.get("tip_currency", "USD"),
+                "state": "settled",
+                "reason": "Tip attached to message",
+                "meta": {
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
+                    "tip_payment_id": item.get("tip_payment_id"),
+                    "payment_method_id": item.get("tip_payment_method_id"),
+                },
+            })
+        except Exception:
+            logger.warning("Failed to write tip billing for scheduled message %s", message_id)
 
     # Fetch participants and bump unread counts
     try:

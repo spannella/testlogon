@@ -1230,3 +1230,169 @@ test.describe("25. Scheduled messages — expiry timer and view-once", () => {
     expect(body.expires_at).toBe(deliverAt + expiresIn);
   });
 });
+
+// ─── 26. Tipped messages — all feature combinations ───────────────────────────
+//
+// Tips attached to messages can be combined with encryption, view-once,
+// scheduling, and expiry. The key invariant for scheduled tips is that
+// billing must NOT be written until the message is actually delivered
+// (so cancelling a scheduled tipped message does not charge the sender).
+
+test.describe("26. Tipped messages — encryption, view-once, scheduled, expiry", () => {
+  let page: Page;
+
+  const SALT_B64       = Buffer.alloc(16).toString("base64");
+  const IV_B64         = Buffer.alloc(12).toString("base64");
+  const CIPHERTEXT_B64 = Buffer.alloc(32).toString("base64");
+  const textEnvelope   = {
+    version: 1, alg: "AES-256-GCM", kdf: "PBKDF2-SHA256", iterations: 100_000,
+    salt_b64: SALT_B64, iv_b64: IV_B64, ciphertext_b64: CIPHERTEXT_B64,
+  };
+
+  test.beforeAll(async ({ browser }) => {
+    page = await browser.newPage();
+    await injectAuth(page, ALICE_ID);
+    await getOrCreateDm(page);
+  });
+
+  test.afterAll(async () => page?.close());
+
+  // ── 26a. Immediate tipped message still writes billing at send time ─────────
+
+  test("Immediate tip: tip_amount_cents echoed in response", async () => {
+    const session = getSessions()[ALICE_ID];
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: { text: `tip-immediate-${Date.now()}`, tip_amount_cents: 150, tip_payment_method_id: "pm_test" },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled).toBeFalsy();
+    expect(body.tip_amount_cents).toBe(150);
+  });
+
+  // ── 26b. Scheduled tip: billing deferred until delivery ────────────────────
+
+  test("Scheduled tip: response has scheduled=true and tip_amount_cents", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: { text: `tip-sched-${Date.now()}`, send_at: deliverAt, tip_amount_cents: 200, tip_payment_method_id: "pm_test" },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled,       "must be scheduled").toBe(true);
+    expect(body.tip_amount_cents, "tip must be preserved").toBe(200);
+    expect(body.deliver_at,      "deliver_at must match send_at").toBe(deliverAt);
+  });
+
+  test("Scheduled tip appears in /messages/scheduled with tip_amount_cents", async () => {
+    const session = getSessions()[ALICE_ID];
+    const r = await page.request.get(
+      `${API}/messaging/conversations/${_dmConvoId}/messages/scheduled`,
+      { headers: { "x-csrf-token": session.csrf_token } },
+    );
+    expect(r.ok()).toBe(true);
+    const list = await r.json() as Array<Record<string, unknown>>;
+    const tipScheduled = list.filter((m) => (m.tip_amount_cents as number) > 0);
+    expect(tipScheduled.length, "at least one scheduled message must have tip_amount_cents").toBeGreaterThan(0);
+  });
+
+  // ── 26c. Scheduled + tip + encryption ──────────────────────────────────────
+
+  test("Scheduled + encrypted tip: scheduled=true, is_encrypted=true, tip_amount_cents set", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: { send_at: deliverAt, tip_amount_cents: 300, tip_payment_method_id: "pm_test", encryption: textEnvelope },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled).toBe(true);
+    expect(body.is_encrypted).toBe(true);
+    expect(body.tip_amount_cents).toBe(300);
+  });
+
+  // ── 26d. Scheduled + tip + view-once ───────────────────────────────────────
+
+  test("Scheduled + view-once tip: scheduled=true, view_once=true, tip_amount_cents set", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: { text: `tip-vo-${Date.now()}`, send_at: deliverAt, tip_amount_cents: 400, view_once: true },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled).toBe(true);
+    expect(body.view_once).toBe(true);
+    expect(body.tip_amount_cents).toBe(400);
+  });
+
+  // ── 26e. Scheduled + tip + expiry (timer anchored to deliver_at) ────────────
+
+  test("Scheduled + tipped + expiry: expires_at anchored to deliver_at", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+    const expiresIn = 3600;
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: { text: `tip-exp-${Date.now()}`, send_at: deliverAt, tip_amount_cents: 500, expires_in_seconds: expiresIn },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled).toBe(true);
+    expect(body.tip_amount_cents).toBe(500);
+    expect(body.expires_at).toBe(deliverAt + expiresIn);
+  });
+
+  // ── 26f. All five together ──────────────────────────────────────────────────
+
+  test("All five: scheduled + tip + encrypted + view-once + expiry coexist", async () => {
+    const session   = getSessions()[ALICE_ID];
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+    const expiresIn = 7200;
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages`,
+      {
+        data: {
+          send_at:           deliverAt,
+          tip_amount_cents:  600,
+          encryption:        textEnvelope,
+          view_once:         true,
+          expires_in_seconds: expiresIn,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled).toBe(true);
+    expect(body.is_encrypted).toBe(true);
+    expect(body.view_once).toBe(true);
+    expect(body.tip_amount_cents).toBe(600);
+    expect(body.expires_at).toBe(deliverAt + expiresIn);
+  });
+});
