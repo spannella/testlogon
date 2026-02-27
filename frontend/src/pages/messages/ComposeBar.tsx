@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -10,9 +10,19 @@ import {
   isMessagingViewOnceVideoEnabled,
 } from "@/lib/featureFlags";
 import { encryptMessage, type MessageEncryptionEnvelope } from "@/lib/messageEncryption";
-import type { Message, PaymentMethod, SendTextMessageReq } from "@/api/types";
+import type { Message, PaymentMethod, SendTextMessageReq, FileEntry, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq } from "@/api/types";
+import { CalendarPickerDialog } from "./CalendarPickerDialog";
+import { EventPickerDialog } from "./EventPickerDialog";
+import { MeetingPollComposer } from "./MeetingPollComposer";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { FilePickerDialog } from "./FilePickerDialog";
 
 interface ComposeBarProps {
   onSendText: (payload: SendTextMessageReq) => void;
@@ -29,6 +39,21 @@ interface ComposeBarProps {
   }) => void;
   onSendVideoAttachment?: (file: File, options?: { consumption_policy?: "none" | "view_once" }) => void;
   onSendAudioRecording?: (file: File, options?: { consumption_policy?: "none" | "listen_once" }) => void;
+  onSendGallery?: (params: {
+    freeFiles: File[];
+    lockedFiles: File[];
+    text?: string;
+    lock_price_cents?: number;
+    lock_description?: string;
+    expires_in_seconds?: number;
+    send_at?: number;
+    tip_amount_cents?: number;
+    tip_payment_method_id?: string;
+  }) => void;
+  onSendFileShare?: (params: SendFileShareReq) => void;
+  onSendCalendarShare?: (params: SendCalendarShareReq) => void;
+  onSendCalendarEvent?: (params: SendCalendarEventReq) => void;
+  onSendMeetingPoll?: (params: SendMeetingPollReq) => void;
   sending?: boolean;
   disabled?: boolean;
   onKeystroke?: () => void;
@@ -41,6 +66,11 @@ export function ComposeBar({
   onSendImage,
   onSendVideoAttachment,
   onSendAudioRecording,
+  onSendGallery,
+  onSendFileShare,
+  onSendCalendarShare,
+  onSendCalendarEvent,
+  onSendMeetingPoll,
   sending,
   disabled,
   onKeystroke,
@@ -72,8 +102,22 @@ export function ComposeBar({
   const [viewOnceText, setViewOnceText] = React.useState(false);
   const [expiresEnabled, setExpiresEnabled] = React.useState(false);
   const [expiresDuration, setExpiresDuration] = React.useState("3600");
+  // Gallery mode state
+  const [galleryMode, setGalleryMode] = React.useState(false);
+  const [galleryFreeFiles, setGalleryFreeFiles] = React.useState<File[]>([]);
+  const [galleryLockedFiles, setGalleryLockedFiles] = React.useState<File[]>([]);
+  const galleryFreeInputRef = React.useRef<HTMLInputElement>(null);
+  const galleryLockedInputRef = React.useRef<HTMLInputElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [filePickerOpen, setFilePickerOpen] = React.useState(false);
+  const [pendingFileShare, setPendingFileShare] = React.useState<{
+    entry: FileEntry;
+    permission: "read" | "write";
+  } | null>(null);
+  const [calendarPickerOpen, setCalendarPickerOpen] = React.useState(false);
+  const [eventPickerOpen, setEventPickerOpen] = React.useState(false);
+  const [meetingPollOpen, setMeetingPollOpen] = React.useState(false);
 
   // Parse a datetime-local string ("YYYY-MM-DDTHH:mm") as the given timezone,
   // returning the equivalent UTC Date.
@@ -178,6 +222,50 @@ export function ComposeBar({
   const handleSubmit = async () => {
     if (sending || encrypting) return;
     const trimmed = text.trim();
+
+    // Gallery mode: submit gallery instead of normal message
+    if (galleryMode && onSendGallery) {
+      if (galleryFreeFiles.length === 0 && galleryLockedFiles.length === 0) return;
+      const extraPayload = buildExtraPayload();
+      onSendGallery({
+        freeFiles: galleryFreeFiles,
+        lockedFiles: galleryLockedFiles,
+        text: trimmed || undefined,
+        lock_price_cents: galleryLockedFiles.length > 0 ? extraPayload.lock_price_cents : undefined,
+        lock_description: galleryLockedFiles.length > 0 ? extraPayload.lock_description : undefined,
+        expires_in_seconds: extraPayload.expires_in_seconds,
+        send_at: extraPayload.send_at,
+        tip_amount_cents: extraPayload.tip_amount_cents,
+        tip_payment_method_id: extraPayload.tip_payment_method_id,
+      });
+      setText("");
+      resetTextArea();
+      setGalleryFreeFiles([]);
+      setGalleryLockedFiles([]);
+      setGalleryMode(false);
+      if (lockEnabled) { setLockEnabled(false); setLockPrice(""); setLockDescription(""); }
+      if (tipEnabled) { setTipEnabled(false); setTipAmount(""); setTipPaymentMethodId(null); }
+      if (scheduledAt) { setScheduledAt(null); setScheduledInput(""); setScheduleOpen(false); }
+      if (expiresEnabled) { setExpiresEnabled(false); setExpiresDuration("3600"); }
+      return;
+    }
+
+    // File share mode: send file share message
+    if (pendingFileShare && onSendFileShare) {
+      const extraPayload = buildExtraPayload();
+      onSendFileShare({
+        file_path: pendingFileShare.entry.path,
+        permission: pendingFileShare.permission,
+        text: trimmed || undefined,
+        send_at: extraPayload.send_at,
+      });
+      setPendingFileShare(null);
+      setText("");
+      resetTextArea();
+      if (scheduledAt) { setScheduledAt(null); setScheduledInput(""); setScheduleOpen(false); }
+      return;
+    }
+
     if (!trimmed && !pendingFile) return;
 
     const resetTextState = () => {
@@ -502,6 +590,146 @@ export function ComposeBar({
         </div>
       )}
 
+      {/* Gallery mode UI */}
+      {galleryMode && onSendGallery && (
+        <div className="mb-2 rounded-md border border-border bg-muted/30 p-2 text-xs space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-foreground">Gallery message</span>
+            <button
+              type="button"
+              onClick={() => { setGalleryMode(false); setGalleryFreeFiles([]); setGalleryLockedFiles([]); }}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Exit gallery mode"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          {/* Free items zone (images + videos) */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Free items ({galleryFreeFiles.length}/20)</span>
+              <button
+                type="button"
+                onClick={() => galleryFreeInputRef.current?.click()}
+                disabled={disabled || sending || galleryFreeFiles.length >= 20}
+                className="inline-flex items-center gap-1 rounded border border-input bg-background px-2 py-0.5 text-xs hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ImageIcon className="h-3 w-3" /> Add
+              </button>
+            </div>
+            <input
+              ref={galleryFreeInputRef}
+              type="file"
+              accept="image/*,video/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                e.target.value = "";
+                setGalleryFreeFiles((prev) => [...prev, ...files].slice(0, 20));
+              }}
+            />
+            {galleryFreeFiles.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {galleryFreeFiles.map((f, i) => (
+                  <div key={i} className="group relative">
+                    {f.type.startsWith("video/") ? (
+                      <video
+                        src={URL.createObjectURL(f)}
+                        className="h-12 w-12 rounded object-cover"
+                        muted
+                        playsInline
+                        preload="metadata"
+                      />
+                    ) : (
+                      <img
+                        src={URL.createObjectURL(f)}
+                        alt={f.name}
+                        className="h-12 w-12 rounded object-cover"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setGalleryFreeFiles((prev) => prev.filter((_, j) => j !== i))}
+                      className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full bg-destructive text-white group-hover:flex"
+                      aria-label="Remove"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Locked items zone (images + videos) */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">
+                <Lock className="inline h-3 w-3 mr-0.5" />
+                Locked items ({galleryLockedFiles.length}/30)
+              </span>
+              <button
+                type="button"
+                onClick={() => galleryLockedInputRef.current?.click()}
+                disabled={disabled || sending || galleryLockedFiles.length >= 30}
+                className="inline-flex items-center gap-1 rounded border border-input bg-background px-2 py-0.5 text-xs hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ImageIcon className="h-3 w-3" /> Add
+              </button>
+            </div>
+            <input
+              ref={galleryLockedInputRef}
+              type="file"
+              accept="image/*,video/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                e.target.value = "";
+                setGalleryLockedFiles((prev) => [...prev, ...files].slice(0, 30));
+              }}
+            />
+            {galleryLockedFiles.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {galleryLockedFiles.map((f, i) => (
+                  <div key={i} className="group relative">
+                    {f.type.startsWith("video/") ? (
+                      <video
+                        src={URL.createObjectURL(f)}
+                        className="h-12 w-12 rounded object-cover opacity-70"
+                        muted
+                        playsInline
+                        preload="metadata"
+                      />
+                    ) : (
+                      <img
+                        src={URL.createObjectURL(f)}
+                        alt={f.name}
+                        className="h-12 w-12 rounded object-cover opacity-70"
+                      />
+                    )}
+                    <Lock className="absolute bottom-0.5 right-0.5 h-3 w-3 text-white drop-shadow" />
+                    <button
+                      type="button"
+                      onClick={() => setGalleryLockedFiles((prev) => prev.filter((_, j) => j !== i))}
+                      className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full bg-destructive text-white group-hover:flex"
+                      aria-label="Remove"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {galleryLockedFiles.length > 0 && !lockEnabled && (
+              <p className="text-[10px] text-amber-600">Set a lock price below to require payment for locked items.</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Reply context */}
       {replyingTo && (
         <div className="mb-2 flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
@@ -543,6 +771,69 @@ export function ComposeBar({
           >
             <X className="h-3.5 w-3.5" />
           </button>
+        </div>
+      )}
+
+      {/* Pending file share preview */}
+      {pendingFileShare && (
+        <div className="mb-2 rounded-lg border border-border bg-muted/40 p-3 space-y-2">
+          <div className="flex items-start gap-3">
+            <FileText className="h-8 w-8 shrink-0 text-muted-foreground mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">{pendingFileShare.entry.name}</p>
+              {pendingFileShare.entry.size != null && (
+                <p className="text-xs text-muted-foreground">
+                  {pendingFileShare.entry.size < 1024
+                    ? `${pendingFileShare.entry.size} B`
+                    : pendingFileShare.entry.size < 1024 ** 2
+                    ? `${(pendingFileShare.entry.size / 1024).toFixed(1)} KB`
+                    : `${(pendingFileShare.entry.size / 1024 ** 2).toFixed(1)} MB`}
+                </p>
+              )}
+              {pendingFileShare.entry.is_encrypted && (
+                <p className="flex items-center gap-1 text-xs text-amber-600 mt-0.5">
+                  <Lock className="h-3 w-3" /> Encrypted
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setPendingFileShare(null)}
+              className="shrink-0 rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Remove file share"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground shrink-0">Permission:</span>
+            <div className="flex rounded border border-input overflow-hidden text-xs">
+              <button
+                type="button"
+                onClick={() => setPendingFileShare((prev) => prev ? { ...prev, permission: "read" } : prev)}
+                className={cn(
+                  "px-2.5 py-0.5 transition-colors",
+                  pendingFileShare.permission === "read"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:bg-muted",
+                )}
+              >
+                View only
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingFileShare((prev) => prev ? { ...prev, permission: "write" } : prev)}
+                className={cn(
+                  "px-2.5 py-0.5 border-l border-input transition-colors",
+                  pendingFileShare.permission === "write"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:bg-muted",
+                )}
+              >
+                View + Edit
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -626,7 +917,7 @@ export function ComposeBar({
               size="icon"
               className="h-9 w-9 shrink-0"
               onClick={() => fileInputRef.current?.click()}
-              disabled={disabled || sending || encrypting || !!pendingFile}
+              disabled={disabled || sending || encrypting || !!pendingFile || galleryMode}
               aria-label="Attach file"
             >
               <Paperclip className="h-4 w-4" />
@@ -639,6 +930,62 @@ export function ComposeBar({
               onChange={handleFileChange}
             />
           </>
+        )}
+        {onSendGallery && (
+          <Button
+            variant={galleryMode ? "secondary" : "ghost"}
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            onClick={() => { setGalleryMode((v) => !v); setPendingFile(null); }}
+            disabled={disabled || sending || encrypting}
+            aria-label="Gallery message"
+          >
+            <Images className="h-4 w-4" />
+          </Button>
+        )}
+        {onSendFileShare && (
+          <Button
+            variant={pendingFileShare ? "secondary" : "ghost"}
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            onClick={() => setFilePickerOpen(true)}
+            disabled={disabled || sending || encrypting}
+            aria-label="Share file from Files"
+          >
+            <FolderOpen className="h-4 w-4" />
+          </Button>
+        )}
+        {(onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll) && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0"
+                aria-label="Calendar actions"
+                disabled={disabled || sending}
+              >
+                <CalendarDays className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align="start">
+              {onSendCalendarShare && (
+                <DropdownMenuItem onClick={() => setCalendarPickerOpen(true)}>
+                  <CalendarDays className="mr-2 h-4 w-4" /> Share my calendar
+                </DropdownMenuItem>
+              )}
+              {onSendCalendarEvent && (
+                <DropdownMenuItem onClick={() => setEventPickerOpen(true)}>
+                  <CalendarCheck className="mr-2 h-4 w-4" /> Share an event
+                </DropdownMenuItem>
+              )}
+              {onSendMeetingPoll && (
+                <DropdownMenuItem onClick={() => setMeetingPollOpen(true)}>
+                  <Users className="mr-2 h-4 w-4" /> Schedule a meeting
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
 
         <textarea
@@ -734,7 +1081,17 @@ export function ComposeBar({
           size="icon"
           className="h-9 w-9 shrink-0 rounded-full"
           onClick={() => void handleSubmit()}
-          disabled={disabled || sending || encrypting || (!text.trim() && !pendingFile) || (tipEnabled && (!tipAmount || !tipPaymentMethodId))}
+          disabled={
+            disabled || sending || encrypting ||
+            (pendingFileShare
+              ? false
+              : galleryMode
+              ? (galleryFreeFiles.length === 0 && galleryLockedFiles.length === 0) ||
+                (galleryLockedFiles.length > 0 && lockEnabled && (!lockPrice || parseFloat(lockPrice) < 0.01))
+              : (!text.trim() && !pendingFile)
+            ) ||
+            (tipEnabled && (!tipAmount || !tipPaymentMethodId))
+          }
           aria-label="Send message"
         >
           {sending || encrypting ? (
@@ -744,6 +1101,42 @@ export function ComposeBar({
           )}
         </Button>
       </div>
+
+      <FilePickerDialog
+        open={filePickerOpen}
+        onClose={() => setFilePickerOpen(false)}
+        onSelect={(entry, perm) => {
+          setPendingFileShare({ entry, permission: perm });
+          setFilePickerOpen(false);
+        }}
+      />
+      {onSendCalendarShare && (
+        <CalendarPickerDialog
+          open={calendarPickerOpen}
+          onClose={() => setCalendarPickerOpen(false)}
+          onSelect={(params) => {
+            onSendCalendarShare(params);
+          }}
+        />
+      )}
+      {onSendCalendarEvent && (
+        <EventPickerDialog
+          open={eventPickerOpen}
+          onClose={() => setEventPickerOpen(false)}
+          onSelect={(params) => {
+            onSendCalendarEvent(params);
+          }}
+        />
+      )}
+      {onSendMeetingPoll && (
+        <MeetingPollComposer
+          open={meetingPollOpen}
+          onClose={() => setMeetingPollOpen(false)}
+          onSend={(params) => {
+            onSendMeetingPoll(params);
+          }}
+        />
+      )}
     </div>
   );
 }

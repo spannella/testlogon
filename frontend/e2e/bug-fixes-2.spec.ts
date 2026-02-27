@@ -320,6 +320,16 @@ const TEST_PNG = Buffer.from(
   "base64",
 );
 
+// ─── Minimal MP4 ftyp box (20 bytes) — enough for encrypt/decrypt round-trip ──
+// Real video playback requires a full moov+mdat, but tests only need the blob URL.
+const TEST_MP4 = Buffer.from([
+  0x00, 0x00, 0x00, 0x14,  // box size = 20
+  0x66, 0x74, 0x79, 0x70,  // 'ftyp'
+  0x6D, 0x70, 0x34, 0x32,  // major brand 'mp42'
+  0x00, 0x00, 0x00, 0x00,  // minor version
+  0x6D, 0x70, 0x34, 0x32,  // compatible brand 'mp42'
+]);
+
 // ─── 16. Fix 6: Tip compose bar — PM selector shown when tip enabled ──────────
 
 test.describe("16. Tip compose bar — PM selector and send-gate when tip enabled", () => {
@@ -1552,5 +1562,897 @@ test.describe("27. Locked messages — encryption, view-once, scheduled, expiry"
       },
     );
     expect(r.status()).toBeGreaterThanOrEqual(400);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 28: Gallery messages — blurred preview + multi-attachment unlock
+// ─────────────────────────────────────────────────────────────────────────────
+
+test.describe("28. Gallery messages — free + locked images with blurred previews", () => {
+  let page: Page;
+
+  // Helper: presign + upload a tiny fake image, return { bucket, key }
+  async function presignAndUpload(
+    convoId: string,
+    filename: string,
+    contentType = "image/jpeg",
+  ): Promise<{ bucket: string; key: string }> {
+    const session = getSessions()[ALICE_ID];
+    const presign = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/images/presign`,
+      {
+        data: { filename, content_type: contentType },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(presign.status()).toBe(200);
+    const { upload_url, bucket, key } = await presign.json() as {
+      upload_url: string; bucket: string; key: string;
+    };
+    // Upload 4 bytes of fake JPEG data
+    const putResp = await page.request.put(`http://localhost:8000${upload_url}`, {
+      data: Buffer.from([0xff, 0xd8, 0xff, 0xd9]), // minimal JPEG header
+      headers: { "Content-Type": contentType },
+    });
+    expect(putResp.status()).toBeLessThan(300);
+    return { bucket, key };
+  }
+
+  test.beforeAll(async ({ browser }) => {
+    page = await browser.newPage();
+    await injectAuth(page, ALICE_ID);
+    await getOrCreateDm(page);
+  });
+
+  test.afterAll(async () => page?.close());
+
+  // ── 28a. Send gallery with free + locked images ───────────────────────────
+
+  test("Gallery with 2 free + 2 locked images returns correct structure", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+
+    // Presign + upload 2 free + 2 main locked + 2 preview images
+    const [free1, free2, locked1, locked2, preview1, preview2] = await Promise.all([
+      presignAndUpload(convoId, "free1.jpg"),
+      presignAndUpload(convoId, "free2.jpg"),
+      presignAndUpload(convoId, "locked1.jpg"),
+      presignAndUpload(convoId, "locked2.jpg"),
+      presignAndUpload(convoId, "preview1.jpg"),
+      presignAndUpload(convoId, "preview2.jpg"),
+    ]);
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [
+            { bucket: free1.bucket, key: free1.key, content_type: "image/jpeg", filename: "free1.jpg" },
+            { bucket: free2.bucket, key: free2.key, content_type: "image/jpeg", filename: "free2.jpg" },
+          ],
+          locked_images: [
+            {
+              bucket: locked1.bucket, key: locked1.key, content_type: "image/jpeg",
+              filename: "locked1.jpg",
+              preview_bucket: preview1.bucket, preview_key: preview1.key,
+            },
+            {
+              bucket: locked2.bucket, key: locked2.key, content_type: "image/jpeg",
+              filename: "locked2.jpg",
+              preview_bucket: preview2.bucket, preview_key: preview2.key,
+            },
+          ],
+          text: `gallery-test-${Date.now()}`,
+          lock_price_cents: 299,
+          lock_description: "Unlock to see all images",
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+
+    expect(body.kind).toBe("gallery");
+    expect(body.locked_image_count).toBe(2);
+    expect(body.lock_price_cents).toBe(299);
+    expect(body.is_unlocked).toBe(true);  // sender always sees their content
+
+    // Sender sees both arrays
+    expect(Array.isArray(body.free_images)).toBe(true);
+    expect((body.free_images as unknown[]).length).toBe(2);
+    expect(Array.isArray(body.locked_images)).toBe(true);
+    expect((body.locked_images as unknown[]).length).toBe(2);
+  });
+
+  // ── 28b. Sender validation errors ────────────────────────────────────────
+
+  test("Gallery with no images is rejected (400)", async () => {
+    const session = getSessions()[ALICE_ID];
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${_dmConvoId}/messages/gallery`,
+      {
+        data: { free_images: [], locked_images: [] },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBeGreaterThanOrEqual(400);
+  });
+
+  test("Gallery with locked images but no lock_price_cents is rejected (400)", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+    const [img, preview] = await Promise.all([
+      presignAndUpload(convoId, "img.jpg"),
+      presignAndUpload(convoId, "preview.jpg"),
+    ]);
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [],
+          locked_images: [{
+            bucket: img.bucket, key: img.key, content_type: "image/jpeg",
+            preview_bucket: preview.bucket, preview_key: preview.key,
+          }],
+          // no lock_price_cents
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBeGreaterThanOrEqual(400);
+  });
+
+  test("Gallery with locked images but missing preview is rejected (400)", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+    const img = await presignAndUpload(convoId, "img.jpg");
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [],
+          locked_images: [{
+            bucket: img.bucket, key: img.key, content_type: "image/jpeg",
+            // missing preview_bucket / preview_key
+          }],
+          lock_price_cents: 100,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBeGreaterThanOrEqual(400);
+  });
+
+  // ── 28c. Recipient sees locked_images=null, locked_image_count=2 ──────────
+
+  test("Recipient sees locked_images=null and locked_image_count before unlock", async ({ browser }) => {
+    // Send a gallery as Alice
+    const aliceSession = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+    const [free1, locked1, preview1] = await Promise.all([
+      presignAndUpload(convoId, "free_r.jpg"),
+      presignAndUpload(convoId, "locked_r.jpg"),
+      presignAndUpload(convoId, "preview_r.jpg"),
+    ]);
+
+    const sendResp = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [
+            { bucket: free1.bucket, key: free1.key, content_type: "image/jpeg" },
+          ],
+          locked_images: [
+            {
+              bucket: locked1.bucket, key: locked1.key, content_type: "image/jpeg",
+              preview_bucket: preview1.bucket, preview_key: preview1.key,
+            },
+          ],
+          lock_price_cents: 150,
+          lock_description: `gallery-recipient-${Date.now()}`,
+        },
+        headers: { "x-csrf-token": aliceSession.csrf_token },
+      },
+    );
+    expect(sendResp.status()).toBe(200);
+    const sentBody = await sendResp.json() as Record<string, unknown>;
+    const msgId = sentBody.message_id as string;
+
+    // Fetch as Bob using a fresh page with Bob's own session cookies (isolated from Alice's page)
+    const bobPage = await browser.newPage();
+    try {
+      await injectAuth(bobPage, BOB_ID);
+      const bobSession = getSessions()[BOB_ID];
+      const getResp = await bobPage.request.get(
+        `${API}/messaging/conversations/${convoId}/messages`,
+        { headers: { "x-csrf-token": bobSession.csrf_token } },
+      );
+      // Bob is a participant in this DM so status should be 200
+      expect(getResp.status()).toBe(200);
+      const msgs = await getResp.json() as Array<Record<string, unknown>>;
+      const galleryMsg = msgs.find((m) => m.message_id === msgId);
+      expect(galleryMsg).toBeTruthy();
+      expect(galleryMsg!.locked_image_count).toBe(1);
+      // locked_images omitted (null) for non-owner before unlock
+      expect(galleryMsg!.locked_images).toBeFalsy();
+      // free_images present
+      expect(Array.isArray(galleryMsg!.free_images)).toBe(true);
+    } finally {
+      await bobPage.close();
+    }
+  });
+
+  // ── 28d. Gallery with free images only (no locked) ────────────────────────
+
+  test("Gallery with only free images (no lock) is accepted", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+    const [img1, img2] = await Promise.all([
+      presignAndUpload(convoId, "free_only1.jpg"),
+      presignAndUpload(convoId, "free_only2.jpg"),
+    ]);
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [
+            { bucket: img1.bucket, key: img1.key, content_type: "image/jpeg" },
+            { bucket: img2.bucket, key: img2.key, content_type: "image/jpeg" },
+          ],
+          locked_images: [],
+          text: "Just some free photos!",
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.kind).toBe("gallery");
+    expect(body.locked_image_count).toBe(0);
+    expect(Array.isArray(body.free_images)).toBe(true);
+    expect((body.free_images as unknown[]).length).toBe(2);
+    // No lock fields
+    expect(body.locked).toBe(false);
+  });
+
+  // ── 28e. Gallery with scheduling ─────────────────────────────────────────
+
+  test("Gallery supports send_at scheduling", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+    const [img, preview] = await Promise.all([
+      presignAndUpload(convoId, "sched_img.jpg"),
+      presignAndUpload(convoId, "sched_preview.jpg"),
+    ]);
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [],
+          locked_images: [{
+            bucket: img.bucket, key: img.key, content_type: "image/jpeg",
+            preview_bucket: preview.bucket, preview_key: preview.key,
+          }],
+          lock_price_cents: 199,
+          send_at: deliverAt,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled).toBe(true);
+    expect(body.deliver_at).toBe(deliverAt);
+    expect(body.kind).toBe("gallery");
+  });
+
+  // ── 28f. Gallery + tip combination ────────────────────────────────────────
+
+  test("Gallery with tip (no lock) creates billing entry", async () => {
+    const session = getSessions()[ALICE_ID];
+    const aliceSub = (getSessions()[ALICE_ID] as SessionData).user_sub;
+    const convoId = _dmConvoId!;
+
+    // Inject a payment method for Alice so the tip can be billed
+    const pmId = `pm_gallery_tip_${Date.now()}`;
+    injectPaymentMethod(aliceSub, pmId);
+
+    const [img] = await Promise.all([
+      presignAndUpload(convoId, "tip_gallery.jpg"),
+    ]);
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [
+            { bucket: img.bucket, key: img.key, content_type: "image/jpeg" },
+          ],
+          locked_images: [],
+          tip_amount_cents: 50,
+          tip_payment_method_id: pmId,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.tip_amount_cents).toBe(50);
+  });
+
+  // ── 28g. Gallery + lock + tip combination is rejected ────────────────────
+
+  test("Gallery with both lock and tip is rejected (400)", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+    const [img, preview] = await Promise.all([
+      presignAndUpload(convoId, "lock_tip.jpg"),
+      presignAndUpload(convoId, "lock_tip_preview.jpg"),
+    ]);
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [],
+          locked_images: [{
+            bucket: img.bucket, key: img.key, content_type: "image/jpeg",
+            preview_bucket: preview.bucket, preview_key: preview.key,
+          }],
+          lock_price_cents: 100,
+          tip_amount_cents: 50,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBeGreaterThanOrEqual(400);
+  });
+
+  // ── 28h-28j. Basic video support (already added above) ──────────────────
+  // ── 28k-28r. Video gallery — full equivalents of 28a-28f ─────────────────
+
+  // 28k — equivalent of 28a: 2 free + 2 locked videos → full structure
+  test("Video gallery: 2 free + 2 locked videos returns correct structure", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+
+    const [freeVid1, freeVid2, lockedVid1, lockedVid2, preview1, preview2] = await Promise.all([
+      presignAndUpload(convoId, "vfree1.mp4", "video/mp4"),
+      presignAndUpload(convoId, "vfree2.mp4", "video/mp4"),
+      presignAndUpload(convoId, "vlocked1.mp4", "video/mp4"),
+      presignAndUpload(convoId, "vlocked2.mp4", "video/mp4"),
+      presignAndUpload(convoId, "vprev1.jpg", "image/jpeg"),
+      presignAndUpload(convoId, "vprev2.jpg", "image/jpeg"),
+    ]);
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [
+            { bucket: freeVid1.bucket, key: freeVid1.key, content_type: "video/mp4", filename: "vfree1.mp4" },
+            { bucket: freeVid2.bucket, key: freeVid2.key, content_type: "video/mp4", filename: "vfree2.mp4" },
+          ],
+          locked_images: [
+            {
+              bucket: lockedVid1.bucket, key: lockedVid1.key, content_type: "video/mp4",
+              filename: "vlocked1.mp4",
+              preview_bucket: preview1.bucket, preview_key: preview1.key,
+            },
+            {
+              bucket: lockedVid2.bucket, key: lockedVid2.key, content_type: "video/mp4",
+              filename: "vlocked2.mp4",
+              preview_bucket: preview2.bucket, preview_key: preview2.key,
+            },
+          ],
+          text: `video-gallery-${Date.now()}`,
+          lock_price_cents: 399,
+          lock_description: "Unlock to see all videos",
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+
+    expect(body.kind).toBe("gallery");
+    expect(body.locked_image_count).toBe(2);
+    expect(body.lock_price_cents).toBe(399);
+    expect(body.is_unlocked).toBe(true);  // sender always sees their content
+
+    const freeItems = body.free_images as Array<Record<string, unknown>>;
+    expect(freeItems.length).toBe(2);
+    expect(freeItems.every((it) => it.content_type === "video/mp4")).toBe(true);
+    expect(freeItems.every((it) => typeof it.url === "string")).toBe(true);
+
+    const lockedItems = body.locked_images as Array<Record<string, unknown>>;
+    expect(lockedItems.length).toBe(2);
+    expect(lockedItems.every((it) => it.content_type === "video/mp4")).toBe(true);
+    expect(lockedItems.every((it) => typeof it.url === "string")).toBe(true);
+    // Each locked video has a preview URL (JPEG thumbnail)
+    expect(lockedItems.every((it) => typeof it.preview_url === "string")).toBe(true);
+  });
+
+  // 28l — equivalent of 28b (validation): locked video without lock_price_cents rejected
+  test("Video gallery: locked video without lock_price_cents is rejected (400)", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+    const [vid, preview] = await Promise.all([
+      presignAndUpload(convoId, "val_vid.mp4", "video/mp4"),
+      presignAndUpload(convoId, "val_prev.jpg", "image/jpeg"),
+    ]);
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [],
+          locked_images: [{
+            bucket: vid.bucket, key: vid.key, content_type: "video/mp4",
+            preview_bucket: preview.bucket, preview_key: preview.key,
+          }],
+          // no lock_price_cents
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBeGreaterThanOrEqual(400);
+  });
+
+  // 28m — equivalent of 28b (validation): locked video without preview rejected
+  test("Video gallery: locked video missing preview is rejected (400)", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+    const vid = await presignAndUpload(convoId, "val_noprev.mp4", "video/mp4");
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [],
+          locked_images: [{
+            bucket: vid.bucket, key: vid.key, content_type: "video/mp4",
+            // missing preview_bucket / preview_key
+          }],
+          lock_price_cents: 100,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBeGreaterThanOrEqual(400);
+  });
+
+  // 28n — equivalent of 28c: recipient sees locked_images=null for video gallery
+  test("Video gallery: recipient sees locked_images=null before unlock", async ({ browser }) => {
+    const aliceSession = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+
+    const [freeVid, lockedVid, preview] = await Promise.all([
+      presignAndUpload(convoId, "rec_vfree.mp4", "video/mp4"),
+      presignAndUpload(convoId, "rec_vlocked.mp4", "video/mp4"),
+      presignAndUpload(convoId, "rec_vprev.jpg", "image/jpeg"),
+    ]);
+
+    const sendResp = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [
+            { bucket: freeVid.bucket, key: freeVid.key, content_type: "video/mp4" },
+          ],
+          locked_images: [{
+            bucket: lockedVid.bucket, key: lockedVid.key, content_type: "video/mp4",
+            preview_bucket: preview.bucket, preview_key: preview.key,
+          }],
+          lock_price_cents: 175,
+          lock_description: `video-recipient-${Date.now()}`,
+        },
+        headers: { "x-csrf-token": aliceSession.csrf_token },
+      },
+    );
+    expect(sendResp.status()).toBe(200);
+    const msgId = (await sendResp.json() as Record<string, unknown>).message_id as string;
+
+    const bobPage = await browser.newPage();
+    try {
+      await injectAuth(bobPage, BOB_ID);
+      const bobSession = getSessions()[BOB_ID];
+      const getResp = await bobPage.request.get(
+        `${API}/messaging/conversations/${convoId}/messages`,
+        { headers: { "x-csrf-token": bobSession.csrf_token } },
+      );
+      expect(getResp.status()).toBe(200);
+      const msgs = await getResp.json() as Array<Record<string, unknown>>;
+      const galleryMsg = msgs.find((m) => m.message_id === msgId);
+      expect(galleryMsg).toBeTruthy();
+      expect(galleryMsg!.locked_image_count).toBe(1);
+      expect(galleryMsg!.locked_images).toBeFalsy();  // hidden before unlock
+      // Free video is visible
+      const freeItems = galleryMsg!.free_images as Array<Record<string, unknown>>;
+      expect(Array.isArray(freeItems)).toBe(true);
+      expect(freeItems[0].content_type).toBe("video/mp4");
+    } finally {
+      await bobPage.close();
+    }
+  });
+
+  // 28o — equivalent of 28d: free videos only (no lock)
+  test("Video gallery: only free videos (no lock) is accepted", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+    const [vid1, vid2] = await Promise.all([
+      presignAndUpload(convoId, "vfree_only1.mp4", "video/mp4"),
+      presignAndUpload(convoId, "vfree_only2.mp4", "video/mp4"),
+    ]);
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [
+            { bucket: vid1.bucket, key: vid1.key, content_type: "video/mp4" },
+            { bucket: vid2.bucket, key: vid2.key, content_type: "video/mp4" },
+          ],
+          locked_images: [],
+          text: "Just some free videos!",
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.kind).toBe("gallery");
+    expect(body.locked_image_count).toBe(0);
+    expect(body.locked).toBe(false);
+    const items = body.free_images as Array<Record<string, unknown>>;
+    expect(items.length).toBe(2);
+    expect(items.every((it) => it.content_type === "video/mp4")).toBe(true);
+  });
+
+  // 28p — equivalent of 28e: locked video supports send_at scheduling
+  test("Video gallery: locked video supports send_at scheduling", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+    const deliverAt = Math.floor(Date.now() / 1000) + 120;
+    const [vid, preview] = await Promise.all([
+      presignAndUpload(convoId, "vsched.mp4", "video/mp4"),
+      presignAndUpload(convoId, "vsched_prev.jpg", "image/jpeg"),
+    ]);
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [],
+          locked_images: [{
+            bucket: vid.bucket, key: vid.key, content_type: "video/mp4",
+            preview_bucket: preview.bucket, preview_key: preview.key,
+          }],
+          lock_price_cents: 299,
+          send_at: deliverAt,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.scheduled).toBe(true);
+    expect(body.deliver_at).toBe(deliverAt);
+    expect(body.kind).toBe("gallery");
+  });
+
+  // 28q — equivalent of 28f: free video gallery with tip creates billing entry
+  test("Video gallery: free video with tip creates billing entry", async () => {
+    const session = getSessions()[ALICE_ID];
+    const aliceSub = (getSessions()[ALICE_ID] as SessionData).user_sub;
+    const convoId = _dmConvoId!;
+
+    const pmId = `pm_vid_gallery_tip_${Date.now()}`;
+    injectPaymentMethod(aliceSub, pmId);
+
+    const vid = await presignAndUpload(convoId, "tip_vid.mp4", "video/mp4");
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [
+            { bucket: vid.bucket, key: vid.key, content_type: "video/mp4" },
+          ],
+          locked_images: [],
+          tip_amount_cents: 75,
+          tip_payment_method_id: pmId,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.tip_amount_cents).toBe(75);
+    expect(body.kind).toBe("gallery");
+    expect((body.free_images as Array<Record<string, unknown>>)[0].content_type).toBe("video/mp4");
+  });
+
+  // 28r — equivalent of 28g: locked video + lock + tip rejected
+  test("Video gallery: locked video with both lock and tip is rejected (400)", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+    const [vid, preview] = await Promise.all([
+      presignAndUpload(convoId, "vlock_tip.mp4", "video/mp4"),
+      presignAndUpload(convoId, "vlock_tip_prev.jpg", "image/jpeg"),
+    ]);
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [],
+          locked_images: [{
+            bucket: vid.bucket, key: vid.key, content_type: "video/mp4",
+            preview_bucket: preview.bucket, preview_key: preview.key,
+          }],
+          lock_price_cents: 100,
+          tip_amount_cents: 50,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBeGreaterThanOrEqual(400);
+  });
+
+  // ── 28h-28j. Basic video support ─────────────────────────────────────────
+
+  test("Gallery accepts video items as free media", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+
+    // Upload a fake MP4 (4-byte stub is enough — backend stores content_type as-is)
+    const vid = await presignAndUpload(convoId, "free_video.mp4", "video/mp4");
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [
+            { bucket: vid.bucket, key: vid.key, content_type: "video/mp4", filename: "free_video.mp4" },
+          ],
+          locked_images: [],
+          text: `gallery-video-${Date.now()}`,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.kind).toBe("gallery");
+    expect(Array.isArray(body.free_images)).toBe(true);
+    const items = body.free_images as Array<Record<string, unknown>>;
+    expect(items.length).toBe(1);
+    expect(items[0].content_type).toBe("video/mp4");
+    expect(typeof items[0].url).toBe("string");
+  });
+
+  test("Gallery accepts locked video with blurred preview", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+
+    // Upload locked video + JPEG preview (preview is always a JPEG thumbnail)
+    const [vid, preview] = await Promise.all([
+      presignAndUpload(convoId, "locked_video.mp4", "video/mp4"),
+      presignAndUpload(convoId, "locked_video_preview.jpg", "image/jpeg"),
+    ]);
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [],
+          locked_images: [{
+            bucket: vid.bucket, key: vid.key, content_type: "video/mp4",
+            filename: "locked_video.mp4",
+            preview_bucket: preview.bucket, preview_key: preview.key,
+          }],
+          lock_price_cents: 250,
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    expect(body.kind).toBe("gallery");
+    expect(body.locked_image_count).toBe(1);
+    expect(body.is_unlocked).toBe(true);  // sender sees their content
+    const lockedItems = body.locked_images as Array<Record<string, unknown>>;
+    expect(lockedItems.length).toBe(1);
+    expect(lockedItems[0].content_type).toBe("video/mp4");
+  });
+
+  test("Gallery with mixed image and video free items is accepted", async () => {
+    const session = getSessions()[ALICE_ID];
+    const convoId = _dmConvoId!;
+
+    const [img, vid] = await Promise.all([
+      presignAndUpload(convoId, "mixed_img.jpg", "image/jpeg"),
+      presignAndUpload(convoId, "mixed_vid.mp4", "video/mp4"),
+    ]);
+
+    const r = await page.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/gallery`,
+      {
+        data: {
+          free_images: [
+            { bucket: img.bucket, key: img.key, content_type: "image/jpeg" },
+            { bucket: vid.bucket, key: vid.key, content_type: "video/mp4" },
+          ],
+          locked_images: [],
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(r.status()).toBe(200);
+    const body = await r.json() as Record<string, unknown>;
+    const items = body.free_images as Array<Record<string, unknown>>;
+    expect(items.length).toBe(2);
+    expect(items[0].content_type).toBe("image/jpeg");
+    expect(items[1].content_type).toBe("video/mp4");
+  });
+});
+
+// ─── 29. Encrypted video message — send and decrypt ──────────────────────────
+
+test.describe("29. Encrypted video message — send and decrypt", () => {
+  let alicePage: Page;
+  let bobPage: Page;
+  const ENC_PASSWORD = "V1d3o&S3cr3t!";
+  const TS = Date.now();
+
+  test.beforeAll(async ({ browser }) => {
+    alicePage = await browser.newPage();
+    bobPage = await browser.newPage();
+    await injectAuth(alicePage, ALICE_ID);
+    await injectAuth(bobPage, BOB_ID);
+    const convoId = await getOrCreateDm(alicePage);
+    const session = getSessions()[ALICE_ID];
+
+    // Encrypt TEST_MP4 using the same AES-256-GCM + PBKDF2-SHA256 algorithm
+    // the browser uses, so the browser can decrypt it correctly.
+    const salt = cryptoRandomBytes(16);
+    const iv   = cryptoRandomBytes(12);
+    const keyBytes  = pbkdf2Sync(ENC_PASSWORD, salt, 600_000, 32, "sha256");
+    const cipher    = createCipheriv("aes-256-gcm", keyBytes, iv);
+    const ciphertext = Buffer.concat([cipher.update(TEST_MP4), cipher.final()]);
+    const authTag    = (cipher as unknown as { getAuthTag(): Buffer }).getAuthTag();
+    const encryptedBuf = Buffer.concat([ciphertext, authTag]);
+
+    // 1. Presign URL for the encrypted video upload
+    const presignResp = await alicePage.request.post(
+      `${API}/messaging/conversations/${convoId}/images/presign`,
+      {
+        data: { content_type: "video/mp4", filename: `enc-video-${TS}.mp4` },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(presignResp.ok()).toBe(true);
+    const { upload_url, bucket, key } = await presignResp.json() as {
+      upload_url: string; bucket: string; key: string;
+    };
+
+    // 2. Upload encrypted bytes as application/octet-stream
+    const absUploadUrl = upload_url.startsWith("/") ? `${API}${upload_url}` : upload_url;
+    const uploadResp = await alicePage.request.fetch(absUploadUrl, {
+      method: "PUT",
+      data: encryptedBuf,
+      headers: { "Content-Type": "application/octet-stream" },
+    });
+    expect(uploadResp.ok()).toBe(true);
+
+    // 3. POST the message with kind="video" and the encryption envelope
+    const msgResp = await alicePage.request.post(
+      `${API}/messaging/conversations/${convoId}/messages/image`,
+      {
+        data: {
+          bucket, key,
+          content_type: "video/mp4",
+          kind: "video",
+          filename: `enc-video-${TS}.mp4`,
+          filesize: TEST_MP4.length,
+          encryption: {
+            version:    1,
+            alg:        "AES-256-GCM",
+            kdf:        "PBKDF2-SHA256",
+            iterations: 600_000,
+            salt_b64:   salt.toString("base64"),
+            iv_b64:     iv.toString("base64"),
+          },
+        },
+        headers: { "x-csrf-token": session.csrf_token },
+      },
+    );
+    expect(msgResp.status()).toBe(200);
+    const msgBody = await msgResp.json() as Record<string, unknown>;
+    expect(msgBody["kind"]).toBe("video");
+    expect(msgBody["is_encrypted"]).toBe(true);
+    expect(msgBody["encryption"]).toBeTruthy();
+    // Video data is stored under file (not image)
+    expect(msgBody["file"]).toBeTruthy();
+    expect((msgBody["file"] as Record<string, unknown>)["content_type"]).toBe("video/mp4");
+  });
+
+  test.afterAll(async () => {
+    await alicePage?.close();
+    await bobPage?.close();
+  });
+
+  test("Alice's UI shows 'Encrypted' badge and 'Encrypted video' for the sent message", async () => {
+    test.setTimeout(30000);
+    await openDmWithBob(alicePage);
+    await expect(
+      alicePage.getByText("Encrypted video").last()
+    ).toBeVisible({ timeout: 10000 });
+    await expect(
+      alicePage.getByRole("button", { name: "Decrypt to view" }).last()
+    ).toBeVisible({ timeout: 5000 });
+  });
+
+  test("Bob sees 'Encrypted video' + 'Decrypt to view' button", async () => {
+    test.setTimeout(30000);
+    await injectAuth(bobPage, BOB_ID);
+    await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
+    await bobPage.waitForTimeout(1000);
+    const aliceRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
+    await expect(aliceRow).toBeVisible({ timeout: 15000 });
+    await aliceRow.click();
+    await expect(
+      bobPage.getByText("Encrypted video").last()
+    ).toBeVisible({ timeout: 12000 });
+    await expect(
+      bobPage.getByRole("button", { name: "Decrypt to view" }).last()
+    ).toBeVisible({ timeout: 5000 });
+  });
+
+  test("Decrypt dialog title says 'Decrypt video'", async () => {
+    test.setTimeout(20000);
+    await bobPage.getByRole("button", { name: "Decrypt to view" }).last().click();
+    await expect(bobPage.getByRole("dialog")).toBeVisible({ timeout: 5000 });
+    await expect(bobPage.getByText(/Decrypt video/i)).toBeVisible({ timeout: 3000 });
+    // Close dialog before next test
+    await bobPage.getByRole("button", { name: "Cancel" }).click();
+    await expect(bobPage.getByRole("dialog")).not.toBeVisible({ timeout: 3000 });
+  });
+
+  test("Bob enters correct password and video decrypts (<video> blob URL rendered)", async () => {
+    test.setTimeout(30000);
+    await bobPage.getByRole("button", { name: "Decrypt to view" }).last().click();
+    await expect(bobPage.getByRole("dialog")).toBeVisible({ timeout: 5000 });
+
+    await bobPage.locator('input[type="password"]').fill(ENC_PASSWORD);
+    await bobPage.getByRole("button", { name: "Decrypt" }).click();
+
+    // Dialog closes, decrypted video (blob URL) element appears
+    await expect(bobPage.getByRole("dialog")).not.toBeVisible({ timeout: 15000 });
+    await expect(bobPage.locator("video[src^='blob:']")).toBeVisible({ timeout: 10000 });
+  });
+
+  test("Wrong password shows error; dialog stays open", async () => {
+    test.setTimeout(30000);
+    // Reload to reset decrypted state, navigate back to DM
+    await bobPage.reload({ waitUntil: "load" });
+    await bobPage.waitForTimeout(1000);
+    const aliceRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
+    await expect(aliceRow).toBeVisible({ timeout: 15000 });
+    await aliceRow.click();
+
+    await expect(
+      bobPage.getByRole("button", { name: "Decrypt to view" }).last()
+    ).toBeVisible({ timeout: 10000 });
+    await bobPage.getByRole("button", { name: "Decrypt to view" }).last().click();
+
+    await expect(bobPage.getByRole("dialog")).toBeVisible({ timeout: 5000 });
+    await bobPage.locator('input[type="password"]').fill("wrong-password-xyz");
+    await bobPage.getByRole("button", { name: "Decrypt" }).click();
+
+    await expect(bobPage.getByText("Wrong password")).toBeVisible({ timeout: 8000 });
+    await expect(bobPage.getByRole("dialog")).toBeVisible({ timeout: 3000 });
+    await bobPage.getByRole("button", { name: "Cancel" }).click();
   });
 });

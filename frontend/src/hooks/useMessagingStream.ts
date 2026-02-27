@@ -42,6 +42,14 @@ export function useMessagingStream(enabled = true) {
         if (conversationId) {
           queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
         }
+
+        // Refresh meeting poll state on vote/confirm
+        if (eventType === "poll:vote" || eventType === "poll:confirmed") {
+          const pollId = typeof data.poll_id === "string" ? data.poll_id : undefined;
+          if (pollId && conversationId) {
+            queryClient.invalidateQueries({ queryKey: ["poll", pollId, conversationId] });
+          }
+        }
       } catch {
         // Ignore parse errors (heartbeat comments, etc.)
       }
@@ -59,6 +67,8 @@ export function useMessagingStream(enabled = true) {
       "once_media_consumed",
       "once_media_state_changed",
       "conversation_updated",
+      "poll:vote",
+      "poll:confirmed",
     ];
 
     function connect() {

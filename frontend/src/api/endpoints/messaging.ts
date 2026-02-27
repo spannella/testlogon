@@ -21,6 +21,12 @@ import type {
   ConsumeAttachmentResp,
   CreateAttachmentGrantResp,
   SendTipReq,
+  SendGalleryMessageReq,
+  SendFileShareReq,
+  SendCalendarShareReq,
+  SendCalendarEventReq,
+  SendMeetingPollReq,
+  MeetingPollState,
 } from "@/api/types";
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
 import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
@@ -52,6 +58,13 @@ export const startConversation = async (body: StartConversationReq) => {
 
 export const startGroupConversation = async (body: StartGroupConversationReq) => {
   const res = await api.post<Conversation>("/messaging/conversations/group", body);
+  return adaptConversation(res);
+};
+
+export const findOrCreateDm = async (userId: string): Promise<Conversation> => {
+  const res = await api.post<Conversation>("/messaging/conversations/dm/find-or-create", {
+    user_id: userId,
+  });
   return adaptConversation(res);
 };
 
@@ -110,6 +123,18 @@ const uploadToPresignedUrl = async (uploadUrl: string, file: File, contentType: 
 
 /** Read natural width/height from an image File. Returns undefined for non-images (e.g. PDFs). */
 const readImageDimensions = (file: File): Promise<{ width: number; height: number } | undefined> => {
+  if (file.type.startsWith("video/")) {
+    return new Promise((resolve) => {
+      const video = document.createElement("video");
+      const url = URL.createObjectURL(file);
+      video.onloadedmetadata = () => {
+        resolve({ width: video.videoWidth, height: video.videoHeight });
+        URL.revokeObjectURL(url);
+      };
+      video.onerror = () => { resolve(undefined); URL.revokeObjectURL(url); };
+      video.src = url;
+    });
+  }
   if (!file.type.startsWith("image/")) return Promise.resolve(undefined);
   return new Promise((resolve) => {
     const img = new Image();
@@ -185,7 +210,7 @@ export const sendImageMessage = async (
     filesize: file.size,
     // file.lastModified is ms since epoch; convert to Unix seconds
     file_created_at: file.lastModified > 0 ? Math.floor(file.lastModified / 1000) : undefined,
-    kind: isPdf ? "file" : "image",
+    kind: isPdf ? "file" : file.type.startsWith("video/") ? "video" : "image",
     width: dims?.width,
     height: dims?.height,
   };
@@ -375,3 +400,237 @@ export const sendMessageTip = (conversationId: string, messageId: string, body: 
     `/messaging/conversations/${conversationId}/messages/${messageId}/tip`,
     body,
   );
+
+// ─── File Share Messages ───────────────────────────────────────
+
+export async function sendFileShareMessage(
+  conversationId: string,
+  params: SendFileShareReq,
+): Promise<Message> {
+  const res = await api.post<Message>(
+    `/messaging/conversations/${conversationId}/messages/file-share`,
+    params,
+  );
+  return adaptMessage(res);
+}
+
+// ─── Gallery Messages ──────────────────────────────────────────
+
+/**
+ * Generate a blurred 32×32 pixel preview of an image file.
+ * The tiny canvas image, when rendered at full size, appears heavily pixelated —
+ * giving recipients a hint of the image content without revealing details.
+ */
+export async function generateBlurredPreview(file: File): Promise<Blob> {
+  const drawToCanvas = (source: CanvasImageSource): Promise<Blob> =>
+    new Promise((resolve, reject) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 32;
+      canvas.height = 32;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { reject(new Error("No 2d context")); return; }
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(source, 0, 0, 32, 32);
+      canvas.toBlob(
+        (blob) => { if (blob) resolve(blob); else reject(new Error("Canvas toBlob failed")); },
+        "image/jpeg",
+        0.8,
+      );
+    });
+
+  if (file.type.startsWith("video/")) {
+    return new Promise((resolve, reject) => {
+      const video = document.createElement("video");
+      const url = URL.createObjectURL(file);
+      video.muted = true;
+      video.playsInline = true;
+      video.onloadedmetadata = () => { video.currentTime = 0; };
+      video.onseeked = () => {
+        drawToCanvas(video)
+          .then(resolve)
+          .catch(reject)
+          .finally(() => URL.revokeObjectURL(url));
+      };
+      video.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Video load failed")); };
+      video.src = url;
+    });
+  }
+
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      drawToCanvas(img)
+        .then(resolve)
+        .catch(reject)
+        .finally(() => URL.revokeObjectURL(img.src));
+    };
+    img.onerror = () => { URL.revokeObjectURL(img.src); reject(new Error("Image load failed")); };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+// ─── Calendar Share Messages ───────────────────────────────────
+
+export async function sendCalendarShareMessage(
+  conversationId: string,
+  params: SendCalendarShareReq,
+): Promise<Message> {
+  const res = await api.post<Message>(
+    `/messaging/conversations/${conversationId}/messages/calendar-share`,
+    params,
+  );
+  return adaptMessage(res);
+}
+
+export async function sendCalendarEventMessage(
+  conversationId: string,
+  params: SendCalendarEventReq,
+): Promise<Message> {
+  const res = await api.post<Message>(
+    `/messaging/conversations/${conversationId}/messages/calendar-event`,
+    params,
+  );
+  return adaptMessage(res);
+}
+
+export async function sendMeetingPollMessage(
+  conversationId: string,
+  params: SendMeetingPollReq,
+): Promise<Message> {
+  const res = await api.post<Message>(
+    `/messaging/conversations/${conversationId}/messages/meeting-poll`,
+    params,
+  );
+  return adaptMessage(res);
+}
+
+export async function getMeetingPoll(
+  conversationId: string,
+  pollId: string,
+): Promise<MeetingPollState> {
+  return api.get<MeetingPollState>(
+    `/messaging/conversations/${conversationId}/polls/${pollId}`,
+  );
+}
+
+export async function voteMeetingPoll(
+  conversationId: string,
+  pollId: string,
+  votes: Record<string, "yes" | "no" | "maybe">,
+): Promise<{ ok: boolean }> {
+  return api.post<{ ok: boolean }>(
+    `/messaging/conversations/${conversationId}/polls/${pollId}/vote`,
+    { votes },
+  );
+}
+
+export async function confirmMeetingPoll(
+  conversationId: string,
+  pollId: string,
+  slotId: string,
+  calendarId?: string,
+): Promise<{ ok: boolean; event_id?: string }> {
+  return api.post<{ ok: boolean; event_id?: string }>(
+    `/messaging/conversations/${conversationId}/polls/${pollId}/confirm`,
+    { slot_id: slotId, calendar_id: calendarId },
+  );
+}
+
+export async function sendGalleryMessage(
+  conversationId: string,
+  params: {
+    freeFiles: File[];
+    lockedFiles: File[];
+    text?: string;
+    lock_price_cents?: number;
+    lock_description?: string;
+    expires_in_seconds?: number;
+    send_at?: number;
+    tip_amount_cents?: number;
+    tip_payment_method_id?: string;
+  },
+): Promise<Message> {
+  const fallbackFilename = (file: File) =>
+    file.name || (file.type.startsWith("video/") ? "video.mp4" : "image.jpg");
+
+  // Presign + upload all free items (images or videos) in parallel
+  const freeUploads = await Promise.all(
+    params.freeFiles.map(async (file) => {
+      const dims = await readImageDimensions(file);
+      const presign = await api.post<{ upload_url: string; bucket: string; key: string; content_type: string }>(
+        `/messaging/conversations/${conversationId}/images/presign`,
+        { content_type: file.type || "image/jpeg", filename: fallbackFilename(file) },
+      );
+      await uploadToPresignedUrl(presign.upload_url, file, presign.content_type || file.type);
+      return {
+        bucket: presign.bucket,
+        key: presign.key,
+        content_type: presign.content_type || file.type,
+        width: dims?.width,
+        height: dims?.height,
+        filename: file.name,
+        filesize: file.size,
+      };
+    }),
+  );
+
+  // For each locked item: presign main + presign preview + generate preview blob + upload both
+  const lockedUploads = await Promise.all(
+    params.lockedFiles.map(async (file) => {
+      const dims = await readImageDimensions(file);
+
+      // Presign main item and preview in parallel
+      const [mainPresign, previewPresign] = await Promise.all([
+        api.post<{ upload_url: string; bucket: string; key: string; content_type: string }>(
+          `/messaging/conversations/${conversationId}/images/presign`,
+          { content_type: file.type || "image/jpeg", filename: fallbackFilename(file) },
+        ),
+        api.post<{ upload_url: string; bucket: string; key: string; content_type: string }>(
+          `/messaging/conversations/${conversationId}/images/presign`,
+          { content_type: "image/jpeg", filename: `preview_${fallbackFilename(file)}` },
+        ),
+      ]);
+
+      // Generate blurred preview blob and upload both in parallel
+      const previewBlob = await generateBlurredPreview(file);
+      await Promise.all([
+        uploadToPresignedUrl(mainPresign.upload_url, file, mainPresign.content_type || file.type),
+        fetch(previewPresign.upload_url, {
+          method: "PUT",
+          body: previewBlob,
+          headers: { "Content-Type": "image/jpeg" },
+        }).then((r) => { if (!r.ok) throw new Error("Failed to upload preview"); }),
+      ]);
+
+      return {
+        bucket: mainPresign.bucket,
+        key: mainPresign.key,
+        content_type: mainPresign.content_type || file.type,
+        width: dims?.width,
+        height: dims?.height,
+        filename: file.name,
+        filesize: file.size,
+        preview_bucket: previewPresign.bucket,
+        preview_key: previewPresign.key,
+      };
+    }),
+  );
+
+  const body: SendGalleryMessageReq = {
+    free_images: freeUploads,
+    locked_images: lockedUploads,
+    text: params.text,
+    lock_price_cents: params.lock_price_cents,
+    lock_description: params.lock_description,
+    expires_in_seconds: params.expires_in_seconds,
+    send_at: params.send_at,
+    tip_amount_cents: params.tip_amount_cents,
+    tip_payment_method_id: params.tip_payment_method_id,
+  };
+
+  const res = await api.post<Message>(
+    `/messaging/conversations/${conversationId}/messages/gallery`,
+    body,
+  );
+  return adaptMessage(res);
+}

@@ -16,6 +16,7 @@ import {
   Settings,
   Bell,
   UsersRound,
+  BookUser,
   PanelLeftClose,
   PanelLeft,
 } from "lucide-react";
@@ -49,6 +50,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Dashboard", path: "/", icon: <LayoutDashboard className="h-5 w-5" /> },
       { label: "Messages", path: "/messages", icon: <MessageSquare className="h-5 w-5" /> },
+      { label: "Contacts", path: "/contacts", icon: <BookUser className="h-5 w-5" /> },
       { label: "Feed", path: "/feed", icon: <Rss className="h-5 w-5" /> },
     ],
   },

@@ -31,6 +31,7 @@ def _table_defs() -> List[TableDef]:
         TableDef(_resolve_table_name(S.ddb_email_table, "email_devices"), "user_sub", "email_device_id"),
         TableDef(_resolve_table_name(S.ddb_recovery_table, "recovery_codes"), "user_sub", "code_hash"),
         TableDef(_resolve_table_name(S.users_table_name, "users"), "user_sub"),
+        TableDef(_resolve_table_name(S.role_audit_table_name, "role_audit"), "pk", "sk"),
         TableDef(
             _resolve_table_name(S.api_keys_table_name, "api_keys"),
             "key_id",
@@ -129,6 +130,7 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(os.getenv("DDB_CONVERSATION_ROUTING_EVENTS", "ConversationRoutingEvents"), "conversation_id", "event_id"),
+        TableDef(os.getenv("DDB_CONTACTS_TABLE", "Contacts"), "owner_id", "contact_id"),
     ]
 
 

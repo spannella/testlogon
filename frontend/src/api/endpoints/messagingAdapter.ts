@@ -105,6 +105,13 @@ export function adaptMessage(raw: RawMessage): Message {
     deliver_at: raw.deliver_at,
     edited: Boolean(raw.edited_at),
     revoked: Boolean(raw.revoked_at),
+    file_share: raw.file_share,
+    calendar_share: raw.calendar_share,
+    calendar_event: raw.calendar_event,
+    meeting_poll: raw.meeting_poll,
+    free_images: raw.free_images,
+    locked_images: raw.locked_images,
+    locked_image_count: raw.locked_image_count,
   };
 }
 

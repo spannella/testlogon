@@ -129,6 +129,7 @@ def create_session(user_sub: str) -> dict:
 TEST_USERS = [
     ("e2e_alice@test.local", "E2E Alice"),
     ("e2e_bob@test.local", "E2E Bob"),
+    ("e2e_charlie@test.local", "E2E Charlie"),
 ]
 
 results = {}

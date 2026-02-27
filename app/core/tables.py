@@ -30,6 +30,7 @@ class Tables:
     catalog: Any
     subscriptions: Any
     projects: Any
+    contacts: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -54,4 +55,5 @@ T = Tables(
     catalog=ddb.Table(S.catalog_table_name),
     subscriptions=ddb.Table(S.subscriptions_table_name),
     projects=ddb.Table(S.projects_table_name),
+    contacts=ddb.Table(S.contacts_table_name),
 )

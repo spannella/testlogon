@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
-import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye, EyeOff, CreditCard, Check } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye, EyeOff, CreditCard, Check, FileText, CalendarDays, CalendarCheck, Users } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -37,15 +38,22 @@ import {
   reactToMessage,
   sendMessageTip,
   unlockMessage,
+  getMeetingPoll,
+  voteMeetingPoll,
+  confirmMeetingPoll,
 } from "@/api/endpoints/messaging";
+import { createEvent } from "@/api/endpoints/calendar";
 import { ApiError } from "@/api/client";
-import type { Message, PaymentMethod } from "@/api/types";
+import type { GalleryImageItem, Message, MeetingPollAttachment, PaymentMethod } from "@/api/types";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import { FileMessageCard } from "./FileMessageCard";
 import { ReadReceipts, ViewTracker } from "./ReadReceipts";
 import { ForwardDialog } from "./ForwardDialog";
 import { MessageDetailsSheet } from "./MessageDetailsSheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { FilePreview } from "@/pages/files/FilePreview";
+import { downloadUrl, sharedPreviewUrl } from "@/api/endpoints/files";
+import type { FileEntry } from "@/api/types";
 
 const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
@@ -88,6 +96,12 @@ const onceErrorMessageFromCode = (code: string | undefined): string => {
   }
 };
 
+function formatBytes(n: number) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 ** 2).toFixed(1)} MB`;
+}
+
 const openBlobInEphemeralWindow = (blob: Blob) => {
   const objectUrl = URL.createObjectURL(blob);
   const opened = window.open(objectUrl, "_blank", "noopener,noreferrer");
@@ -108,7 +122,153 @@ function replyPreviewText(msg: Message): string {
   return (msg.text ?? "").slice(0, 80) || "[Message]";
 }
 
+// ─── MeetingPollCard ──────────────────────────────────────────────
+
+interface MeetingPollCardProps {
+  pollStub: MeetingPollAttachment;
+  conversationId: string;
+  isOwn: boolean;
+  currentUserId?: string;
+}
+
+function MeetingPollCard({ pollStub, conversationId, isOwn }: MeetingPollCardProps) {
+  const queryClient = useQueryClient();
+
+  const { data: poll, isLoading } = useQuery({
+    queryKey: ["poll", pollStub.poll_id, conversationId],
+    queryFn: () => getMeetingPoll(conversationId, pollStub.poll_id),
+    refetchInterval: pollStub.status === "open" ? 15000 : false,
+  });
+
+  const voteMut = useMutation({
+    mutationFn: (votes: Record<string, "yes" | "no" | "maybe">) =>
+      voteMeetingPoll(conversationId, pollStub.poll_id, votes),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["poll", pollStub.poll_id, conversationId] }),
+    onError: () => toast.error("Failed to vote"),
+  });
+
+  const confirmMut = useMutation({
+    mutationFn: ({ slotId, calendarId }: { slotId: string; calendarId?: string }) =>
+      confirmMeetingPoll(conversationId, pollStub.poll_id, slotId, calendarId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["poll", pollStub.poll_id, conversationId] }),
+    onError: () => toast.error("Failed to confirm slot"),
+  });
+
+  const status = poll?.status ?? pollStub.status;
+  const isConfirmed = status === "confirmed";
+  const confirmedSlot = poll?.slots?.find((s) => s.slot_id === poll.confirmed_slot_id);
+
+  function formatSlotTime(startUtc: string, endUtc: string): string {
+    const s = new Date(startUtc);
+    const e = new Date(endUtc);
+    const date = s.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    const startT = s.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    const endT = e.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+    return `${date}, ${startT} – ${endT}`;
+  }
+
+  async function handleAddToCalendar(startUtc: string, endUtc: string) {
+    // Try to add to first calendar — best effort
+    try {
+      const { getCalendars } = await import("@/api/endpoints/calendar");
+      const cals = await getCalendars();
+      const firstCal = cals[0];
+      if (!firstCal) { toast.error("No calendars found"); return; }
+      await createEvent(firstCal.calendar_id, {
+        name: pollStub.title,
+        start_utc: startUtc,
+        end_utc: endUtc,
+        all_day: false,
+      });
+      toast.success("Added to your calendar");
+    } catch {
+      toast.error("Failed to add to calendar");
+    }
+  }
+
+  return (
+    <div className="mt-1 rounded-lg border bg-muted/40 p-3 max-w-sm space-y-2">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Users className="h-5 w-5 shrink-0 text-primary/70" />
+          <p className="font-medium text-sm">{poll?.title ?? pollStub.title}</p>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <span className="text-xs bg-muted rounded-full px-2 py-0.5">
+            {poll?.duration_minutes ?? pollStub.duration_minutes} min
+          </span>
+          {isConfirmed ? (
+            <span className="text-xs bg-green-100 text-green-700 rounded-full px-2 py-0.5">✅ Confirmed</span>
+          ) : (
+            <span className="text-xs bg-blue-100 text-blue-700 rounded-full px-2 py-0.5">🗳️ Voting open</span>
+          )}
+        </div>
+      </div>
+
+      {/* Confirmed slot */}
+      {isConfirmed && confirmedSlot && (
+        <div className="rounded-md bg-green-50 border border-green-200 px-3 py-2 space-y-1">
+          <p className="text-sm font-medium text-green-800">
+            {formatSlotTime(confirmedSlot.start_utc, confirmedSlot.end_utc)}
+          </p>
+          <button
+            type="button"
+            className="text-xs text-primary hover:underline"
+            onClick={() => handleAddToCalendar(confirmedSlot.start_utc, confirmedSlot.end_utc)}
+          >
+            Add to My Calendar
+          </button>
+        </div>
+      )}
+
+      {/* Slot votes (when open) */}
+      {!isConfirmed && (
+        <div className="space-y-1">
+          {isLoading && <p className="text-xs text-muted-foreground">Loading…</p>}
+          {poll?.slots.map((slot) => (
+            <div key={slot.slot_id} className="rounded border bg-background/60 px-2 py-1.5 space-y-1">
+              <p className="text-xs">{formatSlotTime(slot.start_utc, slot.end_utc)}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                {(["yes", "maybe", "no"] as const).map((choice) => {
+                  const label = choice === "yes" ? "👍" : choice === "maybe" ? "🤔" : "👎";
+                  const count = choice === "yes" ? slot.yes_count : choice === "maybe" ? slot.maybe_count : slot.no_count;
+                  return (
+                    <button
+                      key={choice}
+                      type="button"
+                      onClick={() => voteMut.mutate({ [slot.slot_id]: choice })}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs transition-colors border",
+                        slot.my_vote === choice
+                          ? "bg-primary text-primary-foreground border-primary"
+                          : "hover:bg-muted border-transparent",
+                      )}
+                    >
+                      {label} {count > 0 && count}
+                    </button>
+                  );
+                })}
+                {isOwn && (
+                  <button
+                    type="button"
+                    onClick={() => confirmMut.mutate({ slotId: slot.slot_id })}
+                    className="text-xs text-primary hover:underline ml-auto"
+                  >
+                    Confirm →
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MessageBubble({ message, isOwn, showSender, conversationId, onReply, replyToMessage, viewedOnceIds, onViewOnce }: MessageBubbleProps) {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [forwardOpen, setForwardOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -132,6 +292,8 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   const [expiryCountdown, setExpiryCountdown] = useState<string | null>(null);
   const [unlockDialogOpen, setUnlockDialogOpen] = useState(false);
   const [unlockPaymentMethodId, setUnlockPaymentMethodId] = useState<string | null>(null);
+  const [fileSharePreviewOpen, setFileSharePreviewOpen] = useState(false);
+  const [filePreviewOpen, setFilePreviewOpen] = useState(false);
 
   const viewOnceTextRevealed = viewedOnceIds?.has(message.message_id) ?? false;
 
@@ -256,7 +418,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
     setDecryptError(null);
     setDecrypting(true);
     try {
-      const isMedia = message.kind === "image" || message.kind === "file";
+      const isMedia = message.kind === "image" || message.kind === "file" || message.kind === "video";
       if (isMedia) {
         const url = message.image?.url ?? message.file?.url;
         if (!url) throw new Error("No URL for encrypted media");
@@ -501,6 +663,20 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             // Recipient view: locked message — show paywall BEFORE any decrypt UI so that
             // encryption does not bypass the unlock requirement.
             <div className="space-y-2">
+              {/* Blurred preview for locked single images */}
+              {message.kind === "image" && message.image?.preview_url && (
+                <div className="relative overflow-hidden rounded-lg">
+                  <img
+                    src={message.image.preview_url}
+                    alt="Locked image preview"
+                    className="w-full max-h-48 object-cover"
+                    style={{ imageRendering: "pixelated", filter: "blur(2px)", transform: "scale(1.05)" }}
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                    <Lock className="h-8 w-8 text-white drop-shadow" />
+                  </div>
+                </div>
+              )}
               <div className="inline-flex items-center gap-1.5 rounded-full bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
                 <Lock className="h-3 w-3" />
                 {`Lock · $${(message.lock_price_cents / 100).toFixed(2)}`}
@@ -549,6 +725,8 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 decryptedMediaUrl ? (
                   message.kind === "image" ? (
                     <img src={decryptedMediaUrl} alt="Decrypted image" className="max-h-64 rounded-lg object-cover mt-1" />
+                  ) : message.kind === "video" ? (
+                    <video src={decryptedMediaUrl} className="max-h-64 rounded-lg mt-1 w-full" controls playsInline />
                   ) : (
                     <a
                       href={decryptedMediaUrl}
@@ -562,7 +740,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 ) : (
                   <>
                     <p className="whitespace-pre-wrap break-words text-sm italic">
-                      {message.kind === "image" ? "Encrypted image" : "Encrypted file"}
+                      {message.kind === "image" ? "Encrypted image" : message.kind === "video" ? "Encrypted video" : "Encrypted file"}
                     </p>
                     {!showUnsupportedEncryptedState && (
                       <div>
@@ -682,6 +860,31 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             <p className="whitespace-pre-wrap break-words text-sm">{message.text}</p>
           ) : null}
 
+          {message.preview?.url && (
+            <a
+              href={message.preview.url}
+              className="mt-2 flex items-start gap-2 rounded-lg border bg-muted/40 p-2 hover:bg-muted/60 transition-colors no-underline"
+              onClick={(e) => {
+                if (message.preview!.url!.startsWith("/")) {
+                  e.preventDefault();
+                  navigate(message.preview!.url!);
+                }
+              }}
+            >
+              {message.preview.image_url && (
+                <img src={message.preview.image_url} className="h-14 w-14 rounded object-cover shrink-0" alt="" />
+              )}
+              <div className="min-w-0">
+                {message.preview.title && (
+                  <p className="text-sm font-medium line-clamp-2">{message.preview.title}</p>
+                )}
+                {message.preview.site_name && (
+                  <p className="text-xs text-muted-foreground">{message.preview.site_name}</p>
+                )}
+              </div>
+            </a>
+          )}
+
           {message.kind === "image" && !message.is_encrypted && expiryCountdown !== "expired" && !message.expired && (
             message.consumption_policy === "view_once" && !isOwn ? (
               // View-once image for recipient: show tap-to-view, not the actual image
@@ -732,25 +935,322 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             ) : null
           )}
 
+          {message.kind === "gallery" && expiryCountdown !== "expired" && !message.expired && (
+            <div className="space-y-2 mt-1">
+              {/* Free items grid (images + videos) */}
+              {message.free_images && message.free_images.length > 0 && (
+                <div className="grid grid-cols-3 gap-1">
+                  {(message.free_images as GalleryImageItem[]).map((item, i) => (
+                    item.url ? (
+                      item.content_type?.startsWith("video/") ? (
+                        <video
+                          key={i}
+                          src={item.url}
+                          className="w-full aspect-square object-cover rounded"
+                          muted
+                          playsInline
+                          preload="metadata"
+                          controls
+                        />
+                      ) : (
+                        <img
+                          key={i}
+                          src={item.url}
+                          alt={item.filename ?? `Image ${i + 1}`}
+                          className="w-full aspect-square object-cover rounded"
+                        />
+                      )
+                    ) : null
+                  ))}
+                </div>
+              )}
+
+              {/* Locked items section */}
+              {(message.locked_image_count ?? 0) > 0 && (
+                <div>
+                  {message.locked_images ? (
+                    // Unlocked: show full grid
+                    <div className="grid grid-cols-3 gap-1">
+                      {(message.locked_images as GalleryImageItem[]).map((item, i) => (
+                        item.url ? (
+                          item.content_type?.startsWith("video/") ? (
+                            <video
+                              key={i}
+                              src={item.url}
+                              className="w-full aspect-square object-cover rounded"
+                              muted
+                              playsInline
+                              preload="metadata"
+                              controls
+                            />
+                          ) : (
+                            <img
+                              key={i}
+                              src={item.url}
+                              alt={item.filename ?? `Locked image ${i + 1}`}
+                              className="w-full aspect-square object-cover rounded"
+                            />
+                          )
+                        ) : null
+                      ))}
+                    </div>
+                  ) : (
+                    // Locked: show blurred previews if available, else placeholder grid
+                    <div>
+                      <div className="grid grid-cols-3 gap-1 opacity-70">
+                        {Array.from({ length: Math.min(message.locked_image_count ?? 0, 6) }).map((_, i) => (
+                          <div key={i} className="relative aspect-square rounded overflow-hidden bg-muted/60 flex items-center justify-center">
+                            <Lock className="h-4 w-4 text-muted-foreground" />
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+                        <div className="inline-flex items-center gap-1.5 rounded-full bg-background/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide">
+                          <Lock className="h-3 w-3" />
+                          {`${message.locked_image_count} locked item${message.locked_image_count !== 1 ? "s" : ""} · $${((message.lock_price_cents ?? 0) / 100).toFixed(2)}`}
+                        </div>
+                        {!isOwn && message.lock_price_cents && (
+                          paymentMethods.length === 0 ? (
+                            <TooltipProvider delayDuration={100}>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <div>
+                                    <Button type="button" size="sm" variant="secondary" className="h-7 px-2 text-xs cursor-not-allowed opacity-50" disabled>
+                                      <CreditCard className="mr-1 h-3 w-3" />
+                                      {`Unlock for $${(message.lock_price_cents / 100).toFixed(2)}`}
+                                    </Button>
+                                  </div>
+                                </TooltipTrigger>
+                                <TooltipContent>Add a payment method in Billing to unlock this message</TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
+                          ) : (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              className="h-7 px-2 text-xs"
+                              onClick={() => {
+                                const def = paymentMethods.find((m) => m.is_default) ?? paymentMethods[0];
+                                setUnlockPaymentMethodId(def?.payment_method_id ?? null);
+                                setUnlockDialogOpen(true);
+                              }}
+                            >
+                              <CreditCard className="mr-1 h-3 w-3" />
+                              {`Unlock for $${(message.lock_price_cents / 100).toFixed(2)}`}
+                            </Button>
+                          )
+                        )}
+                      </div>
+                      {message.lock_description && (
+                        <p className="mt-1 text-xs text-muted-foreground italic">{message.lock_description}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {isFileKind && !message.is_encrypted && expiryCountdown !== "expired" && !message.expired && typeof message.file?.name === "string" && (
-            <FileMessageCard
-              fileName={message.file.name}
-              fileUrl={typeof message.file?.url === "string" ? message.file.url : undefined}
-              kind={message.kind}
+            <>
+              <FileMessageCard
+                fileName={message.file.name}
+                fileUrl={typeof message.file?.url === "string" ? message.file.url : undefined}
+                kind={message.kind}
+                isOwn={isOwn}
+                consumptionState={message.consumption_state}
+                onceError={onceError}
+                opening={openingOnce}
+                onOpen={() => {
+                  if (message.consumption_policy) {
+                    void handleOpenOnceAttachment();
+                    return;
+                  }
+                  setFilePreviewOpen(true);
+                }}
+              />
+              {filePreviewOpen && message.file?.url && (
+                <FilePreview
+                  file={{
+                    name: message.file.name,
+                    path: "",
+                    type: "file",
+                    size: message.file.size,
+                    content_type: message.file.content_type,
+                  } as FileEntry}
+                  files={[]}
+                  previewSrcUrl={message.file.url}
+                  onClose={() => setFilePreviewOpen(false)}
+                  onNavigate={() => {}}
+                  onDownload={() => { if (message.file?.url) window.open(message.file.url, "_blank", "noopener,noreferrer"); }}
+                />
+              )}
+            </>
+          )}
+
+          {message.kind === "file_share" && message.file_share && (
+            <>
+              <div className="mt-1 rounded-lg border bg-muted/40 p-3 flex gap-3 items-start max-w-xs">
+                <FileText className="h-8 w-8 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1 space-y-1">
+                  <p className="font-medium text-sm truncate">{message.file_share.name}</p>
+                  {message.file_share.size != null && (
+                    <p className="text-xs text-muted-foreground">{formatBytes(message.file_share.size)}</p>
+                  )}
+                  <span className={cn(
+                    "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium",
+                    message.file_share.permission === "write"
+                      ? "bg-amber-100 text-amber-800"
+                      : "bg-blue-100 text-blue-800",
+                  )}>
+                    {message.file_share.permission === "write" ? "View + Edit" : "View only"}
+                  </span>
+                  {message.file_share.is_encrypted && (
+                    <span className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Lock className="h-3 w-3" /> Encrypted
+                    </span>
+                  )}
+                  <div className="flex items-center gap-2 pt-0.5">
+                    {!message.file_share.is_encrypted && (
+                      <button
+                        type="button"
+                        className="text-xs text-primary hover:underline"
+                        onClick={() => setFileSharePreviewOpen(true)}
+                      >
+                        Preview
+                      </button>
+                    )}
+                    <a
+                      href="/files"
+                      className="text-xs text-primary hover:underline whitespace-nowrap"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      Open in Files
+                    </a>
+                  </div>
+                </div>
+              </div>
+              {fileSharePreviewOpen && message.file_share && (
+                <FilePreview
+                  file={{
+                    name: message.file_share.name,
+                    path: message.file_share.path,
+                    type: "file",
+                    size: message.file_share.size,
+                    content_type: message.file_share.content_type,
+                    is_encrypted: message.file_share.is_encrypted,
+                  } as FileEntry}
+                  files={[]}
+                  previewSrcUrl={
+                    isOwn
+                      ? downloadUrl(message.file_share.path)
+                      : sharedPreviewUrl(message.file_share.owner, message.file_share.path)
+                  }
+                  onClose={() => setFileSharePreviewOpen(false)}
+                  onNavigate={() => {}}
+                  onDownload={() => {
+                    const url = isOwn
+                      ? downloadUrl(message.file_share!.path)
+                      : sharedPreviewUrl(message.file_share!.owner, message.file_share!.path);
+                    window.open(url, "_blank", "noopener,noreferrer");
+                  }}
+                />
+              )}
+            </>
+          )}
+          {message.kind === "file_share" && message.text && (
+            <p className="mt-1 text-sm">{message.text}</p>
+          )}
+
+          {/* ── Calendar share card ── */}
+          {message.kind === "calendar_share" && message.calendar_share && (
+            <div className="mt-1 rounded-lg border bg-muted/40 p-3 flex gap-3 items-start max-w-xs">
+              <CalendarDays className="h-8 w-8 shrink-0 text-primary/70" />
+              <div className="min-w-0 flex-1 space-y-1">
+                <p className="font-medium text-sm truncate">{message.calendar_share.name}</p>
+                <span className={cn(
+                  "inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs font-medium",
+                  message.calendar_share.permission === "write"
+                    ? "bg-amber-100 text-amber-800"
+                    : "bg-blue-100 text-blue-800",
+                )}>
+                  {message.calendar_share.permission === "write" ? "View + Edit" : "View only"}
+                </span>
+                <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                  <a href="/calendar" className="text-xs text-primary hover:underline">View Calendar</a>
+                  {message.calendar_share.booking_public_url && (
+                    <a
+                      href={message.calendar_share.booking_public_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-primary hover:underline"
+                    >
+                      Book a time →
+                    </a>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+          {message.kind === "calendar_share" && message.text && (
+            <p className="mt-1 text-sm">{message.text}</p>
+          )}
+
+          {/* ── Calendar event card ── */}
+          {message.kind === "calendar_event" && message.calendar_event && (() => {
+            const ev = message.calendar_event;
+            const start = ev.start_utc ? new Date(ev.start_utc) : null;
+            const dateStr = ev.all_day
+              ? (ev.all_day_date ?? "")
+              : (start?.toLocaleString(undefined, {
+                  weekday: "short",
+                  month: "short",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                }) ?? "");
+            return (
+              <div className="mt-1 rounded-lg border bg-muted/40 p-3 flex gap-3 items-start max-w-xs">
+                <CalendarCheck className="h-8 w-8 shrink-0 text-primary/70" />
+                <div className="min-w-0 flex-1 space-y-1">
+                  <p className="font-medium text-sm truncate">{ev.name}</p>
+                  {dateStr && <p className="text-xs text-muted-foreground">{dateStr}</p>}
+                  <div className="flex flex-wrap gap-2 pt-0.5">
+                    <a
+                      href={`/event/${ev.calendar_id}/${ev.event_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-xs text-primary hover:underline"
+                    >
+                      View details
+                    </a>
+                    <a
+                      href={`/calendar/public/event/${ev.calendar_id}/${ev.event_id}/ical`}
+                      download
+                      className="text-xs text-primary hover:underline"
+                    >
+                      Download .ics
+                    </a>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+          {message.kind === "calendar_event" && message.text && (
+            <p className="mt-1 text-sm">{message.text}</p>
+          )}
+
+          {/* ── Meeting poll card ── */}
+          {message.kind === "meeting_poll" && message.meeting_poll && (
+            <MeetingPollCard
+              pollStub={message.meeting_poll as MeetingPollAttachment}
+              conversationId={conversationId}
               isOwn={isOwn}
-              consumptionState={message.consumption_state}
-              onceError={onceError}
-              opening={openingOnce}
-              onOpen={() => {
-                if (message.consumption_policy) {
-                  void handleOpenOnceAttachment();
-                  return;
-                }
-                if (message.file?.url) {
-                  window.open(message.file.url, "_blank", "noopener,noreferrer");
-                }
-              }}
             />
+          )}
+          {message.kind === "meeting_poll" && message.text && (
+            <p className="mt-1 text-sm">{message.text}</p>
           )}
 
           {message.tip_amount_cents && message.tip_amount_cents > 0 && (
@@ -848,10 +1348,10 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {message.kind === "image" ? "Decrypt image" : isFileKind ? "Decrypt file" : "Decrypt message"}
+              {message.kind === "image" ? "Decrypt image" : message.kind === "video" ? "Decrypt video" : isFileKind ? "Decrypt file" : "Decrypt message"}
             </DialogTitle>
             <DialogDescription>
-              Enter the shared password to decrypt this {message.kind === "image" ? "image" : isFileKind ? "file" : "message"} locally on your device.
+              Enter the shared password to decrypt this {message.kind === "image" ? "image" : message.kind === "video" ? "video" : isFileKind ? "file" : "message"} locally on your device.
             </DialogDescription>
           </DialogHeader>
 

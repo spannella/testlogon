@@ -250,6 +250,9 @@ class Settings:
     # Calendar
     calendar_table_name: str = os.environ.get("CALENDAR_TABLE_NAME", "calendar")
 
+    # Contacts
+    contacts_table_name: str = os.environ.get("DDB_CONTACTS_TABLE", "Contacts")
+
     # Purchase history
     purchase_transactions_table_name: str = os.environ.get(
         "PURCHASE_TRANSACTIONS_TABLE_NAME",

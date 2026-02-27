@@ -22,6 +22,123 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 
+const PYTHON = "/home/ubuntu/testlogon/.venv/bin/python3";
+
+function injectPaymentMethod(userSub: string, pmId: string): void {
+  execSync(
+    `${PYTHON} -c "
+import boto3, os, time
+from pathlib import Path
+env_file = Path('/home/ubuntu/testlogon/.env.local')
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+ddb = boto3.resource(
+    'dynamodb',
+    endpoint_url=os.environ.get('DDB_ENDPOINT_URL', 'http://localhost:8001'),
+    region_name='us-east-1',
+    aws_access_key_id='test',
+    aws_secret_access_key='test',
+)
+tbl = ddb.Table('billing')
+pk = 'USER#${userSub}'
+pm_id = '${pmId}'
+sk = 'PM#' + pm_id
+tbl.put_item(Item={
+    'pk': pk,
+    'sk': sk,
+    'payment_method_id': pm_id,
+    'provider': 'stripe',
+    'provider_method_id': pm_id,
+    'method_type': 'card',
+    'label': 'Test Card ****4242',
+    'brand': 'visa',
+    'last4': '4242',
+    'exp_month': 12,
+    'exp_year': 2099,
+    'is_default': True,
+    'priority': 0,
+    'created_at': int(time.time()),
+})
+tbl.put_item(Item={
+    'pk': pk,
+    'sk': 'BILLING',
+    'autopay_enabled': False,
+    'currency': 'usd',
+    'default_payment_method_id': pm_id,
+})
+print('injected')
+"`,
+    { timeout: 10_000 },
+  );
+}
+
+function removePaymentMethod(userSub: string, pmId: string): void {
+  try {
+    execSync(
+      `${PYTHON} -c "
+import boto3, os
+from pathlib import Path
+env_file = Path('/home/ubuntu/testlogon/.env.local')
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+ddb = boto3.resource(
+    'dynamodb',
+    endpoint_url=os.environ.get('DDB_ENDPOINT_URL', 'http://localhost:8001'),
+    region_name='us-east-1',
+    aws_access_key_id='test',
+    aws_secret_access_key='test',
+)
+tbl = ddb.Table('billing')
+pk = 'USER#${userSub}'
+tbl.delete_item(Key={'pk': pk, 'sk': 'PM#${pmId}'})
+tbl.delete_item(Key={'pk': pk, 'sk': 'BILLING'})
+print('removed')
+"`,
+      { timeout: 10_000 },
+    );
+  } catch {
+    // best-effort cleanup
+  }
+}
+
+function queryLedger(userSub: string): string {
+  return execSync(
+    `${PYTHON} -c "
+import boto3, os, json
+from pathlib import Path
+from boto3.dynamodb.conditions import Key
+env_file = Path('/home/ubuntu/testlogon/.env.local')
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            os.environ.setdefault(k.strip(), v.strip())
+ddb = boto3.resource(
+    'dynamodb',
+    endpoint_url=os.environ.get('DDB_ENDPOINT_URL', 'http://localhost:8001'),
+    region_name='us-east-1',
+    aws_access_key_id='test',
+    aws_secret_access_key='test',
+)
+tbl = ddb.Table('billing')
+resp = tbl.query(
+    KeyConditionExpression=Key('pk').eq('USER#${userSub}') & Key('sk').begins_with('LEDGER#'),
+)
+print(json.dumps(resp['Items'], default=str))
+"`,
+    { timeout: 10_000 },
+  ).toString().trim();
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const BASE = "http://localhost:3000";
@@ -405,5 +522,408 @@ test.describe("7. Feed SSE endpoint", () => {
       expect([200, 204, 206].includes(resp.status())).toBe(true);
     }
     await page.close();
+  });
+});
+
+// ─── 8. Locked posts ──────────────────────────────────────────────────────────
+
+test.describe("8. Locked posts", () => {
+  let page: Page;
+  let postId: string;
+  const LOCK_PRICE_CENTS = 200; // $2.00
+  const BOB_PM = `feed_test_bob_pm_${Date.now()}`;
+  let bobSub = "";
+
+  test.beforeAll(async ({ browser }) => {
+    page = await browser.newPage();
+    await injectAuth(page, ALICE_ID);
+
+    // Alice creates a locked post
+    const resp = await feedPost(page, "/posts", {
+      body: `Locked post content ${Date.now()}`,
+      unlock_price_cents: LOCK_PRICE_CENTS,
+    });
+    expect(resp.ok()).toBe(true);
+    const data = await resp.json();
+    postId = data.post_id;
+    expect(postId).toBeTruthy();
+
+    // Inject a payment method for Bob
+    bobSub = getSessions()[BOB_ID].user_sub;
+    injectPaymentMethod(bobSub, BOB_PM);
+  });
+
+  test.afterAll(async () => {
+    if (postId) await feedDelete(page, `/posts/${postId}`);
+    removePaymentMethod(bobSub, BOB_PM);
+    await page.close();
+  });
+
+  test("create_post returns locked=true and unlock_price_cents", async () => {
+    const resp = await feedPost(page, "/posts", {
+      body: "Another locked post",
+      unlock_price_cents: LOCK_PRICE_CENTS,
+    });
+    expect(resp.ok()).toBe(true);
+    const data = await resp.json();
+    expect(data.locked).toBe(true);
+    expect(data.unlock_price_cents).toBe(LOCK_PRICE_CENTS);
+    // Cleanup
+    await feedDelete(page, `/posts/${data.post_id}`);
+  });
+
+  test("owner (Alice) sees full content in feed — unlocked=true", async () => {
+    const resp = await feedGet(page, "/feed");
+    expect(resp.ok()).toBe(true);
+    const data = await resp.json();
+    const items: Array<{ post_id: string; body: string; unlocked: boolean }> = data.items ?? data;
+    const found = items.find((p) => p.post_id === postId);
+    expect(found).toBeTruthy();
+    // Owner always sees content and unlocked=true
+    expect(found!.body).not.toBe("[Locked content]");
+    expect(found!.unlocked).toBe(true);
+  });
+
+  test("Bob (non-owner) sees [Locked content] and unlocked=false via GET /posts/:id", async () => {
+    const bobPage = await page.context().browser()!.newPage();
+    await injectAuth(bobPage, BOB_ID);
+
+    const resp = await bobPage.request.get(`${API}/posts/${postId}`, {
+      headers: { "x-csrf-token": getSessions()[BOB_ID].csrf_token },
+    });
+    expect(resp.ok()).toBe(true);
+    const data = await resp.json();
+    expect(data.body).toBe("[Locked content]");
+    expect(data.unlocked).toBe(false);
+    expect(data.unlock_price_cents).toBe(LOCK_PRICE_CENTS);
+
+    await bobPage.close();
+  });
+
+  test("Bob unlocks the post and sees full content via GET /posts/:id", async () => {
+    const bobPage = await page.context().browser()!.newPage();
+    await injectAuth(bobPage, BOB_ID);
+
+    // Unlock the post using PM
+    const unlockResp = await bobPage.request.post(`${API}/posts/unlock`, {
+      data: { post_id: postId, payment_method_id: BOB_PM },
+      headers: { "x-csrf-token": getSessions()[BOB_ID].csrf_token },
+    });
+    expect(unlockResp.ok()).toBe(true);
+
+    // Bob now fetches the post directly and sees full content
+    const getResp = await bobPage.request.get(`${API}/posts/${postId}`, {
+      headers: { "x-csrf-token": getSessions()[BOB_ID].csrf_token },
+    });
+    expect(getResp.ok()).toBe(true);
+    const data = await getResp.json();
+    expect(data.body).not.toBe("[Locked content]");
+    expect(data.unlocked).toBe(true);
+
+    await bobPage.close();
+  });
+
+  test("billing ledger has a debit entry for Bob's unlock", async () => {
+    const ledgerJson = queryLedger(bobSub);
+    const entries: Array<{
+      type: string;
+      amount_cents: unknown;
+      reason: string;
+      meta: { post_id: string };
+    }> = JSON.parse(ledgerJson);
+
+    const entry = entries.find(
+      (e) => e.type === "debit" && e.reason === "Post unlock" && e.meta?.post_id === postId,
+    );
+    expect(entry).toBeTruthy();
+    // DynamoDB may serialize numbers as strings; compare numerically
+    expect(Number(entry!.amount_cents)).toBe(LOCK_PRICE_CENTS);
+  });
+
+  test("unlock again returns already_unlocked status (self-contained)", async ({ browser }) => {
+    // Self-contained: create a new post, Bob unlocks once, Bob tries to unlock again
+    const alicePage = await browser.newPage();
+    await injectAuth(alicePage, ALICE_ID);
+
+    // Alice creates a fresh locked post
+    const createResp = await alicePage.request.post(`${API}/posts`, {
+      data: { body: `Self-contained lock test ${Date.now()}`, unlock_price_cents: LOCK_PRICE_CENTS },
+      headers: { "x-csrf-token": getSessions()[ALICE_ID].csrf_token },
+    });
+    expect(createResp.ok()).toBe(true);
+    const { post_id: freshPostId } = await createResp.json();
+
+    const bobPage = await browser.newPage();
+    await injectAuth(bobPage, BOB_ID);
+
+    // Bob unlocks for the first time
+    const firstUnlock = await bobPage.request.post(`${API}/posts/unlock`, {
+      data: { post_id: freshPostId, payment_method_id: BOB_PM },
+      headers: { "x-csrf-token": getSessions()[BOB_ID].csrf_token },
+    });
+    expect(firstUnlock.ok()).toBe(true);
+
+    // Bob tries to unlock again — should get already_unlocked
+    const secondUnlock = await bobPage.request.post(`${API}/posts/unlock`, {
+      data: { post_id: freshPostId, payment_method_id: BOB_PM },
+      headers: { "x-csrf-token": getSessions()[BOB_ID].csrf_token },
+    });
+    expect(secondUnlock.ok()).toBe(true);
+    const data = await secondUnlock.json();
+    expect(data.payment_intent?.status).toBe("already_unlocked");
+
+    // Cleanup
+    await alicePage.request.delete(`${API}/posts/${freshPostId}`, {
+      headers: { "x-csrf-token": getSessions()[ALICE_ID].csrf_token },
+    });
+    await bobPage.close();
+    await alicePage.close();
+  });
+
+  test("unlock with invalid PM returns 400", async () => {
+    // Create a fresh post to test PM validation without interference
+    const newPostResp = await feedPost(page, "/posts", {
+      body: "PM validation test post",
+      unlock_price_cents: LOCK_PRICE_CENTS,
+    });
+    const newPost = await newPostResp.json();
+
+    const bobPage = await page.context().browser()!.newPage();
+    await injectAuth(bobPage, BOB_ID);
+
+    const resp = await bobPage.request.post(`${API}/posts/unlock`, {
+      data: { post_id: newPost.post_id, payment_method_id: "nonexistent_pm_xyz" },
+      headers: { "x-csrf-token": getSessions()[BOB_ID].csrf_token },
+    });
+    expect(resp.status()).toBe(400);
+
+    await bobPage.close();
+    await feedDelete(page, `/posts/${newPost.post_id}`);
+  });
+
+  test("UI: CreatePost shows Lock button", async ({ browser }) => {
+    const uiPage = await browser.newPage();
+    await gotoFeed(uiPage);
+    const lockBtn = uiPage.locator("button").filter({ hasText: /^lock$/i });
+    await expect(lockBtn).toBeVisible({ timeout: 5000 });
+    await uiPage.close();
+  });
+
+  test("UI: Lock button toggles price input", async ({ browser }) => {
+    const uiPage = await browser.newPage();
+    await gotoFeed(uiPage);
+
+    // Click Lock button
+    const lockBtn = uiPage.locator("button").filter({ hasText: /^lock$/i });
+    await lockBtn.click();
+
+    // Lock price input should appear
+    const priceInput = uiPage.locator("input[placeholder*='2.99']");
+    await expect(priceInput).toBeVisible({ timeout: 3000 });
+
+    await uiPage.close();
+  });
+});
+
+// ─── 9. Post tips, reactions, and comment tips ──────────────────────────────
+
+test.describe("9. Post tips, reactions, and comment tips", () => {
+  let page: Page;
+  let bobPage: Page;
+  let postId: string;
+  const TIP_PM_ID = `pm_feed_tip_${Date.now()}`;
+  const TIP_AMOUNT_CENTS = 250;
+  const REACTION_EMOJI = "👍";
+
+  test.beforeAll(async ({ browser }) => {
+    page = await browser.newPage();
+    await injectAuth(page, ALICE_ID);
+    bobPage = await browser.newPage();
+    await injectAuth(bobPage, BOB_ID);
+    // Create a test post for Alice
+    const resp = await feedPost(page, "/posts", {
+      body: `Tip+reaction test post ${Date.now()}`,
+    });
+    expect(resp.status()).toBe(200);
+    const post = await resp.json() as { post_id: string };
+    postId = post.post_id;
+    // Inject PM for Bob so he can tip Alice's post
+    injectPaymentMethod(BOB_ID, TIP_PM_ID);
+  });
+
+  test.afterAll(async () => {
+    try { await feedDelete(page, `/posts/${postId}`); } catch { /**/ }
+    removePaymentMethod(BOB_ID, TIP_PM_ID);
+    await page.close();
+    await bobPage.close();
+  });
+
+  // ── Post tips ──────────────────────────────────────────────────
+
+  test("POST /posts/:id/tip — cannot tip own post (400)", async () => {
+    const resp = await feedPost(page, `/posts/${postId}/tip`, {
+      amount_cents: TIP_AMOUNT_CENTS,
+    });
+    expect(resp.status()).toBe(400);
+    const body = await resp.json() as { detail: string };
+    expect(body.detail).toMatch(/own post/i);
+  });
+
+  test("POST /posts/:id/tip — Bob tips Alice's post", async () => {
+    const bobSession = getSessions()[BOB_ID];
+    const resp = await bobPage.request.post(`${API}/posts/${postId}/tip`, {
+      data: { amount_cents: TIP_AMOUNT_CENTS, payment_method_id: TIP_PM_ID },
+      headers: { "x-csrf-token": bobSession.csrf_token },
+    });
+    expect(resp.status()).toBe(200);
+    const body = await resp.json() as { ok: boolean; tip_total_cents: number };
+    expect(body.ok).toBe(true);
+    expect(body.tip_total_cents).toBe(TIP_AMOUNT_CENTS);
+  });
+
+  test("GET /posts/:id — tip_total_cents reflects the tip", async () => {
+    const resp = await feedGet(page, `/posts/${postId}`);
+    expect(resp.status()).toBe(200);
+    const post = await resp.json() as { tip_total_cents: number };
+    expect(post.tip_total_cents).toBeGreaterThanOrEqual(TIP_AMOUNT_CENTS);
+  });
+
+  test("billing ledger has debit entry for Bob's post tip", async () => {
+    const ledger = JSON.parse(queryLedger(BOB_ID)) as Array<{
+      reason: string;
+      amount_cents: unknown;
+      type: string;
+    }>;
+    const tipEntry = ledger.find(
+      (e) => e.reason === "Post tip" && e.type === "debit",
+    );
+    expect(tipEntry).toBeDefined();
+    expect(Number(tipEntry!.amount_cents)).toBe(TIP_AMOUNT_CENTS);
+  });
+
+  test("POST /posts/:id/tip with invalid PM returns 400", async () => {
+    const bobSession = getSessions()[BOB_ID];
+    const resp = await bobPage.request.post(`${API}/posts/${postId}/tip`, {
+      data: { amount_cents: 100, payment_method_id: "pm_nonexistent_xyz" },
+      headers: { "x-csrf-token": bobSession.csrf_token },
+    });
+    expect(resp.status()).toBe(400);
+  });
+
+  // ── Reactions ──────────────────────────────────────────────────
+
+  test("POST /posts/:id/reactions — add reaction (Alice reacts to own post)", async () => {
+    const resp = await feedPost(page, `/posts/${postId}/reactions`, {
+      emoji: REACTION_EMOJI,
+    });
+    expect(resp.status()).toBe(200);
+    const body = await resp.json() as { ok: boolean };
+    expect(body.ok).toBe(true);
+  });
+
+  test("GET /posts/:id — reactions_counts and my_reactions populated", async () => {
+    const resp = await feedGet(page, `/posts/${postId}`);
+    expect(resp.status()).toBe(200);
+    const post = await resp.json() as {
+      reactions_counts: Record<string, number>;
+      my_reactions: string[];
+    };
+    expect(post.reactions_counts[REACTION_EMOJI]).toBeGreaterThanOrEqual(1);
+    expect(post.my_reactions).toContain(REACTION_EMOJI);
+  });
+
+  test("POST /posts/:id/unreact — remove reaction", async () => {
+    // Bob adds a reaction first
+    const bobSession = getSessions()[BOB_ID];
+    await bobPage.request.post(`${API}/posts/${postId}/reactions`, {
+      data: { emoji: "❤️" },
+      headers: { "x-csrf-token": bobSession.csrf_token },
+    });
+    // Bob removes it
+    const resp = await bobPage.request.post(`${API}/posts/${postId}/unreact`, {
+      data: { emoji: "❤️" },
+      headers: { "x-csrf-token": bobSession.csrf_token },
+    });
+    expect(resp.status()).toBe(200);
+    const body = await resp.json() as { ok: boolean };
+    expect(body.ok).toBe(true);
+    // Verify removed
+    const getResp = await feedGet(page, `/posts/${postId}`);
+    const post = await getResp.json() as { reactions_counts: Record<string, number> };
+    expect(post.reactions_counts["❤️"] ?? 0).toBe(0);
+  });
+
+  test("GET /feed — posts include reactions_counts and my_reactions", async () => {
+    const resp = await feedGet(page, "/feed");
+    expect(resp.status()).toBe(200);
+    const data = await resp.json() as { items: Array<{ reactions_counts: unknown; my_reactions: unknown }> };
+    // All posts should have these fields (even if empty)
+    for (const item of data.items) {
+      expect(item).toHaveProperty("reactions_counts");
+      expect(item).toHaveProperty("my_reactions");
+    }
+  });
+
+  // ── Comment tips ───────────────────────────────────────────────
+
+  test("POST /posts/:id/comments/:cid/tip — tip a comment", async () => {
+    // Alice creates a comment on her own post
+    const cmtResp = await feedPost(page, `/posts/${postId}/comments`, {
+      body: "Tippable comment",
+    });
+    expect(cmtResp.status()).toBe(200);
+    const cmt = await cmtResp.json() as { comment_id: string };
+
+    // Bob tips Alice's comment
+    const bobSession = getSessions()[BOB_ID];
+    const tipResp = await bobPage.request.post(
+      `${API}/posts/${postId}/comments/${cmt.comment_id}/tip`,
+      {
+        data: { amount_cents: 50 },
+        headers: { "x-csrf-token": bobSession.csrf_token },
+      },
+    );
+    expect(tipResp.status()).toBe(200);
+    const tipBody = await tipResp.json() as { ok: boolean; tip_total_cents: number };
+    expect(tipBody.ok).toBe(true);
+    expect(tipBody.tip_total_cents).toBe(50);
+  });
+
+  test("GET /posts/:id/comments — tip_total_cents is returned on comments", async () => {
+    const resp = await feedGet(page, `/posts/${postId}/comments`);
+    expect(resp.status()).toBe(200);
+    const data = await resp.json() as { items: Array<{ tip_total_cents: number }> };
+    // At least one comment should exist with a tip_total_cents field
+    for (const cmt of data.items) {
+      expect(cmt).toHaveProperty("tip_total_cents");
+    }
+  });
+
+  // ── UI smoke tests ─────────────────────────────────────────────
+
+  test("UI: emoji reaction buttons are visible on feed posts", async ({ browser }) => {
+    const uiPage = await browser.newPage();
+    await gotoFeed(uiPage);
+
+    // Reaction bar should contain at least one emoji button (👍)
+    const thumbsUp = uiPage.locator("button").filter({ hasText: "👍" });
+    await expect(thumbsUp.first()).toBeVisible({ timeout: 8000 });
+    await uiPage.close();
+  });
+
+  test("UI: clicking reaction button sends reaction and shows count", async ({ browser }) => {
+    const uiPage = await browser.newPage();
+    await gotoFeed(uiPage);
+
+    // Make sure there's a post visible first
+    await uiPage.waitForSelector("button:has-text('👍')", { timeout: 8000 });
+
+    // Click the 👍 reaction on the first post
+    const thumbsUp = uiPage.locator("button").filter({ hasText: "👍" }).first();
+    await thumbsUp.click();
+
+    // After clicking, the button should become highlighted (primary style)
+    await expect(thumbsUp).toHaveClass(/bg-primary\/10/, { timeout: 5000 });
+    await uiPage.close();
   });
 });

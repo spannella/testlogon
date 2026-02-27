@@ -604,6 +604,31 @@ export interface MessageImage {
   filename?: string;
   filesize?: number;
   file_created_at?: number;
+  preview_url?: string;  // Blurred preview URL for locked images
+}
+
+export interface GalleryImageItem {
+  bucket: string;
+  key: string;
+  content_type: string;
+  width?: number;
+  height?: number;
+  filename?: string;
+  filesize?: number;
+  url?: string;
+  preview_url?: string;  // For locked items: blurred preview
+  preview_bucket?: string;
+  preview_key?: string;
+}
+
+export interface FileShareAttachment {
+  path: string;
+  name: string;
+  size?: number;
+  content_type?: string;
+  permission: "read" | "write";
+  owner: string;
+  is_encrypted?: boolean;
 }
 
 export interface MessageEncryptionEnvelope {
@@ -631,15 +656,94 @@ export type MessageConsumptionPolicy = "none" | "view_once" | "listen_once";
 export type MessageMediaKind = "image" | "video" | "audio";
 export type MessageConsumptionState = "pending" | "consumed" | "expired" | "failed";
 
+export interface CalendarShareAttachment {
+  calendar_id: string;
+  name: string;
+  owner: string;
+  permission: "read" | "write";
+  booking_link_id?: string;
+  booking_public_url?: string;
+}
+
+export interface CalendarEventAttachment {
+  event_id: string;
+  calendar_id: string;
+  name: string;
+  start_utc?: string;
+  end_utc?: string;
+  all_day: boolean;
+  all_day_date?: string;
+  timezone: string;
+  description?: string;
+  owner: string;
+}
+
+export interface MeetingPollSlot {
+  slot_id: string;
+  start_utc: string;
+  end_utc: string;
+  yes_count: number;
+  maybe_count: number;
+  no_count: number;
+  my_vote: "yes" | "no" | "maybe" | null;
+}
+
+export interface MeetingPollAttachment {
+  poll_id: string;
+  creator_id: string;
+  title: string;
+  duration_minutes: number;
+  status: "open" | "confirmed" | "cancelled";
+  confirmed_slot_id: string | null;
+}
+
+export interface MeetingPollState {
+  poll_id: string;
+  title: string;
+  duration_minutes: number;
+  creator_id: string;
+  status: "open" | "confirmed" | "cancelled";
+  confirmed_slot_id: string | null;
+  slots: MeetingPollSlot[];
+}
+
+export interface SendCalendarShareReq {
+  calendar_id: string;
+  permission: "read" | "write";
+  include_booking_link: boolean;
+  text?: string;
+}
+
+export interface SendCalendarEventReq {
+  calendar_id: string;
+  event_id: string;
+  text?: string;
+}
+
+export interface SendMeetingPollReq {
+  title: string;
+  duration_minutes: number;
+  slots: Array<{ start_utc: string; end_utc: string }>;
+  text?: string;
+}
+
 export interface Message {
   message_id: string;
   conversation_id: string;
   sender_id: string;
-  kind: "text" | "image" | "file" | "audio" | "video";
+  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll";
   created_at: number;
   text?: string;
   image?: MessageImage;
   file?: MessageFile;
+  // Gallery message fields
+  free_images?: GalleryImageItem[];
+  locked_images?: GalleryImageItem[] | null;  // null = hidden (not unlocked yet)
+  locked_image_count?: number;
+  file_share?: FileShareAttachment;
+  calendar_share?: CalendarShareAttachment;
+  calendar_event?: CalendarEventAttachment;
+  meeting_poll?: MeetingPollAttachment;
   preview?: LinkPreview;
   reply_to_message_id?: string;
   forwarded_from?: Record<string, unknown>;
@@ -708,7 +812,7 @@ export interface SendImageMessageReq {
   filesize?: number;
   file_created_at?: number;
   caption?: string;
-  kind?: "image" | "file";
+  kind?: "image" | "file" | "video";
   reply_to_message_id?: string;
   consumption_policy?: Extract<MessageConsumptionPolicy, "none" | "view_once">;
   expires_in_seconds?: number;
@@ -727,12 +831,49 @@ export interface SendTipReq {
   payment_method_id?: string;
 }
 
+export interface SendGalleryMessageReq {
+  free_images: Array<{
+    bucket: string;
+    key: string;
+    content_type: string;
+    width?: number;
+    height?: number;
+    filename?: string;
+    filesize?: number;
+  }>;
+  locked_images: Array<{
+    bucket: string;
+    key: string;
+    content_type: string;
+    width?: number;
+    height?: number;
+    filename?: string;
+    filesize?: number;
+    preview_bucket: string;
+    preview_key: string;
+  }>;
+  text?: string;
+  lock_price_cents?: number;
+  lock_description?: string;
+  expires_in_seconds?: number;
+  send_at?: number;
+  tip_amount_cents?: number;
+  tip_payment_method_id?: string;
+}
+
 export interface SendFileMessageReq {
   path: string;
   kind?: "file" | "audio" | "video";
   duration_seconds?: number;
   reply_to_message_id?: string;
   consumption_policy?: MessageConsumptionPolicy;
+}
+
+export interface SendFileShareReq {
+  file_path: string;
+  permission: "read" | "write";
+  text?: string;
+  send_at?: number;
 }
 
 export interface StartConversationReq {
@@ -1258,17 +1399,27 @@ export interface PaginatedList<T> {
 
 // ─── Newsfeed ────────────────────────────────────────────────────
 
+export interface PostFileAttachment {
+  name: string;
+  content_type?: string;
+  size?: number;
+  url: string;
+}
+
 export interface FeedPost {
   post_id: string;
   author_id: string;
   body: string;
   image_urls?: string[];
+  file_attachments?: PostFileAttachment[];
   unlock_price_cents?: number;
   like_count: number;
   comment_count: number;
   tip_total_cents?: number;
   liked_by_me?: boolean;
   unlocked?: boolean;
+  reactions_counts?: Record<string, number>;
+  my_reactions?: string[];
   created_at: string;
   updated_at?: string;
 }
@@ -1282,11 +1433,13 @@ export interface FeedComment {
   updated_at?: string;
   deleted?: boolean;
   version?: number;
+  tip_total_cents?: number;
 }
 
 export interface CreatePostReq {
   body: string;
   image_urls?: string[];
+  file_paths?: string[];
   unlock_price_cents?: number;
 }
 
@@ -1326,6 +1479,7 @@ export interface PresignUploadResp {
 
 export interface TipReq {
   amount_cents: number;
+  payment_method_id?: string;
 }
 
 // ─── Purchase History ────────────────────────────────────────────
@@ -1590,4 +1744,25 @@ export interface ProviderCredential {
 export interface DeleteProviderCredentialResp {
   ok: boolean;
   deleted: boolean;
+}
+
+// ─── Contacts ─────────────────────────────────────────────────────────────
+
+export interface ContactEntry {
+  owner_id: string;
+  contact_id: string;
+  display_name: string;
+  profile_photo_url?: string;
+  is_favorite: boolean;
+  is_blocked: boolean;
+  added_at: string;
+}
+
+export interface AddContactReq {
+  user_id: string;
+}
+
+export interface UpdateContactReq {
+  is_favorite?: boolean;
+  is_blocked?: boolean;
 }

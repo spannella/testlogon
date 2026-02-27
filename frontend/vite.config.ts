@@ -32,6 +32,7 @@ export default defineConfig({
       "/sse": "http://localhost:8000",
       "/notifications": "http://localhost:8000",
       "/mock": "http://localhost:8000",
+      "/calendar/public": "http://localhost:8000",
     },
   },
   build: {

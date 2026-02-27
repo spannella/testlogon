@@ -10,10 +10,15 @@ import {
   getMessages,
   sendTextMessage,
   sendImageMessage,
+  sendGalleryMessage,
+  sendFileShareMessage,
+  sendCalendarShareMessage,
+  sendCalendarEventMessage,
+  sendMeetingPollMessage,
   markRead,
 } from "@/api/endpoints/messaging";
 import { useAuthStore } from "@/stores/authStore";
-import type { Conversation, Message, SendTextMessageReq } from "@/api/types";
+import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq } from "@/api/types";
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
 import { PresenceDot } from "./PresenceDot";
@@ -275,6 +280,74 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
     },
   });
 
+  const sendGallery = useMutation({
+    mutationFn: (args: {
+      freeFiles: File[];
+      lockedFiles: File[];
+      text?: string;
+      lock_price_cents?: number;
+      lock_description?: string;
+      expires_in_seconds?: number;
+      send_at?: number;
+      tip_amount_cents?: number;
+      tip_payment_method_id?: string;
+    }) => sendGalleryMessage(convoId, args),
+    onSuccess: (_data, args) => {
+      if (args.send_at) {
+        const scheduledDate = new Date(args.send_at * 1000);
+        toast.success(
+          `Gallery scheduled for ${scheduledDate.toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            timeZoneName: "short",
+          })}`,
+        );
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to send gallery"),
+  });
+
+  const sendFileShare = useMutation({
+    mutationFn: (params: SendFileShareReq) => sendFileShareMessage(convoId, params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to share file"),
+  });
+
+  const sendCalendarShare = useMutation({
+    mutationFn: (params: SendCalendarShareReq) => sendCalendarShareMessage(convoId, params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to share calendar"),
+  });
+
+  const sendCalendarEvent = useMutation({
+    mutationFn: (params: SendCalendarEventReq) => sendCalendarEventMessage(convoId, params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to share event"),
+  });
+
+  const sendMeetingPoll = useMutation({
+    mutationFn: (params: SendMeetingPollReq) => sendMeetingPollMessage(convoId, params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to create poll"),
+  });
+
   // ── Conversation title / header ────────────────────────────────
 
   const title = conversation.title
@@ -468,7 +541,12 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
           send_at: options?.send_at,
           encryption_password: options?.encryption_password,
         })}
-        sending={sendText.isPending || sendImage.isPending}
+        onSendGallery={(params) => sendGallery.mutate(params)}
+        onSendFileShare={(params) => sendFileShare.mutate(params)}
+        onSendCalendarShare={(params) => sendCalendarShare.mutate(params)}
+        onSendCalendarEvent={(params) => sendCalendarEvent.mutate(params)}
+        onSendMeetingPoll={(params) => sendMeetingPoll.mutate(params)}
+        sending={sendText.isPending || sendImage.isPending || sendGallery.isPending || sendFileShare.isPending || sendCalendarShare.isPending || sendCalendarEvent.isPending || sendMeetingPoll.isPending}
         onKeystroke={onKeystroke}
         replyingTo={replyingTo}
         onCancelReply={() => setReplyingTo(null)}

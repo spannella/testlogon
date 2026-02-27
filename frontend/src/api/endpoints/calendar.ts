@@ -17,6 +17,7 @@ import type {
   AvailabilityReq,
   OccurrenceOverrideIn,
   BookingReserveReq,
+  CalendarEventAttachment,
 } from "@/api/types";
 
 // ─── Calendars ───────────────────────────────────────────────────
@@ -145,3 +146,14 @@ export const getPublicOpenings = (
 
 export const reserveBookingSlot = (linkId: string, body: BookingReserveReq) =>
   api.post<CalendarEvent>(`/booking/${linkId}/reserve`, body);
+
+// ─── Public Event (no auth) ─────────────────────────────────────
+
+export const getPublicEvent = (calendarId: string, eventId: string) =>
+  api.get<CalendarEventAttachment>(`/calendar/public/event/${calendarId}/${eventId}`);
+
+export const getPublicIcalUrl = (calendarId: string, eventId: string): string =>
+  `/calendar/public/event/${calendarId}/${eventId}/ical`;
+
+export const downloadIcalUrl = (calendarId: string, eventId: string): string =>
+  `/ui/calendars/${calendarId}/events/${eventId}/ical`;

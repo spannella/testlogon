@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Send, MoreHorizontal, Pencil, Trash2, X, Check } from "lucide-react";
+import { Send, MoreHorizontal, Pencil, Trash2, X, Check, DollarSign } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,6 +21,7 @@ import {
 } from "@/api/endpoints/newsfeed";
 import { useAuthStore } from "@/stores/authStore";
 import type { FeedComment } from "@/api/types";
+import { TipDialog } from "./TipDialog";
 
 interface CommentsThreadProps {
   postId: string;
@@ -126,6 +127,7 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
   const [editing, setEditing] = useState(false);
   const [editBody, setEditBody] = useState(comment.body);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [tipOpen, setTipOpen] = useState(false);
 
   const editMut = useMutation({
     mutationFn: () => editComment(postId, comment.comment_id, { body: editBody }),
@@ -226,6 +228,27 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
           ) : (
             <p className="text-sm">{comment.body}</p>
           )}
+
+          {/* Tip total + tip button for non-own comments */}
+          {!comment.deleted && (
+            <div className="mt-0.5 flex items-center gap-2">
+              {(comment.tip_total_cents ?? 0) > 0 && (
+                <span className="text-[10px] text-emerald-600">
+                  ${((comment.tip_total_cents ?? 0) / 100).toFixed(2)} tipped
+                </span>
+              )}
+              {!isOwn && (
+                <button
+                  type="button"
+                  onClick={() => setTipOpen(true)}
+                  className="flex items-center gap-0.5 text-[10px] text-muted-foreground hover:text-emerald-600 transition-colors opacity-0 group-hover:opacity-100"
+                >
+                  <DollarSign className="h-3 w-3" />
+                  Tip
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Actions menu — own comments only, when not editing */}
@@ -265,6 +288,16 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
         onConfirm={() => deleteMut.mutate()}
         loading={deleteMut.isPending}
       />
+
+      {!isOwn && (
+        <TipDialog
+          open={tipOpen}
+          onOpenChange={setTipOpen}
+          postId={postId}
+          authorId={comment.author_id}
+          commentId={comment.comment_id}
+        />
+      )}
     </>
   );
 }
