@@ -1,0 +1,19 @@
+{
+  "schema_version": "v1",
+  "sku": "files-daily-2026-03",
+  "product_type": "file_bundle",
+  "billing_model": "rental",
+  "source_system": "commercial_direct",
+  "quantity": 1,
+  "scope": {
+    "selection_type": "date_range",
+    "date_start": "2026-03-01T00:00:00Z",
+    "date_end": "2026-03-31T23:59:59Z",
+    "access_mode": "rental"
+  },
+  "pricing_ref": {
+    "currency": "USD",
+    "amount_cents": 1999,
+    "catalog_version": "v1"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "schema_version": "v1",
+  "sku": "api-pro-credits-50k",
+  "product_type": "api_package",
+  "billing_model": "credit_pack",
+  "source_system": "shopping_cart",
+  "quantity": 1,
+  "scope": {
+    "route_allowlist": ["GET:/v1/fs/download"],
+    "credit_amount": 50000
+  },
+  "pricing_ref": {
+    "currency": "USD",
+    "unit_price_cents": 4900,
+    "cart_id": "cart-1"
+  }
+}

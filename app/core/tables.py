@@ -31,6 +31,13 @@ class Tables:
     subscriptions: Any
     projects: Any
     contacts: Any
+    catalog_products: Any
+    catalog_product_versions: Any
+    orders: Any
+    order_items: Any
+    payments: Any
+    entitlements: Any
+    entitlement_usage_events: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -56,4 +63,11 @@ T = Tables(
     subscriptions=ddb.Table(S.subscriptions_table_name),
     projects=ddb.Table(S.projects_table_name),
     contacts=ddb.Table(S.contacts_table_name),
+    catalog_products=ddb.Table(S.catalog_products_table_name),
+    catalog_product_versions=ddb.Table(S.catalog_product_versions_table_name),
+    orders=ddb.Table(S.orders_table_name),
+    order_items=ddb.Table(S.order_items_table_name),
+    payments=ddb.Table(S.payments_table_name),
+    entitlements=ddb.Table(S.entitlements_table_name),
+    entitlement_usage_events=ddb.Table(S.entitlement_usage_events_table_name),
 )

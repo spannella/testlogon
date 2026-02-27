@@ -1,0 +1,18 @@
+{
+  "schema_version": "v1",
+  "sku": "subscription_plan:creator-plus",
+  "product_type": "internal_api_package",
+  "billing_model": "subscription",
+  "source_system": "subscription_cycle",
+  "quantity": 1,
+  "scope": {
+    "plan_id": "creator-plus",
+    "interval": "month",
+    "renewal_policy": "auto"
+  },
+  "pricing_ref": {
+    "currency": "USD",
+    "price_cents": 1500,
+    "subscription_id": "sub_123"
+  }
+}

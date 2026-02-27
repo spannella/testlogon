@@ -65,6 +65,7 @@ from app.services.messaging_gallery_index import fetch_gallery_index_page, sync_
 from app.services.profile import get_profile_identity
 from app.services.sessions import require_ui_session
 from app.services.subscription_access import require_subscription_access
+from app.services.internal_api_entitlements import enforce_internal_api_entitlement
 from app.services.usage_metering import (
     build_usage_event,
     build_usage_source_idempotency_key,
@@ -163,6 +164,16 @@ def get_current_user_id(authorization: Optional[str] = Header(default=None)) -> 
     Dev behavior: Authorization: Bearer <user_id>
     """
     return extract_bearer_token(authorization)
+
+
+def _enforce_messaging_internal_entitlement(*, user_id: str, action: str, request_id: Optional[str] = None) -> None:
+    req_id = (request_id or "").strip() or f"messaging:{action}:{now_ts()}:{user_id}"
+    enforce_internal_api_entitlement(
+        user_id=user_id,
+        namespace="messaging",
+        action=action,
+        request_id=req_id,
+    )
 
 
 def _meter_message_send(*, user_id: str, conversation_id: str, message_id: str) -> None:
@@ -4496,6 +4507,11 @@ def send_text_message(
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
 ):
+    _enforce_messaging_internal_entitlement(
+        user_id=user_id,
+        action="send_message",
+        request_id=(req.headers.get("x-request-id") if req else None),
+    )
     require_participant_active(user_id, conversation_id)
     if inp.encryption and not _encrypted_messages_enabled():
         raise HTTPException(status_code=403, detail="Encrypted messaging is disabled")
@@ -5622,6 +5638,11 @@ def get_meeting_poll(
     poll_id: str,
     user_id: str = Depends(get_messaging_user_id),
 ):
+    _enforce_messaging_internal_entitlement(
+        user_id=user_id,
+        action="upload_attachment",
+        request_id=(req.headers.get("x-request-id") if req else None),
+    )
     require_participant_active(user_id, conversation_id)
     meta = T.calendar.get_item(Key={"calendar_id": f"MPOLL#{poll_id}", "sk": "meta"}).get("Item")
     if not meta:
@@ -6054,6 +6075,11 @@ def download_message_attachment(
     x_request_id: Optional[str] = Header(default=None, alias="X-Request-Id"),
     user_id: str = Depends(get_messaging_user_id),
 ):
+    _enforce_messaging_internal_entitlement(
+        user_id=user_id,
+        action="download_attachment",
+        request_id=x_request_id,
+    )
     require_participant_active(user_id, conversation_id)
     msg = _get_message_or_404(conversation_id, message_id)
     kind = str(msg.get("kind") or "")
@@ -6794,7 +6820,17 @@ def get_typing(conversation_id: str, user_id: str = Depends(get_messaging_user_i
 # Presence (online)
 # -------------------------
 @router.post("/presence/heartbeat")
-def presence_heartbeat(inp: PresenceHeartbeatIn, user_id: str = Depends(get_messaging_user_id)):
+def presence_heartbeat(
+    inp: PresenceHeartbeatIn,
+    request: Request = None,
+    x_request_id: Optional[str] = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    _enforce_messaging_internal_entitlement(
+        user_id=user_id,
+        action="presence_heartbeat",
+        request_id=x_request_id or (request.headers.get("x-request-id") if request else None),
+    )
     ts = now_ts()
     status = _normalize_presence_status(inp.status)
     tbl_presence.put_item(
@@ -6871,8 +6907,15 @@ async def events_stream(
     after: Optional[str] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     poll_ms: Annotated[int, Query(ge=200, le=5000)] = 1000,
+    request: Request = None,
+    x_request_id: Optional[str] = None,
     user_id: str = Depends(get_messaging_user_id),
 ):
+    _enforce_messaging_internal_entitlement(
+        user_id=user_id,
+        action="stream_events",
+        request_id=x_request_id or (request.headers.get("x-request-id") if request else None),
+    )
     async def gen():
         cursor = after
         last_ping = time.time()

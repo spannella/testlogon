@@ -65,6 +65,51 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(
+            _resolve_table_name(S.catalog_products_table_name, "catalog_products"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI_PRODUCT_TYPE", "partition_key": "GSI_PRODUCT_TYPE_PK", "sort_key": "GSI_PRODUCT_TYPE_SK"},
+            ],
+        ),
+        TableDef(_resolve_table_name(S.catalog_product_versions_table_name, "catalog_product_versions"), "sku", "effective_at"),
+        TableDef(
+            _resolve_table_name(S.orders_table_name, "orders"),
+            "order_id",
+            gsi=[
+                {"index_name": "GSI_USER", "partition_key": "user_id", "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+        ),
+        TableDef(_resolve_table_name(S.order_items_table_name, "order_items"), "order_id", "item_id"),
+        TableDef(
+            _resolve_table_name(S.payments_table_name, "payments"),
+            "payment_id",
+            "event_id",
+            gsi=[
+                {"index_name": "GSI_ORDER", "partition_key": "order_id", "sort_key": "created_at"},
+                {"index_name": "GSI_PROVIDER_EVENT_IDEMPOTENCY", "partition_key": "provider_event_idempotency_key"},
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.entitlements_table_name, "entitlements"),
+            "user_id",
+            "entitlement_id",
+            gsi=[
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "ends_at"},
+                {"index_name": "GSI_SKU", "partition_key": "sku", "sort_key": "starts_at"},
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.entitlement_usage_events_table_name, "entitlement_usage_events"),
+            "entitlement_id",
+            "event_id",
+            gsi=[
+                {"index_name": "GSI_IDEMPOTENCY", "partition_key": "idempotency_key"},
+                {"index_name": "GSI_TIMESTAMP", "partition_key": "event_date", "sort_key": "event_ts"},
+            ],
+        ),
+        TableDef(
             _resolve_table_name(S.filemgr_table_name, "file_manager"),
             "PK",
             "SK",

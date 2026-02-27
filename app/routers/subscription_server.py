@@ -21,6 +21,7 @@ from app.services.alerts import audit_event
 from app.services.profile import get_profile_identity
 from app.services.purchase_history import record_billing_transaction
 from app.services.subscription_access import get_subscription_settings, set_subscription_settings
+from app.services.subscription_cycle_orders import emit_subscription_cycle_order
 
 router = APIRouter(tags=["subscriptions"])
 FEE_BPS = int(os.environ.get("SUBSCRIPTION_FEE_BPS", "1000"))
@@ -50,6 +51,33 @@ def _iso_utc_from_ts(ts: int) -> str:
 
 def _subscription_event_id(subscription_id: str, kind: str) -> str:
     return f"sub_{subscription_id}_{kind}"
+
+
+def emit_subscription_cycle_order_and_reconcile(
+    *,
+    subscription: Dict[str, Any],
+    plan: Dict[str, Any],
+    invoice: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Emit canonical recurring order and always invoke reconciliation using invoice-based identity."""
+    normalized_invoice = dict(invoice)
+    invoice_id = str(normalized_invoice.get("invoice_id") or normalized_invoice.get("provider_invoice_id") or "")
+    if not invoice_id:
+        raise ValueError("invoice_id or provider_invoice_id is required")
+    normalized_invoice["invoice_id"] = invoice_id
+    if not normalized_invoice.get("provider_invoice_id"):
+        normalized_invoice["provider_invoice_id"] = invoice_id
+
+    recurring = emit_subscription_cycle_order(
+        subscription=subscription,
+        plan=plan,
+        invoice=normalized_invoice,
+        enable_default_reconciliation=True,
+    )
+    reconciliation = dict(recurring.get("reconciliation") or {})
+    if str(reconciliation.get("status") or "").lower() == "skipped":
+        raise RuntimeError(f"subscription cycle reconciliation skipped for invoice {invoice_id}")
+    return recurring
 
 
 def ddb_put_item(item: Dict[str, Any]) -> None:
@@ -879,6 +907,8 @@ async def subscribe(
         }
         if applied_discount:
             invoice["discount"] = applied_discount
+        recurring = emit_subscription_cycle_order_and_reconcile(subscription=sub, plan=plan, invoice=invoice)
+        invoice["recurring_order_id"] = recurring["order_id"]
         save_invoice(invoice)
         record_billing_payment(invoice, subscription_id)
         record_billing_transaction(
@@ -1261,6 +1291,8 @@ async def convert_trial(
         "period_end": sub["current_period_end"],
         "created_at": ts,
     }
+    recurring = emit_subscription_cycle_order_and_reconcile(subscription=sub, plan=plan, invoice=invoice)
+    invoice["recurring_order_id"] = recurring["order_id"]
     save_invoice(invoice)
     record_billing_payment(invoice, subscription_id)
     record_billing_transaction(
@@ -1399,6 +1431,8 @@ async def change_subscription_plan(
             "proration_period_start": sub.get("start_at"),
             "proration_period_end": sub.get("current_period_end"),
         }
+        recurring = emit_subscription_cycle_order_and_reconcile(subscription=sub, plan=plan, invoice=invoice)
+        invoice["recurring_order_id"] = recurring["order_id"]
         save_invoice(invoice)
         record_billing_payment(invoice, subscription_id)
         record_billing_transaction(
@@ -1723,6 +1757,7 @@ async def billing_webhook(provider: str, body: WebhookIn):
 
     ts = now_ts()
     event_type = body.event_type.lower()
+    sub_plan = ddb_get_item(pk_plan(sub.get("plan_id")), "META") or {"plan_id": sub.get("plan_id")}
     if event_type in ("invoice.proration", "subscription.proration"):
         proration_amount = body.metadata.get("proration_amount_cents")
         if proration_amount is None:
@@ -1751,6 +1786,8 @@ async def billing_webhook(provider: str, body: WebhookIn):
                 "proration_period_start": body.metadata.get("proration_period_start", sub.get("start_at")),
                 "proration_period_end": body.metadata.get("proration_period_end", sub.get("current_period_end")),
             }
+            recurring = emit_subscription_cycle_order_and_reconcile(subscription=sub, plan=sub_plan, invoice=invoice)
+            invoice["recurring_order_id"] = recurring["order_id"]
             save_invoice(invoice)
             record_billing_payment(invoice, body.subscription_id)
             record_billing_transaction(
@@ -1780,6 +1817,29 @@ async def billing_webhook(provider: str, body: WebhookIn):
         sub["auto_renew"] = True
         if sub.get("discount_remaining_months"):
             sub["discount_remaining_months"] = max(0, int(sub["discount_remaining_months"]) - 1)
+
+        amount_cents = body.metadata.get("amount_cents") or body.metadata.get("amount") or sub.get("price_cents")
+        try:
+            amount_cents = int(amount_cents)
+        except (TypeError, ValueError):
+            amount_cents = int(sub.get("price_cents") or 0)
+        invoice_id = body.invoice_id or body.metadata.get("invoice_id") or body.metadata.get("provider_invoice_id") or new_id("inv")
+        invoice = {
+            "invoice_id": invoice_id,
+            "subscription_id": body.subscription_id,
+            "subscriber_id": sub["subscriber_id"],
+            "provider_invoice_id": body.metadata.get("provider_invoice_id") or body.invoice_id or new_id("stub_inv"),
+            "amount_cents": amount_cents,
+            "currency": body.metadata.get("currency", sub.get("currency", "usd")),
+            "status": "paid",
+            "period_start": body.metadata.get("period_start", ts),
+            "period_end": body.metadata.get("period_end", sub.get("current_period_end")),
+            "created_at": ts,
+        }
+        recurring = emit_subscription_cycle_order_and_reconcile(subscription=sub, plan=sub_plan, invoice=invoice)
+        invoice["recurring_order_id"] = recurring["order_id"]
+        save_invoice(invoice)
+        record_billing_payment(invoice, body.subscription_id)
     elif event_type == "invoice.payment_failed":
         sub["status"] = "past_due"
     elif event_type == "subscription.canceled":

@@ -653,6 +653,97 @@ class SetAutopayIn(BaseModel):
     enabled: bool
 
 
+
+
+
+
+class ApiPackageSkuCreateIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=256)
+    amount_cents: conint(ge=0, le=100000000)
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    billing_model: Literal["credit_pack", "subscription", "one_time"] = "credit_pack"
+    effective_at: str
+    credit_grant: Optional[Dict[str, Any]] = None
+    limit_overrides: Optional[Dict[str, Any]] = None
+    access_template: Optional[Dict[str, Any]] = None
+
+
+class ApiPackageSkuOut(BaseModel):
+    sku: str
+    product_type: Literal["api_package"] = "api_package"
+    display_name: str
+    amount_cents: int
+    currency: str
+    billing_model: Literal["credit_pack", "subscription", "one_time"]
+    effective_at: str
+    credit_grant: Dict[str, Any] = Field(default_factory=dict)
+    limit_overrides: Dict[str, Any] = Field(default_factory=dict)
+    access_template: Dict[str, Any] = Field(default_factory=dict)
+
+class FileBundleSkuCreateIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=128)
+    display_name: str = Field(min_length=1, max_length=256)
+    amount_cents: conint(ge=0, le=100000000)
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    date_start: str
+    date_end: str
+    access_mode: Literal["purchase", "rental"] = "purchase"
+    rental_duration_hours: Optional[conint(ge=1, le=24 * 365)] = None
+
+
+class FileBundleSkuOut(BaseModel):
+    sku: str
+    display_name: str
+    amount_cents: int
+    currency: str
+    product_type: Literal["file_bundle"] = "file_bundle"
+    billing_model: Literal["one_time", "rental"]
+    date_start: str
+    date_end: str
+    access_mode: Literal["purchase", "rental"]
+    rental_duration_hours: Optional[int] = None
+    created_at: str
+    created_by: str
+
+
+class FileBundleCheckoutSessionIn(BaseModel):
+    sku: str = Field(min_length=1, max_length=128)
+    date_start: str
+    date_end: str
+    access_mode: Literal["purchase", "rental"]
+
+
+class FileBundleCheckoutSessionOut(BaseModel):
+    checkout_session_id: str
+    order_id: str
+    status: str
+    sku: str
+    amount_cents: int
+    currency: str
+    access_mode: Literal["purchase", "rental"]
+
+
+
+class UnifiedCheckoutSessionIn(BaseModel):
+    source: Literal["cart", "direct", "subscription_action"]
+    cart_id: Optional[str] = None
+    sku: Optional[str] = None
+    product_type: Optional[Literal["file_bundle", "api_package", "internal_api_package"]] = None
+    billing_model: Optional[Literal["one_time", "rental", "subscription", "credit_pack"]] = None
+    quantity: conint(ge=1, le=1000) = 1
+    scope: Dict[str, Any] = Field(default_factory=dict)
+    pricing_ref: Dict[str, Any] = Field(default_factory=dict)
+    subscription_plan: Optional[Dict[str, Any]] = None
+
+
+class UnifiedCheckoutSessionOut(BaseModel):
+    order_id: str
+    checkout_session_id: str
+    source: Literal["cart", "direct", "subscription_action"]
+    line_items: List[Dict[str, Any]] = Field(default_factory=list)
+    status: str = "pending_payment"
+
 class ShoppingCartSummary(BaseModel):
     cart_id: str
     status: str
@@ -670,6 +761,11 @@ class ShoppingCartItemIn(BaseModel):
     image_url: Optional[str] = None
     category_id: Optional[str] = None
     item_id: Optional[str] = None
+    product_type: Optional[Literal["file_bundle", "api_package", "internal_api_package"]] = None
+    scope: Optional[Dict[str, Any]] = None
+    access_mode: Optional[Literal["purchase", "rental"]] = None
+    rental_metadata: Optional[Dict[str, Any]] = None
+    entitlement_template_metadata: Optional[Dict[str, Any]] = None
 
 
 class CatalogCartItemIn(BaseModel):
@@ -688,6 +784,11 @@ class ShoppingCartItemOut(BaseModel):
     image_url: Optional[str] = None
     category_id: Optional[str] = None
     item_id: Optional[str] = None
+    product_type: Optional[str] = None
+    scope: Optional[Dict[str, Any]] = None
+    access_mode: Optional[str] = None
+    rental_metadata: Optional[Dict[str, Any]] = None
+    entitlement_template_metadata: Optional[Dict[str, Any]] = None
 
 
 class ShoppingCartItemsOut(BaseModel):

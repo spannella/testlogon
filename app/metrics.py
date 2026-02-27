@@ -393,6 +393,18 @@ PROVIDER_FAILURE_ALERTS = Counter(
     ["provider"],
 )
 
+ENTITLEMENT_CHECKS = Counter(
+    "entitlement_checks_total",
+    "Entitlement check outcomes by product family",
+    ["product_family", "outcome", "reason"],
+)
+ENTITLEMENT_CHECK_LATENCY = Histogram(
+    "entitlement_check_latency_seconds",
+    "Entitlement check latency by product family",
+    ["product_family"],
+    buckets=(0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5),
+)
+
 _START_TIME = time.monotonic()
 _ACTIVE_SESSIONS_BY_USER: dict[str, int] = {}
 _ACTIVE_SESSIONS_COUNT = 0
@@ -568,6 +580,20 @@ def record_helpdesk_no_agents_notice(outcome: str) -> None:
 
 def record_helpdesk_time_to_first_claim_ms(elapsed_ms: float) -> None:
     HELPDESK_TIME_TO_FIRST_CLAIM_MS.observe(max(0.0, float(elapsed_ms)))
+
+
+def record_entitlement_check(*, product_family: str, outcome: str, reason: str = "") -> None:
+    ENTITLEMENT_CHECKS.labels(
+        product_family=(product_family or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+        reason=(reason or "none").lower(),
+    ).inc()
+
+
+def record_entitlement_check_latency(*, product_family: str, elapsed_seconds: float) -> None:
+    ENTITLEMENT_CHECK_LATENCY.labels(
+        product_family=(product_family or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
 
 
 def record_admin_scope_denied(*, route: str, required_scope: str, admin_profile_type: str) -> None:
