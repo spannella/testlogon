@@ -7969,6 +7969,7 @@ document.getElementById("accountReactivateBtn").onclick = () => {
 
 if (!window.__SKIP_BOOT__) {
   initBillingUi();
+  initSignatureComposerUi();
   renderPasswordRecovery();
   document.getElementById("billingRefreshBtn").onclick = refreshBillingAll;
   document.getElementById("paySettledBalanceBtn").onclick = payBillingSettledBalance;
@@ -8078,4 +8079,207 @@ document.getElementById("newsfeedConnectBtn").onclick = connectNewsfeedSse;
   if (!accessToken()) { openTokenModal(); } else { refreshAll(); }
   startToastSSE();
   startToastPolling();
+}
+
+/* ===================== signature packet composer ===================== */
+const sigComposerState = {
+  packet: null,
+  fields: [],
+  signers: [],
+};
+
+function sigStatus(msg) {
+  const el = document.getElementById("sigComposerStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function sigFieldDimensions(fieldType) {
+  if (fieldType === "text") return { width: 0.32, height: 0.07 };
+  if (fieldType === "date") return { width: 0.2, height: 0.05 };
+  return { width: 0.22, height: 0.06 };
+}
+
+function renderSigSigners() {
+  const wrap = document.getElementById("sigSignersList");
+  const select = document.getElementById("sigAssignedSignerId");
+  if (!wrap || !select) return;
+  wrap.innerHTML = "";
+  select.innerHTML = '<option value="">Unassigned</option>';
+  for (const signer of sigComposerState.signers || []) {
+    const signerId = String(signer.signer_id || "");
+    const item = document.createElement("div");
+    item.className = "list-item";
+    item.innerHTML = `<div><b>${signerId || "unknown"}</b><div class="muted">status: ${signer.status || "pending"}</div></div>`;
+    wrap.appendChild(item);
+
+    const opt = document.createElement("option");
+    opt.value = signerId;
+    opt.textContent = `${signerId} (${signer.status || "pending"})`;
+    select.appendChild(opt);
+  }
+  if (!sigComposerState.signers.length) {
+    wrap.innerHTML = '<div class="muted">No signers on packet yet.</div>';
+  }
+}
+
+function renderSigFields() {
+  const wrap = document.getElementById("sigFieldsList");
+  const canvas = document.getElementById("sigCanvas");
+  if (!wrap || !canvas) return;
+  wrap.innerHTML = "";
+  canvas.innerHTML = "";
+
+  for (const field of sigComposerState.fields || []) {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `
+      <div>
+        <b>${field.field_type}</b> <span class="mono">${field.field_id}</span>
+        <div class="muted">page ${field.page} • signer ${field.assigned_signer_id || "unassigned"} • ${field.required ? "required" : "optional"}</div>
+      </div>
+      <button data-field-delete="${field.field_id}" class="danger">Delete</button>
+    `;
+    wrap.appendChild(row);
+
+    const box = document.createElement("div");
+    box.className = "signature-composer-field";
+    box.style.left = `${Math.max(0, Number(field.x || 0) * 100)}%`;
+    box.style.top = `${Math.max(0, Number(field.y || 0) * 100)}%`;
+    box.style.width = `${Math.max(1, Number(field.width || 0) * 100)}%`;
+    box.style.height = `${Math.max(1, Number(field.height || 0) * 100)}%`;
+    box.textContent = field.field_type;
+    canvas.appendChild(box);
+  }
+
+  if (!sigComposerState.fields.length) {
+    wrap.innerHTML = '<div class="muted">No fields yet.</div>';
+  }
+
+  wrap.querySelectorAll("button[data-field-delete]").forEach((btn) => {
+    btn.onclick = async () => {
+      if (!sigComposerState.packet) return;
+      try {
+        await apiPost(`/v1/signature-packets/${encodeURIComponent(sigComposerState.packet.packet_id)}/fields`, {
+          action: "delete",
+          field_id: btn.getAttribute("data-field-delete"),
+        });
+        await sigLoadPacket(sigComposerState.packet.packet_id);
+      } catch (e) {
+        sigStatus(String(e.message || e));
+      }
+    };
+  });
+}
+
+function renderSigPacketSummary() {
+  const packetStatus = document.getElementById("sigPacketStatus");
+  const packetRole = document.getElementById("sigPacketRole");
+  const packet = sigComposerState.packet;
+  if (!packetStatus || !packetRole) return;
+  if (!packet) {
+    packetStatus.textContent = "No packet";
+    packetRole.textContent = "";
+    return;
+  }
+  packetStatus.textContent = packet.status || "unknown";
+  packetRole.textContent = `role: ${packet.role || "sender"}`;
+}
+
+async function sigLoadPacket(packetId) {
+  const trimmed = String(packetId || "").trim();
+  if (!trimmed) throw new Error("Packet ID is required");
+  const packet = await apiGet(`/v1/signature-packets/${encodeURIComponent(trimmed)}`);
+  sigComposerState.packet = packet;
+  sigComposerState.fields = Array.isArray(packet.fields) ? packet.fields : [];
+  sigComposerState.signers = Array.isArray(packet.signers) ? packet.signers : [];
+  setInputValue("sigPacketId", trimmed);
+  renderSigPacketSummary();
+  renderSigSigners();
+  renderSigFields();
+}
+
+async function sigCreateDraft() {
+  const sourcePath = readInput("sigSourcePath");
+  const originChannel = document.getElementById("sigOriginChannel")?.value || "share";
+  if (!sourcePath) throw new Error("Source PDF path is required");
+  const created = await apiPost("/v1/signature-packets", {
+    source_path: sourcePath,
+    origin_channel: originChannel,
+  });
+  await sigLoadPacket(created.packet_id);
+  sigStatus(`Draft created: ${created.packet_id}`);
+}
+
+async function sigSendPacket() {
+  const packetId = readInput("sigPacketId");
+  if (!packetId) throw new Error("Packet ID is required");
+  await apiPost(`/v1/signature-packets/${encodeURIComponent(packetId)}/send`, {});
+  await sigLoadPacket(packetId);
+  sigStatus("Packet sent.");
+}
+
+async function sigPlaceFieldFromEvent(ev) {
+  const packet = sigComposerState.packet;
+  if (!packet || packet.status !== "draft") {
+    sigStatus("Load a draft packet to place fields.");
+    return;
+  }
+  const canvas = document.getElementById("sigCanvas");
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const relX = Math.min(0.98, Math.max(0, (ev.clientX - rect.left) / Math.max(1, rect.width)));
+  const relY = Math.min(0.98, Math.max(0, (ev.clientY - rect.top) / Math.max(1, rect.height)));
+  const fieldType = document.getElementById("sigFieldType")?.value || "signature";
+  const assignedSignerId = document.getElementById("sigAssignedSignerId")?.value || null;
+  const required = Boolean(document.getElementById("sigFieldRequired")?.checked);
+  const dims = sigFieldDimensions(fieldType);
+  try {
+    await apiPost(`/v1/signature-packets/${encodeURIComponent(packet.packet_id)}/fields`, {
+      action: "create",
+      page: 1,
+      x: relX,
+      y: relY,
+      width: dims.width,
+      height: dims.height,
+      field_type: fieldType,
+      assigned_signer_id: assignedSignerId,
+      required,
+    });
+    await sigLoadPacket(packet.packet_id);
+    sigStatus("Field added.");
+  } catch (e) {
+    sigStatus(String(e.message || e));
+  }
+}
+
+function initSignatureComposerUi() {
+  if (!document.getElementById("signaturePacketSection")) return;
+  document.getElementById("sigCreateDraftBtn").onclick = async () => {
+    try {
+      await sigCreateDraft();
+    } catch (e) {
+      sigStatus(String(e.message || e));
+    }
+  };
+  document.getElementById("sigLoadPacketBtn").onclick = async () => {
+    try {
+      await sigLoadPacket(readInput("sigPacketId"));
+      sigStatus("Packet loaded.");
+    } catch (e) {
+      sigStatus(String(e.message || e));
+    }
+  };
+  document.getElementById("sigSendPacketBtn").onclick = async () => {
+    try {
+      await sigSendPacket();
+    } catch (e) {
+      sigStatus(String(e.message || e));
+    }
+  };
+  document.getElementById("sigCanvas").onclick = (ev) => {
+    sigPlaceFieldFromEvent(ev);
+  };
+  renderSigPacketSummary();
+  renderSigSigners();
+  renderSigFields();
 }

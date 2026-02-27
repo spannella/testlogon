@@ -270,6 +270,36 @@ class Settings:
     # File manager
     filemgr_table_name: str = os.environ.get("FILEMGR_TABLE", "")
     projects_table_name: str = os.environ.get("PROJECTS_TABLE_NAME", "projects")
+    signature_packets_table_name: str = os.environ.get("SIGNATURE_PACKETS_TABLE_NAME", "signature_packets")
+    signature_packet_signers_table_name: str = os.environ.get(
+        "SIGNATURE_PACKET_SIGNERS_TABLE_NAME",
+        "signature_packet_signers",
+    )
+    signature_packet_fields_table_name: str = os.environ.get(
+        "SIGNATURE_PACKET_FIELDS_TABLE_NAME",
+        "signature_packet_fields",
+    )
+    signature_packet_events_table_name: str = os.environ.get(
+        "SIGNATURE_PACKET_EVENTS_TABLE_NAME",
+        "signature_packet_events",
+    )
+    signature_packet_artifacts_table_name: str = os.environ.get(
+        "SIGNATURE_PACKET_ARTIFACTS_TABLE_NAME",
+        "signature_packet_artifacts",
+    )
+    signature_pdf_enabled: bool = os.environ.get("SIGNATURE_PDF_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    signature_packet_expiration_hours: int = int(os.environ.get("SIGNATURE_PACKET_EXPIRATION_HOURS", "168"))
+    signature_packet_max_signers: int = int(os.environ.get("SIGNATURE_PACKET_MAX_SIGNERS", "10"))
+    signature_packet_max_fields: int = int(os.environ.get("SIGNATURE_PACKET_MAX_FIELDS", "200"))
+    signature_packet_renderer_timeout_seconds: int = int(
+        os.environ.get("SIGNATURE_PACKET_RENDERER_TIMEOUT_SECONDS", "60")
+    )
+    signature_packet_legal_notice_version: str = os.environ.get("SIGNATURE_PACKET_LEGAL_NOTICE_VERSION", "2026-01")
+    signature_packet_legal_notice_text: str = os.environ.get(
+        "SIGNATURE_PACKET_LEGAL_NOTICE_TEXT",
+        "By signing this document, you agree your signature is legally binding.",
+    )
+    signature_packet_reminder_schedule_hours: str = os.environ.get("SIGNATURE_PACKET_REMINDER_SCHEDULE_HOURS", "24,72,168")
     filemgr_bucket: str = os.environ.get("FILEMGR_BUCKET", "")
     filemgr_retention_days: int = int(os.environ.get("FILEMGR_RETENTION_DAYS", "30"))
     filemgr_purge_scan_limit: int = int(os.environ.get("FILEMGR_PURGE_SCAN_LIMIT", "200"))

@@ -16,6 +16,11 @@ This service uses multiple DynamoDB tables to store sessions, MFA devices, recov
 | Alert preferences | `ALERT_PREFS_TABLE_NAME` | Default: `alert_prefs`. |
 | Billing data | `BILLING_TABLE_NAME` | Required for Stripe/PayPal/CCBill billing features. |
 | API usage events | `API_USAGE_TABLE_NAME` | Append-only API metering events + GSIs for period/key/route queries. |
+| Signature packets | `SIGNATURE_PACKETS_TABLE_NAME` | Packet metadata and sender-owner lookup (`OWNER_CREATED_INDEX`). |
+| Signature packet signers | `SIGNATURE_PACKET_SIGNERS_TABLE_NAME` | Signer assignments and signer inbox lookup (`SIGNER_STATUS_INDEX`). |
+| Signature packet fields | `SIGNATURE_PACKET_FIELDS_TABLE_NAME` | Field geometry/type/assignment keyed by packet. |
+| Signature packet events | `SIGNATURE_PACKET_EVENTS_TABLE_NAME` | Append-only audit timeline per packet. |
+| Signature packet artifacts | `SIGNATURE_PACKET_ARTIFACTS_TABLE_NAME` | Immutable draft/final artifact references per packet. |
 | Newsfeed (single-table) | `APP_TABLE` | Required for the newsfeed demo endpoints; default: `app_single_table`. |
 
 ## Table schema overview
@@ -83,3 +88,10 @@ The local/bootstrap migration script (`scripts/local-ddb-init.py`) provisions th
 - Bootstrap is **forward/backward safe** for local/staging because table creation is idempotent and missing GSIs are added in place.
 - Uniqueness/idempotency is enforced via write-path conditional expressions using `provider_event_idempotency_key` and `idempotency_key` lookup indexes.
 - Validate critical-path query latency in staging against `GSI_USER`, `GSI_STATUS`, `GSI_ORDER`, `GSI_IDEMPOTENCY`, and `GSI_TIMESTAMP` before production cutover.
+
+### Signature packet tables
+- **signature_packets**: `packet_id` PK with `OWNER_CREATED_INDEX` (`owner_user_id` + `created_at`) for sender list queries.
+- **signature_packet_signers**: `packet_id` + `signer_id` with `SIGNER_STATUS_INDEX` (`signer_id` + `status_key`) for signer inbox/status queries.
+- **signature_packet_fields**: `packet_id` + `field_id` for packet field placement/fill state.
+- **signature_packet_events**: `packet_id` + `event_id` append-only audit log.
+- **signature_packet_artifacts**: `packet_id` PK for draft/final PDF artifact references.

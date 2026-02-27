@@ -64,6 +64,7 @@ from app.services.messaging_gallery import fetch_gallery_page
 from app.services.messaging_gallery_index import fetch_gallery_index_page, sync_gallery_index_entries
 from app.services.profile import get_profile_identity
 from app.services.sessions import require_ui_session
+from app.services.signature_packet_store import get_signature_packet_progress_for_user
 from app.services.subscription_access import require_subscription_access
 from app.services.internal_api_entitlements import enforce_internal_api_entitlement
 from app.services.usage_metering import (
@@ -938,6 +939,7 @@ class CreateFileMessageIn(BaseModel):
     reply_to_message_id: Optional[str] = None
     preview: Optional[LinkPreviewIn] = None
     consumption_policy: Literal["none", "view_once", "listen_once"] = "none"
+    signature_packet_id: Optional[str] = Field(default=None, max_length=128)
 
     @model_validator(mode="after")
     def _validate_consumption_policy(self):
@@ -1993,6 +1995,19 @@ def _project_gallery_image(img_dict: dict) -> dict:
 
 def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOut:
     merged_item = _merge_consumption_state(message_item, viewer_user_id)
+
+    file_payload = merged_item.get("file")
+    if isinstance(file_payload, dict):
+        packet_id = str(file_payload.get("signature_packet_id") or "")
+        if packet_id:
+            try:
+                progress = get_signature_packet_progress_for_user(packet_id, viewer_user_id)
+            except Exception:
+                progress = None
+            if progress:
+                merged_file = dict(file_payload)
+                merged_file.update(progress)
+                merged_item["file"] = merged_file
 
     counts, mine = _reaction_summaries(merged_item, viewer_user_id)
 
@@ -5858,6 +5873,7 @@ def create_file_message(
             "content_type": content_type,
             "duration_seconds": duration_seconds,
             "thumbnail": node.get("thumbnail"),
+            "signature_packet_id": inp.signature_packet_id,
         },
         "reactions": {},
     }

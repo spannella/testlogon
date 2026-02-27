@@ -680,6 +680,13 @@ export interface MessageFile {
   duration_seconds?: number;
   thumbnail?: string;
   url?: string;
+  signature_packet_id?: string;
+  signature_packet_role?: "sender" | "signer";
+  signature_packet_status?: string;
+  signature_packet_status_chip?: "awaiting_your_signature" | "waiting_on_others" | "completed";
+  signature_packet_status_text?: string;
+  signature_packet_completed_at?: string | null;
+  signature_packet_final_pdf_url?: string;
 }
 
 export type MessageConsumptionPolicy = "none" | "view_once" | "listen_once";
@@ -897,6 +904,7 @@ export interface SendFileMessageReq {
   duration_seconds?: number;
   reply_to_message_id?: string;
   consumption_policy?: MessageConsumptionPolicy;
+  signature_packet_id?: string;
 }
 
 export interface SendFileShareReq {
@@ -1063,6 +1071,7 @@ export interface ShareFileReq {
   to_user: string;
   permission: "read" | "write";
   expires_at?: number;
+  signature_packet_id?: string;
 }
 
 
@@ -1127,6 +1136,13 @@ export interface SharedItem {
   shared_at: string;
   permission: "read" | "write";
   expires_at?: string | null;
+  signature_packet_id?: string | null;
+  signature_packet_role?: "sender" | "signer";
+  signature_packet_status?: string;
+  signature_packet_status_chip?: "awaiting_your_signature" | "waiting_on_others" | "completed";
+  signature_packet_status_text?: string;
+  signature_packet_completed_at?: string | null;
+  signature_packet_final_pdf_url?: string;
   name?: string;
   type?: "file" | "folder";
   size?: number;
