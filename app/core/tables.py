@@ -43,6 +43,7 @@ class Tables:
     signature_packet_fields: Any
     signature_packet_events: Any
     signature_packet_artifacts: Any
+    tickets: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -80,4 +81,5 @@ T = Tables(
     signature_packet_fields=ddb.Table(S.signature_packet_fields_table_name),
     signature_packet_events=ddb.Table(S.signature_packet_events_table_name),
     signature_packet_artifacts=ddb.Table(S.signature_packet_artifacts_table_name),
+    tickets=ddb.Table(S.tickets_table_name),
 )

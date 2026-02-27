@@ -42,6 +42,7 @@ describe("useMessagingStream", () => {
 
     const es = MockEventSource.instances[0]!;
     expect(es).toBeTruthy();
+    if (!es) throw new Error("Expected EventSource instance");
 
     es.onmessage?.({
       data: JSON.stringify({ type: "once_media_consumed", conversation_id: "c-1" }),
@@ -63,6 +64,8 @@ describe("useMessagingStream", () => {
     );
 
     const es = MockEventSource.instances[0]!;
+    expect(es).toBeTruthy();
+    if (!es) throw new Error("Expected EventSource instance");
     es.onmessage?.({
       data: JSON.stringify({ type: "new_message", conversation_id: "c-2" }),
     } as MessageEvent);

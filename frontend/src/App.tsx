@@ -34,6 +34,9 @@ const RootRoleManagementPage = lazy(() => import("@/pages/admin/RootRoleManageme
 const PublicEventPage = lazy(() => import("@/pages/calendar/PublicEventPage"));
 const ContactsPage = lazy(() => import("@/pages/contacts/ContactsPage"));
 const HelpdeskPage = lazy(() => import("@/pages/helpdesk/HelpdeskPage"));
+const TicketsPage = lazy(() => import("@/pages/tickets/TicketsPage"));
+const TicketSpacesPage = lazy(() => import("@/pages/tickets/TicketSpacesPage"));
+const TicketSpaceDetailPage = lazy(() => import("@/pages/tickets/TicketSpaceDetailPage"));
 
 function PageSpinner() {
   return (
@@ -72,6 +75,9 @@ export default function App() {
           <Route path="feed" element={<FeedPage />} />
           <Route path="posts/:postId" element={<PostDetailPage />} />
           <Route path="alerts" element={<AlertsPage />} />
+          <Route path="tickets" element={<TicketsPage />} />
+          <Route path="tickets/spaces" element={<TicketSpacesPage />} />
+          <Route path="tickets/spaces/:spaceId" element={<TicketSpaceDetailPage />} />
           <Route path="security" element={<SecurityPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />

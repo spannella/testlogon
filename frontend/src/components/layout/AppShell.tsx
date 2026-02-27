@@ -78,6 +78,7 @@ import {
   Shield,
   Settings,
   Bell,
+  LifeBuoy,
   UsersRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -117,6 +118,8 @@ const MOBILE_NAV_GROUPS = [
       { label: "Profile", path: "/profile", icon: User },
       { label: "Security", path: "/security", icon: Shield },
       { label: "Alerts", path: "/alerts", icon: Bell },
+      { label: "Tickets", path: "/tickets", icon: LifeBuoy },
+  { label: "Ticket Spaces", path: "/tickets/spaces", icon: LifeBuoy },
       { label: "Settings", path: "/settings", icon: Settings },
       { label: "Role Mgmt", path: "/root/roles", icon: UsersRound },
     ],

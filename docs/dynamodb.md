@@ -95,3 +95,6 @@ The local/bootstrap migration script (`scripts/local-ddb-init.py`) provisions th
 - **signature_packet_fields**: `packet_id` + `field_id` for packet field placement/fill state.
 - **signature_packet_events**: `packet_id` + `event_id` append-only audit log.
 - **signature_packet_artifacts**: `packet_id` PK for draft/final PDF artifact references.
+
+### Ticketing schema and access patterns
+- See [Ticketing DynamoDB schema](ticketing-dynamodb-schema.md) for `pk`/`sk` item families (`META`, `MSG`, `ACT`), owner/status/assignee GSIs, and optimistic concurrency (`version` + conditional updates).
