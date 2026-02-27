@@ -3952,6 +3952,37 @@ def _claim_helpdesk_conversation_internal(
         raise
 
     updated = result.get("conversation", {}) if isinstance(result, dict) else {}
+
+    # Add the claiming agent as an active participant (admin role) so they can send messages.
+    # Use a conditional put to avoid overwriting an existing participant record.
+    existing_part = tbl_parts.get_item(Key={"user_id": user_id, "conversation_id": conversation_id}).get("Item")
+    if not existing_part:
+        tbl_parts.put_item(Item={
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "status": "active",
+            "role": "admin",
+            "muted_until": 0,
+            "last_read_at": 0,
+            "unread_count": 0,
+            "joined_at": ts,
+            "left_at": 0,
+            "GSI1PK": conversation_id,
+            "GSI1SK": user_id,
+        })
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="ADD participant_count :inc",
+            ExpressionAttributeValues={":inc": 1},
+        )
+    elif existing_part.get("status") != "active":
+        tbl_parts.update_item(
+            Key={"user_id": user_id, "conversation_id": conversation_id},
+            UpdateExpression="SET #s = :active, role = :role, joined_at = :ts",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":active": "active", ":role": "admin", ":ts": ts},
+        )
+
     audit_event(
         "messaging_helpdesk_conversation_claimed",
         user_id,
@@ -3973,6 +4004,45 @@ def _claim_helpdesk_conversation_internal(
         assignment_version=int(updated.get("assignment_version") or (current_version + 1)),
         idempotent=False,
     )
+
+
+@router.get("/helpdesk/queue", response_model=List[ConversationOut])
+def get_helpdesk_queue(
+    group_id: str = Query(..., max_length=128),
+    state: Optional[str] = Query(None),
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    if not _is_helpdesk_group_member(group_id, user_id):
+        raise HTTPException(403, detail={"code": "not_helpdesk_member"})
+    states = [state] if state else ["awaiting_agent", "assigned", "paused_no_agents_online"]
+    items: list[dict] = []
+    for s in states:
+        pk = f"{s}#{group_id}"
+        # Paginate through all items in this state (DynamoDB Limit is per page,
+        # not a total cap). Cap at 1000 per state as a safety limit.
+        last_key = None
+        per_state: list[dict] = []
+        while len(per_state) < 1000:
+            kwargs: dict = {
+                "IndexName": "RoutingStateGroupIndex",
+                "KeyConditionExpression": Key("routing_state_group_pk").eq(pk),
+                "Limit": 200,
+            }
+            if last_key:
+                kwargs["ExclusiveStartKey"] = last_key
+            resp = tbl_convos.query(**kwargs)
+            per_state.extend(resp.get("Items", []))
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
+        items.extend(per_state)
+    results: List[ConversationOut] = []
+    for convo in items:
+        cid = convo.get("conversation_id", "")
+        part = tbl_parts.get_item(Key={"user_id": user_id, "conversation_id": cid}).get("Item") or {}
+        results.append(_conversation_out_from_items(conversation_id=cid, convo=convo, participant=part, viewer_user_id=user_id))
+    return results
 
 
 @router.post("/helpdesk/conversations/{conversation_id}/claim", response_model=HelpdeskClaimOut)

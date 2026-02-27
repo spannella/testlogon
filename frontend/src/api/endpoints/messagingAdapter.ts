@@ -7,6 +7,8 @@ type RawConversation = Partial<Conversation> & {
   last_read_at?: number | string;
   unread_count?: number | string;
   last_message_at?: number | string;
+  active_agent_claimed_at?: number | string;
+  assignment_version?: number | string;
 };
 
 type RawMessage = Partial<Message> & {
@@ -135,5 +137,11 @@ export function adaptConversation(raw: RawConversation): Conversation {
     unread_count: toNum(raw.unread_count),
     participants: Array.isArray(raw.participants) ? raw.participants : [],
     last_message: raw.last_message ? adaptMessage(raw.last_message) : undefined,
+    routing_mode: raw.routing_mode,
+    routing_group_id: raw.routing_group_id,
+    routing_state: raw.routing_state,
+    active_agent_user_id: raw.active_agent_user_id,
+    active_agent_claimed_at: raw.active_agent_claimed_at != null ? toNum(raw.active_agent_claimed_at) : undefined,
+    assignment_version: raw.assignment_version != null ? toNum(raw.assignment_version) : undefined,
   };
 }

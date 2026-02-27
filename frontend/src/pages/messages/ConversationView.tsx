@@ -16,6 +16,7 @@ import {
   sendCalendarEventMessage,
   sendMeetingPollMessage,
   markRead,
+  claimHelpdeskConversation,
 } from "@/api/endpoints/messaging";
 import { useAuthStore } from "@/stores/authStore";
 import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq } from "@/api/types";
@@ -31,9 +32,11 @@ import { ScheduledMessages } from "./ScheduledMessages";
 interface ConversationViewProps {
   conversation: Conversation;
   onBack?: () => void;
+  /** Called immediately after a successful helpdesk claim with the new routing state. */
+  onClaimSuccess?: (state: string, agentUserId: string) => void;
 }
 
-export function ConversationView({ conversation, onBack }: ConversationViewProps) {
+export function ConversationView({ conversation, onBack, onClaimSuccess }: ConversationViewProps) {
   const userId = useAuthStore((s) => s.userId);
   const queryClient = useQueryClient();
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -348,6 +351,17 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
     onError: () => toast.error("Failed to create poll"),
   });
 
+  const claimMutation = useMutation({
+    mutationFn: () => claimHelpdeskConversation(convoId),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      queryClient.invalidateQueries({ queryKey: ["helpdesk-queue"] });
+      // Immediately notify parent so it can update activeConvo without waiting for refetch.
+      onClaimSuccess?.(data.state, data.assigned_agent_user_id);
+    },
+    onError: () => toast.error("Failed to claim conversation"),
+  });
+
   // ── Conversation title / header ────────────────────────────────
 
   const title = conversation.title
@@ -463,6 +477,16 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
           </Button>
         )}
       </div>
+
+      {/* Helpdesk routing banner */}
+      {conversation.routing_mode === "helpdesk_bridge" && conversation.routing_state && (
+        <HelpdeskRoutingBanner
+          conversation={conversation}
+          currentUserId={userId ?? ""}
+          onClaim={() => claimMutation.mutate()}
+          isClaiming={claimMutation.isPending}
+        />
+      )}
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
@@ -597,4 +621,60 @@ function useMessagesQuery(conversationId: string) {
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
+}
+
+// ─── Helpdesk Routing Banner ─────────────────────────────────────
+
+interface HelpdeskRoutingBannerProps {
+  conversation: Conversation;
+  currentUserId: string;
+  onClaim: () => void;
+  isClaiming: boolean;
+}
+
+function HelpdeskRoutingBanner({ conversation, currentUserId, onClaim, isClaiming }: HelpdeskRoutingBannerProps) {
+  const state = conversation.routing_state ?? "";
+  const assignedAgent = conversation.active_agent_user_id ?? "";
+
+  let bgClass = "bg-muted";
+  let text = "";
+  let showClaim = false;
+
+  if (state === "awaiting_agent") {
+    bgClass = "bg-amber-50 border-amber-200 text-amber-800";
+    text = "Waiting for agent";
+    showClaim = true;
+  } else if (state === "assigned" && assignedAgent === currentUserId) {
+    bgClass = "bg-green-50 border-green-200 text-green-800";
+    text = "You are handling this conversation";
+  } else if (state === "assigned") {
+    bgClass = "bg-yellow-50 border-yellow-200 text-yellow-800";
+    text = "Assigned to another agent";
+  } else if (state === "paused_no_agents_online") {
+    bgClass = "bg-red-50 border-red-200 text-red-800";
+    text = "No agents online — will resume when an agent comes online";
+  } else if (state === "closed") {
+    bgClass = "bg-muted border-border text-muted-foreground";
+    text = "Conversation closed";
+  } else {
+    return null;
+  }
+
+  return (
+    <div className={cn("flex items-center gap-3 border-b px-4 py-2 text-sm font-medium", bgClass)}>
+      <span className="flex-1">{text}</span>
+      {showClaim && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 shrink-0"
+          onClick={onClaim}
+          disabled={isClaiming}
+          aria-label="Claim this helpdesk conversation"
+        >
+          {isClaiming ? "Claiming…" : "Claim"}
+        </Button>
+      )}
+    </div>
+  );
 }

@@ -33,9 +33,23 @@ export function useMessagingStream(enabled = true) {
           eventType === "message:edited" ||
           eventType === "conversation_updated" ||
           eventType === "message:reaction" ||
-          eventType === "message:expired"
+          eventType === "message:expired" ||
+          eventType === "helpdesk.conversation.alerted" ||
+          eventType === "helpdesk.conversation.assigned" ||
+          eventType === "helpdesk.conversation.released" ||
+          eventType === "helpdesk.conversation.no_agents_online"
         ) {
           queryClient.invalidateQueries({ queryKey: ["conversations"] });
+        }
+
+        // Refresh helpdesk queue on routing state changes
+        if (
+          eventType === "helpdesk.conversation.alerted" ||
+          eventType === "helpdesk.conversation.assigned" ||
+          eventType === "helpdesk.conversation.released" ||
+          eventType === "helpdesk.conversation.no_agents_online"
+        ) {
+          queryClient.invalidateQueries({ queryKey: ["helpdesk-queue"] });
         }
 
         // Refresh the specific conversation's message list
@@ -69,6 +83,10 @@ export function useMessagingStream(enabled = true) {
       "conversation_updated",
       "poll:vote",
       "poll:confirmed",
+      "helpdesk.conversation.alerted",
+      "helpdesk.conversation.assigned",
+      "helpdesk.conversation.released",
+      "helpdesk.conversation.no_agents_online",
     ];
 
     function connect() {

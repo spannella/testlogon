@@ -27,6 +27,8 @@ import type {
   SendCalendarEventReq,
   SendMeetingPollReq,
   MeetingPollState,
+  HelpdeskClaimOut,
+  RoutingEventOut,
 } from "@/api/types";
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
 import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
@@ -633,4 +635,34 @@ export async function sendGalleryMessage(
     body,
   );
   return adaptMessage(res);
+}
+
+// ─── Helpdesk API ─────────────────────────────────────────────────
+
+export async function startHelpdeskConversation(groupId: string): Promise<Conversation> {
+  const res = await api.post<Conversation>("/messaging/conversations", {
+    routing_mode: "helpdesk_bridge",
+    helpdesk_group_id: groupId,
+    type: "dm",
+  });
+  return adaptConversation(res);
+}
+
+export async function claimHelpdeskConversation(conversationId: string): Promise<HelpdeskClaimOut> {
+  return api.post<HelpdeskClaimOut>(`/messaging/helpdesk/conversations/${conversationId}/claim`, {});
+}
+
+export async function getHelpdeskQueue(groupId: string, state?: string): Promise<Conversation[]> {
+  const params: Record<string, string> = { group_id: groupId };
+  if (state) params.state = state;
+  const res = await api.get<Conversation[]>("/messaging/helpdesk/queue", params);
+  return (Array.isArray(res) ? res : []).map(adaptConversation);
+}
+
+export async function getRoutingEvents(conversationId: string, limit = 50): Promise<RoutingEventOut[]> {
+  const res = await api.get<RoutingEventOut[]>(
+    `/messaging/conversations/${conversationId}/routing-events`,
+    { limit: String(limit) },
+  );
+  return Array.isArray(res) ? res : [];
 }

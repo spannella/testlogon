@@ -33,6 +33,7 @@ const SubscriptionsPage = lazy(() => import("@/pages/subscriptions/Subscriptions
 const RootRoleManagementPage = lazy(() => import("@/pages/admin/RootRoleManagementPage"));
 const PublicEventPage = lazy(() => import("@/pages/calendar/PublicEventPage"));
 const ContactsPage = lazy(() => import("@/pages/contacts/ContactsPage"));
+const HelpdeskPage = lazy(() => import("@/pages/helpdesk/HelpdeskPage"));
 
 function PageSpinner() {
   return (
@@ -58,6 +59,7 @@ export default function App() {
           <Route index element={<Dashboard />} />
           <Route path="messages" element={<MessagesPage />} />
           <Route path="contacts" element={<ContactsPage />} />
+          <Route path="helpdesk" element={<HelpdeskPage />} />
           <Route path="files" element={<FilesPage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />

@@ -577,9 +577,39 @@ export interface Conversation {
   muted_until: number;
   last_read_at: number;
   unread_count: number;
+  // Helpdesk routing fields (populated for helpdesk agents only)
+  routing_mode?: string;
+  routing_group_id?: string;
+  routing_state?: string;
+  active_agent_user_id?: string;
+  active_agent_claimed_at?: number;
+  assignment_version?: number;
   // UI convenience fields (derived client-side)
   participants: Participant[];
   last_message?: Message;
+}
+
+export interface RoutingEventOut {
+  conversation_id: string;
+  event_id: string;
+  event_type: string;
+  actor_user_id: string;
+  from_state: string;
+  to_state: string;
+  created_at: number;
+  assignment_version: number;
+  routing_group_id: string;
+  active_agent_user_id: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface HelpdeskClaimOut {
+  ok: boolean;
+  conversation_id: string;
+  state: string;
+  assigned_agent_user_id: string;
+  assignment_version: number;
+  idempotent: boolean;
 }
 
 export interface Participant {
