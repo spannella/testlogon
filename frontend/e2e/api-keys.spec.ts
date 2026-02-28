@@ -376,27 +376,36 @@ test.describe("6. IP access rules", () => {
   });
 
   test("saving IP rules triggers success toast and closes the dialog", async () => {
+    // Fill the allow CIDR input — the frontend auto-adds it on save (no need to click Add first).
     await page.getByLabel("Allow CIDRs").fill("10.0.0.0/8");
+    // Wait for the GET refetch to complete after saving so the keysQuery cache is fresh.
+    const refetchDone = page.waitForResponse(
+      (r) => r.url().includes("/ui/api_keys") && r.request().method() === "GET",
+      { timeout: 8000 },
+    );
     await page.getByRole("dialog").getByRole("button", { name: "Save Rules" }).click();
     await expect(page.getByText("IP rules updated")).toBeVisible({ timeout: 5000 });
     await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 3000 });
+    await refetchDone;
   });
 
   test("saved CIDR rules are pre-populated when the dialog is reopened", async () => {
     await page.getByRole("button", { name: "Manage IP rules" }).first().click();
     await expect(page.getByRole("dialog")).toBeVisible({ timeout: 3000 });
-    await expect(page.getByLabel("Allow CIDRs")).toHaveValue("10.0.0.0/8");
+    // The saved CIDR appears as a chip/tag in the list — not as the text-input value.
+    await expect(page.getByRole("dialog").getByText("10.0.0.0/8")).toBeVisible({ timeout: 3000 });
   });
 
   test("Cancel discards unsaved edits", async () => {
-    // Modify the field without saving.
+    // Fill the input with a new CIDR (without clicking Add) and then cancel.
     await page.getByLabel("Allow CIDRs").fill("192.168.0.0/16");
     await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
     await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 2000 });
-    // Reopen — original value should still be there.
+    // Reopen — original saved CIDR should still be shown as a chip; unsaved edit discarded.
     await page.getByRole("button", { name: "Manage IP rules" }).first().click();
     await expect(page.getByRole("dialog")).toBeVisible({ timeout: 3000 });
-    await expect(page.getByLabel("Allow CIDRs")).toHaveValue("10.0.0.0/8");
+    await expect(page.getByRole("dialog").getByText("10.0.0.0/8")).toBeVisible({ timeout: 3000 });
+    await expect(page.getByRole("dialog").getByText("192.168.0.0/16")).not.toBeVisible({ timeout: 2000 });
   });
 });
 

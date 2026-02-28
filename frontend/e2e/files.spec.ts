@@ -161,9 +161,8 @@ test.describe("3. Create folder via UI", () => {
     const newFolderBtn = page.locator("button").filter({ hasText: /new folder/i }).first();
     await newFolderBtn.click();
     await page.locator("#folder-name").fill(folderName);
-    // Submit the dialog
-    const createBtn = page.locator("button[type='submit'], button").filter({ hasText: /create/i }).first();
-    await createBtn.click();
+    // Submit the dialog — scope to dialog to avoid matching "Create draft" from signature form
+    await page.getByRole("dialog").getByRole("button", { name: "Create" }).click();
     await page.waitForTimeout(2000);
     // Folder should appear in the file list
     const folderEntry = page.locator(`text=${folderName}`);

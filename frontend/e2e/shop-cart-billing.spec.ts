@@ -209,7 +209,9 @@ test.describe("3. Cart — empty cart state", () => {
     await deleteAllOpenCarts(page);
     // Navigate to /cart — the component auto-creates a cart when none exist.
     await page.goto(`${BASE}/cart`, { waitUntil: "load" });
-    await page.waitForTimeout(1000);
+    // Wait until the cart auto-creates and the empty state is rendered.
+    // The component: GETs carts → sees none → POSTs auto-create → invalidates → GETs again → renders "Cart is empty".
+    await expect(page.getByText("Cart is empty")).toBeVisible({ timeout: 15000 });
   });
 
   test.afterAll(async () => page?.close());
@@ -258,8 +260,15 @@ test.describe("4. Cart — with items", () => {
       unit_price_cents: UNIT_PRICE,
     });
 
+    // Wait for the carts list GET to complete so the page renders the cart with items.
+    const cartsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/ui/shoppingcart/carts") && r.request().method() === "GET"
+        && !r.url().match(/\/carts\/.+/),
+      { timeout: 10000 },
+    );
     await page.goto(`${BASE}/cart`, { waitUntil: "load" });
-    await page.waitForTimeout(1000);
+    await cartsLoaded;
+    await page.waitForTimeout(400);
   });
 
   test.afterAll(async () => page?.close());

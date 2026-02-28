@@ -275,15 +275,23 @@ async function openDmWithBob(page: Page) {
   // 1. Inject Alice's auth (sets cookies, navigates to /login)
   await injectAuth(page, ALICE_ID);
   // 2. Create / retrieve the DM (cookies are now in place)
-  await getOrCreateDm(page);
-  // 3. Navigate to /messages
+  const convoId = await getOrCreateDm(page);
+  // 3. Send a "touch" message so _dmConvoId is the most-recently-active
+  //    conversation and appears as the FIRST "E2E Bob" row in the sidebar.
+  //    This is needed when multiple E2E DMs from past runs exist.
+  const session = getSessions()[ALICE_ID];
+  await page.request.post(`${API}/messaging/conversations/${convoId}/messages`, {
+    data: { text: `__touch__${Date.now()}` },
+    headers: { "x-csrf-token": session.csrf_token },
+  }).catch(() => {});
+  // 4. Navigate to /messages and wait for the conversations list to load.
   await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-  await page.waitForTimeout(800);
-  // 4. Click on the "E2E Bob" conversation row
+  await page.waitForTimeout(600);
+  // 5. Click on the "E2E Bob" conversation row
   const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-  await expect(row).toBeVisible({ timeout: 8000 });
+  await expect(row).toBeVisible({ timeout: 12000 });
   await row.click();
-  // 5. Wait for ComposeBar
+  // 6. Wait for ComposeBar
   await expect(
     page.getByPlaceholder("Type a message...").or(
       page.getByPlaceholder("Type an encrypted message..."),
@@ -299,8 +307,14 @@ test.describe("1. Messaging page structure", () => {
   test.beforeAll(async ({ browser }) => {
     page = await browser.newPage();
     await injectAuth(page);
+    const sec1ConvsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await page.waitForTimeout(800);
+    await sec1ConvsLoaded;
+    await page.waitForTimeout(300);
   });
 
   test.afterAll(async () => page?.close());
@@ -428,8 +442,14 @@ test.describe("4. View-once text — recipient sees 'Tap to view once'", () => {
     }
 
     // Alice opens the conversation (already authed, just navigate)
+    const sec5ConvsLoaded2 = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await page.waitForTimeout(800);
+    await sec5ConvsLoaded2;
+    await page.waitForTimeout(300);
     const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
     await expect(row).toBeVisible({ timeout: 8000 });
     await row.click();
@@ -503,10 +523,16 @@ test.describe("5. View-once text — sender sees text normally", () => {
     }
 
     // Alice opens the conversation
+    const sec5ConvsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await page.waitForTimeout(800);
+    await sec5ConvsLoaded;
+    await page.waitForTimeout(300);
     const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 8000 });
+    await expect(row).toBeVisible({ timeout: 10000 });
     await row.click();
     await expect(
       page.getByPlaceholder("Type a message...").or(
@@ -549,14 +575,35 @@ test.describe("6. Encrypted message — compose and send via UI", () => {
     await expect(page.getByText("Passwords match")).toBeVisible({ timeout: 3000 });
 
     await page.getByPlaceholder("Type an encrypted message...").fill(ENCRYPT_TEXT);
+    // Register both POST and GET listeners BEFORE clicking Send.
+    // The "Decrypt message" button requires message.encryption from the server GET
+    // response, not just is_encrypted from the optimistic update.
+    let sec6PostSent = false;
     const sec6SentResponse = page.waitForResponse(
-      (r) => r.url().includes("/messages") && r.request().method() === "POST",
+      (r) => {
+        if (r.url().includes("/messages") && r.request().method() === "POST") {
+          sec6PostSent = true;
+        }
+        return sec6PostSent && r.url().includes("/messages") && r.request().method() === "POST";
+      },
+      { timeout: 10000 },
+    );
+    const sec6RefetchResponse = page.waitForResponse(
+      (r) =>
+        sec6PostSent &&
+        r.url().includes("/messages") &&
+        r.request().method() === "GET" &&
+        !r.url().includes("/scheduled"),
       { timeout: 10000 },
     );
     await page.getByRole("button", { name: "Send message" }).click();
     await sec6SentResponse;
-    await page.waitForTimeout(800);
+    await sec6RefetchResponse;
     await expect(page.getByText("Encrypted").last()).toBeVisible({ timeout: 5000 });
+    // Verify the "Decrypt message" button is present (requires encryption envelope from GET)
+    await expect(
+      page.getByRole("button", { name: "Decrypt message" }).last(),
+    ).toBeVisible({ timeout: 5000 });
   });
 
   test.afterAll(async () => page?.close());
@@ -861,10 +908,16 @@ test.describe("9. Message display order — oldest first, newest last", () => {
 
     // Open the conversation in the browser.  ConversationView auto-scrolls
     // to the bottom on mount, so MSG3 (newest) should be immediately visible.
+    const sec9ConvsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await page.waitForTimeout(800);
+    await sec9ConvsLoaded;
+    await page.waitForTimeout(300);
     const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 8000 });
+    await expect(row).toBeVisible({ timeout: 10000 });
     await row.click();
     await expect(
       page.getByPlaceholder("Type a message...").or(
@@ -974,10 +1027,16 @@ test.describe("9. Message display order — oldest first, newest last", () => {
 
   test("Order is preserved after the page reloads (re-fetch from server)", async () => {
     // Hard-navigate to /messages and re-open the DM to force a fresh API fetch.
+    const sec9ReloadConvsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await page.waitForTimeout(800);
+    await sec9ReloadConvsLoaded;
+    await page.waitForTimeout(300);
     const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 8000 });
+    await expect(row).toBeVisible({ timeout: 10000 });
     await row.click();
     // Wait for the message bubble <p> (not the sidebar span) to confirm the
     // conversation view has finished loading before querying DOM order.
@@ -1032,8 +1091,14 @@ test.describe("10. Scheduled send", () => {
     page = await browser.newPage();
     await injectAuth(page, ALICE_ID);
     await getOrCreateDm(page);
+    const sec10ConvsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await page.waitForTimeout(800);
+    await sec10ConvsLoaded;
+    await page.waitForTimeout(300);
     const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
     await expect(row).toBeVisible({ timeout: 8000 });
     await row.click();
@@ -1156,7 +1221,7 @@ test.describe("10. Scheduled send", () => {
 
   test("Clicking Confirm closes the popover and shows the scheduled pill", async () => {
     // The "Confirm" button appears inside the popover once a valid date is set.
-    await page.getByRole("button", { name: "Confirm" }).click();
+    await page.getByRole("button", { name: "Confirm", exact: true }).click();
     // Popover input should no longer be visible.
     await expect(page.locator("input[type='datetime-local']")).not.toBeVisible({ timeout: 3000 });
     // The "Scheduled: …" pill should appear in the compose area.
@@ -1321,11 +1386,17 @@ test.describe("11. Tips and locked messages", () => {
     // ── Bob's page ──
     bobPage = await browser.newPage();
     await injectAuth(bobPage, BOB_ID);
+    const sec11BobConvsLoaded = bobPage.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await bobPage.waitForTimeout(800);
+    await sec11BobConvsLoaded;
+    await bobPage.waitForTimeout(300);
     // Bob's DM shows as "E2E Alice" (conversationName filters Bob out of DM name)
     const bobRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
-    await expect(bobRow).toBeVisible({ timeout: 8000 });
+    await expect(bobRow).toBeVisible({ timeout: 10000 });
     await bobRow.click();
     await expect(
       bobPage
@@ -1567,22 +1638,32 @@ test.describe("11. Tips and locked messages", () => {
   });
 
   test("UI: Alice sends a locked message and sees the 'Locked ·' badge", async () => {
+    test.setTimeout(60_000);
+    // On retry the compose bar may be disabled because a previous send mutation is still
+    // in-flight. Wait until the textarea is enabled before interacting.
+    await expect(alicePage.locator("textarea").last()).not.toBeDisabled({ timeout: 20_000 });
+
     const lockCheck = alicePage
       .locator("label")
       .filter({ hasText: /require tip to unlock/i })
       .locator("input[type='checkbox']");
     // After mutual-exclusion test, lock is unchecked — check it
     if (!(await lockCheck.isChecked())) await lockCheck.check();
+    // Wait for the lock price input to appear after state update
+    await expect(alicePage.locator("input[placeholder='e.g. 1.00']")).toBeVisible({ timeout: 3000 });
     await alicePage.locator("input[placeholder='e.g. 1.00']").fill("1");
     // Add a unique description so Bob can identify this specific locked message.
     await alicePage
       .locator("textarea[placeholder='Lock description (optional)']")
       .fill(UI_LOCK_DESC);
     await alicePage.getByPlaceholder("Type a message...").fill(UI_LOCK);
+    // Register POST listener before enabling check to avoid race condition
     const postDone = alicePage.waitForResponse(
       (r) => r.url().includes("/messages") && r.request().method() === "POST",
-      { timeout: 10_000 },
+      { timeout: 30_000 },
     );
+    // Wait for Send button to be enabled before clicking.
+    await expect(alicePage.getByRole("button", { name: "Send message" })).toBeEnabled({ timeout: 5_000 });
     await alicePage.getByRole("button", { name: "Send message" }).click();
     await postDone;
     // Sender bubble shows the original text + "Locked · $1.00" badge.
@@ -1594,10 +1675,16 @@ test.describe("11. Tips and locked messages", () => {
 
   test("UI: Bob's page shows 'Lock ·' badge and 'Unlock for' button", async () => {
     // Reload Bob's page so the new locked message is fetched
+    const sec11BobReloadConvsLoaded = bobPage.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await bobPage.reload({ waitUntil: "load" });
-    await bobPage.waitForTimeout(500);
+    await sec11BobReloadConvsLoaded;
+    await bobPage.waitForTimeout(300);
     const bobRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
-    await expect(bobRow).toBeVisible({ timeout: 8000 });
+    await expect(bobRow).toBeVisible({ timeout: 10000 });
     await bobRow.click();
     await expect(
       bobPage
@@ -1648,9 +1735,13 @@ test.describe("11. Tips and locked messages", () => {
     await alicePage.locator("input[placeholder='e.g. 5.00']").fill("1");
     // Select the injected payment method (required since the tip panel now gates
     // the Send button on having both an amount and a selected PM).
-    await expect(alicePage.getByRole("button", { name: /visa.*4242/i })).toBeVisible({ timeout: 5000 });
-    await alicePage.getByRole("button", { name: /visa.*4242/i }).click();
+    // Use .first() in case previous test runs left multiple PMs in DDB with same brand/last4.
+    await expect(alicePage.getByRole("button", { name: /visa.*4242/i }).first()).toBeVisible({ timeout: 8000 });
+    await alicePage.getByRole("button", { name: /visa.*4242/i }).first().click();
     await alicePage.getByPlaceholder("Type a message...").fill(UI_TIP);
+    // Wait for Send button to be enabled before registering the response listener.
+    // The tip+PM+text combination enables the button; React state batching can delay this.
+    await expect(alicePage.getByRole("button", { name: "Send message" })).toBeEnabled({ timeout: 5000 });
     const postDone = alicePage.waitForResponse(
       (r) => r.url().includes("/messages") && r.request().method() === "POST",
       { timeout: 10_000 },

@@ -152,10 +152,18 @@ async function openDmWithBob(page: Page) {
     headers: { "x-csrf-token": session.csrf_token },
   }).catch(() => {});
 
+  // Register the conversations-list response listener BEFORE navigating.
+  const convsLoaded = page.waitForResponse(
+    (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+      && !r.url().match(/\/conversations\/[^/]+$/),
+    { timeout: 15000 },
+  );
   await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-  await page.waitForTimeout(800);
+  await convsLoaded;
+  await page.waitForTimeout(300);
+
   const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-  await expect(row).toBeVisible({ timeout: 8000 });
+  await expect(row).toBeVisible({ timeout: 15000 });
   await row.click();
   await expect(
     page.getByPlaceholder("Type a message...").or(
@@ -347,8 +355,15 @@ test.describe("16. Tip compose bar — PM selector and send-gate when tip enable
 
     // Reload after injecting PM so ComposeBar's React Query picks it up.
     await openDmWithBob(page);
+    // Register listener BEFORE reload so we don't miss the conversations GET response.
+    const sec16ConvsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await page.reload({ waitUntil: "load" });
-    await page.waitForTimeout(800);
+    await sec16ConvsLoaded;
+    await page.waitForTimeout(300);
     const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
     await expect(row).toBeVisible({ timeout: 8000 });
     await row.click();
@@ -378,8 +393,14 @@ test.describe("16. Tip compose bar — PM selector and send-gate when tip enable
   });
 
   test("Injected Visa payment method button is visible in the tip panel", async () => {
-    // The PM should show as "Visa •••• 4242" (brand capitalised + last4).
-    await expect(page.getByRole("button", { name: /visa.*4242/i })).toBeVisible({ timeout: 3000 });
+    // Re-check tip checkbox in case state reset between tests (e.g. on retry).
+    const tipLabel = page.locator("label", { hasText: "Attach tip" });
+    const tipCb = tipLabel.locator("input[type='checkbox']");
+    if (!(await tipCb.isChecked().catch(() => false))) {
+      await tipLabel.locator("input[type='checkbox']").check();
+    }
+    // Use .first() in case previous test runs left multiple PMs with same brand/last4.
+    await expect(page.getByRole("button", { name: /visa.*4242/i }).first()).toBeVisible({ timeout: 5000 });
   });
 
   test("Send button is disabled when tip amount missing (no amount entered yet)", async () => {
@@ -389,12 +410,19 @@ test.describe("16. Tip compose bar — PM selector and send-gate when tip enable
   });
 
   test("Send button enabled after entering tip amount and selecting PM", async () => {
+    // Re-check tip checkbox in case state reset between tests.
+    const tipLabel = page.locator("label", { hasText: "Attach tip" });
+    const tipCb = tipLabel.locator("input[type='checkbox']");
+    if (!(await tipCb.isChecked().catch(() => false))) {
+      await tipLabel.locator("input[type='checkbox']").check();
+    }
     // Fill in tip amount.
     const amountInput = page.locator("input[type='number'][placeholder='e.g. 5.00']");
     await amountInput.fill("1.00");
 
-    // Select the PM button.
-    await page.getByRole("button", { name: /visa.*4242/i }).click();
+    // Select the PM button. Use .first() to avoid strict-mode errors with multiple PMs.
+    await expect(page.getByRole("button", { name: /visa.*4242/i }).first()).toBeVisible({ timeout: 5000 });
+    await page.getByRole("button", { name: /visa.*4242/i }).first().click();
 
     // Also fill in some message text so the send button isn't blocked by empty text.
     await page.getByPlaceholder("Type a message...").fill(`tip-test-${TS}`);
@@ -495,8 +523,15 @@ test.describe("18. Locked message — sidebar preview shows real text after unlo
     msgId = ((await r.json()) as { message_id: string }).message_id;
 
     // Navigate to the conversation list so we can see the sidebar preview.
+    // Use waitForResponse to ensure the conversations list (with the locked message) is loaded.
+    const sec18InitConvsLoaded = alicePage.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await alicePage.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await alicePage.waitForTimeout(800);
+    await sec18InitConvsLoaded;
+    await alicePage.waitForTimeout(300);
   });
 
   test.afterAll(async () => {
@@ -505,8 +540,8 @@ test.describe("18. Locked message — sidebar preview shows real text after unlo
   });
 
   test("Sidebar shows '[Locked message]' before unlocking", async () => {
-    // Trigger a refetch to pick up Bob's locked message.
-    await triggerRefetch(alicePage);
+    // No refetch needed — the conversations list was already loaded in beforeAll.
+    // The sidebar should already show "[Locked message]" from the GET response.
     const row = alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first();
     await expect(row).toBeVisible({ timeout: 5000 });
     await expect(row).toContainText("[Locked message]", { timeout: 8000 });
@@ -524,8 +559,14 @@ test.describe("18. Locked message — sidebar preview shows real text after unlo
     }
 
     // Reload the conversation list page to pick up the fresh last_message state.
+    const sec18ConvsLoaded = alicePage.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await alicePage.reload({ waitUntil: "load" });
-    await alicePage.waitForTimeout(600);
+    await sec18ConvsLoaded;
+    await alicePage.waitForTimeout(300);
 
     const row = alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first();
     await expect(row).toBeVisible({ timeout: 5000 });
@@ -577,10 +618,16 @@ test.describe("19. Tip checkbox — unblocked after PM add + billing nav (no pag
     await page.waitForTimeout(1000);
 
     // Navigate back to messages and open the DM.
+    const sec19ConvsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await page.waitForTimeout(800);
+    await sec19ConvsLoaded;
+    await page.waitForTimeout(300);
     const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 8000 });
+    await expect(row).toBeVisible({ timeout: 10000 });
     await row.click();
     await expect(page.getByPlaceholder("Type a message...")).toBeVisible({ timeout: 5000 });
 
@@ -712,8 +759,14 @@ test.describe("20. Encrypted image message — send and decrypt", () => {
     // Re-inject auth for Bob here — in beforeAll his page was left at /login and
     // navigating directly to /messages without fresh auth causes a redirect back to /login.
     await injectAuth(bobPage, BOB_ID);
+    const sec20BobConvsLoaded = bobPage.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await bobPage.waitForTimeout(1000);
+    await sec20BobConvsLoaded;
+    await bobPage.waitForTimeout(300);
     const aliceRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
     await expect(aliceRow).toBeVisible({ timeout: 15000 });
     await aliceRow.click();
@@ -742,10 +795,17 @@ test.describe("20. Encrypted image message — send and decrypt", () => {
 
   test("Wrong password shows error; dialog stays open", async () => {
     test.setTimeout(30000);
-    // Reload Bob's page to reset decrypted state (clears blob URL), then navigate back to the DM.
-    // Bob has valid session cookies so the reload should keep him authenticated.
-    await bobPage.reload({ waitUntil: "load" });
-    await bobPage.waitForTimeout(1000);
+    // Re-inject auth and navigate fresh to reset decrypted state and ensure auth is valid
+    // (shared localStorage between pages in the same context can cause stale auth state).
+    await injectAuth(bobPage, BOB_ID);
+    const sec20WrongPwConvsLoaded = bobPage.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
+    await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
+    await sec20WrongPwConvsLoaded;
+    await bobPage.waitForTimeout(300);
     const aliceRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
     await expect(aliceRow).toBeVisible({ timeout: 15000 });
     await aliceRow.click();
@@ -2397,8 +2457,14 @@ test.describe("29. Encrypted video message — send and decrypt", () => {
   test("Bob sees 'Encrypted video' + 'Decrypt to view' button", async () => {
     test.setTimeout(30000);
     await injectAuth(bobPage, BOB_ID);
+    const sec29BobConvsLoaded = bobPage.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await bobPage.waitForTimeout(1000);
+    await sec29BobConvsLoaded;
+    await bobPage.waitForTimeout(300);
     const aliceRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
     await expect(aliceRow).toBeVisible({ timeout: 15000 });
     await aliceRow.click();
@@ -2435,9 +2501,17 @@ test.describe("29. Encrypted video message — send and decrypt", () => {
 
   test("Wrong password shows error; dialog stays open", async () => {
     test.setTimeout(30000);
-    // Reload to reset decrypted state, navigate back to DM
-    await bobPage.reload({ waitUntil: "load" });
-    await bobPage.waitForTimeout(1000);
+    // Re-inject auth and navigate fresh to reset decrypted state and ensure auth is valid
+    // (shared localStorage between pages in the same context can cause stale auth state).
+    await injectAuth(bobPage, BOB_ID);
+    const sec29WrongPwConvsLoaded = bobPage.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
+    await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
+    await sec29WrongPwConvsLoaded;
+    await bobPage.waitForTimeout(300);
     const aliceRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
     await expect(aliceRow).toBeVisible({ timeout: 15000 });
     await aliceRow.click();

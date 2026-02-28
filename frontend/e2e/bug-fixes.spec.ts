@@ -178,8 +178,16 @@ async function openDmWithBob(page: Page) {
     headers: { "x-csrf-token": session.csrf_token },
   }).catch(() => {});
 
+  // Register the conversations-list response listener BEFORE navigating so we
+  // never miss it even if the response arrives before Playwright's listener fires.
+  const convsLoaded = page.waitForResponse(
+    (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+      && !r.url().match(/\/conversations\/[^/]+$/),
+    { timeout: 15000 },
+  );
   await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-  await page.waitForTimeout(800);
+  await convsLoaded;
+  await page.waitForTimeout(300);
   const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
   await expect(row).toBeVisible({ timeout: 8000 });
   await row.click();
@@ -431,6 +439,13 @@ test.describe("2. Expired message — stub visible without page reload", () => {
   test("Expired message body is replaced by stub after TTL elapses (no reload)", async () => {
     test.setTimeout(45_000);
 
+    // Register a GET listener BEFORE sending so we can wait for the refetch to complete.
+    const sec2MsgLoaded = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/conversations/${_dmConvoId}/messages`) &&
+        r.request().method() === "GET",
+      { timeout: 15000 },
+    );
     // Send a message that expires in 12 seconds (minimum allowed value is 10 s).
     const resp = await apiPost(
       page,
@@ -443,6 +458,8 @@ test.describe("2. Expired message — stub visible without page reload", () => {
     // (The SSE path does the same thing in production; here we nudge it via the
     // 'online' event listener that ConversationView registers.)
     await triggerRefetch(page);
+    // Wait for the GET response to confirm the messages list is refreshed.
+    await sec2MsgLoaded;
     await expect(
       page.locator("p").filter({ hasText: MSG_TEXT }),
     ).toBeVisible({ timeout: 8000 });
@@ -510,7 +527,14 @@ test.describe("3. Scheduled message — appears in sender's chat after delivery"
     // Without navigating away, trigger a React Query refetch via the 'online'
     // event (which ConversationView listens to).  In production this would be
     // triggered by the SSE "message:new" event from the delivery loop.
+    const sec3RefetchLoaded = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/conversations/${_dmConvoId}/messages`) &&
+        r.request().method() === "GET",
+      { timeout: 15000 },
+    );
     await triggerRefetch(page);
+    await sec3RefetchLoaded;
     const msgLocator = page.locator("p").filter({ hasText: SCHED_TEXT });
     await expect(msgLocator).toBeVisible({ timeout: 8000 });
   });
@@ -527,6 +551,13 @@ test.describe("4. View-once text — 'Already viewed' stub after consuming", () 
     page = await browser.newPage();
     await openDmWithBob(page);
 
+    // Register GET listener BEFORE sending so we don't miss the refetch.
+    const sec4VoMsgLoaded = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/conversations/${_dmConvoId}/messages`) &&
+        r.request().method() === "GET",
+      { timeout: 15000 },
+    );
     const r = await apiPostBearer(
       request,
       `/messaging/conversations/${_dmConvoId}/messages`,
@@ -538,6 +569,7 @@ test.describe("4. View-once text — 'Already viewed' stub after consuming", () 
     }
     // Trigger a React Query refetch so Alice's UI picks up Bob's new message.
     await triggerRefetch(page);
+    await sec4VoMsgLoaded;
   });
 
   test.afterAll(async () => page?.close());
@@ -582,8 +614,12 @@ test.describe("5. Compose bar — Attach tip disabled when no payment method", (
   let page: Page;
 
   test.beforeAll(async ({ browser }) => {
+    // Ensure Alice has no payment methods — previous test runs may have left
+    // PM rows in DDB that make the checkbox appear enabled.
+    const aliceSub = getSessions()[ALICE_ID].user_sub;
+    cleanupAllPaymentMethods(aliceSub);
+
     page = await browser.newPage();
-    // Alice has no payment methods by default.
     await openDmWithBob(page);
   });
 
@@ -623,6 +659,13 @@ test.describe("6. View-once text — not auto-consumed when it scrolls into view
     page = await browser.newPage();
     await openDmWithBob(page);
 
+    // Register a GET listener BEFORE sending so we can wait for the refetch to complete.
+    const sec6VoMsgLoaded = page.waitForResponse(
+      (r) =>
+        r.url().includes(`/conversations/${_dmConvoId}/messages`) &&
+        r.request().method() === "GET",
+      { timeout: 15000 },
+    );
     const r = await apiPostBearer(
       request,
       `/messaging/conversations/${_dmConvoId}/messages`,
@@ -634,6 +677,8 @@ test.describe("6. View-once text — not auto-consumed when it scrolls into view
     }
     // Trigger a React Query refetch so Alice's UI picks up Bob's new message.
     await triggerRefetch(page);
+    // Wait for the GET to complete so the view-once message is in the DOM.
+    await sec6VoMsgLoaded;
   });
 
   test.afterAll(async () => page?.close());
@@ -698,8 +743,14 @@ test.describe("7. Locked message — unlock button opens dialog (not direct muta
     // ── Bob's page ──
     bobPage = await browser.newPage();
     await injectAuth(bobPage, BOB_ID);
+    const sec7BobConvsLoaded = bobPage.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await bobPage.waitForTimeout(800);
+    await sec7BobConvsLoaded;
+    await bobPage.waitForTimeout(300);
     const bobRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
     await expect(bobRow).toBeVisible({ timeout: 8000 });
     await bobRow.click();
@@ -936,32 +987,55 @@ test.describe("10. Expired message — conversation list preview shows '[This me
     if (!r.ok()) throw new Error(`Bob expiry send failed: ${r.status()} — ${await r.text()}`);
 
     // Navigate to the conversation list so we see sidebar previews.
+    const sec10GotoConvsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await page.waitForTimeout(800);
+    await sec10GotoConvsLoaded;
+    await page.waitForTimeout(300);
   });
 
   test.afterAll(async () => page?.close());
 
   test("Sidebar preview changes to '[This message has expired]' after TTL elapses", async () => {
-    test.setTimeout(45_000);
+    test.setTimeout(60_000);
     const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-    // Trigger a refetch so the conversation list picks up the new message.
-    await triggerRefetch(page);
+    // Reload the page to pick up Bob's new message in the sidebar.
+    // triggerRefetch() does not work on /messages without a conversation open
+    // because it relies on ConversationView which is not mounted in that state.
+    const sec10Reload1ConvsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
+    await page.reload({ waitUntil: "load" });
+    await sec10Reload1ConvsLoaded;
+    await page.waitForTimeout(300);
 
     // The most-recent-active DM with Bob should now show Bob's text as preview.
     const convoRow = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(convoRow).toBeVisible({ timeout: 5000 });
+    await expect(convoRow).toBeVisible({ timeout: 8000 });
 
     // Wait for the 12-second TTL + 4-second buffer.
     await sleep(16_000);
 
-    // Trigger another refetch after expiry.
-    await triggerRefetch(page);
+    // Reload again after expiry to get the fresh expired state from the backend.
+    const sec10Reload2ConvsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
+    await page.reload({ waitUntil: "load" });
+    await sec10Reload2ConvsLoaded;
+    await page.waitForTimeout(300);
 
+    const convoRow2 = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
+    await expect(convoRow2).toBeVisible({ timeout: 8000 });
     // The sidebar preview must now show the stub text — NOT the original message.
-    // 15 s timeout: the backend refetch + React re-render can take several seconds.
-    await expect(convoRow).toContainText("[This message has expired]", { timeout: 15_000 });
+    await expect(convoRow2).toContainText("[This message has expired]", { timeout: 15_000 });
   });
 });
 
@@ -1102,8 +1176,14 @@ test.describe("12. Payment method cache — unlock enabled after PM added + bill
     await alicePage.waitForTimeout(1000);
 
     // Navigate back to messages and open the DM.
+    const sec12MessagesConvsLoaded = alicePage.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await alicePage.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await alicePage.waitForTimeout(800);
+    await sec12MessagesConvsLoaded;
+    await alicePage.waitForTimeout(300);
     const row = alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first();
     await expect(row).toBeVisible({ timeout: 8000 });
     await row.click();
@@ -1266,8 +1346,14 @@ test.describe("15. Badge colors — tip/expiry badges visible on own (blue) mess
     // Send a message via UI with "Attach tip" enabled to get a tip badge on an
     // own (blue) bubble, and a message with expiry for an expiry badge.
     // Reload so the ComposeBar picks up the injected payment method.
+    const sec15ReloadConvsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 15000 },
+    );
     await page.reload({ waitUntil: "load" });
-    await page.waitForTimeout(800);
+    await sec15ReloadConvsLoaded;
+    await page.waitForTimeout(300);
     const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
     await expect(row).toBeVisible({ timeout: 8000 });
     await row.click();

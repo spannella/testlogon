@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { isMessageCryptoSupported } from "@/lib/messageEncryption";
 import type { Message } from "@/api/types";
@@ -66,9 +67,11 @@ const baseMessage: Message = {
 function renderBubble(message: Message = baseMessage) {
   const queryClient = new QueryClient();
   return render(
-    <QueryClientProvider client={queryClient}>
-      <MessageBubble message={message} isOwn={false} conversationId="c1" />
-    </QueryClientProvider>,
+    <MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <MessageBubble message={message} isOwn={false} conversationId="c1" />
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
 }
 

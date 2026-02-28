@@ -47,9 +47,10 @@ function CidrList({
   onInputChange: (v: string) => void;
   placeholder?: string;
 }) {
+  const inputId = `cidr-input-${label.toLowerCase().replace(/\s+/g, "-")}`;
   return (
     <div className="space-y-2">
-      <Label>{label}</Label>
+      <Label htmlFor={inputId}>{label}</Label>
       <div className="space-y-1.5">
         {items.map((cidr, i) => (
           <div key={i} className="flex items-center gap-2 rounded-md border border-input bg-muted/30 px-3 py-1.5">
@@ -70,6 +71,7 @@ function CidrList({
       </div>
       <div className="flex gap-2">
         <Input
+          id={inputId}
           value={inputValue}
           onChange={(e) => onInputChange(e.target.value)}
           placeholder={placeholder ?? "e.g. 10.0.0.0/8"}
@@ -269,18 +271,28 @@ export function ApiKeys() {
   });
 
   const ipRulesMutation = useMutation({
-    mutationFn: () =>
-      setApiKeyIpRules({
+    mutationFn: () => {
+      // Auto-include any pending (not-yet-added) CIDR input values on save
+      const pendingAllow = newAllowCidr.trim();
+      const pendingDeny = newDenyCidr.trim();
+      return setApiKeyIpRules({
         key_id: ipRulesTarget ?? "",
-        allow_cidrs: allowCidrList,
-        deny_cidrs: denyCidrList,
-      }),
+        allow_cidrs: pendingAllow && !allowCidrList.includes(pendingAllow)
+          ? [...allowCidrList, pendingAllow]
+          : allowCidrList,
+        deny_cidrs: pendingDeny && !denyCidrList.includes(pendingDeny)
+          ? [...denyCidrList, pendingDeny]
+          : denyCidrList,
+      });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["apiKeys"] });
       toast.success("IP rules updated");
       setIpRulesTarget(null);
       setAllowCidrList([]);
       setDenyCidrList([]);
+      setNewAllowCidr("");
+      setNewDenyCidr("");
     },
     onError: () => toast.error("Failed to update IP rules"),
   });

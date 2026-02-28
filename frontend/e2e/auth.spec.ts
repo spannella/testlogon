@@ -675,10 +675,12 @@ test.describe("13. Multi-device TOTP MFA", () => {
     // Navigate once to warm up the context; any authenticated page works.
     await enrollPage.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });
 
+    const csrfHeader = { "x-csrf-token": setupData.csrf_token };
+
     // ── Enroll Device 1 ──────────────────────────────────────────────────────
     const begin1Resp = await enrollPage.request.post(
       `${API}/ui/mfa/totp/devices/begin`,
-      { data: { label: "E2E TOTP Device 1" } },
+      { data: { label: "E2E TOTP Device 1" }, headers: csrfHeader },
     );
     expect(begin1Resp.ok()).toBeTruthy();
     const begin1 = await begin1Resp.json();
@@ -689,7 +691,7 @@ test.describe("13. Multi-device TOTP MFA", () => {
     const [c1a, c1b] = totpTwoCodes(device1Secret);
     const confirm1 = await enrollPage.request.post(
       `${API}/ui/mfa/totp/devices/confirm`,
-      { data: { device_id: device1Id, totp_code: c1a, totp_code2: c1b } },
+      { data: { device_id: device1Id, totp_code: c1a, totp_code2: c1b }, headers: csrfHeader },
     );
     expect(confirm1.ok()).toBeTruthy();
     // stamp_mfa_verified is called by /confirm, so the session is fresh for
@@ -698,7 +700,7 @@ test.describe("13. Multi-device TOTP MFA", () => {
     // ── Enroll Device 2 ──────────────────────────────────────────────────────
     const begin2Resp = await enrollPage.request.post(
       `${API}/ui/mfa/totp/devices/begin`,
-      { data: { label: "E2E TOTP Device 2" } },
+      { data: { label: "E2E TOTP Device 2" }, headers: csrfHeader },
     );
     expect(begin2Resp.ok()).toBeTruthy();
     const begin2 = await begin2Resp.json();
@@ -708,7 +710,7 @@ test.describe("13. Multi-device TOTP MFA", () => {
     const [c2a, c2b] = totpTwoCodes(device2Secret);
     const confirm2 = await enrollPage.request.post(
       `${API}/ui/mfa/totp/devices/confirm`,
-      { data: { device_id: device2Id, totp_code: c2a, totp_code2: c2b } },
+      { data: { device_id: device2Id, totp_code: c2a, totp_code2: c2b }, headers: csrfHeader },
     );
     expect(confirm2.ok()).toBeTruthy();
   });
@@ -849,7 +851,7 @@ test.describe("13. Multi-device TOTP MFA", () => {
     const removeCode = totpNow(device2Secret);
     const removeResp = await enrollPage.request.post(
       `${API}/ui/mfa/totp/devices/${device1Id}/remove`,
-      { data: { totp_code: removeCode } },
+      { data: { totp_code: removeCode }, headers: { "x-csrf-token": setupData.csrf_token } },
     );
     expect(removeResp.ok()).toBeTruthy();
 

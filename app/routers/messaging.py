@@ -3573,7 +3573,7 @@ def accept_conversation(conversation_id: str, req: Request = None, user_id: str 
 
 @router.get("/conversations", response_model=List[ConversationOut])
 def list_conversations(user_id: str = Depends(get_messaging_user_id)):
-    # Paginate to get all conversations (Limit per page avoids DynamoDB timeout)
+    # Step 1: Paginate to get all participant records for this user.
     parts: List[dict] = []
     last_key = None
     while True:
@@ -3585,12 +3585,45 @@ def list_conversations(user_id: str = Depends(get_messaging_user_id)):
         last_key = resp.get("LastEvaluatedKey")
         if not last_key or len(parts) >= 2000:
             break
+    if not parts:
+        return []
+
+    parts_by_cid = {p["conversation_id"]: p for p in parts}
+    cids = list(parts_by_cid.keys())
+
+    # Step 2: Batch-fetch all conversation records to get last_message_at for
+    # sorting. batch_get_item accepts up to 100 keys per call, so chunk it.
+    convo_map: Dict[str, dict] = {}
+    for i in range(0, len(cids), 100):
+        batch_keys = [{"conversation_id": cid} for cid in cids[i : i + 100]]
+        try:
+            batch_resp = ddb.batch_get_item(
+                RequestItems={DDB_CONVERSATIONS: {"Keys": batch_keys}}
+            )
+            for item in batch_resp.get("Responses", {}).get(DDB_CONVERSATIONS, []):
+                convo_map[item["conversation_id"]] = item
+        except Exception:
+            pass  # Fall back to per-item fetches below if batch fails
+
+    # Step 3: Sort all conversations by recency and cap enrichment at the top
+    # 200 to avoid thousands of DDB calls on accounts with many conversations.
+    def _sort_key(cid: str) -> tuple:
+        convo = convo_map.get(cid, {})
+        return (int(convo.get("last_message_at", 0) or 0), int(convo.get("created_at", 0) or 0))
+
+    sorted_cids = sorted(cids, key=_sort_key, reverse=True)
+    top_cids = sorted_cids[:200]
+
+    # Step 4: Enrich the top 200 conversations with participants + last message.
     out: List[ConversationOut] = []
     profile_cache: Dict[str, Any] = {}
 
-    for p in parts:
-        cid = p["conversation_id"]
-        convo = tbl_convos.get_item(Key={"conversation_id": cid}).get("Item")
+    for cid in top_cids:
+        p = parts_by_cid[cid]
+        convo = convo_map.get(cid)
+        if not convo:
+            # Fall back to individual get_item if batch missed this item.
+            convo = tbl_convos.get_item(Key={"conversation_id": cid}).get("Item")
         if not convo:
             continue
         convo_out = _conversation_out_from_items(conversation_id=cid, convo=convo, participant=p, viewer_user_id=user_id)
@@ -5651,6 +5684,7 @@ def create_meeting_poll_message(
 def get_meeting_poll(
     conversation_id: str,
     poll_id: str,
+    req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
 ):
     _enforce_messaging_internal_entitlement(

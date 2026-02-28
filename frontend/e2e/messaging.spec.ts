@@ -81,9 +81,16 @@ async function injectAuth(page: Page, userId: string) {
 /** Navigate to /messages after injecting auth. Avoids SSE networkidle hang. */
 async function gotoMessages(page: Page, userId: string) {
   await injectAuth(page, userId);
+  // Register response listener before navigating so we catch the conversations GET.
+  const convsLoaded = page.waitForResponse(
+    (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+      && !r.url().match(/\/conversations\/[^/]+$/),
+    { timeout: 15000 },
+  );
   // Use "load" not "networkidle" — SSE connections never go idle
   await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-  await page.waitForTimeout(1000); // let React finish initial renders
+  await convsLoaded;
+  await page.waitForTimeout(300); // let React finish rendering the list
 }
 
 /** Direct API call via page.request (uses Bearer token in DEV_MODE). */
@@ -157,8 +164,8 @@ test.describe("1. Messages page loads correctly", () => {
   test("Sidebar navigation link exists", async ({ browser }) => {
     const page = await browser.newPage();
     await gotoMessages(page, ALICE_ID);
-    // App shell renders a sidebar with a Messages link
-    const msgLink = page.locator("a, button").filter({ hasText: /^messages$/i }).first();
+    // App shell renders a sidebar with a Messages link (may include unread count badge)
+    const msgLink = page.locator('a[href="/messages"]').first();
     const visible = await msgLink.isVisible({ timeout: 5000 }).catch(() => false);
     expect(visible).toBe(true);
     await page.close();
@@ -182,50 +189,35 @@ test.describe("2. Conversation list", () => {
   test("Clicking a conversation opens compose bar", async ({ browser }) => {
     const page = await browser.newPage();
     await gotoMessages(page, ALICE_ID);
-    await page.waitForTimeout(2000);
 
-    // Click the first listed conversation
+    // Wait for the conversation list to populate then click the first E2E conversation
     const item = page.locator("li, [role='listitem'], button")
       .filter({ hasText: /e2e.*bob|E2E Bob|bob/i })
       .first();
-    const otherItem = page.locator("li, [role='listitem']").first();
-    const target = (await item.isVisible({ timeout: 2000 })) ? item : otherItem;
-    await target.click();
-    await page.waitForTimeout(1500);
+    await expect(item).toBeVisible({ timeout: 8000 });
+    await item.click();
 
     // Compose bar (textarea) should appear
-    const textarea = page.locator("textarea").last();
-    const visible = await textarea.isVisible({ timeout: 8000 }).catch(() => false);
-    expect(visible).toBe(true);
+    await expect(page.locator("textarea").last()).toBeVisible({ timeout: 8000 });
     await page.close();
   });
 
   test("Message text appears in opened conversation", async ({ browser }) => {
     const page = await browser.newPage();
     await gotoMessages(page, ALICE_ID);
-    await page.waitForTimeout(2000);
 
-    // Try to find and click the E2E test conversation
+    // Wait for the conversation list, then click the E2E conversation
     const item = page.locator("li, [role='listitem'], button")
       .filter({ hasText: /e2e.*bob|E2E Bob|bob/i })
       .first();
-    const anyItem = page.locator("li, [role='listitem']").first();
-    const target = (await item.isVisible({ timeout: 2000 })) ? item : anyItem;
-    if (await target.isVisible({ timeout: 2000 })) {
-      await target.click();
-      // Wait for messages to load
-      await page.waitForTimeout(3000);
-      // Check that SOME message text appears in the view — flex: any paragraph or text
-      const anyMsg = page.locator("p, [class*='bubble'], [class*='message']").first();
-      const hasContent = await anyMsg.isVisible({ timeout: 5000 }).catch(() => false);
-      // If the conversation opened, some content must render
-      const composeVisible = await page.locator("textarea").last().isVisible({ timeout: 2000 }).catch(() => false);
-      if (composeVisible) {
-        // Conversation is open — verify any message content visible
-        expect(hasContent).toBe(true);
-      }
-      // Otherwise conversation didn't open — pass silently
-    }
+    await expect(item).toBeVisible({ timeout: 8000 });
+    await item.click();
+
+    // Wait for compose bar — confirms conversation view is mounted
+    await expect(page.locator("textarea").last()).toBeVisible({ timeout: 8000 });
+    // Check that SOME message text appears in the view
+    const anyMsg = page.locator("p, [class*='bubble'], [class*='message']").first();
+    await expect(anyMsg).toBeVisible({ timeout: 8000 });
     await page.close();
   });
 });
@@ -236,66 +228,49 @@ test.describe("3. Compose bar features", () => {
   test("Tip attachment UI exists in compose bar", async ({ browser }) => {
     const page = await browser.newPage();
     await gotoMessages(page, ALICE_ID);
-    await page.waitForTimeout(2000);
 
-    // Conversation list uses <button> elements — click the first conversation button
+    // Wait for conversation list, then open the first E2E conversation
     const convBtn = page.locator("button").filter({ hasText: /E2E|e2e|alice|bob/i }).first();
-    const anyBtn = page.locator("button").first();
-    const target = (await convBtn.isVisible({ timeout: 2000 }).catch(() => false)) ? convBtn : anyBtn;
-    if (await target.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await target.click();
-      await page.waitForTimeout(2000);
-    }
+    await expect(convBtn).toBeVisible({ timeout: 8000 });
+    await convBtn.click();
+    await expect(page.locator("textarea").last()).toBeVisible({ timeout: 8000 });
 
     // ComposeBar always renders "Attach tip" checkbox when a conversation is open
-    const attachTip = page.locator("text=Attach tip");
-    const checkboxes = page.locator("input[type='checkbox']");
-    const hasTip = await attachTip.isVisible({ timeout: 3000 }).catch(() => false);
-    const cbCount = await checkboxes.count();
-    expect(hasTip || cbCount > 0).toBe(true);
+    await expect(page.locator("text=Attach tip")).toBeVisible({ timeout: 5000 });
     await page.close();
   });
 
   test("File/image input exists for attachments", async ({ browser }) => {
     const page = await browser.newPage();
     await gotoMessages(page, ALICE_ID);
-    await page.waitForTimeout(2000);
 
-    // Conversation list uses <button> elements — click the first conversation button
+    // Wait for conversation list, then open the first E2E conversation
     const convBtn = page.locator("button").filter({ hasText: /E2E|e2e|alice|bob/i }).first();
-    const anyBtn = page.locator("button").first();
-    const target = (await convBtn.isVisible({ timeout: 2000 }).catch(() => false)) ? convBtn : anyBtn;
-    if (await target.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await target.click();
-      await page.waitForTimeout(2000);
-    }
+    await expect(convBtn).toBeVisible({ timeout: 8000 });
+    await convBtn.click();
+    await expect(page.locator("textarea").last()).toBeVisible({ timeout: 8000 });
 
-    // ComposeBar renders a hidden file input and a Paperclip button when onSendImage is provided
-    const fileInput = page.locator("input[type='file']");
-    const paperclip = page.locator("[aria-label='Attach file']");
-    const fileCount = await fileInput.count();
-    const hasClip = await paperclip.isVisible({ timeout: 3000 }).catch(() => false);
-    expect(fileCount > 0 || hasClip).toBe(true);
+    // ComposeBar renders a Paperclip/Attach button for file attachments
+    await expect(page.locator("[aria-label='Attach file']")).toBeVisible({ timeout: 5000 });
     await page.close();
   });
 
   test("Can type in compose textarea", async ({ browser }) => {
     const page = await browser.newPage();
     await gotoMessages(page, ALICE_ID);
-    await page.waitForTimeout(2000);
 
-    const item = page.locator("li, [role='listitem']").first();
-    if (await item.isVisible({ timeout: 2000 })) {
-      await item.click();
-      await page.waitForTimeout(1500);
-    }
+    // Wait for the E2E Bob conversation row and click it
+    const item = page.locator("li, [role='listitem'], button")
+      .filter({ hasText: /e2e.*bob|E2E Bob|bob/i })
+      .first();
+    await expect(item).toBeVisible({ timeout: 8000 });
+    await item.click();
 
     const textarea = page.locator("textarea").last();
-    if (await textarea.isVisible({ timeout: 3000 })) {
-      await textarea.fill("Testing compose bar typing");
-      const val = await textarea.inputValue();
-      expect(val).toBe("Testing compose bar typing");
-    }
+    await expect(textarea).toBeVisible({ timeout: 8000 });
+    await textarea.fill("Testing compose bar typing");
+    const val = await textarea.inputValue();
+    expect(val).toBe("Testing compose bar typing");
     await page.close();
   });
 });
