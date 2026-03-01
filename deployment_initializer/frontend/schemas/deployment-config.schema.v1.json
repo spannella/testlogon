@@ -1,0 +1,317 @@
+{
+  "schema_version": "1.0.0",
+  "compatibility": "backward-compatible additive changes within major version",
+  "json_schema": {
+    "$defs": {
+      "AlertingFeatureConfig": {
+        "properties": {
+          "slack_webhook_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Slack Webhook Url"
+          },
+          "email_notifications_enabled": {
+            "default": true,
+            "title": "Email Notifications Enabled",
+            "type": "boolean"
+          }
+        },
+        "title": "AlertingFeatureConfig",
+        "type": "object"
+      },
+      "DeploymentContext": {
+        "properties": {
+          "environment": {
+            "examples": [
+              "prod-us-east-1"
+            ],
+            "minLength": 1,
+            "title": "Environment",
+            "type": "string"
+          },
+          "region": {
+            "examples": [
+              "us-east-1"
+            ],
+            "minLength": 1,
+            "title": "Region",
+            "type": "string"
+          },
+          "aws_account_id": {
+            "maxLength": 12,
+            "minLength": 12,
+            "pattern": "^\\d{12}$",
+            "title": "Aws Account Id",
+            "type": "string"
+          },
+          "app_name": {
+            "minLength": 1,
+            "title": "App Name",
+            "type": "string"
+          },
+          "owner_email": {
+            "minLength": 3,
+            "title": "Owner Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "environment",
+          "region",
+          "aws_account_id",
+          "app_name",
+          "owner_email"
+        ],
+        "title": "DeploymentContext",
+        "type": "object"
+      },
+      "DeploymentOptions": {
+        "properties": {
+          "instance_count": {
+            "default": 2,
+            "maximum": 50,
+            "minimum": 1,
+            "title": "Instance Count",
+            "type": "integer"
+          },
+          "instance_type": {
+            "default": "t3.medium",
+            "title": "Instance Type",
+            "type": "string"
+          },
+          "vpc_id": {
+            "minLength": 2,
+            "title": "Vpc Id",
+            "type": "string"
+          },
+          "subnet_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Subnet Ids",
+            "type": "array"
+          },
+          "enable_multi_az": {
+            "default": true,
+            "title": "Enable Multi Az",
+            "type": "boolean"
+          },
+          "log_level": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/LogLevel"
+              }
+            ],
+            "default": "info"
+          }
+        },
+        "required": [
+          "vpc_id"
+        ],
+        "title": "DeploymentOptions",
+        "type": "object"
+      },
+      "FeatureConfig": {
+        "properties": {
+          "helpdesk": {
+            "$ref": "#/$defs/HelpdeskFeatureConfig"
+          },
+          "messaging": {
+            "$ref": "#/$defs/MessagingFeatureConfig"
+          },
+          "filemanager": {
+            "$ref": "#/$defs/FilemanagerFeatureConfig"
+          },
+          "alerting": {
+            "$ref": "#/$defs/AlertingFeatureConfig"
+          },
+          "signature_packets": {
+            "$ref": "#/$defs/SignaturePacketsFeatureConfig"
+          }
+        },
+        "title": "FeatureConfig",
+        "type": "object"
+      },
+      "FilemanagerFeatureConfig": {
+        "properties": {
+          "max_upload_mb": {
+            "default": 100,
+            "maximum": 10000,
+            "minimum": 1,
+            "title": "Max Upload Mb",
+            "type": "integer"
+          },
+          "enable_virus_scan": {
+            "default": true,
+            "title": "Enable Virus Scan",
+            "type": "boolean"
+          }
+        },
+        "title": "FilemanagerFeatureConfig",
+        "type": "object"
+      },
+      "HelpdeskFeatureConfig": {
+        "properties": {
+          "routing_queue": {
+            "default": "general",
+            "title": "Routing Queue",
+            "type": "string"
+          },
+          "auto_assign": {
+            "default": true,
+            "title": "Auto Assign",
+            "type": "boolean"
+          }
+        },
+        "title": "HelpdeskFeatureConfig",
+        "type": "object"
+      },
+      "LogLevel": {
+        "enum": [
+          "debug",
+          "info",
+          "warn",
+          "error"
+        ],
+        "title": "LogLevel",
+        "type": "string"
+      },
+      "MessagingFeatureConfig": {
+        "properties": {
+          "retention_days": {
+            "default": 30,
+            "maximum": 365,
+            "minimum": 1,
+            "title": "Retention Days",
+            "type": "integer"
+          },
+          "allow_external_sharing": {
+            "default": false,
+            "title": "Allow External Sharing",
+            "type": "boolean"
+          }
+        },
+        "title": "MessagingFeatureConfig",
+        "type": "object"
+      },
+      "OptionalFeatures": {
+        "properties": {
+          "enable_helpdesk": {
+            "default": false,
+            "title": "Enable Helpdesk",
+            "type": "boolean"
+          },
+          "enable_messaging": {
+            "default": false,
+            "title": "Enable Messaging",
+            "type": "boolean"
+          },
+          "enable_filemanager": {
+            "default": false,
+            "title": "Enable Filemanager",
+            "type": "boolean"
+          },
+          "enable_alerting": {
+            "default": true,
+            "title": "Enable Alerting",
+            "type": "boolean"
+          },
+          "enable_signature_packets": {
+            "default": false,
+            "title": "Enable Signature Packets",
+            "type": "boolean"
+          }
+        },
+        "title": "OptionalFeatures",
+        "type": "object"
+      },
+      "RequiredSecrets": {
+        "properties": {
+          "database_password": {
+            "minLength": 8,
+            "title": "Database Password",
+            "type": "string"
+          },
+          "jwt_signing_key": {
+            "minLength": 16,
+            "title": "Jwt Signing Key",
+            "type": "string"
+          },
+          "internal_api_token": {
+            "minLength": 16,
+            "title": "Internal Api Token",
+            "type": "string"
+          },
+          "stripe_api_key": {
+            "minLength": 8,
+            "title": "Stripe Api Key",
+            "type": "string"
+          },
+          "openai_api_key": {
+            "minLength": 8,
+            "title": "Openai Api Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "database_password",
+          "jwt_signing_key",
+          "internal_api_token",
+          "stripe_api_key",
+          "openai_api_key"
+        ],
+        "title": "RequiredSecrets",
+        "type": "object"
+      },
+      "SignaturePacketsFeatureConfig": {
+        "properties": {
+          "reminder_interval_hours": {
+            "default": 24,
+            "maximum": 168,
+            "minimum": 1,
+            "title": "Reminder Interval Hours",
+            "type": "integer"
+          }
+        },
+        "title": "SignaturePacketsFeatureConfig",
+        "type": "object"
+      }
+    },
+    "properties": {
+      "schema_version": {
+        "const": "1.0.0",
+        "default": "1.0.0",
+        "title": "Schema Version"
+      },
+      "deployment_context": {
+        "$ref": "#/$defs/DeploymentContext"
+      },
+      "required_secrets": {
+        "$ref": "#/$defs/RequiredSecrets"
+      },
+      "optional_features": {
+        "$ref": "#/$defs/OptionalFeatures"
+      },
+      "feature_config": {
+        "$ref": "#/$defs/FeatureConfig"
+      },
+      "deployment_options": {
+        "$ref": "#/$defs/DeploymentOptions"
+      }
+    },
+    "required": [
+      "deployment_context",
+      "required_secrets",
+      "deployment_options"
+    ],
+    "title": "DeploymentConfigV1",
+    "type": "object"
+  }
+}
