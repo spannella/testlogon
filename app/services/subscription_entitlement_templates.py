@@ -15,11 +15,16 @@ def _to_utc(value: Any, *, default: datetime | None = None) -> datetime:
         return _utc_now()
     if isinstance(value, datetime):
         dt = value
+    elif isinstance(value, (int, float)):
+        dt = datetime.fromtimestamp(float(value), tz=timezone.utc)
     else:
         text = str(value)
-        if text.endswith("Z"):
-            text = text[:-1] + "+00:00"
-        dt = datetime.fromisoformat(text)
+        if text.isdigit():
+            dt = datetime.fromtimestamp(int(text), tz=timezone.utc)
+        else:
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            dt = datetime.fromisoformat(text)
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)

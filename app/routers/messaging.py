@@ -2462,8 +2462,12 @@ def _conversation_out_from_items(*, conversation_id: str, convo: dict, participa
         last_read_at=int(participant.get("last_read_at", 0) or 0),
         unread_count=int(participant.get("unread_count", 0) or 0),
     )
+    raw_routing_mode = str(convo.get("routing_mode") or "")
+    if raw_routing_mode == "helpdesk_bridge":
+        # Always expose routing_mode to all participants so the UI can identify
+        # the conversation as a helpdesk chat (e.g. customer "Your Support Chats" view).
+        out.routing_mode = raw_routing_mode
     if _is_helpdesk_agent_viewer(convo, viewer_user_id):
-        out.routing_mode = str(convo.get("routing_mode") or "")
         out.routing_group_id = str(convo.get("routing_group_id") or "")
         out.routing_state = str(convo.get("routing_state") or "")
         out.active_agent_user_id = str(convo.get("active_agent_user_id") or "")

@@ -73,6 +73,7 @@ import {
   ClipboardList,
   Repeat,
   FolderOpen,
+  FilePen,
   CalendarDays,
   User,
   Shield,
@@ -110,6 +111,7 @@ const MOBILE_NAV_GROUPS = [
     items: [
       { label: "Files", path: "/files", icon: FolderOpen },
       { label: "Calendar", path: "/calendar", icon: CalendarDays },
+      { label: "Signing", path: "/signing", icon: FilePen },
     ],
   },
   {

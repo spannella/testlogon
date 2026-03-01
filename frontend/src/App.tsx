@@ -39,6 +39,7 @@ const TicketsPage = lazy(() => import("@/pages/tickets/TicketsPage"));
 const TicketSpacesPage = lazy(() => import("@/pages/tickets/TicketSpacesPage"));
 const TicketSpaceDetailPage = lazy(() => import("@/pages/tickets/TicketSpaceDetailPage"));
 const DevToolsLogUiPage = lazy(() => import("@/pages/devtools/DevToolsLogUiPage"));
+const SigningPage = lazy(() => import("@/pages/signing/SigningPage"));
 
 function PageSpinner() {
   return (
@@ -68,6 +69,7 @@ export default function App() {
           <Route path="contacts" element={<ContactsPage />} />
           <Route path="helpdesk" element={<HelpdeskPage />} />
           <Route path="files" element={<FilesPage />} />
+          <Route path="signing" element={<SigningPage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="billing" element={<BillingPage />} />

@@ -10,6 +10,7 @@ import {
   Repeat,
   FolderOpen,
   FolderKanban,
+  FilePen,
   CalendarDays,
   User,
   Shield,
@@ -75,6 +76,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Files", path: "/files", icon: <FolderOpen className="h-5 w-5" /> },
       { label: "Projects", path: "/projects", icon: <FolderKanban className="h-5 w-5" /> },
       { label: "Calendar", path: "/calendar", icon: <CalendarDays className="h-5 w-5" /> },
+      { label: "Signing", path: "/signing", icon: <FilePen className="h-5 w-5" /> },
     ],
   },
   {

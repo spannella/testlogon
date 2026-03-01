@@ -77,7 +77,6 @@ import { ShareDialog } from "./ShareDialog";
 import { UploadZone } from "./UploadZone";
 import { BulkActions } from "./BulkActions";
 import { MoveDialog } from "./MoveDialog";
-import { SignaturePacketComposer } from "./SignaturePacketComposer";
 import ImpersonationRouteIndicator from "@/components/shared/ImpersonationRouteIndicator";
 
 type SearchMode = "name" | "content";
@@ -815,8 +814,6 @@ export default function FilesPage() {
               <span className="hidden sm:inline ml-1">New Folder</span>
             </Button>
           </div>
-
-          <SignaturePacketComposer />
 
           {/* Bulk actions toolbar */}
           <BulkActions

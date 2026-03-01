@@ -1,6 +1,8 @@
 import * as React from "react";
+import { FilePen } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -357,7 +359,15 @@ export function SignaturePacketComposer() {
   }, [loadPacket, packet]);
 
   return (
-    <div className="rounded-lg border p-4 space-y-4">
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <FilePen className="h-5 w-5" />
+          Document Signing
+        </CardTitle>
+        <CardDescription>Create and send signature packets for PDF documents</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
       <div>
         <h3 className="text-base font-semibold">Create signature form</h3>
         <p className="text-sm text-muted-foreground">
@@ -619,6 +629,7 @@ export function SignaturePacketComposer() {
           </div>
         </div>
       </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }
