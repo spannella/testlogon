@@ -355,3 +355,181 @@ test.describe("Section 76: Dev Tools Log UI frontend", () => {
     await expect(page.getByRole("button", { name: /charge/i })).toHaveCount(0);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Section 77 — MFA (TOTP) code generator: interactive tool tests
+// ═════════════════════════════════════════════════════════════════════════════
+// The MFA tab is a fully client-side tool — no backend or API mocks required.
+// All TOTP parsing and code generation runs in the browser via Web Crypto API.
+
+test.describe("Section 77: MFA (TOTP) code generator", () => {
+  let page: Page;
+
+  // 16-char Base32 secret from RFC 4226 test vectors (well-known, deterministic algorithm)
+  const SECRET = "JBSWY3DPEHPK3PXP";
+  const OTPAUTH_URI = `otpauth://totp/TestLogon:devtest%40example.com?secret=${SECRET}&issuer=TestLogon`;
+
+  test.beforeAll(async ({ browser }: { browser: Browser }) => {
+    page = await browser.newPage();
+    await injectAuth(page, ALICE_ID);
+    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("tab", { name: "MFA (TOTP)" }).click();
+    await expect(page.getByText(/Local-only tool:/)).toBeVisible();
+  });
+
+  test.afterAll(async () => {
+    await page.close();
+  });
+
+  test("77.1 empty state shows local-only notice and live-code placeholder", async () => {
+    await expect(page.getByText(/Local-only tool:/)).toBeVisible();
+    await expect(page.getByText("Provide a valid TOTP configuration to generate live codes.")).toBeVisible();
+    // The code display element only renders when mfaConfig is valid — empty state shows placeholder text only
+    await expect(page.locator("div.font-mono.text-4xl")).toHaveCount(0);
+  });
+
+  test("77.2 invalid Base32 characters show a validation error", async () => {
+    await page.getByLabel("Paste TOTP configuration").fill("NOT-VALID-$€£");
+    await expect(page.getByText("TOTP secret must be valid Base32 characters (A-Z and 2-7).")).toBeVisible();
+    // Code display element only renders when mfaConfig is valid — error state has no code div
+    await expect(page.locator("div.font-mono.text-4xl")).toHaveCount(0);
+  });
+
+  test("77.3 too-short Base32 secret (< 16 chars) shows length error", async () => {
+    await page.getByLabel("Paste TOTP configuration").fill("AAAAAAA"); // 7 chars
+    await expect(page.getByText(/TOTP secret is too short/)).toBeVisible();
+  });
+
+  test("77.4 valid 16-char Base32 secret generates a 6-digit live code", async () => {
+    await page.getByLabel("Paste TOTP configuration").fill(SECRET);
+    const codeDisplay = page.locator("div.font-mono.text-4xl");
+    // Code transitions from "------" to a 6-digit number
+    await expect(codeDisplay).not.toHaveText("------");
+    await expect(codeDisplay).toHaveText(/^\d{6}$/);
+  });
+
+  test("77.5 countdown timer and cadence are shown after valid secret", async () => {
+    // Re-apply the valid secret so this test is self-contained
+    await page.getByLabel("Paste TOTP configuration").fill(SECRET);
+    await expect(page.locator("div.font-mono.text-4xl")).toHaveText(/^\d{6}$/);
+    // "Rollover in" card is visible alongside the live code
+    await expect(page.getByText("Rollover in")).toBeVisible();
+    // Cadence defaults to 30 s for a raw Base32 secret
+    await expect(page.getByText("30s")).toBeVisible();
+    // The countdown value is "Xs" (1–30 s)
+    const rolloverCard = page.locator(".rounded-md.border.p-3").filter({ hasText: "Rollover in" });
+    await expect(rolloverCard.locator("div.mt-1.text-xl")).toHaveText(/^\d{1,2}s$/);
+  });
+
+  test("77.6 Clear / Reset button resets input and returns to empty state", async () => {
+    await page.getByRole("button", { name: "Clear / Reset" }).click();
+    await expect(page.getByLabel("Paste TOTP configuration")).toHaveValue("");
+    // After reset mfaConfig becomes null — code display div is unmounted
+    await expect(page.locator("div.font-mono.text-4xl")).toHaveCount(0);
+    await expect(page.getByText("Provide a valid TOTP configuration to generate live codes.")).toBeVisible();
+  });
+
+  test("77.7 valid otpauth:// URI generates a code and shows issuer metadata", async () => {
+    await page.getByLabel("Paste TOTP configuration").fill(OTPAUTH_URI);
+    await expect(page.locator("div.font-mono.text-4xl")).not.toHaveText("------");
+    await expect(page.locator("div.font-mono.text-4xl")).toHaveText(/^\d{6}$/);
+    // Issuer extracted from URI and shown in the config detail list
+    await expect(page.locator("dd").filter({ hasText: "TestLogon" })).toBeVisible();
+    // Account name extracted from label
+    await expect(page.locator("dd").filter({ hasText: /devtest/ })).toBeVisible();
+  });
+
+  test("77.8 URI with unsupported algorithm shows warning but still generates code", async () => {
+    await page.getByLabel("Paste TOTP configuration").fill(
+      `otpauth://totp/Test:user@example.com?secret=${SECRET}&algorithm=MD5`,
+    );
+    // Non-blocking warning displayed
+    await expect(page.getByText(/Falling back to SHA1/)).toBeVisible();
+    // Code is still generated using the fallback SHA1 algorithm
+    await expect(page.locator("div.font-mono.text-4xl")).toHaveText(/^\d{6}$/);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Section 78 — Billing log filter and display interactions
+// ═════════════════════════════════════════════════════════════════════════════
+
+test.describe("Section 78: Billing log filter and display", () => {
+  let page: Page;
+
+  test.beforeAll(async ({ browser }: { browser: Browser }) => {
+    page = await browser.newPage();
+    await injectAuth(page, ALICE_ID);
+
+    await page.route("**/internal/dev-tools/billing/ledger**", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_BILLING_LEDGER) }),
+    );
+    await page.route("**/internal/dev-tools/billing/summary**", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_BILLING_SUMMARY) }),
+    );
+
+    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("tab", { name: "Billing" }).click();
+    // Wait for actual ledger data (confirms mock responded and React re-rendered)
+    await expect(page.getByText("charge.succeeded")).toBeVisible();
+  });
+
+  test.afterAll(async () => {
+    await page.close();
+  });
+
+  test("78.1 summary cards display mock aggregate values", async () => {
+    // Summary card labels
+    await expect(page.getByText("Gross inflow")).toBeVisible();
+    await expect(page.getByText("Fees")).toBeVisible();
+    await expect(page.getByText("Net balance")).toBeVisible();
+    await expect(page.getByText("Transactions")).toBeVisible();
+    // $25.00 also appears in the ledger Amount cell — scope to the summary card div
+    await expect(page.locator("div.text-2xl.font-semibold").filter({ hasText: "$25.00" })).toBeVisible();
+  });
+
+  test("78.2 provider filter select can be changed to Stripe", async () => {
+    const trigger = page.getByRole("combobox", { name: "Billing provider filter" });
+    await expect(trigger).toBeVisible();
+    await trigger.click();
+    await page.getByRole("option", { name: "Stripe" }).click();
+    await expect(trigger).toContainText("Stripe");
+  });
+
+  test("78.3 status filter select can be changed to Completed", async () => {
+    const trigger = page.getByRole("combobox", { name: "Billing status filter" });
+    await expect(trigger).toBeVisible();
+    await trigger.click();
+    await page.getByRole("option", { name: "Completed" }).click();
+    await expect(trigger).toContainText("Completed");
+  });
+
+  test("78.4 Reset filters restores provider and status to all-items state", async () => {
+    await page.getByRole("button", { name: "Reset filters" }).click();
+    const providerTrigger = page.getByRole("combobox", { name: "Billing provider filter" });
+    const statusTrigger  = page.getByRole("combobox", { name: "Billing status filter" });
+    await expect(providerTrigger).toContainText(/All providers/i);
+    await expect(statusTrigger).toContainText(/All statuses/i);
+  });
+
+  test("78.5 ledger table has all expected column headers", async () => {
+    await expect(page.getByRole("columnheader", { name: "Occurred" })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "Provider" })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "Event" })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "Status" })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "Amount" })).toBeVisible();
+  });
+
+  test("78.6 ledger entry shows correct provider, event type, status, and external ID", async () => {
+    await expect(page.getByText("charge.succeeded")).toBeVisible();
+    await expect(page.getByText("ch_test123")).toBeVisible();
+    // Provider badge and status badge from mock data
+    await expect(page.getByText("stripe").first()).toBeVisible();
+    await expect(page.getByText("completed").first()).toBeVisible();
+  });
+
+  test("78.7 Load more button absent when ledger has no next page", async () => {
+    // MOCK_BILLING_LEDGER has next_cursor: null → hasNextPage is false
+    await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
+  });
+});
