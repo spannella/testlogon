@@ -1385,3 +1385,172 @@ class ProviderCredentialModel(BaseModel):
         if parsed.tzinfo is None:
             raise ValueError("timestamp must include timezone")
         return value
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Internal Dev Tools (DLU-002) canonical read models
+# ──────────────────────────────────────────────────────────────────────────────
+
+class DevtoolsParseWarningOut(BaseModel):
+    """Parser warning surfaced to callers without failing the whole response."""
+
+    source: Literal["email", "sms", "billing"]
+    line_number: Optional[int] = None
+    code: str = Field(min_length=1, max_length=64)
+    message: str = Field(min_length=1, max_length=512)
+    sample: Optional[str] = Field(default=None, max_length=1024)
+
+
+class DevtoolsIdentityOut(BaseModel):
+    """Stable deterministic identifier metadata.
+
+    `id` should remain stable across refreshes for unchanged source logs.
+    `id_strategy` documents what inputs were hashed/combined by parsers.
+    """
+
+    id: str = Field(min_length=1, max_length=128)
+    id_strategy: str = Field(min_length=1, max_length=128)
+
+
+class DevtoolsTimestampMixin(BaseModel):
+    """Normalize API timestamps to UTC RFC3339 (`YYYY-MM-DDTHH:MM:SSZ`)."""
+
+    @staticmethod
+    def _normalize_utc_timestamp(value: str) -> str:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError("timestamp must include timezone")
+        return parsed.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+class DevtoolsEmailMessageOut(DevtoolsTimestampMixin, DevtoolsIdentityOut):
+    thread_id: str = Field(min_length=1, max_length=128)
+    mailbox: str = Field(min_length=1, max_length=320)
+    sent_at: str
+    event_kind: Literal["mfa_email_code", "alert_email", "unknown"] = "unknown"
+    direction: Literal["inbound", "outbound", "unknown"] = "unknown"
+    from_email: Optional[str] = Field(default=None, max_length=320)
+    to_emails: List[str] = Field(default_factory=list)
+    subject: Optional[str] = Field(default=None, max_length=512)
+    body_text: Optional[str] = None
+    body_html: Optional[str] = None
+    code: Optional[str] = Field(default=None, max_length=64)
+    purpose: Optional[str] = Field(default=None, max_length=64)
+    status: Optional[str] = Field(default=None, max_length=64)
+    parse_warnings: List[DevtoolsParseWarningOut] = Field(default_factory=list)
+
+    @field_validator("sent_at")
+    @classmethod
+    def _normalize_sent_at(cls, value: str) -> str:
+        return cls._normalize_utc_timestamp(value)
+
+
+class DevtoolsEmailThreadOut(DevtoolsTimestampMixin, DevtoolsIdentityOut):
+    mailbox: str = Field(min_length=1, max_length=320)
+    subject: Optional[str] = Field(default=None, max_length=512)
+    message_count: int = Field(default=0, ge=0)
+    unread_count: int = Field(default=0, ge=0)
+    participant_emails: List[str] = Field(default_factory=list)
+    latest_message_at: str
+
+    @field_validator("latest_message_at")
+    @classmethod
+    def _normalize_latest_message_at(cls, value: str) -> str:
+        return cls._normalize_utc_timestamp(value)
+
+
+class DevtoolsEmailMailboxOut(DevtoolsIdentityOut):
+    mailbox: str = Field(min_length=1, max_length=320)
+    thread_count: int = Field(default=0, ge=0)
+    unread_count: int = Field(default=0, ge=0)
+
+
+class DevtoolsEmailMessagesOut(BaseModel):
+    mailboxes: List[DevtoolsEmailMailboxOut] = Field(default_factory=list)
+    threads: List[DevtoolsEmailThreadOut] = Field(default_factory=list)
+    messages: List[DevtoolsEmailMessageOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+    parse_warnings: List[DevtoolsParseWarningOut] = Field(default_factory=list)
+
+
+class DevtoolsSmsMessageOut(DevtoolsTimestampMixin, DevtoolsIdentityOut):
+    conversation_id: str = Field(min_length=1, max_length=128)
+    sent_at: str
+    from_number: Optional[str] = Field(default=None, max_length=32)
+    to_number: Optional[str] = Field(default=None, max_length=32)
+    direction: Literal["inbound", "outbound", "unknown"] = "unknown"
+    body_text: Optional[str] = None
+    code: Optional[str] = Field(default=None, max_length=64)
+    status: Optional[str] = Field(default=None, max_length=64)
+    provider_message_id: Optional[str] = Field(default=None, max_length=128)
+    event_kind: Literal["mfa_sms_code", "alert_sms", "unknown"] = "unknown"
+    parse_warnings: List[DevtoolsParseWarningOut] = Field(default_factory=list)
+
+    @field_validator("sent_at")
+    @classmethod
+    def _normalize_sent_at(cls, value: str) -> str:
+        return cls._normalize_utc_timestamp(value)
+
+
+class DevtoolsSmsConversationOut(DevtoolsTimestampMixin, DevtoolsIdentityOut):
+    participant_numbers: List[str] = Field(default_factory=list)
+    message_count: int = Field(default=0, ge=0)
+    latest_message_at: str
+    latest_preview: Optional[str] = Field(default=None, max_length=256)
+
+    @field_validator("latest_message_at")
+    @classmethod
+    def _normalize_latest_message_at(cls, value: str) -> str:
+        return cls._normalize_utc_timestamp(value)
+
+
+class DevtoolsSmsConversationsOut(BaseModel):
+    conversations: List[DevtoolsSmsConversationOut] = Field(default_factory=list)
+    messages: List[DevtoolsSmsMessageOut] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+    parse_warnings: List[DevtoolsParseWarningOut] = Field(default_factory=list)
+
+
+class DevtoolsBillingLedgerEntryOut(DevtoolsTimestampMixin, DevtoolsIdentityOut):
+    provider: Literal["stripe", "ccbill", "paypal", "unknown"] = "unknown"
+    event_type: str = Field(min_length=1, max_length=128)
+    status: str = Field(min_length=1, max_length=64)
+    occurred_at: str
+    external_id: Optional[str] = Field(default=None, max_length=128)
+    amount: float = 0.0
+    fee: float = 0.0
+    net: float = 0.0
+    currency: str = Field(default="usd", min_length=3, max_length=3)
+    source_path: Optional[str] = Field(default=None, max_length=512)
+    raw_payload: Dict[str, Any] = Field(default_factory=dict)
+    parse_warnings: List[DevtoolsParseWarningOut] = Field(default_factory=list)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def _normalize_occurred_at(cls, value: str) -> str:
+        return cls._normalize_utc_timestamp(value)
+
+    @field_validator("currency")
+    @classmethod
+    def _normalize_currency(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        if len(normalized) != 3:
+            raise ValueError("currency must be an ISO-4217 3-letter code")
+        return normalized
+
+
+class DevtoolsBillingLedgerSummaryOut(BaseModel):
+    gross_inflow: float = 0.0
+    fees: float = 0.0
+    net_total_balance: float = 0.0
+    transaction_count: int = Field(default=0, ge=0)
+    provider_counts: Dict[str, int] = Field(default_factory=dict)
+    status_counts: Dict[str, int] = Field(default_factory=dict)
+    parse_warnings: List[DevtoolsParseWarningOut] = Field(default_factory=list)
+
+
+class DevtoolsBillingLedgerOut(BaseModel):
+    entries: List[DevtoolsBillingLedgerEntryOut] = Field(default_factory=list)
+    summary: DevtoolsBillingLedgerSummaryOut = Field(default_factory=DevtoolsBillingLedgerSummaryOut)
+    next_cursor: Optional[str] = None
+    parse_warnings: List[DevtoolsParseWarningOut] = Field(default_factory=list)

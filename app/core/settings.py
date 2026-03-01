@@ -183,6 +183,13 @@ class Settings:
     dev_registration_phone: str = os.environ.get("DEV_REGISTRATION_PHONE", "")
     dev_email_log: str = os.environ.get("DEV_EMAIL_LOG", ".logs/dev/emails.log")
     dev_sms_log: str = os.environ.get("DEV_SMS_LOG", ".logs/dev/sms.log")
+    # Internal Dev Log UI discovery defaults (DLU-001).
+    devtools_email_log_path: str = os.environ.get("DEVTOOLS_EMAIL_LOG_PATH", os.environ.get("DEV_EMAIL_LOG", ".logs/dev/emails.log"))
+    devtools_sms_log_path: str = os.environ.get("DEVTOOLS_SMS_LOG_PATH", os.environ.get("DEV_SMS_LOG", ".logs/dev/sms.log"))
+    # Stripe mock writes provider logs under .local/logs in host-mode startup.
+    devtools_billing_stripe_log_path: str = os.environ.get("DEVTOOLS_BILLING_STRIPE_LOG_PATH", ".local/logs/stripe-mock.log")
+    # CCBill/PayPal mock calls are served in-process and observable from backend logs.
+    devtools_billing_backend_log_path: str = os.environ.get("DEVTOOLS_BILLING_BACKEND_LOG_PATH", ".logs/dev/backend.log")
 
     # Billing / CCBill
     ccbill_base_url: str = os.environ.get("CCBILL_BASE_URL", "https://api.ccbill.com").rstrip("/")

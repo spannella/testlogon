@@ -20,6 +20,7 @@ session management, MFA, billing, notifications, and a lightweight control panel
 - [Stripe billing](docs/stripe.md)
 - [PayPal billing](docs/paypal.md)
 - [UPS integration](docs/ups.md)
+- [Internal Dev Log UI (local/dev)](docs/internal-dev-log-ui.md)
 
 ## What ships in this service
 - **FastAPI API surface**: routers for account management, MFA, alerts, messaging, catalog, shopping cart, purchase history, billing, and file management.
@@ -42,6 +43,16 @@ scripts/run_dev.sh
 # in another terminal
 scripts/test_mock_mode.sh
 ```
+
+### Internal Dev Log UI (local/dev)
+
+`scripts/run_dev.sh` auto-enables the internal Dev Log UI route in local runs.
+
+- URL: `http://localhost:5173/dev-tools/log-ui`
+- Data inputs: `DEVTOOLS_EMAIL_LOG_PATH`, `DEVTOOLS_SMS_LOG_PATH`, `DEVTOOLS_BILLING_STRIPE_LOG_PATH`, `DEVTOOLS_BILLING_BACKEND_LOG_PATH`
+- Security/read-only: Email/SMS/Billing are read-only; the only editable input is local TOTP config paste in browser.
+
+See [Internal Dev Log UI (local/dev)](docs/internal-dev-log-ui.md) for quickstart + troubleshooting.
 
 ## Required environment variables (minimum)
 | Variable | Purpose | Notes |

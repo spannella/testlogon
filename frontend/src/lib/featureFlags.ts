@@ -38,3 +38,6 @@ export const isMessagingViewOnceImageEnabled = () => isMessagingOnceMediaCompose
 export const isMessagingViewOnceVideoEnabled = () => isMessagingOnceMediaComposerEnabled() && messagingOnceMediaVideoEnabled;
 export const isMessagingListenOnceAudioEnabled = () => isMessagingOnceMediaComposerEnabled() && messagingOnceMediaAudioEnabled;
 
+
+export const devtoolsLogUiEnabled = toBool(env.VITE_ENABLE_DEVTOOLS_LOG_UI, false);
+export const isDevtoolsLogUiEnabled = () => devtoolsLogUiEnabled;

@@ -55,9 +55,6 @@ done
 mkdir -p "$(dirname "$BACKEND_LOG_PATH")" "$(dirname "$FRONTEND_LOG_PATH")"
 touch "$BACKEND_LOG_PATH" "$FRONTEND_LOG_PATH"
 
-echo "Dev logs will be written to:"
-echo "  backend : $BACKEND_LOG_PATH"
-echo "  frontend: $FRONTEND_LOG_PATH"
 
 if [[ -d ".venv" ]]; then
   # shellcheck disable=SC1091
@@ -85,6 +82,26 @@ if [[ -f ".env" ]]; then
   source .env
 fi
 set +a
+
+# DLU-017: auto-enable Dev Tools Log UI and canonical log path defaults for local runs.
+: "${VITE_ENABLE_DEVTOOLS_LOG_UI:=1}"
+: "${DEVTOOLS_EMAIL_LOG_PATH:=${DEV_EMAIL_LOG:-$DEV_LOG_DIR/emails.log}}"
+: "${DEVTOOLS_SMS_LOG_PATH:=${DEV_SMS_LOG:-$DEV_LOG_DIR/sms.log}}"
+: "${DEVTOOLS_BILLING_STRIPE_LOG_PATH:=.local/logs/stripe-mock.log}"
+: "${DEVTOOLS_BILLING_BACKEND_LOG_PATH:=${DEV_BACKEND_LOG_PATH:-$DEV_LOG_DIR/backend.log}}"
+export VITE_ENABLE_DEVTOOLS_LOG_UI
+export DEVTOOLS_EMAIL_LOG_PATH DEVTOOLS_SMS_LOG_PATH
+export DEVTOOLS_BILLING_STRIPE_LOG_PATH DEVTOOLS_BILLING_BACKEND_LOG_PATH
+
+echo "Dev logs will be written to:"
+echo "  backend : $BACKEND_LOG_PATH"
+echo "  frontend: $FRONTEND_LOG_PATH"
+echo "Dev Tools Log UI enabled: VITE_ENABLE_DEVTOOLS_LOG_UI=${VITE_ENABLE_DEVTOOLS_LOG_UI}"
+echo "Dev Tools log sources:"
+echo "  email   : ${DEVTOOLS_EMAIL_LOG_PATH}"
+echo "  sms     : ${DEVTOOLS_SMS_LOG_PATH}"
+echo "  stripe  : ${DEVTOOLS_BILLING_STRIPE_LOG_PATH}"
+echo "  backend : ${DEVTOOLS_BILLING_BACKEND_LOG_PATH}"
 
 detect_external_ip() {
   local detected
@@ -329,6 +346,10 @@ if [[ "$backend_mode" == "mock" ]]; then
 fi
 
 if [[ -f "frontend/package.json" ]]; then
+  echo "Frontend dev server starting on http://localhost:5173"
+  if [[ "${VITE_ENABLE_DEVTOOLS_LOG_UI}" == "1" ]]; then
+    echo "Dev Tools Log UI: http://localhost:5173/dev-tools/log-ui"
+  fi
   npm --prefix frontend run dev >>"$FRONTEND_LOG_PATH" 2>&1
 else
   wait "$BACKEND_PID"

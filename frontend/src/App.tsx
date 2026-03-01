@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/layout/AppShell";
 import { ErrorPage } from "@/components/shared/ErrorPage";
+import { isDevtoolsLogUiEnabled } from "@/lib/featureFlags";
 
 // ─── Lazy-loaded pages (code-split per route) ───────────────────
 const Login = lazy(() => import("@/pages/Login"));
@@ -37,6 +38,7 @@ const HelpdeskPage = lazy(() => import("@/pages/helpdesk/HelpdeskPage"));
 const TicketsPage = lazy(() => import("@/pages/tickets/TicketsPage"));
 const TicketSpacesPage = lazy(() => import("@/pages/tickets/TicketSpacesPage"));
 const TicketSpaceDetailPage = lazy(() => import("@/pages/tickets/TicketSpaceDetailPage"));
+const DevToolsLogUiPage = lazy(() => import("@/pages/devtools/DevToolsLogUiPage"));
 
 function PageSpinner() {
   return (
@@ -47,6 +49,8 @@ function PageSpinner() {
 }
 
 export default function App() {
+  const showDevtoolsLogUi = isDevtoolsLogUiEnabled();
+
   return (
     <Suspense fallback={<PageSpinner />}>
       <Routes>
@@ -85,6 +89,7 @@ export default function App() {
           <Route path="purchases/:txnId" element={<PurchasesPage />} />
           <Route path="subscriptions" element={<SubscriptionsPage />} />
           <Route path="root/roles" element={<RootRoleManagementPage />} />
+          {showDevtoolsLogUi && <Route path="dev-tools/log-ui" element={<DevToolsLogUiPage />} />}
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

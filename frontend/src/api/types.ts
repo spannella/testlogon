@@ -1830,3 +1830,118 @@ export interface WalletDepositReq {
 export interface WalletWithdrawReq {
   amount_cents: number;
 }
+
+// ─── Internal Dev Tools ─────────────────────────────────────────
+
+export interface DevtoolsParseWarningOut {
+  source: "email" | "sms" | "billing";
+  line_number?: number;
+  code: string;
+  message: string;
+  sample?: string;
+}
+
+export interface DevtoolsIdentityOut {
+  id: string;
+  id_strategy: string;
+}
+
+export interface DevtoolsEmailMailboxOut extends DevtoolsIdentityOut {
+  mailbox: string;
+  thread_count: number;
+  unread_count: number;
+}
+
+export interface DevtoolsEmailThreadOut extends DevtoolsIdentityOut {
+  mailbox: string;
+  subject?: string;
+  message_count: number;
+  unread_count: number;
+  participant_emails: string[];
+  latest_message_at: string;
+}
+
+export interface DevtoolsEmailMessageOut extends DevtoolsIdentityOut {
+  thread_id: string;
+  mailbox: string;
+  sent_at: string;
+  event_kind: "mfa_email_code" | "alert_email" | "unknown";
+  direction: "inbound" | "outbound" | "unknown";
+  from_email?: string;
+  to_emails: string[];
+  subject?: string;
+  body_text?: string;
+  body_html?: string;
+  code?: string;
+  purpose?: string;
+  status?: string;
+  parse_warnings: DevtoolsParseWarningOut[];
+}
+
+export interface DevtoolsEmailMessagesOut {
+  mailboxes: DevtoolsEmailMailboxOut[];
+  threads: DevtoolsEmailThreadOut[];
+  messages: DevtoolsEmailMessageOut[];
+  next_cursor?: string | null;
+  parse_warnings: DevtoolsParseWarningOut[];
+}
+
+export interface DevtoolsSmsConversationOut extends DevtoolsIdentityOut {
+  participant_numbers: string[];
+  message_count: number;
+  latest_message_at: string;
+  latest_preview?: string;
+}
+
+export interface DevtoolsSmsMessageOut extends DevtoolsIdentityOut {
+  conversation_id: string;
+  sent_at: string;
+  from_number?: string;
+  to_number?: string;
+  direction: "inbound" | "outbound" | "unknown";
+  body_text?: string;
+  code?: string;
+  status?: string;
+  provider_message_id?: string;
+  event_kind: "mfa_sms_code" | "alert_sms" | "unknown";
+  parse_warnings: DevtoolsParseWarningOut[];
+}
+
+export interface DevtoolsSmsConversationsOut {
+  conversations: DevtoolsSmsConversationOut[];
+  messages: DevtoolsSmsMessageOut[];
+  next_cursor?: string | null;
+  parse_warnings: DevtoolsParseWarningOut[];
+}
+
+export interface DevtoolsBillingLedgerEntryOut extends DevtoolsIdentityOut {
+  provider: "stripe" | "ccbill" | "paypal" | "unknown";
+  event_type: string;
+  status: string;
+  occurred_at: string;
+  external_id?: string;
+  amount: number;
+  fee: number;
+  net: number;
+  currency: string;
+  source_path?: string;
+  raw_payload: Record<string, unknown>;
+  parse_warnings: DevtoolsParseWarningOut[];
+}
+
+export interface DevtoolsBillingLedgerSummaryOut {
+  gross_inflow: number;
+  fees: number;
+  net_total_balance: number;
+  transaction_count: number;
+  provider_counts: Record<string, number>;
+  status_counts: Record<string, number>;
+  parse_warnings: DevtoolsParseWarningOut[];
+}
+
+export interface DevtoolsBillingLedgerOut {
+  entries: DevtoolsBillingLedgerEntryOut[];
+  summary: DevtoolsBillingLedgerSummaryOut;
+  next_cursor?: string | null;
+  parse_warnings: DevtoolsParseWarningOut[];
+}
