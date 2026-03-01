@@ -30,6 +30,20 @@ class Tables:
     catalog: Any
     subscriptions: Any
     projects: Any
+    contacts: Any
+    catalog_products: Any
+    catalog_product_versions: Any
+    orders: Any
+    order_items: Any
+    payments: Any
+    entitlements: Any
+    entitlement_usage_events: Any
+    signature_packets: Any
+    signature_packet_signers: Any
+    signature_packet_fields: Any
+    signature_packet_events: Any
+    signature_packet_artifacts: Any
+    tickets: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -54,4 +68,18 @@ T = Tables(
     catalog=ddb.Table(S.catalog_table_name),
     subscriptions=ddb.Table(S.subscriptions_table_name),
     projects=ddb.Table(S.projects_table_name),
+    contacts=ddb.Table(S.contacts_table_name),
+    catalog_products=ddb.Table(S.catalog_products_table_name),
+    catalog_product_versions=ddb.Table(S.catalog_product_versions_table_name),
+    orders=ddb.Table(S.orders_table_name),
+    order_items=ddb.Table(S.order_items_table_name),
+    payments=ddb.Table(S.payments_table_name),
+    entitlements=ddb.Table(S.entitlements_table_name),
+    entitlement_usage_events=ddb.Table(S.entitlement_usage_events_table_name),
+    signature_packets=ddb.Table(S.signature_packets_table_name),
+    signature_packet_signers=ddb.Table(S.signature_packet_signers_table_name),
+    signature_packet_fields=ddb.Table(S.signature_packet_fields_table_name),
+    signature_packet_events=ddb.Table(S.signature_packet_events_table_name),
+    signature_packet_artifacts=ddb.Table(S.signature_packet_artifacts_table_name),
+    tickets=ddb.Table(S.tickets_table_name),
 )

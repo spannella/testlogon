@@ -15,7 +15,10 @@ import {
   Shield,
   Settings,
   Bell,
+  LifeBuoy,
   UsersRound,
+  BookUser,
+  Headphones,
   PanelLeftClose,
   PanelLeft,
 } from "lucide-react";
@@ -26,6 +29,8 @@ import { Separator } from "@/components/ui/separator";
 import { useUiStore } from "@/stores/uiStore";
 import { useAuthStore } from "@/stores/authStore";
 import { canSeeRootRoleManagement } from "@/lib/adminCapabilities";
+import { useQuery } from "@tanstack/react-query";
+import { getConversations } from "@/api/endpoints/messaging";
 
 // ─── Navigation Config ──────────────────────────────────────────
 
@@ -47,6 +52,8 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Dashboard", path: "/", icon: <LayoutDashboard className="h-5 w-5" /> },
       { label: "Messages", path: "/messages", icon: <MessageSquare className="h-5 w-5" /> },
+      { label: "Contacts", path: "/contacts", icon: <BookUser className="h-5 w-5" /> },
+      { label: "Helpdesk", path: "/helpdesk", icon: <Headphones className="h-5 w-5" /> },
       { label: "Feed", path: "/feed", icon: <Rss className="h-5 w-5" /> },
     ],
   },
@@ -74,6 +81,8 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Profile", path: "/profile", icon: <User className="h-5 w-5" /> },
       { label: "Security", path: "/security", icon: <Shield className="h-5 w-5" /> },
       { label: "Alerts", path: "/alerts", icon: <Bell className="h-5 w-5" /> },
+      { label: "Tickets", path: "/tickets", icon: <LifeBuoy className="h-5 w-5" /> },
+      { label: "Ticket Spaces", path: "/tickets/spaces", icon: <LifeBuoy className="h-5 w-5" /> },
       { label: "Settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
       { label: "Role Management", path: "/root/roles", icon: <UsersRound className="h-5 w-5" /> },
     ],
@@ -88,6 +97,17 @@ export default function Sidebar() {
   const location = useLocation();
   const accessToken = useAuthStore((s) => s.accessToken);
   const showRootRoleManagement = canSeeRootRoleManagement(accessToken);
+
+  const { data: convoData } = useQuery({
+    queryKey: ["conversations"],
+    queryFn: () => getConversations(),
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
+  });
+  const totalUnread = (convoData?.conversations ?? []).reduce(
+    (sum, c) => sum + (c.unread_count ?? 0),
+    0,
+  );
 
   const isActive = (path: string) => {
     if (path === "/") return location.pathname === "/";
@@ -133,6 +153,7 @@ export default function Sidebar() {
             <ul className="space-y-0.5">
               {items.map((item) => {
                 const active = isActive(item.path);
+                const badge = item.path === "/messages" ? totalUnread : (item.badge ?? 0);
                 const link = (
                   <NavLink
                     key={item.path}
@@ -145,15 +166,20 @@ export default function Sidebar() {
                       collapsed && "justify-center px-0 gap-0",
                     )}
                   >
-                    <span className={cn("shrink-0", active && "text-primary")}>
+                    <span className={cn("relative shrink-0", active && "text-primary")}>
                       {item.icon}
+                      {collapsed && badge > 0 && (
+                        <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-0.5 text-[9px] font-bold text-primary-foreground">
+                          {badge > 9 ? "9+" : badge}
+                        </span>
+                      )}
                     </span>
                     {!collapsed && (
                       <span className="truncate">{item.label}</span>
                     )}
-                    {!collapsed && item.badge != null && item.badge > 0 && (
+                    {!collapsed && badge > 0 && (
                       <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
-                        {item.badge > 99 ? "99+" : item.badge}
+                        {badge > 99 ? "99+" : badge}
                       </span>
                     )}
                   </NavLink>

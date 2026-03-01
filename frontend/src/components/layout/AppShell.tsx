@@ -6,6 +6,7 @@ import MobileNav from "./MobileNav";
 import ImpersonationBanner from "@/components/shared/ImpersonationBanner";
 import { PageTransition } from "@/components/shared/PageTransition";
 import { OfflineBanner } from "@/components/shared/OfflineBanner";
+import { SessionExpiryWarning } from "@/components/shared/SessionExpiryWarning";
 import {
   Sheet,
   SheetContent,
@@ -44,6 +45,7 @@ export default function AppShell() {
         <OfflineBanner />
         <Header onMobileMenuToggle={() => setMobileMenuOpen(true)} />
         <ImpersonationBanner />
+        <SessionExpiryWarning />
 
         <main id="main-content" className="flex flex-col flex-1 overflow-y-auto pb-16 md:pb-0">
           <PageTransition>
@@ -76,6 +78,7 @@ import {
   Shield,
   Settings,
   Bell,
+  LifeBuoy,
   UsersRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -115,6 +118,8 @@ const MOBILE_NAV_GROUPS = [
       { label: "Profile", path: "/profile", icon: User },
       { label: "Security", path: "/security", icon: Shield },
       { label: "Alerts", path: "/alerts", icon: Bell },
+      { label: "Tickets", path: "/tickets", icon: LifeBuoy },
+  { label: "Ticket Spaces", path: "/tickets/spaces", icon: LifeBuoy },
       { label: "Settings", path: "/settings", icon: Settings },
       { label: "Role Mgmt", path: "/root/roles", icon: UsersRound },
     ],

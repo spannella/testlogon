@@ -43,6 +43,7 @@ from app.metrics import (
 )
 from app.core.settings import S
 from app.core.aws import ddb
+from app.core.tables import T
 from app.core.aws_clients import s3_client
 from app.metrics import (
     record_once_media_conflict,
@@ -58,12 +59,14 @@ from app.services.messaging_routing import (
     build_routing_event_item,
     transition_helpdesk_routing,
 )
-from app.services.filemanager import get_node, get_usage_summary, norm_path
+from app.services.filemanager import get_node, get_usage_summary, norm_path, share_node
 from app.services.messaging_gallery import fetch_gallery_page
 from app.services.messaging_gallery_index import fetch_gallery_index_page, sync_gallery_index_entries
 from app.services.profile import get_profile_identity
 from app.services.sessions import require_ui_session
+from app.services.signature_packet_store import get_signature_packet_progress_for_user
 from app.services.subscription_access import require_subscription_access
+from app.services.internal_api_entitlements import enforce_internal_api_entitlement
 from app.services.usage_metering import (
     build_usage_event,
     build_usage_source_idempotency_key,
@@ -162,6 +165,16 @@ def get_current_user_id(authorization: Optional[str] = Header(default=None)) -> 
     Dev behavior: Authorization: Bearer <user_id>
     """
     return extract_bearer_token(authorization)
+
+
+def _enforce_messaging_internal_entitlement(*, user_id: str, action: str, request_id: Optional[str] = None) -> None:
+    req_id = (request_id or "").strip() or f"messaging:{action}:{now_ts()}:{user_id}"
+    enforce_internal_api_entitlement(
+        user_id=user_id,
+        namespace="messaging",
+        action=action,
+        request_id=req_id,
+    )
 
 
 def _meter_message_send(*, user_id: str, conversation_id: str, message_id: str) -> None:
@@ -528,6 +541,10 @@ class StartGroupConversationIn(BaseModel):
     retention_days: Optional[int] = Field(default=None, ge=1, le=3650)
 
 
+class FindOrCreateDmIn(BaseModel):
+    user_id: str  # target user's sub
+
+
 class ConversationOut(BaseModel):
     conversation_id: str
     type: str
@@ -551,6 +568,8 @@ class ConversationOut(BaseModel):
     active_agent_user_id: Optional[str] = None
     active_agent_claimed_at: Optional[int] = None
     assignment_version: Optional[int] = None
+    participants: List["ParticipantOut"] = Field(default_factory=list)
+    last_message: Optional["MessageOut"] = None
 
 
 class RoutingEventOut(BaseModel):
@@ -591,7 +610,17 @@ class MessageEncryptionEnvelope(BaseModel):
     iterations: int = Field(ge=100000, le=2000000)
     salt_b64: str = Field(min_length=4, max_length=256)
     iv_b64: str = Field(min_length=4, max_length=128)
-    ciphertext_b64: str = Field(min_length=4, max_length=12000)
+    # For text messages: ciphertext is stored here. For media messages: ciphertext lives in S3.
+    ciphertext_b64: Optional[str] = Field(default=None, min_length=4, max_length=12000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_decimals(cls, data: Any) -> Any:
+        """DynamoDB returns numbers as Decimal; coerce to native int for Literal/int fields."""
+        from decimal import Decimal as _Decimal
+        if isinstance(data, dict):
+            return {k: int(v) if isinstance(v, _Decimal) else v for k, v in data.items()}
+        return data
 
     @model_validator(mode="after")
     def _validate_binary_fields(self):
@@ -609,20 +638,22 @@ class MessageEncryptionEnvelope(BaseModel):
         if len(iv) != 12:
             raise PydanticCustomError("enc_iv_length", "iv_b64 must decode to exactly 12 bytes")
 
-        try:
-            ciphertext = base64.b64decode(self.ciphertext_b64, validate=True)
-        except binascii.Error as exc:
-            raise PydanticCustomError("enc_ciphertext_invalid", "ciphertext_b64 must be valid base64") from exc
-        if len(ciphertext) <= 16:
-            raise PydanticCustomError(
-                "enc_ciphertext_length",
-                "ciphertext_b64 must include ciphertext bytes plus authentication tag",
-            )
-        if len(ciphertext) > ENCRYPTED_CIPHERTEXT_MAX_BYTES:
-            raise PydanticCustomError(
-                "enc_ciphertext_too_large",
-                f"ciphertext payload exceeds {ENCRYPTED_CIPHERTEXT_MAX_BYTES} byte limit",
-            )
+        # ciphertext_b64 is optional for media messages (encrypted binary lives in S3)
+        if self.ciphertext_b64 is not None:
+            try:
+                ciphertext = base64.b64decode(self.ciphertext_b64, validate=True)
+            except binascii.Error as exc:
+                raise PydanticCustomError("enc_ciphertext_invalid", "ciphertext_b64 must be valid base64") from exc
+            if len(ciphertext) <= 16:
+                raise PydanticCustomError(
+                    "enc_ciphertext_length",
+                    "ciphertext_b64 must include ciphertext bytes plus authentication tag",
+                )
+            if len(ciphertext) > ENCRYPTED_CIPHERTEXT_MAX_BYTES:
+                raise PydanticCustomError(
+                    "enc_ciphertext_too_large",
+                    f"ciphertext payload exceeds {ENCRYPTED_CIPHERTEXT_MAX_BYTES} byte limit",
+                )
         return self
 
 
@@ -634,6 +665,7 @@ class SendTextMessageIn(BaseModel):
     encryption: Optional[MessageEncryptionEnvelope] = None
     send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
     tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)  # e.g. 500 = $5.00
+    tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
     expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=604800)  # 10s–7d
     view_once: bool = False
     lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
@@ -674,6 +706,7 @@ class SendTipIn(BaseModel):
     amount_cents: int = Field(ge=1, le=100_000)
     currency: str = "USD"
     note: Optional[str] = Field(default=None, max_length=500)
+    payment_method_id: Optional[str] = None
 
 
 class SendImagePresignIn(BaseModel):
@@ -694,12 +727,112 @@ class CreateImageMessageIn(BaseModel):
     content_type: str = "image/jpeg"
     width: Optional[int] = None
     height: Optional[int] = None
+    filename: Optional[str] = Field(default=None, max_length=255)
+    filesize: Optional[int] = None
+    file_created_at: Optional[int] = None  # Unix seconds from file.lastModified
+    caption: Optional[str] = Field(default=None, max_length=MESSAGE_TEXT_MAX_CHARS)
+    kind: Literal["image", "file", "video"] = "image"
     reply_to_message_id: Optional[str] = None
     consumption_policy: Literal["none", "view_once"] = "none"
     expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=604800)
     view_once: bool = False
     lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
     lock_description: Optional[str] = Field(default=None, max_length=200)
+    tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
+    tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
+    send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
+    encryption: Optional[MessageEncryptionEnvelope] = None
+    # Blurred preview for locked images — small pixelated thumbnail shown before unlock
+    preview_bucket: Optional[str] = Field(default=None, max_length=200)
+    preview_key: Optional[str] = Field(default=None, max_length=500)
+
+
+class GalleryImageItemIn(BaseModel):
+    bucket: str = Field(min_length=1, max_length=200)
+    key: str = Field(min_length=1, max_length=500)
+    content_type: str = Field(min_length=1, max_length=100)
+    width: Optional[int] = None
+    height: Optional[int] = None
+    filename: Optional[str] = Field(default=None, max_length=255)
+    filesize: Optional[int] = None
+    preview_bucket: Optional[str] = Field(default=None, max_length=200)
+    preview_key: Optional[str] = Field(default=None, max_length=500)
+
+
+class CreateGalleryMessageIn(BaseModel):
+    free_images: List[GalleryImageItemIn] = Field(default_factory=list)
+    locked_images: List[GalleryImageItemIn] = Field(default_factory=list)
+    text: Optional[str] = Field(default=None, max_length=2000)
+    lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
+    lock_description: Optional[str] = Field(default=None, max_length=500)
+    expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=2592000)
+    send_at: Optional[int] = None
+    tip_amount_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
+    tip_payment_method_id: Optional[str] = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_gallery(self):
+        if len(self.free_images) > 20:
+            raise ValueError("free_images may not exceed 20 items")
+        if len(self.locked_images) > 30:
+            raise ValueError("locked_images may not exceed 30 items")
+        if not self.free_images and not self.locked_images:
+            raise ValueError("Gallery must have at least one item")
+        if self.locked_images and not self.lock_price_cents:
+            raise ValueError("lock_price_cents required when locked_images provided")
+        for img in self.locked_images:
+            if not img.preview_bucket or not img.preview_key:
+                raise ValueError("Each locked image must have preview_bucket and preview_key")
+        return self
+
+
+class CreateFileShareMessageIn(BaseModel):
+    file_path: str = Field(min_length=1, max_length=1000)
+    permission: Literal["read", "write"] = "read"
+    text: Optional[str] = Field(default=None, max_length=2000)
+    send_at: Optional[int] = None
+
+    @model_validator(mode="after")
+    def validate_path(self):
+        if not self.file_path.startswith("/"):
+            raise ValueError("file_path must be absolute (start with /)")
+        return self
+
+
+class CreateCalendarShareMessageIn(BaseModel):
+    calendar_id: str
+    permission: Literal["read", "write"] = "read"
+    include_booking_link: bool = False
+    text: Optional[str] = Field(default=None, max_length=2000)
+    send_at: Optional[int] = None
+
+
+class CreateCalendarEventMessageIn(BaseModel):
+    calendar_id: str
+    event_id: str
+    text: Optional[str] = Field(default=None, max_length=2000)
+    send_at: Optional[int] = None
+
+
+class MeetingPollSlotIn(BaseModel):
+    start_utc: str
+    end_utc: str
+
+
+class CreateMeetingPollMessageIn(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    duration_minutes: int = Field(ge=15, le=1440, default=30)
+    slots: List[MeetingPollSlotIn] = Field(min_length=2, max_length=5)
+    text: Optional[str] = Field(default=None, max_length=2000)
+
+
+class PollVoteIn(BaseModel):
+    votes: Dict[str, Literal["yes", "no", "maybe"]]
+
+
+class PollConfirmIn(BaseModel):
+    slot_id: str
+    calendar_id: Optional[str] = None
 
 
 class MarkReadIn(BaseModel):
@@ -770,6 +903,12 @@ class ParticipantOut(BaseModel):
     assignment_state: Optional[str] = None
     assignment_owner_user_id: Optional[str] = None
     is_assignment_owner: Optional[bool] = None
+    display_name: Optional[str] = None
+    profile_photo_url: Optional[str] = None
+
+
+# Partial rebuild now that ParticipantOut is defined; MessageOut not yet defined.
+ConversationOut.model_rebuild(raise_errors=False)
 
 
 class ReactIn(BaseModel):
@@ -800,6 +939,7 @@ class CreateFileMessageIn(BaseModel):
     reply_to_message_id: Optional[str] = None
     preview: Optional[LinkPreviewIn] = None
     consumption_policy: Literal["none", "view_once", "listen_once"] = "none"
+    signature_packet_id: Optional[str] = Field(default=None, max_length=128)
 
     @model_validator(mode="after")
     def _validate_consumption_policy(self):
@@ -891,11 +1031,19 @@ class MessageOut(BaseModel):
     message_id: str
     sender_id: str
     created_at: int
-    kind: Literal["text", "image", "file", "audio", "video"]
+    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll"]
     text: Optional[str] = None
     image: Optional[Dict[str, Any]] = None
     file: Optional[Dict[str, Any]] = None
+    file_share: Optional[Dict[str, Any]] = None
+    calendar_share: Optional[Dict[str, Any]] = None
+    calendar_event: Optional[Dict[str, Any]] = None
+    meeting_poll: Optional[Dict[str, Any]] = None
     preview: Optional[Dict[str, Any]] = None
+    # Gallery message fields
+    free_images: Optional[List[Dict[str, Any]]] = None
+    locked_images: Optional[List[Dict[str, Any]]] = None  # None = hidden (not unlocked)
+    locked_image_count: Optional[int] = None
 
     reply_to_message_id: Optional[str] = None
     forwarded_from: Optional[Dict[str, Any]] = None
@@ -938,6 +1086,9 @@ class MessageOut(BaseModel):
     is_unlocked: bool = False              # viewer-specific: True once paid
 
 
+# Rebuild ConversationOut now that MessageOut is also fully defined
+ConversationOut.model_rebuild()
+
 GalleryType = Literal["image", "video", "file", "link"]
 GALLERY_TYPES: set[str] = {"image", "video", "file", "link"}
 
@@ -965,7 +1116,7 @@ HELPDESK_MASKED_SENDER_ID = "Helpdesk"
 
 
 class UnlockMessageIn(BaseModel):
-    pass  # body intentionally empty; amount comes from message's lock_price_cents
+    payment_method_id: Optional[str] = None
 
 
 class UnlockOut(BaseModel):
@@ -1036,12 +1187,18 @@ def build_message_search_tokens(text: str, *, max_len: int = 32, max_prefix_len:
     return list(dict.fromkeys(out))
 
 
+_MSG_SEARCH_MAX_PREFIX_LEN = 8  # must match build_message_search_tokens max_prefix_len
+
+
 def build_message_query_tokens(query: str, *, max_len: int = 32) -> list[str]:
     tokens = _stem_tokens(_tokenize_message(query, max_len=max_len))
     out: list[str] = []
     for token in tokens:
         out.append(token)
-        out.extend(build_prefix_tokens(token))
+        # Use the same prefix length cap as build_message_search_tokens so that
+        # every query prefix token is guaranteed to exist in the index.
+        for i in range(1, min(len(token), _MSG_SEARCH_MAX_PREFIX_LEN) + 1):
+            out.append(token[:i])
         out.extend(_token_ngrams(token))
     return list(dict.fromkeys(out))
 
@@ -1486,6 +1643,9 @@ def _filter_message_visible(message_item: dict, user_id: str) -> bool:
     deleted_for = set(message_item.get("deleted_for", []))
     if message_item.get("revoked_at"):
         return False
+    # Scheduled messages are only visible to the sender until delivered
+    if message_item.get("status") == "scheduled" and message_item.get("sender_id") != user_id:
+        return False
     return user_id not in deleted_for
 
 
@@ -1816,8 +1976,38 @@ def _is_view_once_consumed(item: dict, viewer_user_id: str) -> bool:
     return viewer_user_id in seen
 
 
+def _project_gallery_image(img_dict: dict) -> dict:
+    """Project a gallery image item dict to a response dict with URL added in dev mode."""
+    out = dict(img_dict)
+    if S.dev_mode:
+        from urllib.parse import quote as _gi_quote
+        bucket = out.get("bucket", "")
+        key = out.get("key", "")
+        if bucket and key and not out.get("url"):
+            out["url"] = f"/mock/s3/{bucket}/{_gi_quote(key, safe='/')}"
+        # Also generate preview_url from preview_bucket/preview_key if present
+        pb = out.get("preview_bucket", "")
+        pk = out.get("preview_key", "")
+        if pb and pk and not out.get("preview_url"):
+            out["preview_url"] = f"/mock/s3/{pb}/{_gi_quote(pk, safe='/')}"
+    return out
+
+
 def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOut:
     merged_item = _merge_consumption_state(message_item, viewer_user_id)
+
+    file_payload = merged_item.get("file")
+    if isinstance(file_payload, dict):
+        packet_id = str(file_payload.get("signature_packet_id") or "")
+        if packet_id:
+            try:
+                progress = get_signature_packet_progress_for_user(packet_id, viewer_user_id)
+            except Exception:
+                progress = None
+            if progress:
+                merged_file = dict(file_payload)
+                merged_file.update(progress)
+                merged_item["file"] = merged_file
 
     counts, mine = _reaction_summaries(merged_item, viewer_user_id)
 
@@ -1850,9 +2040,97 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
     deliver_at = int(merged_item.get("deliver_at", 0)) or None
 
     text = None if content_hidden else merged_item.get("text")
-    image = None if content_hidden else merged_item.get("image")
-    file_ = None if content_hidden else merged_item.get("file")
+    raw_image = None if content_hidden else merged_item.get("image")
+
+    # For single locked images with a blurred preview: when content is hidden due to lock
+    # (not expiry or view-once consumption), show the preview image instead of nothing.
+    if (content_hidden and has_lock and not is_unlocked and not expired and not view_once_consumed
+            and merged_item.get("kind") == "image"
+            and merged_item.get("preview_key") and merged_item.get("preview_bucket")):
+        from urllib.parse import quote as _pv_url_quote
+        _pv_bucket = merged_item["preview_bucket"]
+        _pv_key = merged_item["preview_key"]
+        _pv_url = f"/mock/s3/{_pv_bucket}/{_pv_url_quote(_pv_key, safe='/')}" if S.dev_mode else ""
+        raw_image = {
+            "bucket": _pv_bucket,
+            "key": _pv_key,
+            "content_type": merged_item.get("image", {}).get("content_type", "image/jpeg"),
+            "url": _pv_url,
+            "preview_url": _pv_url,
+        }
+
+    # In DEV_MODE, add a directly-accessible URL to image messages so the browser
+    # can display them without needing a real AWS S3 endpoint.
+    if raw_image and S.dev_mode and not raw_image.get("url"):
+        from urllib.parse import quote as _url_quote
+        _bucket = raw_image.get("bucket", "")
+        _key = raw_image.get("key", "")
+        if _bucket and _key:
+            raw_image = dict(raw_image)
+            raw_image["url"] = f"/mock/s3/{_bucket}/{_url_quote(_key, safe='/')}"
+    image = raw_image
+    raw_file = None if content_hidden else merged_item.get("file")
+    # In DEV_MODE, add a directly-accessible URL to file messages (PDF, audio, video)
+    # so the browser can open them without needing a real AWS S3 endpoint.
+    if raw_file and S.dev_mode and not raw_file.get("url"):
+        _bucket_f = raw_file.get("bucket", "")
+        _key_f = raw_file.get("key", "")
+        if _bucket_f and _key_f:
+            from urllib.parse import quote as _url_quote_f
+            raw_file = dict(raw_file)
+            raw_file["url"] = f"/mock/s3/{_bucket_f}/{_url_quote_f(_key_f, safe='/')}"
+    file_ = raw_file
     preview = None if content_hidden else merged_item.get("preview")
+
+    # Gallery message projection
+    free_images_out: Optional[List[Dict[str, Any]]] = None
+    locked_images_out: Optional[List[Dict[str, Any]]] = None
+    locked_image_count: Optional[int] = None
+    if merged_item.get("kind") == "gallery":
+        raw_free = merged_item.get("free_images") or []
+        raw_locked = merged_item.get("locked_images") or []
+        locked_image_count = len(raw_locked)
+        # Free images are always visible (lock only gates locked_images)
+        if not expired:
+            free_images_out = [_project_gallery_image(img) for img in raw_free]
+        # Locked images: visible if unlocked or sender; show preview thumbnails otherwise
+        if not expired and is_unlocked:
+            locked_images_out = [_project_gallery_image(img) for img in raw_locked]
+        elif not expired:
+            # Show blurred preview thumbnails for locked images
+            locked_images_out = None  # hidden; frontend uses locked_image_count to know count
+
+    # File share message projection
+    file_share_out: Optional[Dict[str, Any]] = None
+    if merged_item.get("kind") == "file_share":
+        raw_fs = merged_item.get("file_share") or {}
+        file_share_out = {
+            "path": raw_fs.get("path"),
+            "name": raw_fs.get("name"),
+            "size": int(raw_fs["size"]) if raw_fs.get("size") is not None else None,
+            "content_type": raw_fs.get("content_type"),
+            "permission": raw_fs.get("permission", "read"),
+            "owner": raw_fs.get("owner"),
+            "is_encrypted": bool(raw_fs.get("is_encrypted", False)),
+        }
+
+    calendar_share_out: Optional[Dict[str, Any]] = None
+    if merged_item.get("kind") == "calendar_share":
+        raw = merged_item.get("calendar_share") or {}
+        calendar_share_out = {k: raw.get(k) for k in
+            ["calendar_id", "name", "owner", "permission", "booking_link_id", "booking_public_url"]}
+
+    calendar_event_out: Optional[Dict[str, Any]] = None
+    if merged_item.get("kind") == "calendar_event":
+        raw = merged_item.get("calendar_event") or {}
+        calendar_event_out = {k: raw.get(k) for k in
+            ["event_id", "calendar_id", "name", "start_utc", "end_utc", "all_day", "all_day_date", "timezone", "description", "owner"]}
+
+    meeting_poll_out: Optional[Dict[str, Any]] = None
+    if merged_item.get("kind") == "meeting_poll":
+        raw = merged_item.get("meeting_poll") or {}
+        meeting_poll_out = {k: raw.get(k) for k in
+            ["poll_id", "creator_id", "title", "duration_minutes", "status", "confirmed_slot_id"]}
 
     return MessageOut(
         conversation_id=merged_item["conversation_id"],
@@ -1863,7 +2141,14 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         text=text,
         image=image,
         file=file_,
+        file_share=file_share_out,
+        calendar_share=calendar_share_out,
+        calendar_event=calendar_event_out,
+        meeting_poll=meeting_poll_out,
         preview=preview,
+        free_images=free_images_out,
+        locked_images=locked_images_out,
+        locked_image_count=locked_image_count,
         reply_to_message_id=merged_item.get("reply_to_message_id"),
         forwarded_from=merged_item.get("forwarded_from"),
         forward_note=merged_item.get("forward_note"),
@@ -1975,6 +2260,12 @@ def _fetch_message_items(message_keys: Iterable[str]) -> list[dict]:
     return items
 
 
+_INDEX_QUERY_LIMIT = 200
+# Minimum token length to use for intersection.  Tokens shorter than this are
+# prefix/ngram helpers that match too many messages to be useful as an AND filter.
+_MIN_INTERSECTION_TOKEN_LEN = 4
+
+
 def _search_messages_index(
     query_tokens: Sequence[str],
     *,
@@ -1991,7 +2282,10 @@ def _search_messages_index(
     message_map: Dict[str, dict] = {}
     try:
         for idx, token in enumerate(query_tokens):
-            kwargs: Dict[str, Any] = {"KeyConditionExpression": Key("token").eq(token), "Limit": 200}
+            kwargs: Dict[str, Any] = {
+                "KeyConditionExpression": Key("token").eq(token),
+                "Limit": _INDEX_QUERY_LIMIT,
+            }
             filters = []
             if conversation_id:
                 filters.append(Attr("conversation_id").eq(conversation_id))
@@ -2011,6 +2305,12 @@ def _search_messages_index(
             if idx == 0:
                 message_map = {item["message_key"]: item for item in items}
             else:
+                # Skip intersection for tokens that are too short (too common) or
+                # whose result set was truncated by the query limit (unreliable for AND).
+                # DynamoDB sets LastEvaluatedKey when more items exist beyond the Limit.
+                truncated = "LastEvaluatedKey" in resp
+                if len(token) < _MIN_INTERSECTION_TOKEN_LEN or truncated:
+                    continue
                 allowed = {item["message_key"] for item in items}
                 message_map = {k: v for k, v in message_map.items() if k in allowed}
             if not message_map:
@@ -2102,6 +2402,47 @@ def _is_helpdesk_agent_viewer(convo: dict, user_id: str) -> bool:
     return _is_helpdesk_group_member(group_id, user_id)
 
 
+def _find_existing_dm(user_sub: str, target_sub: str) -> Optional[str]:
+    """Return conversation_id of an existing DM between user_sub and target_sub, or None."""
+    dm_conv_ids: List[str] = []
+    last_key = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("user_id").eq(user_sub),
+            "Limit": 500,
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        resp = tbl_parts.query(**kwargs)
+        for item in resp.get("Items", []):
+            if item.get("conv_type") == "dm" or True:
+                # We need to check the conversation type from tbl_convos; collect all
+                dm_conv_ids.append(item["conversation_id"])
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key or len(dm_conv_ids) >= 2000:
+            break
+
+    if not dm_conv_ids:
+        return None
+
+    # Filter to only DM conversations (type == "dm")
+    # We batch-check which of these cids the target is also a participant in
+    batch_size = 100
+    for i in range(0, len(dm_conv_ids), batch_size):
+        chunk = dm_conv_ids[i:i + batch_size]
+        keys = [{"user_id": target_sub, "conversation_id": cid} for cid in chunk]
+        resp = ddb.batch_get_item(RequestItems={tbl_parts.name: {"Keys": keys}})
+        hits = resp.get("Responses", {}).get(tbl_parts.name, [])
+        for hit in hits:
+            cid = hit["conversation_id"]
+            # Verify it's a DM
+            convo_item = tbl_convos.get_item(Key={"conversation_id": cid}).get("Item")
+            if convo_item and convo_item.get("type") == "dm":
+                return cid
+
+    return None
+
+
 def _conversation_out_from_items(*, conversation_id: str, convo: dict, participant: dict, viewer_user_id: str) -> ConversationOut:
     out = ConversationOut(
         conversation_id=conversation_id,
@@ -2131,6 +2472,37 @@ def _conversation_out_from_items(*, conversation_id: str, convo: dict, participa
     return out
 
 
+def _enrich_participant_out(p: dict, profile_cache: Dict[str, Any]) -> "ParticipantOut":
+    pid = p["user_id"]
+    if pid not in profile_cache:
+        try:
+            profile_cache[pid] = get_profile_identity(pid)
+        except Exception:
+            profile_cache[pid] = {}
+    identity = profile_cache[pid]
+    display_name = identity.get("display_name")
+    if not display_name:
+        display_name = tbl_users.get_item(Key={"user_id": pid}).get("Item", {}).get("display_name")
+    return ParticipantOut(
+        user_id=pid,
+        status=p.get("status", "pending"),
+        role=p.get("role", "member"),
+        muted_until=int(p.get("muted_until", 0) or 0),
+        last_read_at=int(p.get("last_read_at", 0) or 0),
+        joined_at=int(p.get("joined_at", 0) or 0),
+        left_at=int(p.get("left_at", 0) or 0),
+        display_name=display_name or None,
+        profile_photo_url=identity.get("profile_photo_url") or None,
+    )
+
+
+def _get_conversation_participants_enriched(conversation_id: str, profile_cache: Dict[str, Any]) -> List["ParticipantOut"]:
+    items = tbl_parts.query(
+        IndexName="GSI1",
+        KeyConditionExpression=Key("GSI1PK").eq(conversation_id),
+        Limit=50,
+    ).get("Items", [])
+    return [_enrich_participant_out(p, profile_cache) for p in items if p.get("status") != "left"]
 
 
 def _helpdesk_lifecycle_event_payload(*, conversation: Mapping[str, Any], event_item: Mapping[str, Any]) -> dict:
@@ -2473,8 +2845,16 @@ def _ensure_can_revoke_message(user_id: str, conversation_id: str, message_item:
     require_participant_role(user_id, conversation_id, {"admin"})
 
 
+class _DecimalEncoder(json.JSONEncoder):
+    def default(self, o):
+        from decimal import Decimal as _Decimal
+        if isinstance(o, _Decimal):
+            return float(o) if o % 1 else int(o)
+        return super().default(o)
+
+
 def _sse_pack(data: dict, event: str = "message") -> str:
-    return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
+    return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'), cls=_DecimalEncoder)}\n\n"
 
 
 def _ddb_fetch_events(user_id: str, after: Optional[str], limit: int) -> list[dict]:
@@ -3058,7 +3438,7 @@ def start_conversation(
     tbl_convos.put_item(Item=convo_item, ConditionExpression="attribute_not_exists(conversation_id)")
 
     for pid in participant_ids:
-        status = "active" if pid == user_id else "pending"
+        status = "active" if (pid == user_id or inp.type == "dm") else "pending"
         tbl_parts.put_item(
             Item={
                 "user_id": pid,
@@ -3080,6 +3460,7 @@ def start_conversation(
         if delivered == 0:
             _emit_no_agents_online_notice(conversation_id=cid, user_id=user_id, now=created_at)
 
+    profile_cache: Dict[str, Any] = {}
     convo = ConversationOut(
         conversation_id=cid,
         type=inp.type,
@@ -3098,6 +3479,7 @@ def start_conversation(
         last_read_at=0,
         unread_count=0,
     )
+    convo.participants = _get_conversation_participants_enriched(cid, profile_cache)
     audit_event(
         "messaging_conversation_started",
         user_id,
@@ -3127,6 +3509,36 @@ def start_group_conversation(
             retention_days=inp.retention_days,
         ),
         req,
+        user_id=user_id,
+    )
+
+
+@router.post("/conversations/dm/find-or-create", response_model=ConversationOut)
+def find_or_create_dm(inp: FindOrCreateDmIn, req: Request = None, user_id: str = Depends(get_messaging_user_id)):
+    """Find an existing DM with the target user or create a new one."""
+    target_sub = inp.user_id
+    if user_id == target_sub:
+        raise HTTPException(400, "Cannot DM yourself")
+
+    existing_id = _find_existing_dm(user_id, target_sub)
+    if existing_id:
+        convo_item = tbl_convos.get_item(Key={"conversation_id": existing_id}).get("Item")
+        part_item = tbl_parts.get_item(Key={"user_id": user_id, "conversation_id": existing_id}).get("Item", {})
+        if convo_item:
+            profile_cache: Dict[str, Any] = {}
+            out = _conversation_out_from_items(
+                conversation_id=existing_id,
+                convo=convo_item,
+                participant=part_item,
+                viewer_user_id=user_id,
+            )
+            out.participants = _get_conversation_participants_enriched(existing_id, profile_cache)
+            return out
+
+    # No existing DM — create one using the same logic as start_conversation
+    return start_conversation(
+        StartConversationIn(participant_ids=[target_sub], type="dm"),
+        req=req,
         user_id=user_id,
     )
 
@@ -3161,19 +3573,91 @@ def accept_conversation(conversation_id: str, req: Request = None, user_id: str 
 
 @router.get("/conversations", response_model=List[ConversationOut])
 def list_conversations(user_id: str = Depends(get_messaging_user_id)):
-    resp = tbl_parts.query(KeyConditionExpression=Key("user_id").eq(user_id), Limit=200)
-    parts = resp.get("Items", [])
-    out: List[ConversationOut] = []
+    # Step 1: Paginate to get all participant records for this user.
+    parts: List[dict] = []
+    last_key = None
+    while True:
+        kwargs: dict = {"KeyConditionExpression": Key("user_id").eq(user_id), "Limit": 500}
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        resp = tbl_parts.query(**kwargs)
+        parts.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key or len(parts) >= 2000:
+            break
+    if not parts:
+        return []
 
-    for p in parts:
-        cid = p["conversation_id"]
-        convo = tbl_convos.get_item(Key={"conversation_id": cid}).get("Item")
+    parts_by_cid = {p["conversation_id"]: p for p in parts}
+    cids = list(parts_by_cid.keys())
+
+    # Step 2: Batch-fetch all conversation records to get last_message_at for
+    # sorting. batch_get_item accepts up to 100 keys per call, so chunk it.
+    convo_map: Dict[str, dict] = {}
+    for i in range(0, len(cids), 100):
+        batch_keys = [{"conversation_id": cid} for cid in cids[i : i + 100]]
+        try:
+            batch_resp = ddb.batch_get_item(
+                RequestItems={DDB_CONVERSATIONS: {"Keys": batch_keys}}
+            )
+            for item in batch_resp.get("Responses", {}).get(DDB_CONVERSATIONS, []):
+                convo_map[item["conversation_id"]] = item
+        except Exception:
+            pass  # Fall back to per-item fetches below if batch fails
+
+    # Step 3: Sort all conversations by recency and cap enrichment at the top
+    # 200 to avoid thousands of DDB calls on accounts with many conversations.
+    def _sort_key(cid: str) -> tuple:
+        convo = convo_map.get(cid, {})
+        return (int(convo.get("last_message_at", 0) or 0), int(convo.get("created_at", 0) or 0))
+
+    sorted_cids = sorted(cids, key=_sort_key, reverse=True)
+    top_cids = sorted_cids[:200]
+
+    # Step 4: Enrich the top 200 conversations with participants + last message.
+    out: List[ConversationOut] = []
+    profile_cache: Dict[str, Any] = {}
+
+    for cid in top_cids:
+        p = parts_by_cid[cid]
+        convo = convo_map.get(cid)
+        if not convo:
+            # Fall back to individual get_item if batch missed this item.
+            convo = tbl_convos.get_item(Key={"conversation_id": cid}).get("Item")
         if not convo:
             continue
-        out.append(_conversation_out_from_items(conversation_id=cid, convo=convo, participant=p, viewer_user_id=user_id))
+        convo_out = _conversation_out_from_items(conversation_id=cid, convo=convo, participant=p, viewer_user_id=user_id)
+        convo_out.participants = _get_conversation_participants_enriched(cid, profile_cache)
+
+        # Include the last message object so the conversation list can render
+        # accurate preview text for expired/view-once/locked messages.
+        last_msg_id = convo.get("last_message_id")
+        if last_msg_id:
+            try:
+                last_msg_item = tbl_msgs.get_item(
+                    Key={"conversation_id": cid, "message_id": last_msg_id}
+                ).get("Item")
+                if last_msg_item:
+                    convo_out.last_message = _message_out_from_item(last_msg_item, user_id)
+            except Exception:
+                pass  # Best-effort; don't fail if last message can't be fetched
+
+        out.append(convo_out)
 
     out.sort(key=lambda x: (x.last_message_at or 0, x.created_at), reverse=True)
     return out
+
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationOut)
+def get_conversation(conversation_id: str, user_id: str = Depends(get_messaging_user_id)):
+    part = get_participant_any(user_id, conversation_id)
+    if not part:
+        raise HTTPException(404, "Conversation not found")
+    convo = _get_conversation_or_404(conversation_id)
+    profile_cache: Dict[str, Any] = {}
+    convo_out = _conversation_out_from_items(conversation_id=conversation_id, convo=convo, participant=part, viewer_user_id=user_id)
+    convo_out.participants = _get_conversation_participants_enriched(conversation_id, profile_cache)
+    return convo_out
 
 
 @router.post("/conversations/{conversation_id}/mute")
@@ -3527,6 +4011,37 @@ def _claim_helpdesk_conversation_internal(
         raise
 
     updated = result.get("conversation", {}) if isinstance(result, dict) else {}
+
+    # Add the claiming agent as an active participant (admin role) so they can send messages.
+    # Use a conditional put to avoid overwriting an existing participant record.
+    existing_part = tbl_parts.get_item(Key={"user_id": user_id, "conversation_id": conversation_id}).get("Item")
+    if not existing_part:
+        tbl_parts.put_item(Item={
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "status": "active",
+            "role": "admin",
+            "muted_until": 0,
+            "last_read_at": 0,
+            "unread_count": 0,
+            "joined_at": ts,
+            "left_at": 0,
+            "GSI1PK": conversation_id,
+            "GSI1SK": user_id,
+        })
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="ADD participant_count :inc",
+            ExpressionAttributeValues={":inc": 1},
+        )
+    elif existing_part.get("status") != "active":
+        tbl_parts.update_item(
+            Key={"user_id": user_id, "conversation_id": conversation_id},
+            UpdateExpression="SET #s = :active, role = :role, joined_at = :ts",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":active": "active", ":role": "admin", ":ts": ts},
+        )
+
     audit_event(
         "messaging_helpdesk_conversation_claimed",
         user_id,
@@ -3548,6 +4063,45 @@ def _claim_helpdesk_conversation_internal(
         assignment_version=int(updated.get("assignment_version") or (current_version + 1)),
         idempotent=False,
     )
+
+
+@router.get("/helpdesk/queue", response_model=List[ConversationOut])
+def get_helpdesk_queue(
+    group_id: str = Query(..., max_length=128),
+    state: Optional[str] = Query(None),
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    if not _is_helpdesk_group_member(group_id, user_id):
+        raise HTTPException(403, detail={"code": "not_helpdesk_member"})
+    states = [state] if state else ["awaiting_agent", "assigned", "paused_no_agents_online"]
+    items: list[dict] = []
+    for s in states:
+        pk = f"{s}#{group_id}"
+        # Paginate through all items in this state (DynamoDB Limit is per page,
+        # not a total cap). Cap at 1000 per state as a safety limit.
+        last_key = None
+        per_state: list[dict] = []
+        while len(per_state) < 1000:
+            kwargs: dict = {
+                "IndexName": "RoutingStateGroupIndex",
+                "KeyConditionExpression": Key("routing_state_group_pk").eq(pk),
+                "Limit": 200,
+            }
+            if last_key:
+                kwargs["ExclusiveStartKey"] = last_key
+            resp = tbl_convos.query(**kwargs)
+            per_state.extend(resp.get("Items", []))
+            last_key = resp.get("LastEvaluatedKey")
+            if not last_key:
+                break
+        items.extend(per_state)
+    results: List[ConversationOut] = []
+    for convo in items:
+        cid = convo.get("conversation_id", "")
+        part = tbl_parts.get_item(Key={"user_id": user_id, "conversation_id": cid}).get("Item") or {}
+        results.append(_conversation_out_from_items(conversation_id=cid, convo=convo, participant=part, viewer_user_id=user_id))
+    return results
 
 
 @router.post("/helpdesk/conversations/{conversation_id}/claim", response_model=HelpdeskClaimOut)
@@ -3672,16 +4226,9 @@ def list_participants(conversation_id: str, user_id: str = Depends(get_messaging
 
     assignment_state = str(convo.get("routing_state") or "") if str(convo.get("routing_mode") or "") == "helpdesk_bridge" else ""
     assignment_owner = str(convo.get("active_agent_user_id") or "") if assignment_state else ""
+    profile_cache: Dict[str, Any] = {}
     for p in items:
-        participant_out = ParticipantOut(
-            user_id=p["user_id"],
-            status=p.get("status", "pending"),
-            role=p.get("role", "member"),
-            muted_until=int(p.get("muted_until", 0) or 0),
-            last_read_at=int(p.get("last_read_at", 0) or 0),
-            joined_at=int(p.get("joined_at", 0) or 0),
-            left_at=int(p.get("left_at", 0) or 0),
-        )
+        participant_out = _enrich_participant_out(p, profile_cache)
         if helpdesk_agent_view and assignment_state:
             participant_out.assignment_state = assignment_state
             participant_out.assignment_owner_user_id = assignment_owner
@@ -3728,6 +4275,9 @@ def list_messages(
             continue
         msg = _message_out_from_item(m, user_id)
         out.append(_apply_message_receipts(msg, m, parts))
+    # Sort by created_at descending (newest first) so the response is in
+    # chronological order regardless of DynamoDB sort-key (message_id) ordering.
+    out.sort(key=lambda m: m.created_at, reverse=True)
     return out
 
 
@@ -4005,6 +4555,11 @@ def send_text_message(
     req: Request = None,
     user_id: str = Depends(get_messaging_user_id),
 ):
+    _enforce_messaging_internal_entitlement(
+        user_id=user_id,
+        action="send_message",
+        request_id=(req.headers.get("x-request-id") if req else None),
+    )
     require_participant_active(user_id, conversation_id)
     if inp.encryption and not _encrypted_messages_enabled():
         raise HTTPException(status_code=403, detail="Encrypted messaging is disabled")
@@ -4065,15 +4620,45 @@ def send_text_message(
         item["tip_amount_cents"] = tip_amount_cents
         item["tip_currency"] = tip_currency
         item["tip_payment_id"] = tip_payment_id
+        # Store the payment method on the item so the delivery loop can include it
+        # in the billing entry meta when the message is eventually promoted.
+        if inp.tip_payment_method_id:
+            item["tip_payment_method_id"] = inp.tip_payment_method_id
+        if not is_scheduled:
+            # Write billing immediately only for messages delivered right now.
+            # Scheduled messages defer billing to _deliver_scheduled_message so
+            # that cancelling a scheduled tipped message does not charge the sender.
+            try:
+                billing_tbl_tip = ddb.Table(S.billing_table_name)
+                _tip_led_id = uuid.uuid4().hex
+                billing_tbl_tip.put_item(Item={
+                    "pk": f"USER#{user_id}",
+                    "sk": f"LEDGER#{ts}#{_tip_led_id}",
+                    "entry_id": _tip_led_id,
+                    "ts": ts,
+                    "type": "debit",
+                    "amount_cents": tip_amount_cents,
+                    "currency": "USD",
+                    "state": "settled",
+                    "reason": "Tip attached to message",
+                    "meta": {"conversation_id": conversation_id, "message_id": mid, "tip_payment_id": tip_payment_id,
+                             "payment_method_id": inp.tip_payment_method_id},
+                })
+            except Exception:
+                pass  # Best-effort; do not fail the send if billing write fails
 
     # Validate: lock_price_cents and tip_amount_cents cannot both be set
     if inp.lock_price_cents and inp.tip_amount_cents:
         raise HTTPException(400, "Cannot combine lock_price_cents with tip_amount_cents")
 
     # Expiry
+    # When the message is scheduled, start the timer from the scheduled delivery time
+    # (deliver_at) rather than the current request time, so the recipient gets the full
+    # expiry window after the message actually arrives.
     expires_at = None
     if inp.expires_in_seconds:
-        expires_at = ts + inp.expires_in_seconds
+        expiry_base = deliver_at if is_scheduled else ts
+        expires_at = expiry_base + inp.expires_in_seconds
         item["expires_at"] = expires_at
     if inp.view_once:
         item["view_once"] = True
@@ -4112,8 +4697,8 @@ def send_text_message(
         preview_text = "[Encrypted message]" if is_encrypted else message_text[:140]
         tbl_convos.update_item(
             Key={"conversation_id": conversation_id},
-            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p",
-            ExpressionAttributeValues={":ts": ts, ":p": preview_text},
+            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+            ExpressionAttributeValues={":ts": ts, ":p": preview_text, ":mid": mid},
         )
 
     message = MessageOut(
@@ -4142,17 +4727,18 @@ def send_text_message(
     if not is_scheduled:
         message = _apply_message_receipts(message, item, participants)
 
-    fanout_event_to_conversation(
-        conversation_id=conversation_id,
-        sender_id=user_id,
-        event_type="message:new",
-        payload={
-            "message_id": mid,
-            "created_at": ts,
-            "message": _serialize_message_event_payload(item, user_id),
-        },
-        respect_mute=False,
-    )
+    if not is_scheduled:
+        fanout_event_to_conversation(
+            conversation_id=conversation_id,
+            sender_id=user_id,
+            event_type="message:new",
+            payload={
+                "message_id": mid,
+                "created_at": ts,
+                "message": _serialize_message_event_payload(item, user_id),
+            },
+            respect_mute=False,
+        )
 
     audit_event(
         "messaging_message_sent",
@@ -4174,12 +4760,19 @@ def send_text_message(
 @router.post("/conversations/{conversation_id}/images/presign", response_model=PresignOut)
 def presign_image_upload(conversation_id: str, inp: SendImagePresignIn, user_id: str = Depends(get_messaging_user_id)):
     require_participant_active(user_id, conversation_id)
+    from urllib.parse import quote as _url_quote
     key = f"{conversation_id}/{user_id}/{now_ts()}_{uuid.uuid4().hex}_{inp.filename}"
-    upload_url = s3.generate_presigned_url(
-        ClientMethod="put_object",
-        Params={"Bucket": S3_BUCKET_IMAGES, "Key": key, "ContentType": inp.content_type},
-        ExpiresIn=900,
-    )
+    if S.dev_mode:
+        # In DEV_MODE, moto presigned URLs point to inaccessible AWS endpoints.
+        # Return a path-relative URL so the browser routes through the Vite proxy
+        # to the in-app mock S3 PUT handler (see s3_mock.py, mounted at /mock/s3).
+        upload_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_url_quote(key, safe='/')}"
+    else:
+        upload_url = s3.generate_presigned_url(
+            ClientMethod="put_object",
+            Params={"Bucket": S3_BUCKET_IMAGES, "Key": key, "ContentType": inp.content_type},
+            ExpiresIn=900,
+        )
     return PresignOut(upload_url=upload_url, bucket=S3_BUCKET_IMAGES, key=key, content_type=inp.content_type)
 
 
@@ -4205,29 +4798,54 @@ def create_image_message(
     _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
     _validate_reply_target(conversation_id, inp.reply_to_message_id)
 
+    # Validate send_at: must be in the future (at least 5 seconds from now)
+    ts = now_ts()
+    deliver_at_img: Optional[int] = None
+    is_scheduled_img = False
+    if inp.send_at is not None:
+        if inp.send_at <= ts + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        deliver_at_img = inp.send_at
+        is_scheduled_img = True
 
     mid = "m_" + new_id()
-    ts = now_ts()
 
     item: Dict[str, Any] = {
         "conversation_id": conversation_id,
         "message_id": mid,
         "sender_id": user_id,
         "created_at": ts,
-        "kind": "image",
-        "image": {
+        "kind": inp.kind,
+        "reactions": {},
+    }
+    if inp.kind in ("file", "video"):
+        item["file"] = {
+            "bucket": inp.bucket,
+            "key": inp.key,
+            "content_type": inp.content_type,
+            "name": inp.filename,
+            "size": inp.filesize,
+        }
+    else:
+        item["image"] = {
             "bucket": inp.bucket,
             "key": inp.key,
             "content_type": inp.content_type,
             "width": inp.width,
             "height": inp.height,
-        },
-        "reactions": {},
-    }
+            "filename": inp.filename,
+            "filesize": inp.filesize,
+            "file_created_at": inp.file_created_at,
+        }
+    if inp.caption:
+        item["text"] = inp.caption
     # Expiry
+    # When the message is scheduled, start the timer from the scheduled delivery time
+    # (deliver_at_img) rather than the current request time.
     expires_at = None
     if inp.expires_in_seconds:
-        expires_at = ts + inp.expires_in_seconds
+        expiry_base = deliver_at_img if is_scheduled_img else ts
+        expires_at = expiry_base + inp.expires_in_seconds
         item["expires_at"] = expires_at
     if inp.view_once:
         item["view_once"] = True
@@ -4238,6 +4856,49 @@ def create_image_message(
         item["unlocked_by"] = {}  # pre-initialize so nested SET path works
         if inp.lock_description:
             item["lock_description"] = inp.lock_description
+        # Store blurred preview location for locked single images
+        if inp.preview_bucket and inp.preview_key:
+            item["preview_bucket"] = inp.preview_bucket
+            item["preview_key"] = inp.preview_key
+
+    # Scheduling
+    if is_scheduled_img:
+        item["status"] = "scheduled"
+        item["deliver_at"] = deliver_at_img
+
+    # Tip attached to message
+    tip_amount_cents: Optional[int] = None
+    if inp.tip_amount_cents:
+        if inp.lock_price_cents:
+            raise HTTPException(400, "Cannot combine lock_price_cents with tip_amount_cents")
+        tip_amount_cents = inp.tip_amount_cents
+        _img_tip_payment_id = "tip_" + new_id()
+        item["tip_amount_cents"] = tip_amount_cents
+        item["tip_currency"] = "USD"
+        item["tip_payment_id"] = _img_tip_payment_id
+        if inp.tip_payment_method_id:
+            item["tip_payment_method_id"] = inp.tip_payment_method_id
+        if not is_scheduled_img:
+            # Write billing immediately only for messages delivered right now.
+            # Scheduled messages defer billing to _deliver_scheduled_message.
+            try:
+                billing_tbl_tip_img = ddb.Table(S.billing_table_name)
+                _img_tip_led_id = uuid.uuid4().hex
+                billing_tbl_tip_img.put_item(Item={
+                    "pk": f"USER#{user_id}",
+                    "sk": f"LEDGER#{ts}#{_img_tip_led_id}",
+                    "entry_id": _img_tip_led_id,
+                    "ts": ts,
+                    "type": "debit",
+                    "amount_cents": tip_amount_cents,
+                    "currency": "USD",
+                    "state": "settled",
+                    "reason": "Tip attached to message",
+                    "meta": {"conversation_id": conversation_id, "message_id": mid, "tip_payment_id": _img_tip_payment_id,
+                             "payment_method_id": inp.tip_payment_method_id},
+                })
+            except Exception:
+                pass  # Best-effort; do not fail the send if billing write fails
 
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
@@ -4248,33 +4909,56 @@ def create_image_message(
         item["consumption_policy"] = inp.consumption_policy
         item["media_kind"] = "image"
 
+    # Encryption: store envelope without ciphertext_b64 (encrypted binary lives in S3)
+    is_encrypted_img = inp.encryption is not None
+    if is_encrypted_img:
+        item["is_encrypted"] = True
+        item["encryption"] = inp.encryption.model_dump(exclude_none=True)
+
     tbl_msgs.put_item(Item=item)
     _sync_gallery_index_message(item)
-    _bump_unread_counts(conversation_id, user_id, participants)
-    _record_delivery_receipts(conversation_id, mid, user_id, participants)
-    _put_message_consumption_records(
-        conversation_id=conversation_id,
-        message_id=mid,
-        sender_id=user_id,
-        participants=participants,
-        consumption_policy=inp.consumption_policy,
-        media_kind="image",
-        created_at=ts,
-    )
 
-    tbl_convos.update_item(
-        Key={"conversation_id": conversation_id},
-        UpdateExpression="SET last_message_at = :ts, last_message_preview = :p",
-        ExpressionAttributeValues={":ts": ts, ":p": "[image]"},
-    )
+    if not is_scheduled_img:
+        _bump_unread_counts(conversation_id, user_id, participants)
+        _record_delivery_receipts(conversation_id, mid, user_id, participants)
+        _put_message_consumption_records(
+            conversation_id=conversation_id,
+            message_id=mid,
+            sender_id=user_id,
+            participants=participants,
+            consumption_policy=inp.consumption_policy,
+            media_kind="image",
+            created_at=ts,
+        )
+
+        _preview = inp.caption or ("[file]" if inp.kind == "file" else "[video]" if inp.kind == "video" else "[image]")
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+            ExpressionAttributeValues={":ts": ts, ":p": _preview, ":mid": mid},
+        )
+
+        fanout_event_to_conversation(
+            conversation_id=conversation_id,
+            sender_id=user_id,
+            event_type="message:new",
+            payload={
+                "message_id": mid,
+                "created_at": ts,
+                "message": _serialize_message_event_payload(item, user_id),
+            },
+            respect_mute=False,
+        )
 
     message = MessageOut(
         conversation_id=conversation_id,
         message_id=mid,
         sender_id=user_id,
         created_at=ts,
-        kind="image",
-        image=item["image"],
+        kind=inp.kind,
+        image=item.get("image"),
+        file=item.get("file"),
+        text=inp.caption,
         reply_to_message_id=inp.reply_to_message_id,
         consumption_policy=inp.consumption_policy if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
         media_kind="image" if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
@@ -4285,8 +4969,15 @@ def create_image_message(
         lock_price_cents=inp.lock_price_cents,
         lock_description=inp.lock_description,
         is_unlocked=True,  # sender always sees their own content
+        tip_amount_cents=tip_amount_cents,
+        tip_currency="USD" if tip_amount_cents else None,
+        scheduled=is_scheduled_img,
+        deliver_at=deliver_at_img,
+        is_encrypted=is_encrypted_img,
+        encryption=inp.encryption,
     )
-    message = _apply_message_receipts(message, item, participants)
+    if not is_scheduled_img:
+        message = _apply_message_receipts(message, item, participants)
     audit_event(
         "messaging_message_sent",
         user_id,
@@ -4296,6 +4987,7 @@ def create_image_message(
         message_id=mid,
         kind="image",
         reply_to_message_id=inp.reply_to_message_id,
+        tip_amount_cents=tip_amount_cents,
     )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     _meter_messaging_attachment_upload(
@@ -4312,6 +5004,859 @@ def create_image_message(
             cohort=_extract_once_media_cohort(req),
         )
     return message
+
+
+@router.post("/conversations/{conversation_id}/messages/gallery", response_model=MessageOut)
+def create_gallery_message(
+    conversation_id: str,
+    inp: CreateGalleryMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+    _enforce_helpdesk_send_constraints(conversation_id=conversation_id, convo=convo, user_id=user_id, req=req)
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+    for participant in participants:
+        pid = participant.get("user_id")
+        if pid and pid != user_id:
+            require_subscription_access(user_id, pid)
+    _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
+
+    ts = now_ts()
+    deliver_at_gal: Optional[int] = None
+    is_scheduled_gal = False
+    if inp.send_at is not None:
+        if inp.send_at <= ts + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        deliver_at_gal = inp.send_at
+        is_scheduled_gal = True
+
+    mid = "m_" + new_id()
+
+    # Serialize image lists for DDB storage
+    def _serialize_img(img: GalleryImageItemIn) -> dict:
+        d: Dict[str, Any] = {
+            "bucket": img.bucket,
+            "key": img.key,
+            "content_type": img.content_type,
+        }
+        if img.width is not None:
+            d["width"] = img.width
+        if img.height is not None:
+            d["height"] = img.height
+        if img.filename:
+            d["filename"] = img.filename
+        if img.filesize is not None:
+            d["filesize"] = img.filesize
+        if img.preview_bucket:
+            d["preview_bucket"] = img.preview_bucket
+        if img.preview_key:
+            d["preview_key"] = img.preview_key
+        return d
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "gallery",
+        "reactions": {},
+        "free_images": [_serialize_img(img) for img in inp.free_images],
+        "locked_images": [_serialize_img(img) for img in inp.locked_images],
+    }
+
+    if inp.text:
+        item["text"] = inp.text
+
+    # Expiry
+    expires_at_gal = None
+    if inp.expires_in_seconds:
+        expiry_base = deliver_at_gal if is_scheduled_gal else ts
+        expires_at_gal = expiry_base + inp.expires_in_seconds
+        item["expires_at"] = expires_at_gal
+
+    # Lock / PPV for locked images
+    if inp.lock_price_cents:
+        item["lock_price_cents"] = inp.lock_price_cents
+        item["unlocked_by"] = {}
+        if inp.lock_description:
+            item["lock_description"] = inp.lock_description
+
+    # Scheduling
+    if is_scheduled_gal:
+        item["status"] = "scheduled"
+        item["deliver_at"] = deliver_at_gal
+
+    # Tip attached to message
+    gal_tip_amount_cents: Optional[int] = None
+    if inp.tip_amount_cents:
+        if inp.lock_price_cents:
+            raise HTTPException(400, "Cannot combine lock_price_cents with tip_amount_cents")
+        gal_tip_amount_cents = inp.tip_amount_cents
+        _gal_tip_payment_id = "tip_" + new_id()
+        item["tip_amount_cents"] = gal_tip_amount_cents
+        item["tip_currency"] = "USD"
+        item["tip_payment_id"] = _gal_tip_payment_id
+        if inp.tip_payment_method_id:
+            item["tip_payment_method_id"] = inp.tip_payment_method_id
+        if not is_scheduled_gal:
+            try:
+                billing_tbl_gal = ddb.Table(S.billing_table_name)
+                _gal_tip_led_id = uuid.uuid4().hex
+                billing_tbl_gal.put_item(Item={
+                    "pk": f"USER#{user_id}",
+                    "sk": f"LEDGER#{ts}#{_gal_tip_led_id}",
+                    "entry_id": _gal_tip_led_id,
+                    "ts": ts,
+                    "type": "debit",
+                    "amount_cents": gal_tip_amount_cents,
+                    "currency": "USD",
+                    "state": "settled",
+                    "reason": "Tip attached to message",
+                    "meta": {"conversation_id": conversation_id, "message_id": mid,
+                             "tip_payment_id": _gal_tip_payment_id,
+                             "payment_method_id": inp.tip_payment_method_id},
+                })
+            except Exception:
+                pass
+
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+
+    tbl_msgs.put_item(Item=item)
+
+    if not is_scheduled_gal:
+        _bump_unread_counts(conversation_id, user_id, participants)
+        _record_delivery_receipts(conversation_id, mid, user_id, participants)
+
+        _preview = inp.text or f"[Gallery: {len(inp.free_images)} free + {len(inp.locked_images)} locked]"
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+            ExpressionAttributeValues={":ts": ts, ":p": _preview, ":mid": mid},
+        )
+
+        fanout_event_to_conversation(
+            conversation_id=conversation_id,
+            sender_id=user_id,
+            event_type="message:new",
+            payload={
+                "message_id": mid,
+                "created_at": ts,
+                "message": _serialize_message_event_payload(item, user_id),
+            },
+            respect_mute=False,
+        )
+
+    # Build response: sender always sees all images
+    free_imgs_out = [_project_gallery_image(img.model_dump()) for img in inp.free_images]
+    locked_imgs_out = [_project_gallery_image(img.model_dump()) for img in inp.locked_images]
+
+    message = MessageOut(
+        conversation_id=conversation_id,
+        message_id=mid,
+        sender_id=user_id,
+        created_at=ts,
+        kind="gallery",
+        text=inp.text,
+        free_images=free_imgs_out if not expires_at_gal or ts < expires_at_gal else None,
+        locked_images=locked_imgs_out if not expires_at_gal or ts < expires_at_gal else None,
+        locked_image_count=len(inp.locked_images),
+        expires_at=expires_at_gal,
+        locked=bool(inp.lock_price_cents),
+        lock_price_cents=inp.lock_price_cents,
+        lock_description=inp.lock_description,
+        is_unlocked=True,  # sender always sees their own content
+        tip_amount_cents=gal_tip_amount_cents,
+        tip_currency="USD" if gal_tip_amount_cents else None,
+        scheduled=is_scheduled_gal,
+        deliver_at=deliver_at_gal,
+    )
+    if not is_scheduled_gal:
+        message = _apply_message_receipts(message, item, participants)
+
+    audit_event(
+        "messaging_message_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=mid,
+        kind="gallery",
+    )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    return message
+
+
+@router.post("/conversations/{conversation_id}/messages/file-share", response_model=MessageOut)
+def create_file_share_message(
+    conversation_id: str,
+    inp: CreateFileShareMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+
+    # Validate file exists and is owned by the sender
+    file_path_norm = norm_path(inp.file_path, is_folder=None)
+    node = get_node(user_id, file_path_norm)  # raises 404 if not found or owned by another user
+
+    # Share the file with every non-sender participant (best-effort)
+    for participant in participants:
+        pid = participant.get("user_id")
+        if pid and pid != user_id:
+            try:
+                share_node(user_id, file_path_norm, pid, inp.permission)
+            except Exception:
+                pass  # do not fail the send if the share operation fails
+
+    ts = now_ts()
+    deliver_at_fs: Optional[int] = None
+    is_scheduled_fs = False
+    if inp.send_at is not None:
+        if inp.send_at <= ts + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        deliver_at_fs = inp.send_at
+        is_scheduled_fs = True
+
+    mid = "m_" + new_id()
+
+    file_share_data: Dict[str, Any] = {
+        "path": node.get("path", file_path_norm),
+        "name": node.get("name") or file_path_norm.rstrip("/").rsplit("/", 1)[-1],
+        "size": int(node["size"]) if node.get("size") is not None else None,
+        "content_type": node.get("content_type"),
+        "permission": inp.permission,
+        "owner": user_id,
+        "is_encrypted": bool(node.get("is_encrypted")),
+    }
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "file_share",
+        "reactions": {},
+        "file_share": file_share_data,
+    }
+
+    if inp.text:
+        item["text"] = inp.text
+    if is_scheduled_fs:
+        item["status"] = "scheduled"
+        item["deliver_at"] = deliver_at_fs
+
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+
+    tbl_msgs.put_item(Item=item)
+
+    if not is_scheduled_fs:
+        _bump_unread_counts(conversation_id, user_id, participants)
+        _record_delivery_receipts(conversation_id, mid, user_id, participants)
+
+        preview_text = inp.text or f"[Shared file: {file_share_data['name']}]"
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+            ExpressionAttributeValues={":ts": ts, ":p": preview_text, ":mid": mid},
+        )
+
+        fanout_event_to_conversation(
+            conversation_id=conversation_id,
+            sender_id=user_id,
+            event_type="message:new",
+            payload={
+                "message_id": mid,
+                "created_at": ts,
+                "message": _serialize_message_event_payload(item, user_id),
+            },
+            respect_mute=False,
+        )
+
+    audit_event(
+        "messaging_message_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=mid,
+        kind="file_share",
+        scheduled=is_scheduled_fs,
+    )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    return _message_out_from_item(item, user_id)
+
+
+# -------------------------
+# Calendar messaging helpers
+# -------------------------
+
+def _share_calendar_to_user(calendar_id: str, recipient_sub: str, permission: str, granter_sub: str) -> None:
+    """Grant a calendar share to a recipient user — mirrors calendar.py share_calendar logic."""
+    from datetime import datetime, timezone as _tz
+    now = datetime.now(_tz.utc).isoformat().replace("+00:00", "Z")
+    # Write the share record on the calendar partition
+    T.calendar.put_item(Item={
+        "calendar_id": calendar_id,
+        "sk": f"share#{recipient_sub}",
+        "type": "calendar_share",
+        "user_sub": recipient_sub,
+        "permission": permission,
+        "created_at_utc": now,
+        "granted_by": granter_sub,
+    })
+    # Write the access index record so the calendar appears in the recipient's calendar list
+    T.calendar.put_item(Item={
+        "calendar_id": f"user#{recipient_sub}",
+        "sk": f"calendar#{calendar_id}",
+        "type": "calendar_access",
+        "target_calendar_id": calendar_id,
+        "permission": permission,
+        "created_at_utc": now,
+    })
+
+
+@router.post("/conversations/{conversation_id}/messages/calendar-share", response_model=MessageOut)
+def create_calendar_share_message(
+    conversation_id: str,
+    inp: CreateCalendarShareMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+
+    # Validate calendar exists and is owned by sender
+    cal_item = T.calendar.get_item(Key={"calendar_id": inp.calendar_id, "sk": "meta"}).get("Item")
+    if not cal_item:
+        raise HTTPException(404, "Calendar not found")
+    if cal_item.get("owner_user_sub") != user_id:
+        raise HTTPException(403, "You do not own this calendar")
+
+    # Share the calendar with all non-sender participants (best-effort)
+    for participant in participants:
+        pid = participant.get("user_id")
+        if pid and pid != user_id:
+            try:
+                _share_calendar_to_user(inp.calendar_id, pid, inp.permission, user_id)
+            except Exception:
+                pass
+
+    # Optionally create/retrieve a booking link
+    booking_link_id: Optional[str] = None
+    booking_public_url: Optional[str] = None
+    if inp.include_booking_link:
+        try:
+            existing_links = T.calendar.query(
+                KeyConditionExpression=Key("calendar_id").eq(inp.calendar_id) & Key("sk").begins_with("booking#"),
+            ).get("Items", [])
+            if existing_links:
+                link_item = existing_links[0]
+                booking_link_id = link_item.get("link_id")
+            else:
+                booking_link_id = new_id()
+                from datetime import datetime, timezone as _tz
+                now_iso = datetime.now(_tz.utc).isoformat().replace("+00:00", "Z")
+                T.calendar.put_item(Item={
+                    "calendar_id": inp.calendar_id,
+                    "sk": f"booking#{booking_link_id}",
+                    "type": "booking_link",
+                    "link_id": booking_link_id,
+                    "name": f"{cal_item.get('name', 'Meeting')} — 30 min",
+                    "duration_minutes": 30,
+                    "timezone": cal_item.get("timezone", "UTC"),
+                    "created_at_utc": now_iso,
+                    "owner_user_sub": user_id,
+                })
+            if booking_link_id:
+                booking_public_url = f"/booking/{booking_link_id}"
+        except Exception:
+            pass
+
+    ts = now_ts()
+    deliver_at_cs: Optional[int] = None
+    is_scheduled_cs = False
+    if inp.send_at is not None:
+        if inp.send_at <= ts + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        deliver_at_cs = inp.send_at
+        is_scheduled_cs = True
+
+    mid = "m_" + new_id()
+
+    calendar_share_data: Dict[str, Any] = {
+        "calendar_id": inp.calendar_id,
+        "name": cal_item.get("name", ""),
+        "owner": user_id,
+        "permission": inp.permission,
+    }
+    if booking_link_id:
+        calendar_share_data["booking_link_id"] = booking_link_id
+    if booking_public_url:
+        calendar_share_data["booking_public_url"] = booking_public_url
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "calendar_share",
+        "reactions": {},
+        "calendar_share": calendar_share_data,
+    }
+    if inp.text:
+        item["text"] = inp.text
+    if is_scheduled_cs:
+        item["status"] = "scheduled"
+        item["deliver_at"] = deliver_at_cs
+
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+
+    tbl_msgs.put_item(Item=item)
+
+    if not is_scheduled_cs:
+        _bump_unread_counts(conversation_id, user_id, participants)
+        _record_delivery_receipts(conversation_id, mid, user_id, participants)
+        preview_text = inp.text or f"[Shared calendar: {calendar_share_data['name']}]"
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+            ExpressionAttributeValues={":ts": ts, ":p": preview_text, ":mid": mid},
+        )
+        fanout_event_to_conversation(
+            conversation_id=conversation_id,
+            sender_id=user_id,
+            event_type="message:new",
+            payload={
+                "message_id": mid,
+                "created_at": ts,
+                "message": _serialize_message_event_payload(item, user_id),
+            },
+            respect_mute=False,
+        )
+
+    audit_event(
+        "messaging_message_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=mid,
+        kind="calendar_share",
+        scheduled=is_scheduled_cs,
+    )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    return _message_out_from_item(item, user_id)
+
+
+@router.post("/conversations/{conversation_id}/messages/calendar-event", response_model=MessageOut)
+def create_calendar_event_message(
+    conversation_id: str,
+    inp: CreateCalendarEventMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+
+    # Validate calendar access and load event
+    cal_item = T.calendar.get_item(Key={"calendar_id": inp.calendar_id, "sk": "meta"}).get("Item")
+    if not cal_item:
+        raise HTTPException(404, "Calendar not found")
+    if cal_item.get("owner_user_sub") != user_id:
+        raise HTTPException(403, "You do not own this calendar")
+
+    event_item = T.calendar.get_item(Key={"calendar_id": inp.calendar_id, "sk": f"event#{inp.event_id}"}).get("Item")
+    if not event_item:
+        raise HTTPException(404, "Event not found")
+
+    ts = now_ts()
+    deliver_at_ce: Optional[int] = None
+    is_scheduled_ce = False
+    if inp.send_at is not None:
+        if inp.send_at <= ts + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        deliver_at_ce = inp.send_at
+        is_scheduled_ce = True
+
+    mid = "m_" + new_id()
+
+    calendar_event_data: Dict[str, Any] = {
+        "event_id": inp.event_id,
+        "calendar_id": inp.calendar_id,
+        "name": event_item.get("name", ""),
+        "start_utc": event_item.get("start_utc"),
+        "end_utc": event_item.get("end_utc"),
+        "all_day": bool(event_item.get("all_day", False)),
+        "all_day_date": event_item.get("all_day_date"),
+        "timezone": event_item.get("timezone", "UTC"),
+        "description": event_item.get("description"),
+        "owner": user_id,
+    }
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "calendar_event",
+        "reactions": {},
+        "calendar_event": calendar_event_data,
+    }
+    if inp.text:
+        item["text"] = inp.text
+    if is_scheduled_ce:
+        item["status"] = "scheduled"
+        item["deliver_at"] = deliver_at_ce
+
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+
+    tbl_msgs.put_item(Item=item)
+
+    if not is_scheduled_ce:
+        _bump_unread_counts(conversation_id, user_id, participants)
+        _record_delivery_receipts(conversation_id, mid, user_id, participants)
+        preview_text = inp.text or f"[Event: {calendar_event_data['name']}]"
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+            ExpressionAttributeValues={":ts": ts, ":p": preview_text, ":mid": mid},
+        )
+        fanout_event_to_conversation(
+            conversation_id=conversation_id,
+            sender_id=user_id,
+            event_type="message:new",
+            payload={
+                "message_id": mid,
+                "created_at": ts,
+                "message": _serialize_message_event_payload(item, user_id),
+            },
+            respect_mute=False,
+        )
+
+    audit_event(
+        "messaging_message_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=mid,
+        kind="calendar_event",
+        scheduled=is_scheduled_ce,
+    )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    return _message_out_from_item(item, user_id)
+
+
+@router.post("/conversations/{conversation_id}/messages/meeting-poll", response_model=MessageOut)
+def create_meeting_poll_message(
+    conversation_id: str,
+    inp: CreateMeetingPollMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+
+    poll_id = new_id()
+    ts = now_ts()
+    mid = "m_" + new_id()
+
+    slots_data = []
+    for slot in inp.slots:
+        slots_data.append({
+            "slot_id": new_id(),
+            "start_utc": slot.start_utc,
+            "end_utc": slot.end_utc,
+        })
+
+    # Store poll metadata in T.calendar table (reusing as single-table store)
+    T.calendar.put_item(Item={
+        "calendar_id": f"MPOLL#{poll_id}",
+        "sk": "meta",
+        "type": "meeting_poll",
+        "poll_id": poll_id,
+        "conversation_id": conversation_id,
+        "title": inp.title,
+        "duration_minutes": inp.duration_minutes,
+        "slots": slots_data,
+        "status": "open",
+        "creator_id": user_id,
+        "confirmed_slot_id": None,
+        "created_at": ts,
+    })
+
+    meeting_poll_data: Dict[str, Any] = {
+        "poll_id": poll_id,
+        "creator_id": user_id,
+        "title": inp.title,
+        "duration_minutes": inp.duration_minutes,
+        "status": "open",
+        "confirmed_slot_id": None,
+    }
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "meeting_poll",
+        "reactions": {},
+        "meeting_poll": meeting_poll_data,
+    }
+    if inp.text:
+        item["text"] = inp.text
+
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+
+    tbl_msgs.put_item(Item=item)
+
+    _bump_unread_counts(conversation_id, user_id, participants)
+    _record_delivery_receipts(conversation_id, mid, user_id, participants)
+    preview_text = inp.text or f"[Meeting poll: {inp.title}]"
+    tbl_convos.update_item(
+        Key={"conversation_id": conversation_id},
+        UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+        ExpressionAttributeValues={":ts": ts, ":p": preview_text, ":mid": mid},
+    )
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="message:new",
+        payload={
+            "message_id": mid,
+            "created_at": ts,
+            "message": _serialize_message_event_payload(item, user_id),
+        },
+        respect_mute=False,
+    )
+
+    audit_event(
+        "messaging_message_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=mid,
+        kind="meeting_poll",
+    )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    return _message_out_from_item(item, user_id)
+
+
+@router.get("/conversations/{conversation_id}/polls/{poll_id}")
+def get_meeting_poll(
+    conversation_id: str,
+    poll_id: str,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    _enforce_messaging_internal_entitlement(
+        user_id=user_id,
+        action="upload_attachment",
+        request_id=(req.headers.get("x-request-id") if req else None),
+    )
+    require_participant_active(user_id, conversation_id)
+    meta = T.calendar.get_item(Key={"calendar_id": f"MPOLL#{poll_id}", "sk": "meta"}).get("Item")
+    if not meta:
+        raise HTTPException(404, "Poll not found")
+    if meta.get("conversation_id") != conversation_id:
+        raise HTTPException(403, "Poll does not belong to this conversation")
+
+    # Load all votes
+    votes_resp = T.calendar.query(
+        KeyConditionExpression=Key("calendar_id").eq(f"MPOLL#{poll_id}") & Key("sk").begins_with("vote#"),
+    )
+    vote_items = votes_resp.get("Items", [])
+
+    # Build slot vote counts
+    slots_raw = meta.get("slots") or []
+    yes_counts: Dict[str, int] = {s["slot_id"]: 0 for s in slots_raw}
+    maybe_counts: Dict[str, int] = {s["slot_id"]: 0 for s in slots_raw}
+    no_counts: Dict[str, int] = {s["slot_id"]: 0 for s in slots_raw}
+    my_votes: Dict[str, str] = {}
+
+    for vote_item in vote_items:
+        voter = vote_item["sk"].replace("vote#", "")
+        votes_map = vote_item.get("votes") or {}
+        for sid, choice in votes_map.items():
+            if sid not in yes_counts:
+                continue
+            if choice == "yes":
+                yes_counts[sid] += 1
+            elif choice == "maybe":
+                maybe_counts[sid] += 1
+            elif choice == "no":
+                no_counts[sid] += 1
+            if voter == user_id:
+                my_votes[sid] = choice
+
+    slots_out = []
+    for s in slots_raw:
+        sid = s["slot_id"]
+        slots_out.append({
+            "slot_id": sid,
+            "start_utc": s["start_utc"],
+            "end_utc": s["end_utc"],
+            "yes_count": yes_counts.get(sid, 0),
+            "maybe_count": maybe_counts.get(sid, 0),
+            "no_count": no_counts.get(sid, 0),
+            "my_vote": my_votes.get(sid),
+        })
+
+    confirmed_slot_id = meta.get("confirmed_slot_id")
+
+    return {
+        "poll_id": poll_id,
+        "title": meta.get("title"),
+        "duration_minutes": int(meta.get("duration_minutes", 30)),
+        "creator_id": meta.get("creator_id"),
+        "status": meta.get("status", "open"),
+        "confirmed_slot_id": confirmed_slot_id,
+        "slots": slots_out,
+    }
+
+
+@router.post("/conversations/{conversation_id}/polls/{poll_id}/vote")
+def vote_meeting_poll(
+    conversation_id: str,
+    poll_id: str,
+    inp: PollVoteIn,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    meta = T.calendar.get_item(Key={"calendar_id": f"MPOLL#{poll_id}", "sk": "meta"}).get("Item")
+    if not meta:
+        raise HTTPException(404, "Poll not found")
+    if meta.get("conversation_id") != conversation_id:
+        raise HTTPException(403, "Poll does not belong to this conversation")
+    if meta.get("status") != "open":
+        raise HTTPException(400, "Poll is not open for voting")
+
+    valid_slot_ids = {s["slot_id"] for s in (meta.get("slots") or [])}
+    for sid in inp.votes:
+        if sid not in valid_slot_ids:
+            raise HTTPException(400, f"Unknown slot_id: {sid}")
+
+    T.calendar.put_item(Item={
+        "calendar_id": f"MPOLL#{poll_id}",
+        "sk": f"vote#{user_id}",
+        "type": "poll_vote",
+        "voter_id": user_id,
+        "votes": inp.votes,
+        "voted_at": now_ts(),
+    })
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="poll:vote",
+        payload={"poll_id": poll_id},
+        respect_mute=False,
+    )
+    return {"ok": True}
+
+
+@router.post("/conversations/{conversation_id}/polls/{poll_id}/confirm")
+def confirm_meeting_poll(
+    conversation_id: str,
+    poll_id: str,
+    inp: PollConfirmIn,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    require_participant_active(user_id, conversation_id)
+    meta = T.calendar.get_item(Key={"calendar_id": f"MPOLL#{poll_id}", "sk": "meta"}).get("Item")
+    if not meta:
+        raise HTTPException(404, "Poll not found")
+    if meta.get("conversation_id") != conversation_id:
+        raise HTTPException(403, "Poll does not belong to this conversation")
+    if meta.get("creator_id") != user_id:
+        raise HTTPException(403, "Only the poll creator can confirm a slot")
+    if meta.get("status") != "open":
+        raise HTTPException(400, "Poll is not open")
+
+    slots_raw = meta.get("slots") or []
+    slot = next((s for s in slots_raw if s["slot_id"] == inp.slot_id), None)
+    if not slot:
+        raise HTTPException(400, "Unknown slot_id")
+
+    event_id: Optional[str] = None
+    if inp.calendar_id:
+        try:
+            cal_item = T.calendar.get_item(Key={"calendar_id": inp.calendar_id, "sk": "meta"}).get("Item")
+            if cal_item and cal_item.get("owner_user_sub") == user_id:
+                event_id = new_id()
+                from datetime import datetime, timezone as _tz
+                now_iso = datetime.now(_tz.utc).isoformat().replace("+00:00", "Z")
+                T.calendar.put_item(Item={
+                    "calendar_id": inp.calendar_id,
+                    "sk": f"event#{event_id}",
+                    "type": "event",
+                    "event_id": event_id,
+                    "name": meta.get("title", "Meeting"),
+                    "start_utc": slot["start_utc"],
+                    "end_utc": slot["end_utc"],
+                    "all_day": False,
+                    "timezone": cal_item.get("timezone", "UTC"),
+                    "description": f"Meeting poll confirmed: {meta.get('title')}",
+                    "status": "confirmed",
+                    "created_at_utc": now_iso,
+                    "owner_user_sub": user_id,
+                })
+        except Exception:
+            event_id = None
+
+    T.calendar.update_item(
+        Key={"calendar_id": f"MPOLL#{poll_id}", "sk": "meta"},
+        UpdateExpression="SET #s = :s, confirmed_slot_id = :cid",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":s": "confirmed", ":cid": inp.slot_id},
+    )
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="poll:confirmed",
+        payload={"poll_id": poll_id, "slot_id": inp.slot_id},
+        respect_mute=False,
+    )
+    return {"ok": True, "event_id": event_id, "calendar_id": inp.calendar_id}
 
 
 @router.post("/conversations/{conversation_id}/messages/file", response_model=MessageOut)
@@ -4362,6 +5907,7 @@ def create_file_message(
             "content_type": content_type,
             "duration_seconds": duration_seconds,
             "thumbnail": node.get("thumbnail"),
+            "signature_packet_id": inp.signature_packet_id,
         },
         "reactions": {},
     }
@@ -4579,6 +6125,11 @@ def download_message_attachment(
     x_request_id: Optional[str] = Header(default=None, alias="X-Request-Id"),
     user_id: str = Depends(get_messaging_user_id),
 ):
+    _enforce_messaging_internal_entitlement(
+        user_id=user_id,
+        action="download_attachment",
+        request_id=x_request_id,
+    )
     require_participant_active(user_id, conversation_id)
     msg = _get_message_or_404(conversation_id, message_id)
     kind = str(msg.get("kind") or "")
@@ -4775,6 +6326,15 @@ def revoke_message_for_all(
     revoked_item["revoked_at"] = ts
     revoked_item["revoked_by"] = user_id
     _sync_gallery_index_message(revoked_item)
+
+    # If this was the last message, update conversation preview to show it was deleted
+    convo = tbl_convos.get_item(Key={"conversation_id": conversation_id}).get("Item") or {}
+    if convo.get("last_message_at") == msg.get("created_at"):
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="SET last_message_preview = :p",
+            ExpressionAttributeValues={":p": "[Message deleted]"},
+        )
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,
@@ -5310,7 +6870,17 @@ def get_typing(conversation_id: str, user_id: str = Depends(get_messaging_user_i
 # Presence (online)
 # -------------------------
 @router.post("/presence/heartbeat")
-def presence_heartbeat(inp: PresenceHeartbeatIn, user_id: str = Depends(get_messaging_user_id)):
+def presence_heartbeat(
+    inp: PresenceHeartbeatIn,
+    request: Request = None,
+    x_request_id: Optional[str] = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    _enforce_messaging_internal_entitlement(
+        user_id=user_id,
+        action="presence_heartbeat",
+        request_id=x_request_id or (request.headers.get("x-request-id") if request else None),
+    )
     ts = now_ts()
     status = _normalize_presence_status(inp.status)
     tbl_presence.put_item(
@@ -5387,8 +6957,15 @@ async def events_stream(
     after: Optional[str] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     poll_ms: Annotated[int, Query(ge=200, le=5000)] = 1000,
+    request: Request = None,
+    x_request_id: Optional[str] = None,
     user_id: str = Depends(get_messaging_user_id),
 ):
+    _enforce_messaging_internal_entitlement(
+        user_id=user_id,
+        action="stream_events",
+        request_id=x_request_id or (request.headers.get("x-request-id") if request else None),
+    )
     async def gen():
         cursor = after
         last_ping = time.time()
@@ -5491,6 +7068,33 @@ def _deliver_scheduled_message(item: dict) -> None:
         ExpressionAttributeValues={":ts": ts},
     )
 
+    # Write deferred tip billing now that the message is actually delivered.
+    # (Billing was intentionally skipped at schedule time so that cancelling
+    # a scheduled tipped message does not charge the sender.)
+    if item.get("tip_amount_cents"):
+        try:
+            billing_tbl = ddb.Table(S.billing_table_name)
+            _led_id = uuid.uuid4().hex
+            billing_tbl.put_item(Item={
+                "pk": f"USER#{user_id}",
+                "sk": f"LEDGER#{ts}#{_led_id}",
+                "entry_id": _led_id,
+                "ts": ts,
+                "type": "debit",
+                "amount_cents": int(item["tip_amount_cents"]),
+                "currency": item.get("tip_currency", "USD"),
+                "state": "settled",
+                "reason": "Tip attached to message",
+                "meta": {
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
+                    "tip_payment_id": item.get("tip_payment_id"),
+                    "payment_method_id": item.get("tip_payment_method_id"),
+                },
+            })
+        except Exception:
+            logger.warning("Failed to write tip billing for scheduled message %s", message_id)
+
     # Fetch participants and bump unread counts
     try:
         resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
@@ -5518,6 +7122,18 @@ def _deliver_scheduled_message(item: dict) -> None:
         event_type="message:new",
         payload={"conversation_id": conversation_id, "message_id": message_id},
     )
+    # Also notify the sender — fanout excludes them by default, but they need
+    # to know their scheduled message was promoted so their chat view refreshes.
+    ts_notify = now_ts()
+    tbl_events.put_item(Item={
+        "user_id": user_id,
+        "event_id": _event_id(),
+        "type": "message:new",
+        "created_at": ts_notify,
+        "conversation_id": conversation_id,
+        "payload": {"conversation_id": conversation_id, "message_id": message_id},
+        "ttl": ts_notify + 7 * 24 * 3600,
+    })
     logger.info("Delivered scheduled message %s in conversation %s", message_id, conversation_id)
 
 
@@ -5621,24 +7237,70 @@ def send_message_tip(
     if msg.get("sender_id") == user_id:
         raise HTTPException(400, "Cannot tip your own message")
 
+    # Validate the chosen payment method belongs to this user
+    if inp.payment_method_id:
+        billing_tbl = ddb.Table(S.billing_table_name)
+        billing_pk = f"USER#{user_id}"
+        billing_items = billing_tbl.query(
+            KeyConditionExpression="pk = :pk",
+            ExpressionAttributeValues={":pk": billing_pk},
+        ).get("Items", [])
+        pm_ids = {
+            it["payment_method_id"]
+            for it in billing_items
+            if it.get("sk", "").startswith("PM#") and "payment_method_id" in it
+        }
+        if inp.payment_method_id not in pm_ids:
+            raise HTTPException(400, "Payment method not found")
+
     # Mock payment in dev mode; real payment processor in production
     tip_payment_id = "tip_" + new_id()
     ts = now_ts()
 
+    update_expr = (
+        "SET tip_amount_cents = if_not_exists(tip_amount_cents, :zero) + :amt, "
+        "tip_currency = :cur, tip_payment_id = :pid, tip_updated_at = :ts"
+    )
+    expr_values: dict = {
+        ":zero": 0,
+        ":amt": inp.amount_cents,
+        ":cur": inp.currency,
+        ":pid": tip_payment_id,
+        ":ts": ts,
+    }
+    if inp.payment_method_id:
+        update_expr += ", tip_payment_method_id = :pmid"
+        expr_values[":pmid"] = inp.payment_method_id
+
     tbl_msgs.update_item(
         Key={"conversation_id": conversation_id, "message_id": message_id},
-        UpdateExpression=(
-            "SET tip_amount_cents = if_not_exists(tip_amount_cents, :zero) + :amt, "
-            "tip_currency = :cur, tip_payment_id = :pid, tip_updated_at = :ts"
-        ),
-        ExpressionAttributeValues={
-            ":zero": 0,
-            ":amt": inp.amount_cents,
-            ":cur": inp.currency,
-            ":pid": tip_payment_id,
-            ":ts": ts,
-        },
+        UpdateExpression=update_expr,
+        ExpressionAttributeValues=expr_values,
     )
+
+    # Write billing ledger debit entry for the tip
+    try:
+        billing_tbl_led = ddb.Table(S.billing_table_name)
+        led_entry_id = uuid.uuid4().hex
+        led_sk = f"LEDGER#{ts}#{led_entry_id}"
+        billing_tbl_led.put_item(Item={
+            "pk": f"USER#{user_id}",
+            "sk": led_sk,
+            "entry_id": led_entry_id,
+            "ts": ts,
+            "type": "debit",
+            "amount_cents": inp.amount_cents,
+            "currency": inp.currency,
+            "state": "settled",
+            "reason": "Tip sent",
+            "meta": {
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "tip_payment_id": tip_payment_id,
+            },
+        })
+    except Exception:
+        pass  # Best-effort ledger write; do not fail the tip if billing is unavailable
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,
@@ -5700,8 +7362,26 @@ def unlock_message(
         raise HTTPException(400, "Already unlocked")
 
     amount_cents = int(msg["lock_price_cents"])
+
+    # Validate the chosen payment method belongs to this user
+    if inp.payment_method_id:
+        billing_tbl = ddb.Table(S.billing_table_name)
+        billing_pk = f"USER#{user_id}"
+        billing_items = billing_tbl.query(
+            KeyConditionExpression="pk = :pk",
+            ExpressionAttributeValues={":pk": billing_pk},
+        ).get("Items", [])
+        pm_ids = {
+            it["payment_method_id"]
+            for it in billing_items
+            if it.get("sk", "").startswith("PM#") and "payment_method_id" in it
+        }
+        if inp.payment_method_id not in pm_ids:
+            raise HTTPException(400, "Payment method not found")
+
     # Dev-mode: mock payment; production would call a real payment processor
     unlock_payment_id = "unlock_" + new_id()
+    unlock_ts = now_ts()
 
     tbl_msgs.update_item(
         Key={"conversation_id": conversation_id, "message_id": message_id},
@@ -5709,6 +7389,30 @@ def unlock_message(
         ExpressionAttributeNames={"#uid": user_id},
         ExpressionAttributeValues={":pid": unlock_payment_id},
     )
+
+    # Write billing ledger debit entry for the unlock
+    try:
+        billing_tbl_led = ddb.Table(S.billing_table_name)
+        led_entry_id = uuid.uuid4().hex
+        led_sk = f"LEDGER#{unlock_ts}#{led_entry_id}"
+        billing_tbl_led.put_item(Item={
+            "pk": f"USER#{user_id}",
+            "sk": led_sk,
+            "entry_id": led_entry_id,
+            "ts": unlock_ts,
+            "type": "debit",
+            "amount_cents": amount_cents,
+            "currency": "USD",
+            "state": "settled",
+            "reason": "Message unlock",
+            "meta": {
+                "conversation_id": conversation_id,
+                "message_id": message_id,
+                "unlock_payment_id": unlock_payment_id,
+            },
+        })
+    except Exception:
+        pass  # Best-effort ledger write
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,

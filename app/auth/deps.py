@@ -198,7 +198,10 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
                 )
                 user_sub = payload.get("sub")
                 if user_sub:
-                    return AuthenticatedUser(sub=str(user_sub))
+                    role = _extract_role_from_claims(payload)
+                    role = enforce_root_role_invariant(user_sub=str(user_sub), role=role)
+                    admin_profile = _extract_admin_profile_from_claims(payload)
+                    return AuthenticatedUser(sub=str(user_sub), role=role, admin_profile=admin_profile)
             except jwt.PyJWTError:
                 pass
 

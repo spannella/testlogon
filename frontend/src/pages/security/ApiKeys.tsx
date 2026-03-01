@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Key, Plus, Trash2, Copy, Check, AlertTriangle, Globe, Download } from "lucide-react";
+import { Key, Plus, Trash2, Copy, Check, AlertTriangle, Globe, Download, Info, X, BarChart2, Shield } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,7 +25,205 @@ import {
 } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { getApiKeys, createApiKey, revokeApiKey, setApiKeyIpRules } from "@/api/endpoints/account";
+import { getApiKeys, createApiKey, revokeApiKey, setApiKeyIpRules, getApiKeyUsage } from "@/api/endpoints/account";
+import type { ApiKey } from "@/api/types";
+
+// ─── CIDR list editor ────────────────────────────────────────────
+
+function CidrList({
+  label,
+  items,
+  onAdd,
+  onRemove,
+  inputValue,
+  onInputChange,
+  placeholder,
+}: {
+  label: string;
+  items: string[];
+  onAdd: () => void;
+  onRemove: (idx: number) => void;
+  inputValue: string;
+  onInputChange: (v: string) => void;
+  placeholder?: string;
+}) {
+  const inputId = `cidr-input-${label.toLowerCase().replace(/\s+/g, "-")}`;
+  return (
+    <div className="space-y-2">
+      <Label htmlFor={inputId}>{label}</Label>
+      <div className="space-y-1.5">
+        {items.map((cidr, i) => (
+          <div key={i} className="flex items-center gap-2 rounded-md border border-input bg-muted/30 px-3 py-1.5">
+            <code className="flex-1 text-xs font-mono">{cidr}</code>
+            <button
+              type="button"
+              onClick={() => onRemove(i)}
+              className="text-muted-foreground hover:text-destructive"
+              aria-label={`Remove ${cidr}`}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ))}
+        {items.length === 0 && (
+          <p className="text-xs text-muted-foreground italic">No rules — all IPs {label.toLowerCase().includes("allow") ? "allowed" : "denied"} by default</p>
+        )}
+      </div>
+      <div className="flex gap-2">
+        <Input
+          id={inputId}
+          value={inputValue}
+          onChange={(e) => onInputChange(e.target.value)}
+          placeholder={placeholder ?? "e.g. 10.0.0.0/8"}
+          className="h-8 flex-1 font-mono text-xs"
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onAdd(); } }}
+        />
+        <Button type="button" size="sm" variant="outline" className="h-8 shrink-0" onClick={onAdd}>
+          <Plus className="h-3.5 w-3.5" />
+          Add
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Key details dialog ──────────────────────────────────────────
+
+function KeyDetailsDialog({
+  keyData,
+  onClose,
+  onOpenIpRules,
+}: {
+  keyData: ApiKey;
+  onClose: () => void;
+  onOpenIpRules: () => void;
+}) {
+  const usageQuery = useQuery({
+    queryKey: ["apiKeyUsage", keyData.key_id],
+    queryFn: () => getApiKeyUsage(keyData.key_id),
+    staleTime: 60_000,
+  });
+
+  const usage = usageQuery.data;
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Key className="h-4 w-4" />
+            {keyData.label ?? "Unnamed key"}
+          </DialogTitle>
+          <DialogDescription>
+            <code className="text-xs">{keyData.prefix}…</code>
+            {" · "}
+            Created {new Date(keyData.created_at * 1000).toLocaleDateString()}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          {/* Usage stats */}
+          <div>
+            <div className="mb-2 flex items-center gap-1.5 text-sm font-medium">
+              <BarChart2 className="h-4 w-4 text-muted-foreground" />
+              Usage {usage?.period ? `(${usage.period})` : ""}
+            </div>
+            {usageQuery.isLoading ? (
+              <div className="space-y-1.5">
+                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-8 w-full" />
+              </div>
+            ) : usage ? (
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-lg border border-border bg-muted/30 p-3">
+                  <p className="text-xs text-muted-foreground">Total calls</p>
+                  <p className="text-lg font-semibold">{usage.calls.toLocaleString()}</p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/30 p-3">
+                  <p className="text-xs text-muted-foreground">Billable calls</p>
+                  <p className="text-lg font-semibold">{usage.billable_calls.toLocaleString()}</p>
+                </div>
+                <div className="rounded-lg border border-border bg-muted/30 p-3">
+                  <p className="text-xs text-muted-foreground">Spend</p>
+                  <p className="text-lg font-semibold">${(usage.spend_cents / 100).toFixed(2)}</p>
+                </div>
+                {usage.limit_calls != null && (
+                  <div className="rounded-lg border border-border bg-muted/30 p-3">
+                    <p className="text-xs text-muted-foreground">Remaining</p>
+                    <p className="text-lg font-semibold">
+                      {(usage.remaining_calls ?? 0).toLocaleString()}
+                      <span className="text-xs text-muted-foreground"> / {usage.limit_calls.toLocaleString()}</span>
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">No usage data available</p>
+            )}
+          </div>
+
+          {/* IP rules summary */}
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-sm font-medium">
+                <Shield className="h-4 w-4 text-muted-foreground" />
+                IP Rules
+              </div>
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { onClose(); onOpenIpRules(); }}>
+                <Globe className="mr-1 h-3 w-3" />
+                Edit Rules
+              </Button>
+            </div>
+            {((keyData.allow_cidrs ?? []).length === 0 && (keyData.deny_cidrs ?? []).length === 0) ? (
+              <p className="text-xs text-muted-foreground italic">No IP restrictions — all IPs allowed</p>
+            ) : (
+              <div className="space-y-2">
+                {(keyData.allow_cidrs ?? []).length > 0 && (
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-green-700 dark:text-green-400">Allow</p>
+                    <div className="flex flex-wrap gap-1">
+                      {(keyData.allow_cidrs ?? []).map((cidr) => (
+                        <Badge key={cidr} variant="outline" className="text-[10px] font-mono border-green-300 text-green-700 dark:border-green-700 dark:text-green-400">
+                          {cidr}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {(keyData.deny_cidrs ?? []).length > 0 && (
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-red-700 dark:text-red-400">Deny</p>
+                    <div className="flex flex-wrap gap-1">
+                      {(keyData.deny_cidrs ?? []).map((cidr) => (
+                        <Badge key={cidr} variant="outline" className="text-[10px] font-mono border-red-300 text-red-700 dark:border-red-700 dark:text-red-400">
+                          {cidr}
+                        </Badge>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Expiry */}
+          {(keyData.expires_at ?? 0) > 0 && (
+            <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              Expires {new Date((keyData.expires_at ?? 0) * 1000).toLocaleDateString()}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button onClick={onClose}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── Main component ──────────────────────────────────────────────
 
 export function ApiKeys() {
   const queryClient = useQueryClient();
@@ -36,8 +234,12 @@ export function ApiKeys() {
   const [copiedField, setCopiedField] = useState<"key_id" | "key_secret" | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<string | null>(null);
   const [ipRulesTarget, setIpRulesTarget] = useState<string | null>(null);
-  const [allowCidrs, setAllowCidrs] = useState("");
-  const [denyCidrs, setDenyCidrs] = useState("");
+  const [detailsTarget, setDetailsTarget] = useState<ApiKey | null>(null);
+  // CIDR list state
+  const [allowCidrList, setAllowCidrList] = useState<string[]>([]);
+  const [denyCidrList, setDenyCidrList] = useState<string[]>([]);
+  const [newAllowCidr, setNewAllowCidr] = useState("");
+  const [newDenyCidr, setNewDenyCidr] = useState("");
 
   const keysQuery = useQuery({
     queryKey: ["apiKeys"],
@@ -69,17 +271,28 @@ export function ApiKeys() {
   });
 
   const ipRulesMutation = useMutation({
-    mutationFn: () =>
-      setApiKeyIpRules({
+    mutationFn: () => {
+      // Auto-include any pending (not-yet-added) CIDR input values on save
+      const pendingAllow = newAllowCidr.trim();
+      const pendingDeny = newDenyCidr.trim();
+      return setApiKeyIpRules({
         key_id: ipRulesTarget ?? "",
-        allow_cidrs: allowCidrs.split("\n").map((s) => s.trim()).filter(Boolean),
-        deny_cidrs: denyCidrs.split("\n").map((s) => s.trim()).filter(Boolean),
-      }),
+        allow_cidrs: pendingAllow && !allowCidrList.includes(pendingAllow)
+          ? [...allowCidrList, pendingAllow]
+          : allowCidrList,
+        deny_cidrs: pendingDeny && !denyCidrList.includes(pendingDeny)
+          ? [...denyCidrList, pendingDeny]
+          : denyCidrList,
+      });
+    },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["apiKeys"] });
       toast.success("IP rules updated");
       setIpRulesTarget(null);
-      setAllowCidrs("");
-      setDenyCidrs("");
+      setAllowCidrList([]);
+      setDenyCidrList([]);
+      setNewAllowCidr("");
+      setNewDenyCidr("");
     },
     onError: () => toast.error("Failed to update IP rules"),
   });
@@ -116,42 +329,34 @@ export function ApiKeys() {
     const text = field === "key_id" ? createdKey?.key_id : createdKey?.key_secret;
     if (!text) return;
 
-    // Clipboard API only works in secure contexts (HTTPS / localhost).
-    if (window.isSecureContext && navigator.clipboard) {
-      try {
-        await navigator.clipboard.writeText(text);
-        setCopiedField(field);
-        toast.success("Copied to clipboard");
-        setTimeout(() => setCopiedField(null), 2000);
-      } catch {
-        toast.error("Copy failed — use the Download button instead");
-      }
+    if (!window.isSecureContext) {
+      toast.error("Clipboard copy requires HTTPS. Use the Download button to save your key.");
       return;
     }
 
-    // Plain-HTTP fallback: off-screen textarea + execCommand.
-    // Do NOT use opacity:0 or pointer-events:none — they prevent the browser
-    // from treating the element as selectable and execCommand returns true
-    // but silently does nothing.
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.cssText =
-      "position:fixed;top:-9999px;left:-9999px;width:2px;height:2px;" +
-      "padding:0;border:none;outline:none;box-shadow:none;background:transparent;";
-    document.body.appendChild(ta);
-    ta.focus();
-    ta.select();
-    let success = false;
-    try { success = document.execCommand("copy"); } catch { /* ignore */ }
-    document.body.removeChild(ta);
-
-    if (success) {
+    try {
+      await navigator.clipboard.writeText(text);
       setCopiedField(field);
       toast.success("Copied to clipboard");
       setTimeout(() => setCopiedField(null), 2000);
-    } else {
+    } catch {
       toast.error("Copy failed — use the Download button instead");
     }
+  };
+
+  const openIpRules = (k: ApiKey) => {
+    setIpRulesTarget(k.key_id);
+    setAllowCidrList(k.allow_cidrs ?? []);
+    setDenyCidrList(k.deny_cidrs ?? []);
+    setNewAllowCidr("");
+    setNewDenyCidr("");
+  };
+
+  const addCidr = (list: string[], setList: (v: string[]) => void, value: string, setValue: (v: string) => void) => {
+    const trimmed = value.trim();
+    if (!trimmed || list.includes(trimmed)) return;
+    setList([...list, trimmed]);
+    setValue("");
   };
 
   return (
@@ -195,16 +400,22 @@ export function ApiKeys() {
                     {k.prefix && (
                       <code className="text-xs text-muted-foreground">{k.prefix}…</code>
                     )}
+                    {((k.allow_cidrs ?? []).length > 0 || (k.deny_cidrs ?? []).length > 0) && (
+                      <Badge variant="outline" className="text-[10px]">
+                        <Shield className="mr-1 h-2.5 w-2.5" />
+                        IP restricted
+                      </Badge>
+                    )}
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                     <span>Created {new Date(k.created_at * 1000).toLocaleDateString()}</span>
-                    {k.expires_at > 0 && (
+                    {(k.expires_at ?? 0) > 0 && (
                       <Badge variant="secondary" className="text-[10px]">
-                        Expires {new Date(k.expires_at * 1000).toLocaleDateString()}
+                        Expires {new Date((k.expires_at ?? 0) * 1000).toLocaleDateString()}
                       </Badge>
                     )}
-                    {k.last_used_at > 0 && (
-                      <span>Last used {new Date(k.last_used_at * 1000).toLocaleDateString()}</span>
+                    {(k.last_used_at ?? 0) > 0 && (
+                      <span>Last used {new Date((k.last_used_at ?? 0) * 1000).toLocaleDateString()}</span>
                     )}
                   </div>
                 </div>
@@ -212,11 +423,15 @@ export function ApiKeys() {
                   <Button
                     size="icon"
                     variant="ghost"
-                    onClick={() => {
-                      setIpRulesTarget(k.key_id);
-                      setAllowCidrs((k.allow_cidrs ?? []).join("\n"));
-                      setDenyCidrs((k.deny_cidrs ?? []).join("\n"));
-                    }}
+                    onClick={() => setDetailsTarget(k)}
+                    aria-label="View key details"
+                  >
+                    <Info className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => openIpRules(k)}
                     aria-label="Manage IP rules"
                   >
                     <Globe className="h-4 w-4" />
@@ -235,6 +450,15 @@ export function ApiKeys() {
           </ul>
         )}
       </CardContent>
+
+      {/* Key details dialog */}
+      {detailsTarget && (
+        <KeyDetailsDialog
+          keyData={detailsTarget}
+          onClose={() => setDetailsTarget(null)}
+          onOpenIpRules={() => openIpRules(detailsTarget)}
+        />
+      )}
 
       {/* Create key dialog */}
       <Dialog open={createOpen} onOpenChange={(o) => { if (!o) { setCreateOpen(false); setCreatedKey(null); } }}>
@@ -333,35 +557,36 @@ export function ApiKeys() {
       />
 
       {/* IP rules dialog */}
-      <Dialog open={!!ipRulesTarget} onOpenChange={(o) => { if (!o) setIpRulesTarget(null); }}>
-        <DialogContent>
+      <Dialog open={!!ipRulesTarget} onOpenChange={(o) => { if (!o) { setIpRulesTarget(null); } }}>
+        <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>IP Access Rules</DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              <Globe className="h-4 w-4" />
+              IP Access Rules
+            </DialogTitle>
             <DialogDescription>
-              Restrict this API key to specific IP ranges using CIDR notation (one per line).
+              Restrict this API key to specific IP ranges using CIDR notation. Leave both lists empty to allow all IPs.
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={(e) => { e.preventDefault(); ipRulesMutation.mutate(); }} className="space-y-3">
-            <div>
-              <Label htmlFor="allow-cidrs">Allow CIDRs</Label>
-              <textarea
-                id="allow-cidrs"
-                className="mt-1 flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                value={allowCidrs}
-                onChange={(e) => setAllowCidrs(e.target.value)}
-                placeholder="10.0.0.0/8&#10;192.168.1.0/24"
-              />
-            </div>
-            <div>
-              <Label htmlFor="deny-cidrs">Deny CIDRs</Label>
-              <textarea
-                id="deny-cidrs"
-                className="mt-1 flex min-h-[80px] w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                value={denyCidrs}
-                onChange={(e) => setDenyCidrs(e.target.value)}
-                placeholder="0.0.0.0/0"
-              />
-            </div>
+          <form onSubmit={(e) => { e.preventDefault(); ipRulesMutation.mutate(); }} className="space-y-4">
+            <CidrList
+              label="Allow CIDRs"
+              items={allowCidrList}
+              onAdd={() => addCidr(allowCidrList, setAllowCidrList, newAllowCidr, setNewAllowCidr)}
+              onRemove={(i) => setAllowCidrList(allowCidrList.filter((_, idx) => idx !== i))}
+              inputValue={newAllowCidr}
+              onInputChange={setNewAllowCidr}
+              placeholder="e.g. 10.0.0.0/8"
+            />
+            <CidrList
+              label="Deny CIDRs"
+              items={denyCidrList}
+              onAdd={() => addCidr(denyCidrList, setDenyCidrList, newDenyCidr, setNewDenyCidr)}
+              onRemove={(i) => setDenyCidrList(denyCidrList.filter((_, idx) => idx !== i))}
+              inputValue={newDenyCidr}
+              onInputChange={setNewDenyCidr}
+              placeholder="e.g. 0.0.0.0/0"
+            />
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => setIpRulesTarget(null)}>Cancel</Button>
               <Button type="submit" disabled={ipRulesMutation.isPending}>

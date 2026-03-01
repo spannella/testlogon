@@ -31,6 +31,7 @@ function ReadReceiptsInner({
     queryKey: ["message-views", conversationId, messageId],
     queryFn: () => getViewers(conversationId, messageId),
     staleTime: 30_000,
+    enabled: !messageId.startsWith("optimistic-"),
   });
 
   const items: MessageViewer[] = viewers ?? [];
@@ -70,15 +71,19 @@ interface ViewTrackerProps {
   conversationId: string;
   messageId: string;
   isOwn: boolean;
+  /** Set to true to skip auto-marking as viewed (e.g. view-once text, which requires explicit tap) */
+  skipMarkViewed?: boolean;
 }
 
-export function ViewTracker({ conversationId, messageId, isOwn }: ViewTrackerProps) {
+export function ViewTracker({ conversationId, messageId, isOwn, skipMarkViewed }: ViewTrackerProps) {
   const ref = useRef<HTMLDivElement>(null);
   const markedRef = useRef(false);
 
   useEffect(() => {
-    // Don't track own messages
+    // Don't track own messages or optimistic messages
     if (isOwn) return;
+    if (messageId.startsWith("optimistic-")) return;
+    if (skipMarkViewed) return;
 
     const el = ref.current;
     if (!el) return;

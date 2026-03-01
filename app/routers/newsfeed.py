@@ -20,7 +20,7 @@ from app.core.aws import ddb
 from app.core.aws_clients import s3_client, sqs_client
 from app.core.cursor import decode_cursor, encode_cursor
 from app.core.settings import S
-from app.services.filemanager import get_usage_summary
+from app.services.filemanager import download_file, get_node, get_usage_summary, norm_path
 from app.services.sessions import require_ui_session
 from app.services.subscription_access import can_access_creator
 from app.services.usage_metering import (
@@ -365,6 +365,7 @@ class CreatePostRequest(BaseModel):
     image_urls: List[str] = Field(default_factory=list)
     visibility: Literal["followers", "public"] = "followers"
     unlock_price_cents: Optional[int] = Field(default=None, ge=0)
+    file_paths: List[str] = Field(default_factory=list)
 
 
 class PostResponse(BaseModel):
@@ -435,6 +436,7 @@ class PresignUploadResponse(BaseModel):
 
 class UnlockPostRequest(BaseModel):
     post_id: str
+    payment_method_id: Optional[str] = None
 
 
 class UnlockPostResponse(BaseModel):
@@ -442,10 +444,32 @@ class UnlockPostResponse(BaseModel):
     payment_intent: Dict[str, Any]
 
 
+class PostTipRequest(BaseModel):
+    amount_cents: int = Field(..., ge=1)
+    currency: str = "usd"
+    payment_method_id: Optional[str] = None
+
+
+class ReactionRequest(BaseModel):
+    emoji: str = Field(..., min_length=1, max_length=10)
+
+
 # -----------------------------
 # Post serialization helper
 # -----------------------------
-def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: bool = False) -> Dict[str, Any]:
+def _reaction_summaries(reactions_map: Dict, viewer_id: Optional[str] = None):
+    """Compute per-emoji counts and the viewer's own reactions from a DDB reactions map."""
+    counts: Dict[str, int] = {}
+    mine: List[str] = []
+    for emoji, users in (reactions_map or {}).items():
+        if isinstance(users, dict) and users:
+            counts[emoji] = len(users)
+            if viewer_id and users.get(viewer_id):
+                mine.append(emoji)
+    return counts, mine
+
+
+def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: bool = False, unlocked: bool = False, viewer_id: Optional[str] = None) -> Dict[str, Any]:
     """Map a raw DDB post item to the FeedPost shape expected by the frontend."""
     body = post.get("body", "")
     # Handle legacy dict-format bodies gracefully
@@ -458,19 +482,37 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
     if locked_body:
         body = "[Locked content]"
         image_urls = []
+    reactions_map = post.get("reactions") or {}
+    reactions_counts, my_reactions = _reaction_summaries(reactions_map, viewer_id)
+    post_id = post["post_id"]
+    raw_attachments = [] if locked_body else (post.get("file_attachments") or [])
+    file_attachments = [
+        {
+            "name": fa.get("name"),
+            "content_type": fa.get("content_type"),
+            "size": int(fa["size"]) if fa.get("size") is not None else None,
+            "url": f"/api/posts/{post_id}/files/{i}",
+        }
+        for i, fa in enumerate(raw_attachments)
+    ]
     return {
-        "post_id": post["post_id"],
+        "post_id": post_id,
         "author_id": post.get("user_id", ""),
         "created_at": post.get("created_at", ""),
         "updated_at": post.get("updated_at"),
         "body": body,
         "image_urls": image_urls,
+        "file_attachments": file_attachments,
         "visibility": post.get("visibility", "followers"),
         "locked": bool(post.get("locked")),
         "unlock_price_cents": post.get("unlock_price_cents"),
+        "unlocked": unlocked,
         "like_count": int(post.get("like_count", 0)),
         "comment_count": int(post.get("comment_count", 0)),
+        "tip_total_cents": int(post.get("tip_total_cents", 0)),
         "liked_by_me": liked_by_me,
+        "reactions_counts": reactions_counts,
+        "my_reactions": my_reactions,
     }
 
 
@@ -769,6 +811,19 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
     unlock_price_cents = req.unlock_price_cents if req.unlock_price_cents and req.unlock_price_cents > 0 else None
     locked = unlock_price_cents is not None
 
+    # Validate and collect file attachment metadata (max 5)
+    file_attachments = []
+    for fp in req.file_paths[:5]:
+        node_path = norm_path(fp, is_folder=False)
+        node = get_node(user_id, node_path)  # raises 404 if not found or not owned
+        file_attachments.append({
+            "path": node_path,
+            "name": node.get("name") or node_path.rsplit("/", 1)[-1],
+            "content_type": node.get("content_type"),
+            "size": int(node["size"]) if node.get("size") is not None else None,
+            "owner": user_id,
+        })
+
     post_item = {
         "pk": pk_post(post_id),
         "sk": sk_post(),
@@ -783,6 +838,7 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "unlock_price_cents": unlock_price_cents,
         "like_count": 0,
         "comment_count": 0,
+        "file_attachments": file_attachments,
     }
     ddb_put_item(post_item)
 
@@ -836,7 +892,63 @@ def edit_post(post_id: str, req: EditPostRequest, user_id: UserIdDep):
         expr_names={"#body": "body"},
         expr_vals=expr_vals,
     )
-    return _post_to_dict(updated)
+    return _post_to_dict(updated, viewer_id=user_id)
+
+
+@router.get("/posts/{post_id}")
+def get_post(post_id: str, user_id: UserIdDep):
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    author = post.get("user_id")
+    if author and author != user_id:
+        if not can_access_creator(user_id, author):
+            raise HTTPException(status_code=403, detail="Subscription required")
+    locked = bool(post.get("locked"))
+    is_locked_for_viewer = locked and author != user_id and not has_unlocked(user_id, post_id)
+    viewer_unlocked = locked and not is_locked_for_viewer
+    liked = bool(ddb_get_item({"pk": pk_like(user_id), "sk": f"POST#{post_id}"}))
+    return _post_to_dict(post, locked_body=is_locked_for_viewer, liked_by_me=liked, unlocked=viewer_unlocked, viewer_id=user_id)
+
+
+@router.get("/posts/{post_id}/files/{file_index}")
+def get_post_file(post_id: str, file_index: int, user_id: UserIdDep):
+    """Proxy a file attachment from a post to an authorized viewer."""
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    author = post.get("user_id")
+    if author and author != user_id:
+        if not can_access_creator(user_id, author):
+            raise HTTPException(status_code=403, detail="Subscription required")
+    locked = bool(post.get("locked"))
+    if locked and author != user_id and not has_unlocked(user_id, post_id):
+        raise HTTPException(status_code=402, detail="Post is locked; unlock required")
+    attachments = post.get("file_attachments") or []
+    if file_index < 0 or file_index >= len(attachments):
+        raise HTTPException(status_code=404, detail="File attachment not found")
+    fa = attachments[file_index]
+    owner = fa.get("owner")
+    path = fa.get("path")
+    if not owner or not path:
+        raise HTTPException(status_code=404, detail="File attachment metadata missing")
+    result = download_file(owner, path)
+    node = result["node"]
+    obj = result["object"]
+    content_type = node.get("content_type") or "application/octet-stream"
+
+    def _iter():
+        body = obj["Body"]
+        while True:
+            chunk = body.read(1024 * 1024)
+            if not chunk:
+                break
+            yield chunk
+
+    headers: dict = {"Cache-Control": "private, max-age=300"}
+    if node.get("size") is not None:
+        headers["Content-Length"] = str(node["size"])
+    return StreamingResponse(_iter(), media_type=content_type, headers=headers)
 
 
 @router.delete("/posts/{post_id}")
@@ -916,6 +1028,126 @@ def unlike_post(post_id: str, user_id: UserIdDep):
                 detail=f"DynamoDB error: {exc.response['Error'].get('Message', 'unknown')}",
             ) from exc
         # Already unliked — idempotent
+    return {"ok": True}
+
+
+@router.post("/posts/{post_id}/tip")
+def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep):
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if post.get("user_id") == user_id:
+        raise HTTPException(status_code=400, detail="Cannot tip your own post")
+
+    # Validate payment method belongs to this user (if provided and billing enabled)
+    if req.payment_method_id and S.billing_table_name:
+        billing_tbl = ddb.Table(S.billing_table_name)
+        billing_items = billing_tbl.query(
+            KeyConditionExpression="pk = :pk",
+            ExpressionAttributeValues={":pk": f"USER#{user_id}"},
+        ).get("Items", [])
+        pm_ids = {
+            it["payment_method_id"]
+            for it in billing_items
+            if it.get("sk", "").startswith("PM#") and "payment_method_id" in it
+        }
+        if req.payment_method_id not in pm_ids:
+            raise HTTPException(status_code=400, detail="Payment method not found")
+
+    pi = payments.create_payment_intent(
+        user_id=user_id,
+        amount_cents=req.amount_cents,
+        currency=req.currency,
+        metadata={"type": "tip_post", "post_id": post_id},
+    )
+    conf = payments.confirm_payment_intent(payment_intent_id=pi["payment_intent_id"])
+    if conf.get("status") != "succeeded":
+        raise HTTPException(status_code=402, detail="Payment failed")
+
+    updated = ddb_update_item(
+        key={"pk": pk_post(post_id), "sk": sk_post()},
+        update_expr="SET tip_total_cents = if_not_exists(tip_total_cents, :z) + :amt",
+        expr_vals={":z": 0, ":amt": req.amount_cents},
+    )
+
+    # Write billing ledger debit entry (best-effort)
+    if S.billing_table_name:
+        try:
+            billing_tbl_led = ddb.Table(S.billing_table_name)
+            led_entry_id = uuid.uuid4().hex
+            ts_now = int(time.time())
+            billing_tbl_led.put_item(Item={
+                "pk": f"USER#{user_id}",
+                "sk": f"LEDGER#{ts_now}#{led_entry_id}",
+                "entry_id": led_entry_id,
+                "ts": ts_now,
+                "type": "debit",
+                "amount_cents": req.amount_cents,
+                "currency": "USD",
+                "state": "settled",
+                "reason": "Post tip",
+                "meta": {"post_id": post_id, "payment_method_id": req.payment_method_id},
+            })
+        except Exception:
+            pass
+
+    author = post.get("user_id")
+    if author:
+        put_notification(
+            recipient_user_id=author,
+            notif_type="tip_on_post",
+            payload={
+                "post_id": post_id,
+                "from_user_id": user_id,
+                "amount_cents": req.amount_cents,
+                "currency": req.currency,
+                "created_at": now_iso(),
+            },
+        )
+
+    return {"ok": True, "tip_total_cents": int(updated.get("tip_total_cents", 0))}
+
+
+@router.post("/posts/{post_id}/reactions")
+def add_reaction(post_id: str, req: ReactionRequest, user_id: UserIdDep):
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    reactions = dict(post.get("reactions") or {})
+    emoji_map = dict(reactions.get(req.emoji, {}))
+    emoji_map[user_id] = True
+    reactions[req.emoji] = emoji_map
+
+    ddb_update_item(
+        key={"pk": pk_post(post_id), "sk": sk_post()},
+        update_expr="SET reactions = :r",
+        expr_vals={":r": reactions},
+        return_values="NONE",
+    )
+    return {"ok": True}
+
+
+@router.post("/posts/{post_id}/unreact")
+def remove_reaction(post_id: str, req: ReactionRequest, user_id: UserIdDep):
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+
+    reactions = dict(post.get("reactions") or {})
+    if req.emoji in reactions:
+        emoji_map = dict(reactions[req.emoji])
+        emoji_map.pop(user_id, None)
+        if emoji_map:
+            reactions[req.emoji] = emoji_map
+        else:
+            del reactions[req.emoji]
+        ddb_update_item(
+            key={"pk": pk_post(post_id), "sk": sk_post()},
+            update_expr="SET reactions = :r",
+            expr_vals={":r": reactions},
+            return_values="NONE",
+        )
     return {"ok": True}
 
 
@@ -999,7 +1231,8 @@ def view_feed(
 
         locked = bool(post.get("locked"))
         is_locked_for_viewer = locked and author != user_id and not has_unlocked(user_id, post_id)
-        ordered.append(_post_to_dict(post, locked_body=is_locked_for_viewer, liked_by_me=post_id in liked_post_ids))
+        viewer_unlocked = locked and not is_locked_for_viewer
+        ordered.append(_post_to_dict(post, locked_body=is_locked_for_viewer, liked_by_me=post_id in liked_post_ids, unlocked=viewer_unlocked, viewer_id=user_id))
 
     return {"items": ordered, "next_cursor": encode_cursor(resp.get("LastEvaluatedKey"))}
 
@@ -1348,6 +1581,21 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep):
     if price <= 0:
         raise HTTPException(status_code=500, detail="Locked post has invalid price")
 
+    # Validate payment method belongs to this user
+    if req.payment_method_id and S.billing_table_name:
+        billing_tbl_pm = ddb.Table(S.billing_table_name)
+        billing_items = billing_tbl_pm.query(
+            KeyConditionExpression="pk = :pk",
+            ExpressionAttributeValues={":pk": f"USER#{user_id}"},
+        ).get("Items", [])
+        pm_ids = {
+            it["payment_method_id"]
+            for it in billing_items
+            if it.get("sk", "").startswith("PM#") and "payment_method_id" in it
+        }
+        if req.payment_method_id not in pm_ids:
+            raise HTTPException(status_code=400, detail="Payment method not found")
+
     pi = payments.create_payment_intent(
         user_id=user_id,
         amount_cents=price,
@@ -1369,6 +1617,30 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep):
         "payment_intent_id": pi["payment_intent_id"],
     }
     ddb_put_item(item)
+
+    # Write billing ledger debit entry (best-effort)
+    if S.billing_table_name:
+        try:
+            billing_tbl_led = ddb.Table(S.billing_table_name)
+            led_entry_id = uuid.uuid4().hex
+            ts_now = int(time.time())
+            billing_tbl_led.put_item(Item={
+                "pk": f"USER#{user_id}",
+                "sk": f"LEDGER#{ts_now}#{led_entry_id}",
+                "entry_id": led_entry_id,
+                "ts": ts_now,
+                "type": "debit",
+                "amount_cents": price,
+                "currency": "USD",
+                "state": "settled",
+                "reason": "Post unlock",
+                "meta": {
+                    "post_id": req.post_id,
+                    "payment_method_id": req.payment_method_id,
+                },
+            })
+        except Exception:
+            pass  # Best-effort; do not fail the unlock if billing write fails
 
     author = post.get("user_id")
     if author and author != user_id:

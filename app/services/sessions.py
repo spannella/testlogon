@@ -256,6 +256,16 @@ def rotate_refresh_token(response: Response, user_sub: str, session_id: str, ref
     stored = it.get("refresh_token_hash", "")
     if not stored or not hmac.compare_digest(stored, sha256_str(refresh_token)):
         raise HTTPException(401, "Invalid refresh token")
+    # Reset inactivity clock so the first post-refresh request doesn't immediately
+    # hit the inactivity check in require_ui_session.
+    try:
+        T.sessions.update_item(
+            Key={"user_sub": user_sub, "session_id": session_id},
+            UpdateExpression="SET last_seen_at = :now",
+            ExpressionAttributeValues={":now": now_ts()},
+        )
+    except Exception:
+        pass
     refresh_ttl = int(it.get("refresh_ttl_seconds") or 0)
     _issue_refresh_token(response, session_id, user_sub, refresh_ttl_seconds=refresh_ttl or None)
     access = mint_access_token(user_sub, session_id)
@@ -336,8 +346,6 @@ async def require_ui_session(
         ):
             if compute_required_factors(user_sub):
                 require_fresh_mfa({"user_sub": resolved_user_sub, "session_id": session_id})
-            else:
-                raise HTTPException(401, "Re-auth required")
 
     csrf_header_name = getattr(S, "ui_csrf_header_name", "")
     csrf_cookie_name = getattr(S, "ui_csrf_cookie_name", "")
@@ -366,7 +374,12 @@ async def require_ui_session(
         request.state.effective_sub = impersonation_ctx["effective_sub"]
         request.state.impersonation_id = impersonation_ctx["impersonation_id"]
 
-    out = {"user_sub": resolved_user_sub, "session_id": session_id, "role": role.value}
+    out = {
+        "user_sub": resolved_user_sub,
+        "session_id": session_id,
+        "role": role.value,
+        "ip": str(it.get("ip") or ""),
+    }
     out.update(impersonation_ctx)
     return out
 

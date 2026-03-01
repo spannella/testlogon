@@ -117,7 +117,7 @@ export interface TotpDeviceBeginResp {
 export interface TotpDeviceConfirmReq {
   device_id: string;
   totp_code: string;
-  totp_code2: string;
+  totp_code2?: string;
 }
 
 export interface SmsDevice {
@@ -577,9 +577,39 @@ export interface Conversation {
   muted_until: number;
   last_read_at: number;
   unread_count: number;
+  // Helpdesk routing fields (populated for helpdesk agents only)
+  routing_mode?: string;
+  routing_group_id?: string;
+  routing_state?: string;
+  active_agent_user_id?: string;
+  active_agent_claimed_at?: number;
+  assignment_version?: number;
   // UI convenience fields (derived client-side)
   participants: Participant[];
   last_message?: Message;
+}
+
+export interface RoutingEventOut {
+  conversation_id: string;
+  event_id: string;
+  event_type: string;
+  actor_user_id: string;
+  from_state: string;
+  to_state: string;
+  created_at: number;
+  assignment_version: number;
+  routing_group_id: string;
+  active_agent_user_id: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface HelpdeskClaimOut {
+  ok: boolean;
+  conversation_id: string;
+  state: string;
+  assigned_agent_user_id: string;
+  assignment_version: number;
+  idempotent: boolean;
 }
 
 export interface Participant {
@@ -591,6 +621,7 @@ export interface Participant {
   last_read_at?: number;
   joined_at?: number;
   left_at?: number;
+  profile_photo_url?: string;
 }
 
 export interface MessageImage {
@@ -600,6 +631,34 @@ export interface MessageImage {
   width?: number;
   height?: number;
   url?: string;
+  filename?: string;
+  filesize?: number;
+  file_created_at?: number;
+  preview_url?: string;  // Blurred preview URL for locked images
+}
+
+export interface GalleryImageItem {
+  bucket: string;
+  key: string;
+  content_type: string;
+  width?: number;
+  height?: number;
+  filename?: string;
+  filesize?: number;
+  url?: string;
+  preview_url?: string;  // For locked items: blurred preview
+  preview_bucket?: string;
+  preview_key?: string;
+}
+
+export interface FileShareAttachment {
+  path: string;
+  name: string;
+  size?: number;
+  content_type?: string;
+  permission: "read" | "write";
+  owner: string;
+  is_encrypted?: boolean;
 }
 
 export interface MessageEncryptionEnvelope {
@@ -609,7 +668,8 @@ export interface MessageEncryptionEnvelope {
   iterations: number;
   salt_b64: string;
   iv_b64: string;
-  ciphertext_b64: string;
+  // For text messages: ciphertext stored inline. For media: absent (binary lives in S3).
+  ciphertext_b64?: string;
 }
 
 export interface MessageFile {
@@ -620,21 +680,107 @@ export interface MessageFile {
   duration_seconds?: number;
   thumbnail?: string;
   url?: string;
+  signature_packet_id?: string;
+  signature_packet_role?: "sender" | "signer";
+  signature_packet_status?: string;
+  signature_packet_status_chip?: "awaiting_your_signature" | "waiting_on_others" | "completed";
+  signature_packet_status_text?: string;
+  signature_packet_completed_at?: string | null;
+  signature_packet_final_pdf_url?: string;
 }
 
 export type MessageConsumptionPolicy = "none" | "view_once" | "listen_once";
 export type MessageMediaKind = "image" | "video" | "audio";
 export type MessageConsumptionState = "pending" | "consumed" | "expired" | "failed";
 
+export interface CalendarShareAttachment {
+  calendar_id: string;
+  name: string;
+  owner: string;
+  permission: "read" | "write";
+  booking_link_id?: string;
+  booking_public_url?: string;
+}
+
+export interface CalendarEventAttachment {
+  event_id: string;
+  calendar_id: string;
+  name: string;
+  start_utc?: string;
+  end_utc?: string;
+  all_day: boolean;
+  all_day_date?: string;
+  timezone: string;
+  description?: string;
+  owner: string;
+}
+
+export interface MeetingPollSlot {
+  slot_id: string;
+  start_utc: string;
+  end_utc: string;
+  yes_count: number;
+  maybe_count: number;
+  no_count: number;
+  my_vote: "yes" | "no" | "maybe" | null;
+}
+
+export interface MeetingPollAttachment {
+  poll_id: string;
+  creator_id: string;
+  title: string;
+  duration_minutes: number;
+  status: "open" | "confirmed" | "cancelled";
+  confirmed_slot_id: string | null;
+}
+
+export interface MeetingPollState {
+  poll_id: string;
+  title: string;
+  duration_minutes: number;
+  creator_id: string;
+  status: "open" | "confirmed" | "cancelled";
+  confirmed_slot_id: string | null;
+  slots: MeetingPollSlot[];
+}
+
+export interface SendCalendarShareReq {
+  calendar_id: string;
+  permission: "read" | "write";
+  include_booking_link: boolean;
+  text?: string;
+}
+
+export interface SendCalendarEventReq {
+  calendar_id: string;
+  event_id: string;
+  text?: string;
+}
+
+export interface SendMeetingPollReq {
+  title: string;
+  duration_minutes: number;
+  slots: Array<{ start_utc: string; end_utc: string }>;
+  text?: string;
+}
+
 export interface Message {
   message_id: string;
   conversation_id: string;
   sender_id: string;
-  kind: "text" | "image" | "file" | "audio" | "video";
+  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll";
   created_at: number;
   text?: string;
   image?: MessageImage;
   file?: MessageFile;
+  // Gallery message fields
+  free_images?: GalleryImageItem[];
+  locked_images?: GalleryImageItem[] | null;  // null = hidden (not unlocked yet)
+  locked_image_count?: number;
+  file_share?: FileShareAttachment;
+  calendar_share?: CalendarShareAttachment;
+  calendar_event?: CalendarEventAttachment;
+  meeting_poll?: MeetingPollAttachment;
   preview?: LinkPreview;
   reply_to_message_id?: string;
   forwarded_from?: Record<string, unknown>;
@@ -655,6 +801,17 @@ export interface Message {
   media_kind?: MessageMediaKind;
   consumption_state?: MessageConsumptionState;
   consumed_at?: number;
+  lock_price_cents?: number;
+  lock_description?: string;
+  is_unlocked?: boolean;
+  locked?: boolean;
+  tip_amount_cents?: number;
+  tip_currency?: string;
+  view_once?: boolean;
+  expires_at?: number;
+  expired?: boolean;
+  scheduled?: boolean;
+  deliver_at?: number;
   // UI convenience fields (derived client-side)
   edited?: boolean;
   revoked?: boolean;
@@ -673,6 +830,13 @@ export interface SendTextMessageReq {
   encryption?: MessageEncryptionEnvelope;
   reply_to_message_id?: string;
   preview?: LinkPreview;
+  lock_price_cents?: number;
+  lock_description?: string;
+  send_at?: number;
+  view_once?: boolean;
+  expires_in_seconds?: number;
+  tip_amount_cents?: number;
+  tip_payment_method_id?: string;
 }
 
 export interface SendImageMessageReq {
@@ -681,8 +845,57 @@ export interface SendImageMessageReq {
   content_type?: string;
   width?: number;
   height?: number;
+  filename?: string;
+  filesize?: number;
+  file_created_at?: number;
+  caption?: string;
+  kind?: "image" | "file" | "video";
   reply_to_message_id?: string;
   consumption_policy?: Extract<MessageConsumptionPolicy, "none" | "view_once">;
+  expires_in_seconds?: number;
+  lock_price_cents?: number;
+  lock_description?: string;
+  tip_amount_cents?: number;
+  tip_payment_method_id?: string;
+  send_at?: number;
+  encryption?: MessageEncryptionEnvelope;
+}
+
+export interface SendTipReq {
+  amount_cents: number;
+  currency?: string;
+  note?: string;
+  payment_method_id?: string;
+}
+
+export interface SendGalleryMessageReq {
+  free_images: Array<{
+    bucket: string;
+    key: string;
+    content_type: string;
+    width?: number;
+    height?: number;
+    filename?: string;
+    filesize?: number;
+  }>;
+  locked_images: Array<{
+    bucket: string;
+    key: string;
+    content_type: string;
+    width?: number;
+    height?: number;
+    filename?: string;
+    filesize?: number;
+    preview_bucket: string;
+    preview_key: string;
+  }>;
+  text?: string;
+  lock_price_cents?: number;
+  lock_description?: string;
+  expires_in_seconds?: number;
+  send_at?: number;
+  tip_amount_cents?: number;
+  tip_payment_method_id?: string;
 }
 
 export interface SendFileMessageReq {
@@ -691,6 +904,14 @@ export interface SendFileMessageReq {
   duration_seconds?: number;
   reply_to_message_id?: string;
   consumption_policy?: MessageConsumptionPolicy;
+  signature_packet_id?: string;
+}
+
+export interface SendFileShareReq {
+  file_path: string;
+  permission: "read" | "write";
+  text?: string;
+  send_at?: number;
 }
 
 export interface StartConversationReq {
@@ -850,6 +1071,7 @@ export interface ShareFileReq {
   to_user: string;
   permission: "read" | "write";
   expires_at?: number;
+  signature_packet_id?: string;
 }
 
 
@@ -914,6 +1136,13 @@ export interface SharedItem {
   shared_at: string;
   permission: "read" | "write";
   expires_at?: string | null;
+  signature_packet_id?: string | null;
+  signature_packet_role?: "sender" | "signer";
+  signature_packet_status?: string;
+  signature_packet_status_chip?: "awaiting_your_signature" | "waiting_on_others" | "completed";
+  signature_packet_status_text?: string;
+  signature_packet_completed_at?: string | null;
+  signature_packet_final_pdf_url?: string;
   name?: string;
   type?: "file" | "folder";
   size?: number;
@@ -1116,6 +1345,9 @@ export interface CartItemIn {
   name: string;
   quantity?: number;
   unit_price_cents: number;
+  image_url?: string;
+  category_id?: string;
+  item_id?: string;
 }
 
 export interface CartItem {
@@ -1125,6 +1357,9 @@ export interface CartItem {
   unit_price_cents: number;
   line_total_cents: number;
   updated_at: string;
+  image_url?: string;
+  category_id?: string;
+  item_id?: string;
 }
 
 export interface CartItemsResp {
@@ -1210,17 +1445,27 @@ export interface PaginatedList<T> {
 
 // ─── Newsfeed ────────────────────────────────────────────────────
 
+export interface PostFileAttachment {
+  name: string;
+  content_type?: string;
+  size?: number;
+  url: string;
+}
+
 export interface FeedPost {
   post_id: string;
   author_id: string;
   body: string;
   image_urls?: string[];
+  file_attachments?: PostFileAttachment[];
   unlock_price_cents?: number;
   like_count: number;
   comment_count: number;
   tip_total_cents?: number;
   liked_by_me?: boolean;
   unlocked?: boolean;
+  reactions_counts?: Record<string, number>;
+  my_reactions?: string[];
   created_at: string;
   updated_at?: string;
 }
@@ -1234,11 +1479,13 @@ export interface FeedComment {
   updated_at?: string;
   deleted?: boolean;
   version?: number;
+  tip_total_cents?: number;
 }
 
 export interface CreatePostReq {
   body: string;
   image_urls?: string[];
+  file_paths?: string[];
   unlock_price_cents?: number;
 }
 
@@ -1278,6 +1525,7 @@ export interface PresignUploadResp {
 
 export interface TipReq {
   amount_cents: number;
+  payment_method_id?: string;
 }
 
 // ─── Purchase History ────────────────────────────────────────────
@@ -1542,4 +1790,43 @@ export interface ProviderCredential {
 export interface DeleteProviderCredentialResp {
   ok: boolean;
   deleted: boolean;
+}
+
+// ─── Contacts ─────────────────────────────────────────────────────────────
+
+export interface ContactEntry {
+  owner_id: string;
+  contact_id: string;
+  display_name: string;
+  profile_photo_url?: string;
+  is_favorite: boolean;
+  is_blocked: boolean;
+  added_at: string;
+}
+
+export interface AddContactReq {
+  user_id: string;
+}
+
+export interface UpdateContactReq {
+  is_favorite?: boolean;
+  is_blocked?: boolean;
+}
+
+// ─── Wallet ───────────────────────────────────────────────────────────────────
+
+export interface WalletBalance {
+  wallet_balance_cents: number;
+  currency: string;
+  updated_at?: number;
+}
+
+export interface WalletDepositReq {
+  amount_cents: number;
+  payment_method_id?: string;
+  idempotency_key?: string;
+}
+
+export interface WalletWithdrawReq {
+  amount_cents: number;
 }

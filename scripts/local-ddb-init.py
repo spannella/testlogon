@@ -31,6 +31,7 @@ def _table_defs() -> List[TableDef]:
         TableDef(_resolve_table_name(S.ddb_email_table, "email_devices"), "user_sub", "email_device_id"),
         TableDef(_resolve_table_name(S.ddb_recovery_table, "recovery_codes"), "user_sub", "code_hash"),
         TableDef(_resolve_table_name(S.users_table_name, "users"), "user_sub"),
+        TableDef(_resolve_table_name(S.role_audit_table_name, "role_audit"), "pk", "sk"),
         TableDef(
             _resolve_table_name(S.api_keys_table_name, "api_keys"),
             "key_id",
@@ -64,6 +65,51 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(
+            _resolve_table_name(S.catalog_products_table_name, "catalog_products"),
+            "PK",
+            "SK",
+            gsi=[
+                {"index_name": "GSI_PRODUCT_TYPE", "partition_key": "GSI_PRODUCT_TYPE_PK", "sort_key": "GSI_PRODUCT_TYPE_SK"},
+            ],
+        ),
+        TableDef(_resolve_table_name(S.catalog_product_versions_table_name, "catalog_product_versions"), "sku", "effective_at"),
+        TableDef(
+            _resolve_table_name(S.orders_table_name, "orders"),
+            "order_id",
+            gsi=[
+                {"index_name": "GSI_USER", "partition_key": "user_id", "sort_key": "created_at"},
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "created_at"},
+            ],
+        ),
+        TableDef(_resolve_table_name(S.order_items_table_name, "order_items"), "order_id", "item_id"),
+        TableDef(
+            _resolve_table_name(S.payments_table_name, "payments"),
+            "payment_id",
+            "event_id",
+            gsi=[
+                {"index_name": "GSI_ORDER", "partition_key": "order_id", "sort_key": "created_at"},
+                {"index_name": "GSI_PROVIDER_EVENT_IDEMPOTENCY", "partition_key": "provider_event_idempotency_key"},
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.entitlements_table_name, "entitlements"),
+            "user_id",
+            "entitlement_id",
+            gsi=[
+                {"index_name": "GSI_STATUS", "partition_key": "status", "sort_key": "ends_at"},
+                {"index_name": "GSI_SKU", "partition_key": "sku", "sort_key": "starts_at"},
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.entitlement_usage_events_table_name, "entitlement_usage_events"),
+            "entitlement_id",
+            "event_id",
+            gsi=[
+                {"index_name": "GSI_IDEMPOTENCY", "partition_key": "idempotency_key"},
+                {"index_name": "GSI_TIMESTAMP", "partition_key": "event_date", "sort_key": "event_ts"},
+            ],
+        ),
+        TableDef(
             _resolve_table_name(S.filemgr_table_name, "file_manager"),
             "PK",
             "SK",
@@ -71,6 +117,43 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
                 {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
             ],
+        ),
+        TableDef(
+            _resolve_table_name(S.signature_packets_table_name, "signature_packets"),
+            "packet_id",
+            gsi=[
+                {
+                    "index_name": "OWNER_CREATED_INDEX",
+                    "partition_key": "owner_user_id",
+                    "sort_key": "created_at",
+                }
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.signature_packet_signers_table_name, "signature_packet_signers"),
+            "packet_id",
+            "signer_id",
+            gsi=[
+                {
+                    "index_name": "SIGNER_STATUS_INDEX",
+                    "partition_key": "signer_id",
+                    "sort_key": "status_key",
+                }
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.signature_packet_fields_table_name, "signature_packet_fields"),
+            "packet_id",
+            "field_id",
+        ),
+        TableDef(
+            _resolve_table_name(S.signature_packet_events_table_name, "signature_packet_events"),
+            "packet_id",
+            "event_id",
+        ),
+        TableDef(
+            _resolve_table_name(S.signature_packet_artifacts_table_name, "signature_packet_artifacts"),
+            "packet_id",
         ),
         TableDef(
             _resolve_table_name(S.api_usage_table_name, "api_usage_events"),
@@ -129,6 +212,7 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(os.getenv("DDB_CONVERSATION_ROUTING_EVENTS", "ConversationRoutingEvents"), "conversation_id", "event_id"),
+        TableDef(os.getenv("DDB_CONTACTS_TABLE", "Contacts"), "owner_id", "contact_id"),
     ]
 
 

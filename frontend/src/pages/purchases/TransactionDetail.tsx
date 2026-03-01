@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -29,6 +29,8 @@ import {
   respondCancel,
 } from "@/api/endpoints/purchases";
 import type { TransactionEvent } from "@/api/endpoints/purchases";
+import { getCartItems } from "@/api/endpoints/cart";
+import type { CartItem } from "@/api/types";
 
 // ─── Helpers ──────────────────────────────────────────────────
 
@@ -58,20 +60,95 @@ function formatCurrency(amount: number, currency: string): string {
   }).format(amount);
 }
 
-function formatDate(ts: number): string {
+function formatDate(ts: number | undefined): string {
+  if (!ts) return "—";
   return new Date(ts * 1000).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
     year: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZoneName: "short",
   });
 }
 
-function formatEventName(name: string): string {
+function formatEventName(name: string | undefined): string {
+  if (!name) return "Unknown Event";
   return name
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// ─── Cart Items Sub-component ────────────────────────────────
+
+function CartItemsCard({ cartId }: { cartId: string }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ["cart-items", cartId],
+    queryFn: () => getCartItems(cartId),
+    staleTime: 60_000,
+  });
+
+  const items: CartItem[] = data?.items ?? [];
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm font-medium">Items Ordered</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-2">
+            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full rounded-lg" />)}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (items.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium">Items Ordered</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="divide-y divide-border">
+          {items.map((item) => (
+            <div key={item.sku} className="flex items-center gap-3 py-2.5 first:pt-0 last:pb-0">
+              {item.image_url ? (
+                <img
+                  src={item.image_url}
+                  alt={item.name}
+                  className="h-12 w-12 shrink-0 rounded-md object-cover"
+                />
+              ) : (
+                <div className="h-12 w-12 shrink-0 rounded-md bg-muted" />
+              )}
+              <div className="min-w-0 flex-1">
+                {item.item_id ? (
+                  <Link
+                    to={item.category_id ? `/shop/${item.category_id}/${item.item_id}` : `/shop/${item.item_id}`}
+                    className="truncate text-sm font-medium hover:underline text-foreground"
+                  >
+                    {item.name}
+                  </Link>
+                ) : (
+                  <p className="truncate text-sm font-medium">{item.name}</p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Qty: {item.quantity} · ${(item.unit_price_cents / 100).toFixed(2)} each
+                </p>
+              </div>
+              <p className="shrink-0 text-sm font-semibold">
+                ${(item.line_total_cents / 100).toFixed(2)}
+              </p>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 // ─── Events Timeline Sub-component ───────────────────────────
@@ -116,11 +193,11 @@ function EventsTimeline({ txnId }: { txnId: string }) {
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium">
-                  {formatEventName(event.event_type)}
+                  {formatEventName(event.event_name ?? event.event_type)}
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
-                {formatDate(event.ts)}
+                {formatDate(event.created_at ?? event.ts)}
               </p>
               {event.detail && (
                 <p className="mt-0.5 text-xs text-muted-foreground">{event.detail}</p>
@@ -226,7 +303,14 @@ export function TransactionDetail() {
     mutationFn: () => getReceipt(txnId!),
     onSuccess: (data) => {
       if (data.receipt_url) {
-        window.open(data.receipt_url, "_blank", "noopener");
+        // Strip the origin so the request routes through the Vite proxy,
+        // avoiding direct-to-backend calls that bypass session cookies.
+        try {
+          const url = new URL(data.receipt_url);
+          window.open(url.pathname + url.search, "_blank", "noopener");
+        } catch {
+          window.open(data.receipt_url, "_blank", "noopener");
+        }
       } else {
         toast.info("Receipt is being generated. Try again shortly.");
       }
@@ -406,6 +490,11 @@ export function TransactionDetail() {
           )}
         </CardContent>
       </Card>
+
+      {/* Cart Items */}
+      {typeof (txn.metadata as Record<string, unknown> | undefined)?.cart_id === "string" && (
+        <CartItemsCard cartId={(txn.metadata as Record<string, unknown>).cart_id as string} />
+      )}
 
       {/* Action buttons */}
       {(canComplete || canRevert || canRequestCancel || canRespondCancel) && (

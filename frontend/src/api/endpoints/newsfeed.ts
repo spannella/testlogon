@@ -43,8 +43,11 @@ export const follow = (userId: string) =>
 export const unfollow = (userId: string) =>
   api.post<{ ok: boolean }>("/social/unfollow", { target_user_id: userId });
 
-export const unlockPost = (postId: string) =>
-  api.post<{ ok: boolean }>("/posts/unlock", { post_id: postId });
+export const unlockPost = (postId: string, paymentMethodId?: string) =>
+  api.post<{ ok: boolean }>("/posts/unlock", {
+    post_id: postId,
+    ...(paymentMethodId ? { payment_method_id: paymentMethodId } : {}),
+  });
 
 // ── Post CRUD ──────────────────────────────────────────────────
 
@@ -82,6 +85,14 @@ export const uploadPostImage = (file: File) => {
 
 export const tipPostDirect = (postId: string, body: TipReq) =>
   api.post<{ ok: boolean; tip_total_cents: number }>(`/posts/${postId}/tip`, body);
+
+// ── Reactions ──────────────────────────────────────────────────
+
+export const addPostReaction = (postId: string, emoji: string) =>
+  api.post<{ ok: boolean }>(`/posts/${postId}/reactions`, { emoji });
+
+export const removePostReaction = (postId: string, emoji: string) =>
+  api.post<{ ok: boolean }>(`/posts/${postId}/unreact`, { emoji });
 
 /** SSE stream URL for real-time feed updates */
 export const feedSseUrl = "/sse";

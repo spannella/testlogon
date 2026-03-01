@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { MoreHorizontal, Pencil, Trash2, EyeOff, Flag } from "lucide-react";
+import { MoreHorizontal, Pencil, Trash2, EyeOff, Flag, Link2 } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -51,6 +51,15 @@ export function PostActions({ postId, isOwn, onEdit }: PostActionsProps) {
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            onClick={() => {
+              navigator.clipboard.writeText(`${window.location.origin}/posts/${postId}`);
+              toast.success("Link copied");
+            }}
+          >
+            <Link2 className="mr-2 h-4 w-4" /> Copy link
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
           {isOwn ? (
             <>
               <DropdownMenuItem onClick={onEdit}>

@@ -40,6 +40,7 @@ except ImportError:  # pragma: no cover - fallback for older Python
 
 router = APIRouter(prefix="/ui", tags=["calendar"])
 public_router = APIRouter(prefix="/booking", tags=["booking"])
+public_event_router = APIRouter(prefix="/calendar/public", tags=["calendar_public"])
 
 
 def _require_zoneinfo() -> None:
@@ -1641,3 +1642,91 @@ async def reserve_booking_slot(link_id: str, body: BookingRequestIn):
             event_id=event_id,
         )
     return _event_out(item, meta["calendar_id"])
+
+
+# ─── iCal helper ─────────────────────────────────────────────────
+
+def _build_ics(evt: dict, event_id: str) -> str:
+    """Build an iCalendar (.ics) file string from an event dict."""
+    def fmt_dt(s: str) -> str:
+        dt = parse_iso_dt(s).astimezone(timezone.utc)
+        return dt.strftime("%Y%m%dT%H%M%SZ")
+
+    lines = [
+        "BEGIN:VCALENDAR",
+        "VERSION:2.0",
+        "PRODID:-//TestLogon//EN",
+        "CALSCALE:GREGORIAN",
+        "BEGIN:VEVENT",
+        f"UID:{event_id}@testlogon",
+    ]
+    if evt.get("all_day") and evt.get("all_day_date"):
+        d = evt["all_day_date"].replace("-", "")
+        end_d = (date.fromisoformat(evt["all_day_date"]) + timedelta(days=1)).strftime("%Y%m%d")
+        lines += [f"DTSTART;VALUE=DATE:{d}", f"DTEND;VALUE=DATE:{end_d}"]
+    elif evt.get("start_utc"):
+        lines.append(f"DTSTART:{fmt_dt(evt['start_utc'])}")
+        if evt.get("end_utc"):
+            lines.append(f"DTEND:{fmt_dt(evt['end_utc'])}")
+    lines.append(f"SUMMARY:{evt.get('name', '')}")
+    if evt.get("description"):
+        lines.append(f"DESCRIPTION:{evt['description'].replace(chr(10), chr(92) + 'n')}")
+    lines += ["END:VEVENT", "END:VCALENDAR"]
+    return "\r\n".join(lines) + "\r\n"
+
+
+# ─── Public event endpoints (no auth) ───────────────────────────
+
+@public_event_router.get("/event/{calendar_id}/{event_id}")
+def get_public_event(calendar_id: str, event_id: str):
+    evt = T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": f"event#{event_id}"}).get("Item")
+    if not evt:
+        raise HTTPException(404, "Event not found")
+    return {
+        "event_id": evt.get("event_id") or event_id,
+        "calendar_id": calendar_id,
+        "name": evt.get("name"),
+        "start_utc": evt.get("start_utc"),
+        "end_utc": evt.get("end_utc"),
+        "all_day": bool(evt.get("all_day", False)),
+        "all_day_date": evt.get("all_day_date"),
+        "timezone": evt.get("timezone", "UTC"),
+        "description": evt.get("description"),
+    }
+
+
+@public_event_router.get("/event/{calendar_id}/{event_id}/ical")
+def download_public_ical(calendar_id: str, event_id: str):
+    from fastapi.responses import Response
+    evt = T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": f"event#{event_id}"}).get("Item")
+    if not evt:
+        raise HTTPException(404, "Event not found")
+    ics = _build_ics(evt, event_id)
+    safe = "".join(c for c in evt.get("name", "event") if c.isalnum() or c in " -_")[:40].strip()
+    return Response(
+        content=ics,
+        media_type="text/calendar",
+        headers={"Content-Disposition": f'attachment; filename="{safe or "event"}.ics"'},
+    )
+
+
+# ─── Authenticated iCal download ────────────────────────────────
+
+@router.get("/calendars/{calendar_id}/events/{event_id}/ical")
+async def download_event_ical(
+    calendar_id: str,
+    event_id: str,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    from fastapi.responses import Response
+    _load_calendar_access(calendar_id, ctx["user_sub"])
+    evt = T.calendar.get_item(Key={"calendar_id": calendar_id, "sk": f"event#{event_id}"}).get("Item")
+    if not evt:
+        raise HTTPException(404, "Event not found")
+    ics = _build_ics(evt, event_id)
+    safe = "".join(c for c in evt.get("name", "event") if c.isalnum() or c in " -_")[:40].strip()
+    return Response(
+        content=ics,
+        media_type="text/calendar",
+        headers={"Content-Disposition": f'attachment; filename="{safe or "event"}.ics"'},
+    )

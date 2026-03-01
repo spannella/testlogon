@@ -45,8 +45,11 @@ describe("messageEncryption", () => {
   it("classifies tampered payload via checksum mismatch", async () => {
     const envelope = await encryptMessage("tamper check", "Str0ng!Password");
 
-    const bytes = Uint8Array.from(atob(envelope.ciphertext_b64), (ch) => ch.charCodeAt(0));
-    bytes[0] = bytes[0] ^ 0xff;
+    const bytes = Uint8Array.from(atob(envelope.ciphertext_b64!), (ch) => ch.charCodeAt(0));
+    expect(bytes.length).toBeGreaterThan(0);
+    const first = bytes[0];
+    if (first === undefined) throw new Error("Expected ciphertext bytes");
+    bytes[0] = first ^ 0xff;
     const tamperedB64 = btoa(String.fromCharCode(...bytes));
 
     const tampered = {

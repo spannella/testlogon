@@ -45,6 +45,34 @@ vi.mock("../ShareDialog", () => ({ ShareDialog: () => null }));
 vi.mock("../BulkActions", () => ({ BulkActions: () => null }));
 vi.mock("../MoveDialog", () => ({ MoveDialog: () => null }));
 
+vi.mock("@/lib/fileEncryption", () => ({
+  encryptFileChunked: vi.fn().mockResolvedValue({
+    blob: new Blob(["encrypted"], { type: "application/octet-stream" }),
+    metadata: {
+      version: 1,
+      alg: "AES-256-GCM",
+      kdf: "PBKDF2-SHA256",
+      iterations: 600000,
+      salt_b64: "AAAAAAAAAAAAAAAAAAAAAA==",
+      iv_b64: "AAAAAAAAAAAAAAAA",
+      orig_name: "a.txt",
+      orig_size: 3,
+      mime: "text/plain",
+    },
+  }),
+  decryptFileChunked: vi.fn(),
+}));
+
+vi.mock("@/lib/filePasswordStore", () => ({
+  buildRememberedFileId: vi.fn().mockResolvedValue("fake-file-id"),
+  canRememberPasswords: vi.fn().mockReturnValue(false),
+  clearAllRememberedPasswords: vi.fn().mockResolvedValue(0),
+  clearRememberedPassword: vi.fn().mockResolvedValue(undefined),
+  loadRememberedPassword: vi.fn().mockResolvedValue(null),
+  purgeExpiredRememberedPasswords: vi.fn().mockResolvedValue(undefined),
+  saveRememberedPassword: vi.fn().mockResolvedValue(undefined),
+}));
+
 describe("FilesPage encryption password dialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();

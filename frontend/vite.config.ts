@@ -31,6 +31,8 @@ export default defineConfig({
       "/uploads": "http://localhost:8000",
       "/sse": "http://localhost:8000",
       "/notifications": "http://localhost:8000",
+      "/mock": "http://localhost:8000",
+      "/calendar/public": "http://localhost:8000",
     },
   },
   build: {
@@ -41,5 +43,6 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: "./src/test/setup.ts",
+    exclude: ["**/node_modules/**", "**/e2e/**"],
   },
 });

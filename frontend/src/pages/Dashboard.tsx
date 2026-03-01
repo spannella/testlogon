@@ -104,6 +104,7 @@ export default function Dashboard() {
     queryKey: ["events", "upcoming", firstCalendarId],
     queryFn: () => getEvents(firstCalendarId!),
     enabled: !!firstCalendarId,
+    retry: false,
   });
 
   // ── Derived values ──────────────────────────────────────────────

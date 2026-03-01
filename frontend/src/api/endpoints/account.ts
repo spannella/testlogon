@@ -42,6 +42,16 @@ export const setApiKeyIpRules = (body: ApiKeyIpRulesReq) =>
     body,
   );
 
+export const getApiKeyUsage = (keyId: string, period?: string) =>
+  api.get<{
+    period: string;
+    calls: number;
+    billable_calls: number;
+    spend_cents: number;
+    limit_calls?: number;
+    remaining_calls?: number;
+  }>(`/ui/api_keys/${keyId}/usage${period ? `?period=${period}` : ""}`);
+
 // ─── Account Status ──────────────────────────────────────────────
 
 export const getAccountStatus = () =>

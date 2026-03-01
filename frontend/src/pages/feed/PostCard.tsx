@@ -1,19 +1,40 @@
 import { useState, useCallback, useEffect } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Heart, MessageCircle, Lock, DollarSign, X, ChevronLeft, ChevronRight } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Heart, MessageCircle, Lock, DollarSign, X, ChevronLeft, ChevronRight, CreditCard, Check, Loader2, Share2, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
-import { likePost, unlikePost, unlockPost } from "@/api/endpoints/newsfeed";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { likePost, unlikePost, unlockPost, addPostReaction, removePostReaction } from "@/api/endpoints/newsfeed";
+import { getPaymentMethods } from "@/api/endpoints/billing";
 import { useAuthStore } from "@/stores/authStore";
 import { CommentsThread } from "./CommentsThread";
 import { PostActions } from "./PostActions";
 import { EditPostDialog } from "./EditPostDialog";
 import { TipDialog } from "./TipDialog";
-import type { FeedPost } from "@/api/types";
+import { SharePostDialog } from "./SharePostDialog";
+import { FilePreview } from "@/pages/files/FilePreview";
+import type { FeedPost, PaymentMethod, PostFileAttachment } from "@/api/types";
+import type { FileEntry } from "@/api/types";
+
+function formatBytes(bytes?: number): string {
+  if (bytes == null) return "";
+  if (bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + (sizes[i] ?? "TB");
+}
 
 function formatRelative(dateStr: string): string {
   const date = new Date(dateStr);
@@ -139,18 +160,30 @@ function PostImageGrid({ urls, onClickImage }: PostImageGridProps) {
 
 interface PostCardProps {
   post: FeedPost;
+  defaultShowComments?: boolean;
 }
 
-export function PostCard({ post }: PostCardProps) {
+export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
   const userId = useAuthStore((s) => s.userId);
   const queryClient = useQueryClient();
-  const [showComments, setShowComments] = useState(false);
+  const [showComments, setShowComments] = useState(defaultShowComments);
   const [editOpen, setEditOpen] = useState(false);
   const [tipOpen, setTipOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
+  const [unlockDialogOpen, setUnlockDialogOpen] = useState(false);
+  const [unlockPaymentMethodId, setUnlockPaymentMethodId] = useState<string | null>(null);
+  const [filePreviewTarget, setFilePreviewTarget] = useState<PostFileAttachment | null>(null);
 
   const imageUrls = post.image_urls ?? [];
   const isOwn = post.author_id === userId;
+
+  const { data: paymentMethods = [] } = useQuery<PaymentMethod[]>({
+    queryKey: ["billing", "payment-methods"],
+    queryFn: getPaymentMethods,
+    staleTime: 5 * 60 * 1000,
+    enabled: !isOwn,
+  });
 
   const likeMutation = useMutation({
     mutationFn: () => (post.liked_by_me ? unlikePost(post.post_id) : likePost(post.post_id)),
@@ -163,10 +196,11 @@ export function PostCard({ post }: PostCardProps) {
   });
 
   const unlockMutation = useMutation({
-    mutationFn: () => unlockPost(post.post_id),
+    mutationFn: (paymentMethodId?: string | null) => unlockPost(post.post_id, paymentMethodId ?? undefined),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["feed"] });
       toast.success("Post unlocked!");
+      setUnlockDialogOpen(false);
     },
     onError: () => {
       toast.error("Failed to unlock post");
@@ -175,6 +209,28 @@ export function PostCard({ post }: PostCardProps) {
 
   const isLocked = !!post.unlock_price_cents && !post.unlocked;
   const initials = post.author_id.slice(0, 2).toUpperCase();
+
+  const REACTION_EMOJIS = ["👍", "❤️", "😂", "🔥", "😮"];
+
+  const addReactionMut = useMutation({
+    mutationFn: (emoji: string) => addPostReaction(post.post_id, emoji),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["feed"] }),
+    onError: () => toast.error("Failed to react"),
+  });
+
+  const removeReactionMut = useMutation({
+    mutationFn: (emoji: string) => removePostReaction(post.post_id, emoji),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["feed"] }),
+    onError: () => toast.error("Failed to remove reaction"),
+  });
+
+  const handleReaction = (emoji: string, isMine: boolean) => {
+    if (isMine) {
+      removeReactionMut.mutate(emoji);
+    } else {
+      addReactionMut.mutate(emoji);
+    }
+  };
 
   const closeLightbox = useCallback(() => setLightboxIdx(null), []);
 
@@ -237,15 +293,22 @@ export function PostCard({ post }: PostCardProps) {
               </p>
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-background/60 rounded">
                 <Lock className="h-6 w-6 text-muted-foreground" />
-                <Button
-                  size="sm"
-                  onClick={() => unlockMutation.mutate()}
-                  disabled={unlockMutation.isPending}
-                >
-                  {unlockMutation.isPending
-                    ? "Unlocking..."
-                    : `Unlock for $${((post.unlock_price_cents ?? 0) / 100).toFixed(2)}`}
-                </Button>
+                {paymentMethods.length === 0 ? (
+                  <p className="text-xs text-muted-foreground px-4 text-center">
+                    Add a payment method in Billing to unlock this post
+                  </p>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      const def = paymentMethods.find((m) => m.is_default) ?? paymentMethods[0];
+                      setUnlockPaymentMethodId(def?.payment_method_id ?? null);
+                      setUnlockDialogOpen(true);
+                    }}
+                  >
+                    {`Unlock for $${((post.unlock_price_cents ?? 0) / 100).toFixed(2)}`}
+                  </Button>
+                )}
               </div>
             </div>
           ) : (
@@ -256,6 +319,26 @@ export function PostCard({ post }: PostCardProps) {
         {/* Image grid */}
         {imageUrls.length > 0 && (
           <PostImageGrid urls={imageUrls} onClickImage={setLightboxIdx} />
+        )}
+
+        {/* File attachment cards */}
+        {!isLocked && (post.file_attachments ?? []).length > 0 && (
+          <div className="mt-3 space-y-1.5">
+            {(post.file_attachments ?? []).map((fa, i) => (
+              <button
+                key={i}
+                type="button"
+                onClick={() => setFilePreviewTarget(fa)}
+                className="flex w-full items-center gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-left hover:bg-muted/70 transition-colors"
+              >
+                <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">{fa.name}</span>
+                {fa.size != null && (
+                  <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(fa.size)}</span>
+                )}
+              </button>
+            ))}
+          </div>
         )}
 
         {/* Action row */}
@@ -294,11 +377,43 @@ export function PostCard({ post }: PostCardProps) {
               <span>Tip</span>
             </button>
           )}
+          <button
+            className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            onClick={() => setShareOpen(true)}
+            aria-label="Share post"
+          >
+            <Share2 className="h-4 w-4" />
+          </button>
           {(post.tip_total_cents ?? 0) > 0 && (
             <span className="ml-auto text-xs text-emerald-600">
               ${((post.tip_total_cents ?? 0) / 100).toFixed(2)} tipped
             </span>
           )}
+        </div>
+
+        {/* Reaction bar */}
+        <div className="mt-2 flex items-center flex-wrap gap-1">
+          {REACTION_EMOJIS.map((emoji) => {
+            const count = (post.reactions_counts ?? {})[emoji] ?? 0;
+            const isMine = (post.my_reactions ?? []).includes(emoji);
+            return (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => handleReaction(emoji, isMine)}
+                disabled={addReactionMut.isPending || removeReactionMut.isPending}
+                className={cn(
+                  "flex items-center gap-0.5 rounded-full border px-2 py-0.5 text-sm transition-colors",
+                  isMine
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : "border-transparent hover:border-border hover:bg-muted text-muted-foreground",
+                )}
+              >
+                <span>{emoji}</span>
+                {count > 0 && <span className="text-xs font-medium">{count}</span>}
+              </button>
+            );
+          })}
         </div>
 
         {/* Comments thread */}
@@ -326,6 +441,97 @@ export function PostCard({ post }: PostCardProps) {
         postId={post.post_id}
         authorId={post.author_id}
       />
+
+      {/* Share dialog */}
+      <SharePostDialog
+        open={shareOpen}
+        onClose={() => setShareOpen(false)}
+        post={post}
+      />
+
+      {/* Unlock dialog */}
+      <Dialog
+        open={unlockDialogOpen}
+        onOpenChange={(open) => { if (!open) { setUnlockDialogOpen(false); setUnlockPaymentMethodId(null); } }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Lock className="h-4 w-4" />
+              Unlock post
+            </DialogTitle>
+            <DialogDescription>
+              Pay ${((post.unlock_price_cents ?? 0) / 100).toFixed(2)} to unlock this post.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Payment method</label>
+              <div className="space-y-2">
+                {paymentMethods.map((pm) => {
+                  const label = pm.brand
+                    ? `${pm.brand.charAt(0).toUpperCase() + pm.brand.slice(1)} •••• ${pm.last4}`
+                    : (pm.label ?? pm.method_type);
+                  const isSelected = unlockPaymentMethodId === pm.payment_method_id;
+                  return (
+                    <button
+                      key={pm.payment_method_id}
+                      type="button"
+                      onClick={() => setUnlockPaymentMethodId(pm.payment_method_id)}
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-sm transition-colors hover:bg-accent",
+                        isSelected ? "border-primary bg-primary/5" : "border-border",
+                      )}
+                    >
+                      <CreditCard className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="flex-1 text-left">{label}</span>
+                      {pm.is_default && (
+                        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">Default</span>
+                      )}
+                      {isSelected && <Check className="h-4 w-4 text-primary" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Total charge</span>
+                <span className="font-semibold">${((post.unlock_price_cents ?? 0) / 100).toFixed(2)} USD</span>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUnlockDialogOpen(false)} disabled={unlockMutation.isPending}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => unlockMutation.mutate(unlockPaymentMethodId)}
+              disabled={unlockMutation.isPending || !unlockPaymentMethodId}
+            >
+              {unlockMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Pay & Unlock"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* File preview modal */}
+      {filePreviewTarget && (
+        <FilePreview
+          file={{
+            name: filePreviewTarget.name,
+            path: "",
+            type: "file",
+            size: filePreviewTarget.size,
+            content_type: filePreviewTarget.content_type,
+          } as FileEntry}
+          files={[]}
+          previewSrcUrl={filePreviewTarget.url}
+          onClose={() => setFilePreviewTarget(null)}
+          onNavigate={() => {}}
+          onDownload={() => window.open(filePreviewTarget.url, "_blank", "noopener,noreferrer")}
+        />
+      )}
 
       {/* Image lightbox */}
       {lightboxIdx !== null && imageUrls[lightboxIdx] && (

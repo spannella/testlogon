@@ -40,8 +40,10 @@ from app.routers.account_state import router as account_state_router
 from app.routers.profile import router as profile_router
 from app.routers.messaging import router as messaging_router
 from app.routers.filemanager import router as filemanager_router
+from app.routers.signature_packets import router as signature_packets_router
 from app.routers.addresses import router as addresses_router
 from app.routers.calendar import public_router as calendar_public_router
+from app.routers.calendar import public_event_router as calendar_public_event_router
 from app.routers.calendar import router as calendar_router
 from app.routers.device_trust import router as device_trust_router
 from app.routers.newsfeed import router as newsfeed_router, startup as newsfeed_startup
@@ -50,8 +52,14 @@ from app.routers.shoppingcart import router as shoppingcart_router
 from app.routers.catalog import router as catalog_router
 from app.routers.subscription_server import router as subscription_server_router
 from app.routers.admin_usage import router as admin_usage_router
+from app.routers.admin_entitlements import router as admin_entitlements_router
 from app.routers.ups import router as ups_router
 from app.routers.projects import router as projects_router
+from app.routers.contacts import router as contacts_router
+from app.routers.entitlements import router as entitlements_router
+from app.routers.commercial_checkout import router as commercial_checkout_router
+from app.routers.tickets import router as tickets_router
+from app.routers.ticket_spaces import router as ticket_spaces_router
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
@@ -59,12 +67,15 @@ from app.services.api_usage_metering import record_api_usage_from_response, enfo
 from app.services.api_metering_policy import build_limit_denial_headers
 from app.routers.messaging import start_scheduled_messages_task
 from app.services.projects_reconcile import start_projects_reconcile_task
+from app.services.api_usage_entitlements import enforce_api_package_entitlement_pre_request
 
 
 def _api_usage_metering_middleware():
     async def _middleware(request: Request, call_next):
         quota_headers = {}
+        entitlement_headers = {}
         try:
+            entitlement_headers = enforce_api_package_entitlement_pre_request(request)
             quota_headers = enforce_account_quota_pre_request(request)
         except HTTPException as exc:
             detail = exc.detail if isinstance(exc.detail, dict) else {"code": "api_limit_exceeded"}
@@ -72,6 +83,8 @@ def _api_usage_metering_middleware():
             return JSONResponse(status_code=int(exc.status_code or 429), content={"detail": detail}, headers=headers)
 
         response = await call_next(request)
+        for k, v in entitlement_headers.items():
+            response.headers.setdefault(k, v)
         for k, v in quota_headers.items():
             response.headers.setdefault(k, v)
         try:
@@ -163,9 +176,11 @@ def create_app() -> FastAPI:
     app.include_router(profile_router)
     app.include_router(messaging_router)
     app.include_router(filemanager_router)
+    app.include_router(signature_packets_router)
     app.include_router(addresses_router)
     app.include_router(calendar_router)
     app.include_router(calendar_public_router)
+    app.include_router(calendar_public_event_router)
     app.include_router(device_trust_router)
     app.include_router(newsfeed_router)
     app.add_event_handler("startup", validate_startup_root_invariant)
@@ -185,10 +200,16 @@ def create_app() -> FastAPI:
     app.include_router(purchase_history_router)
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)
+    app.include_router(commercial_checkout_router)
+    app.include_router(entitlements_router)
     app.include_router(subscription_server_router)
     app.include_router(admin_usage_router)
+    app.include_router(admin_entitlements_router)
     app.include_router(ups_router)
     app.include_router(projects_router)
+    app.include_router(contacts_router)
+    app.include_router(tickets_router)
+    app.include_router(ticket_spaces_router)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)
 

@@ -7969,6 +7969,7 @@ document.getElementById("accountReactivateBtn").onclick = () => {
 
 if (!window.__SKIP_BOOT__) {
   initBillingUi();
+  initSignatureComposerUi();
   renderPasswordRecovery();
   document.getElementById("billingRefreshBtn").onclick = refreshBillingAll;
   document.getElementById("paySettledBalanceBtn").onclick = payBillingSettledBalance;
@@ -8068,14 +8069,635 @@ document.getElementById("newsfeedNotifsRefreshBtn").onclick = async () => {
   }
 };
 document.getElementById("newsfeedConnectBtn").onclick = connectNewsfeedSse;
+document.getElementById("ticketRefreshBtn").onclick = async () => {
+  try {
+    await refreshTicketList({ append: false });
+  } catch (e) {
+    setTicketListStatus(String(e.message || e));
+  }
+};
+document.getElementById("ticketLoadMoreBtn").onclick = async () => {
+  try {
+    if (!ticketUiState.nextCursor) {
+      setTicketListStatus("No more tickets.");
+      return;
+    }
+    await refreshTicketList({ append: true });
+  } catch (e) {
+    setTicketListStatus(String(e.message || e));
+  }
+};
+document.getElementById("ticketCreateBtn").onclick = async () => {
+  try {
+    await createTicketFromUi();
+  } catch (e) {
+    setTicketCreateStatus(String(e.message || e));
+  }
+};
+document.getElementById("ticketThreadRefreshBtn").onclick = async () => {
+  try {
+    if (!ticketUiState.activeTicketId) return;
+    await selectTicketThread(ticketUiState.activeTicketId);
+  } catch (e) {
+    setTicketReplyStatus(String(e.message || e));
+  }
+};
+document.getElementById("ticketReplyBtn").onclick = async () => {
+  try {
+    await sendTicketReplyFromUi();
+  } catch (e) {
+    setTicketReplyStatus(String(e.message || e));
+  }
+};
+document.getElementById("adminTicketFilterApplyBtn").onclick = async () => {
+  try {
+    applyAdminTicketFiltersFromInputs();
+    await refreshAdminTicketQueue({ append: false });
+  } catch (e) {
+    setAdminTicketQueueStatus(String(e.message || e));
+  }
+};
+document.getElementById("adminTicketQueueLoadMoreBtn").onclick = async () => {
+  try {
+    if (!adminTicketUiState.nextCursor) {
+      setAdminTicketQueueStatus("No more queue items.");
+      return;
+    }
+    await refreshAdminTicketQueue({ append: true });
+  } catch (e) {
+    setAdminTicketQueueStatus(String(e.message || e));
+  }
+};
+document.getElementById("adminTicketThreadRefreshBtn").onclick = async () => {
+  try {
+    if (!adminTicketUiState.activeTicketId) return;
+    await selectAdminTicket(adminTicketUiState.activeTicketId);
+  } catch (e) {
+    setAdminTicketActionStatus(String(e.message || e));
+  }
+};
+document.getElementById("adminTicketAssignSelfBtn").onclick = async () => {
+  try {
+    setAdminTicketActionStatus("Assigning to you...");
+    await adminAssignTicketToSelf();
+    setAdminTicketActionStatus("Assigned.");
+  } catch (e) {
+    setAdminTicketActionStatus(String(e.message || e));
+  }
+};
+document.getElementById("adminTicketAssignOtherBtn").onclick = async () => {
+  try {
+    const assignee = readInput("adminTicketAssignOtherInput").trim();
+    setAdminTicketActionStatus("Assigning...");
+    await adminAssignTicket(assignee);
+    setAdminTicketActionStatus("Assigned.");
+  } catch (e) {
+    setAdminTicketActionStatus(String(e.message || e));
+  }
+};
+document.getElementById("adminTicketReplyBtn").onclick = async () => {
+  try {
+    setAdminTicketActionStatus("Sending reply...");
+    await adminReplyToTicket();
+    setAdminTicketActionStatus("Reply sent.");
+  } catch (e) {
+    setAdminTicketActionStatus(String(e.message || e));
+  }
+};
+document.getElementById("adminTicketMarkDoneBtn").onclick = async () => {
+  try {
+    setAdminTicketActionStatus("Updating status...");
+    await adminSetTicketStatus("done");
+    setAdminTicketActionStatus("Ticket marked done.");
+  } catch (e) {
+    setAdminTicketActionStatus(String(e.message || e));
+  }
+};
+document.getElementById("adminTicketReopenBtn").onclick = async () => {
+  try {
+    setAdminTicketActionStatus("Updating status...");
+    await adminSetTicketStatus("open");
+    setAdminTicketActionStatus("Ticket reopened.");
+  } catch (e) {
+    setAdminTicketActionStatus(String(e.message || e));
+  }
+};
   document.getElementById("newsfeedDisconnectBtn").onclick = () => {
   disconnectNewsfeedSse();
   logNewsfeedSse("Disconnected.");
 };
+
+
+const ticketUiState = {
+  items: [],
+  nextCursor: null,
+  activeTicketId: "",
+};
+
+function setTicketListStatus(msg) {
+  const el = document.getElementById("ticketListStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function setTicketCreateStatus(msg) {
+  const el = document.getElementById("ticketCreateStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function setTicketReplyStatus(msg) {
+  const el = document.getElementById("ticketReplyStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function renderTicketList() {
+  const root = document.getElementById("ticketList");
+  if (!root) return;
+  root.innerHTML = "";
+  for (const t of ticketUiState.items) {
+    const row = document.createElement("button");
+    row.className = "item";
+    row.style.width = "100%";
+    row.style.textAlign = "left";
+    row.innerHTML = `
+      <div class="row-inline" style="justify-content:space-between;">
+        <b>${escapeHtml(t.subject || "(no subject)")}</b>
+        <span class="pill">${escapeHtml(t.status || "open")}</span>
+      </div>
+      <div class="muted mono">${escapeHtml(t.ticket_id || "")}</div>
+    `;
+    row.onclick = () => selectTicketThread(t.ticket_id);
+    root.appendChild(row);
+  }
+  if (ticketUiState.items.length === 0) {
+    root.innerHTML = '<div class="muted">No tickets yet.</div>';
+  }
+}
+
+async function refreshTicketList({ append = false } = {}) {
+  const q = new URLSearchParams();
+  q.set("limit", "10");
+  if (append && ticketUiState.nextCursor) q.set("cursor", ticketUiState.nextCursor);
+  const res = await apiGet(`/tickets?${q.toString()}`);
+  const items = res.items || [];
+  ticketUiState.nextCursor = res.next_cursor || null;
+  ticketUiState.items = append ? ticketUiState.items.concat(items) : items;
+  renderTicketList();
+  setTicketListStatus(ticketUiState.nextCursor ? "More available" : "Up to date");
+}
+
+function renderTicketThread(ticket) {
+  const label = document.getElementById("ticketActiveLabel");
+  const meta = document.getElementById("ticketThreadMeta");
+  const messages = document.getElementById("ticketThreadMessages");
+  if (!ticket) {
+    if (label) label.textContent = "No ticket selected";
+    if (meta) meta.textContent = "";
+    if (messages) messages.innerHTML = '<div class="muted">Select a ticket to view thread.</div>';
+    return;
+  }
+  if (label) label.textContent = `${ticket.ticket_id} • ${ticket.status}`;
+  if (meta) meta.textContent = `Subject: ${ticket.subject || ""}`;
+  if (messages) {
+    messages.innerHTML = "";
+    for (const msg of (ticket.messages || [])) {
+      const item = document.createElement("div");
+      item.className = "item";
+      item.innerHTML = `
+        <div class="row-inline" style="justify-content:space-between;">
+          <b>${escapeHtml(msg.sender_role || "user")}</b>
+          <span class="muted">${fmtTs(msg.created_at)}</span>
+        </div>
+        <div>${escapeHtml(msg.body || "")}</div>
+      `;
+      messages.appendChild(item);
+    }
+    if ((ticket.messages || []).length === 0) {
+      messages.innerHTML = '<div class="muted">No messages.</div>';
+    }
+  }
+}
+
+async function selectTicketThread(ticketId) {
+  if (!ticketId) return;
+  ticketUiState.activeTicketId = ticketId;
+  const res = await apiGet(`/tickets/${encodeURIComponent(ticketId)}`);
+  renderTicketThread(res.ticket);
+}
+
+async function createTicketFromUi() {
+  const subject = readInput("ticketNewSubject").trim();
+  const description = readInput("ticketNewDescription").trim();
+  if (!subject || !description) throw new Error("Subject and description are required");
+  setTicketCreateStatus("Opening ticket...");
+  const res = await apiPost("/tickets", { subject, description });
+  setInputValue("ticketNewSubject", "");
+  setInputValue("ticketNewDescription", "");
+  setTicketCreateStatus("Ticket opened.");
+  await refreshTicketList({ append: false });
+  await selectTicketThread(res.ticket.ticket_id);
+}
+
+async function sendTicketReplyFromUi() {
+  if (!ticketUiState.activeTicketId) throw new Error("Select a ticket first");
+  const body = readInput("ticketReplyBody").trim();
+  if (!body) throw new Error("Reply cannot be empty");
+  setTicketReplyStatus("Sending...");
+  await apiPost(`/tickets/${encodeURIComponent(ticketUiState.activeTicketId)}/messages`, { body });
+  setInputValue("ticketReplyBody", "");
+  setTicketReplyStatus("Reply sent.");
+  await selectTicketThread(ticketUiState.activeTicketId);
+  await refreshTicketList({ append: false });
+}
+
+refreshTicketList({ append: false }).catch(() => {});
+
+
+const adminTicketUiState = {
+  items: [],
+  nextCursor: null,
+  activeTicketId: "",
+  activeTicket: null,
+  filters: { status: "", assignee: "", owner: "" },
+};
+
+function setAdminTicketQueueStatus(msg) {
+  const el = document.getElementById("adminTicketQueueStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function setAdminTicketActionStatus(msg) {
+  const el = document.getElementById("adminTicketActionStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function renderAdminTicketQueue() {
+  const root = document.getElementById("adminTicketQueueList");
+  if (!root) return;
+  root.innerHTML = "";
+  for (const t of adminTicketUiState.items) {
+    const row = document.createElement("button");
+    row.className = "item";
+    row.style.width = "100%";
+    row.style.textAlign = "left";
+    row.innerHTML = `
+      <div class="row-inline" style="justify-content:space-between;">
+        <b>${escapeHtml(t.subject || "(no subject)")}</b>
+        <span class="pill">${escapeHtml(t.status || "open")}</span>
+      </div>
+      <div class="muted mono">${escapeHtml(t.ticket_id || "")}</div>
+      <div class="muted">owner=${escapeHtml(t.owner_sub || "")} assignee=${escapeHtml(t.assigned_admin_sub || "unassigned")}</div>
+    `;
+    row.onclick = () => selectAdminTicket(t.ticket_id);
+    root.appendChild(row);
+  }
+  if (adminTicketUiState.items.length === 0) {
+    root.innerHTML = '<div class="muted">No tickets for current filters.</div>';
+  }
+}
+
+function renderAdminTicketDetails(ticket) {
+  const label = document.getElementById("adminTicketActiveLabel");
+  const meta = document.getElementById("adminTicketMeta");
+  const messages = document.getElementById("adminTicketThreadMessages");
+  if (!ticket) {
+    if (label) label.textContent = "No ticket selected";
+    if (meta) meta.textContent = "";
+    if (messages) messages.innerHTML = '<div class="muted">Select a queue ticket to triage.</div>';
+    return;
+  }
+  if (label) label.textContent = `${ticket.ticket_id} • ${ticket.status}`;
+  if (meta) {
+    meta.textContent = `Subject: ${ticket.subject || ""} | Owner: ${ticket.owner_sub || ""} | Assignee: ${ticket.assigned_admin_sub || "unassigned"}`;
+  }
+  if (messages) {
+    messages.innerHTML = "";
+    for (const msg of (ticket.messages || [])) {
+      const item = document.createElement("div");
+      item.className = "item";
+      item.innerHTML = `
+        <div class="row-inline" style="justify-content:space-between;">
+          <b>${escapeHtml(msg.sender_role || "user")}</b>
+          <span class="muted">${fmtTs(msg.created_at)}</span>
+        </div>
+        <div>${escapeHtml(msg.body || "")}</div>
+      `;
+      messages.appendChild(item);
+    }
+    if ((ticket.messages || []).length === 0) {
+      messages.innerHTML = '<div class="muted">No messages.</div>';
+    }
+  }
+}
+
+async function refreshAdminTicketQueue({ append = false } = {}) {
+  const q = new URLSearchParams();
+  q.set("limit", "10");
+  const f = adminTicketUiState.filters;
+  if (f.status) q.set("status", f.status);
+  if (f.assignee) q.set("assignee_admin_sub", f.assignee);
+  if (f.owner) q.set("owner_sub", f.owner);
+  if (append && adminTicketUiState.nextCursor) q.set("cursor", adminTicketUiState.nextCursor);
+
+  const res = await apiGet(`/tickets?${q.toString()}`);
+  const items = res.items || [];
+  adminTicketUiState.nextCursor = res.next_cursor || null;
+  adminTicketUiState.items = append ? adminTicketUiState.items.concat(items) : items;
+  renderAdminTicketQueue();
+  setAdminTicketQueueStatus(adminTicketUiState.nextCursor ? "More queue items available" : "Queue loaded");
+}
+
+async function selectAdminTicket(ticketId) {
+  if (!ticketId) return;
+  adminTicketUiState.activeTicketId = ticketId;
+  const res = await apiGet(`/tickets/${encodeURIComponent(ticketId)}`);
+  adminTicketUiState.activeTicket = res.ticket;
+  renderAdminTicketDetails(adminTicketUiState.activeTicket);
+}
+
+async function adminAssignTicket(assigneeSub) {
+  if (!adminTicketUiState.activeTicketId) throw new Error("Select a ticket first");
+  const assignee = String(assigneeSub || "").trim();
+  if (!assignee) throw new Error("Assignee is required");
+  await apiPost(`/tickets/${encodeURIComponent(adminTicketUiState.activeTicketId)}/assign`, { assignee_admin_sub: assignee });
+  await selectAdminTicket(adminTicketUiState.activeTicketId);
+  await refreshAdminTicketQueue({ append: false });
+}
+
+async function adminAssignTicketToSelf() {
+  const me = await apiGet("/ui/me");
+  await adminAssignTicket(me.user_sub);
+}
+
+async function adminReplyToTicket() {
+  if (!adminTicketUiState.activeTicketId) throw new Error("Select a ticket first");
+  const body = readInput("adminTicketReplyBody").trim();
+  if (!body) throw new Error("Reply cannot be empty");
+  await apiPost(`/tickets/${encodeURIComponent(adminTicketUiState.activeTicketId)}/messages`, { body });
+  setInputValue("adminTicketReplyBody", "");
+  await selectAdminTicket(adminTicketUiState.activeTicketId);
+  await refreshAdminTicketQueue({ append: false });
+}
+
+async function adminSetTicketStatus(status) {
+  if (!adminTicketUiState.activeTicketId) throw new Error("Select a ticket first");
+  await apiPost(`/tickets/${encodeURIComponent(adminTicketUiState.activeTicketId)}/status`, { status });
+  await selectAdminTicket(adminTicketUiState.activeTicketId);
+  await refreshAdminTicketQueue({ append: false });
+}
+
+function applyAdminTicketFiltersFromInputs() {
+  adminTicketUiState.filters.status = readInput("adminTicketFilterStatus").trim();
+  adminTicketUiState.filters.assignee = readInput("adminTicketFilterAssignee").trim();
+  adminTicketUiState.filters.owner = readInput("adminTicketFilterOwner").trim();
+  adminTicketUiState.nextCursor = null;
+}
+
+
+refreshAdminTicketQueue({ append: false }).catch((e) => {
+  setAdminTicketQueueStatus(String(e.message || e));
+  renderAdminTicketDetails(null);
+});
+
+const TICKET_AUTO_REFRESH_MS = 15000;
+let ticketAutoRefreshHandle = null;
+
+async function refreshTicketPanelsLive() {
+  try {
+    await refreshTicketList({ append: false });
+    if (ticketUiState.activeTicketId) {
+      await selectTicketThread(ticketUiState.activeTicketId);
+    }
+  } catch (e) {
+    // keep polling resilient
+  }
+
+  try {
+    await refreshAdminTicketQueue({ append: false });
+    if (adminTicketUiState.activeTicketId) {
+      await selectAdminTicket(adminTicketUiState.activeTicketId);
+    }
+  } catch (e) {
+    // keep polling resilient
+  }
+}
+
+function startTicketAutoRefresh() {
+  if (ticketAutoRefreshHandle) return;
+  ticketAutoRefreshHandle = setInterval(() => {
+    if (document.hidden) return;
+    refreshTicketPanelsLive();
+  }, TICKET_AUTO_REFRESH_MS);
+}
+
+startTicketAutoRefresh();
+
 
 /* ===================== boot ===================== */
   setCalendarId(getCalendarId());
   if (!accessToken()) { openTokenModal(); } else { refreshAll(); }
   startToastSSE();
   startToastPolling();
+}
+
+/* ===================== signature packet composer ===================== */
+const sigComposerState = {
+  packet: null,
+  fields: [],
+  signers: [],
+};
+
+function sigStatus(msg) {
+  const el = document.getElementById("sigComposerStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function sigFieldDimensions(fieldType) {
+  if (fieldType === "text") return { width: 0.32, height: 0.07 };
+  if (fieldType === "date") return { width: 0.2, height: 0.05 };
+  return { width: 0.22, height: 0.06 };
+}
+
+function renderSigSigners() {
+  const wrap = document.getElementById("sigSignersList");
+  const select = document.getElementById("sigAssignedSignerId");
+  if (!wrap || !select) return;
+  wrap.innerHTML = "";
+  select.innerHTML = '<option value="">Unassigned</option>';
+  for (const signer of sigComposerState.signers || []) {
+    const signerId = String(signer.signer_id || "");
+    const item = document.createElement("div");
+    item.className = "list-item";
+    item.innerHTML = `<div><b>${signerId || "unknown"}</b><div class="muted">status: ${signer.status || "pending"}</div></div>`;
+    wrap.appendChild(item);
+
+    const opt = document.createElement("option");
+    opt.value = signerId;
+    opt.textContent = `${signerId} (${signer.status || "pending"})`;
+    select.appendChild(opt);
+  }
+  if (!sigComposerState.signers.length) {
+    wrap.innerHTML = '<div class="muted">No signers on packet yet.</div>';
+  }
+}
+
+function renderSigFields() {
+  const wrap = document.getElementById("sigFieldsList");
+  const canvas = document.getElementById("sigCanvas");
+  if (!wrap || !canvas) return;
+  wrap.innerHTML = "";
+  canvas.innerHTML = "";
+
+  for (const field of sigComposerState.fields || []) {
+    const row = document.createElement("div");
+    row.className = "list-item";
+    row.innerHTML = `
+      <div>
+        <b>${field.field_type}</b> <span class="mono">${field.field_id}</span>
+        <div class="muted">page ${field.page} • signer ${field.assigned_signer_id || "unassigned"} • ${field.required ? "required" : "optional"}</div>
+      </div>
+      <button data-field-delete="${field.field_id}" class="danger">Delete</button>
+    `;
+    wrap.appendChild(row);
+
+    const box = document.createElement("div");
+    box.className = "signature-composer-field";
+    box.style.left = `${Math.max(0, Number(field.x || 0) * 100)}%`;
+    box.style.top = `${Math.max(0, Number(field.y || 0) * 100)}%`;
+    box.style.width = `${Math.max(1, Number(field.width || 0) * 100)}%`;
+    box.style.height = `${Math.max(1, Number(field.height || 0) * 100)}%`;
+    box.textContent = field.field_type;
+    canvas.appendChild(box);
+  }
+
+  if (!sigComposerState.fields.length) {
+    wrap.innerHTML = '<div class="muted">No fields yet.</div>';
+  }
+
+  wrap.querySelectorAll("button[data-field-delete]").forEach((btn) => {
+    btn.onclick = async () => {
+      if (!sigComposerState.packet) return;
+      try {
+        await apiPost(`/v1/signature-packets/${encodeURIComponent(sigComposerState.packet.packet_id)}/fields`, {
+          action: "delete",
+          field_id: btn.getAttribute("data-field-delete"),
+        });
+        await sigLoadPacket(sigComposerState.packet.packet_id);
+      } catch (e) {
+        sigStatus(String(e.message || e));
+      }
+    };
+  });
+}
+
+function renderSigPacketSummary() {
+  const packetStatus = document.getElementById("sigPacketStatus");
+  const packetRole = document.getElementById("sigPacketRole");
+  const packet = sigComposerState.packet;
+  if (!packetStatus || !packetRole) return;
+  if (!packet) {
+    packetStatus.textContent = "No packet";
+    packetRole.textContent = "";
+    return;
+  }
+  packetStatus.textContent = packet.status || "unknown";
+  packetRole.textContent = `role: ${packet.role || "sender"}`;
+}
+
+async function sigLoadPacket(packetId) {
+  const trimmed = String(packetId || "").trim();
+  if (!trimmed) throw new Error("Packet ID is required");
+  const packet = await apiGet(`/v1/signature-packets/${encodeURIComponent(trimmed)}`);
+  sigComposerState.packet = packet;
+  sigComposerState.fields = Array.isArray(packet.fields) ? packet.fields : [];
+  sigComposerState.signers = Array.isArray(packet.signers) ? packet.signers : [];
+  setInputValue("sigPacketId", trimmed);
+  renderSigPacketSummary();
+  renderSigSigners();
+  renderSigFields();
+}
+
+async function sigCreateDraft() {
+  const sourcePath = readInput("sigSourcePath");
+  const originChannel = document.getElementById("sigOriginChannel")?.value || "share";
+  if (!sourcePath) throw new Error("Source PDF path is required");
+  const created = await apiPost("/v1/signature-packets", {
+    source_path: sourcePath,
+    origin_channel: originChannel,
+  });
+  await sigLoadPacket(created.packet_id);
+  sigStatus(`Draft created: ${created.packet_id}`);
+}
+
+async function sigSendPacket() {
+  const packetId = readInput("sigPacketId");
+  if (!packetId) throw new Error("Packet ID is required");
+  await apiPost(`/v1/signature-packets/${encodeURIComponent(packetId)}/send`, {});
+  await sigLoadPacket(packetId);
+  sigStatus("Packet sent.");
+}
+
+async function sigPlaceFieldFromEvent(ev) {
+  const packet = sigComposerState.packet;
+  if (!packet || packet.status !== "draft") {
+    sigStatus("Load a draft packet to place fields.");
+    return;
+  }
+  const canvas = document.getElementById("sigCanvas");
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const relX = Math.min(0.98, Math.max(0, (ev.clientX - rect.left) / Math.max(1, rect.width)));
+  const relY = Math.min(0.98, Math.max(0, (ev.clientY - rect.top) / Math.max(1, rect.height)));
+  const fieldType = document.getElementById("sigFieldType")?.value || "signature";
+  const assignedSignerId = document.getElementById("sigAssignedSignerId")?.value || null;
+  const required = Boolean(document.getElementById("sigFieldRequired")?.checked);
+  const dims = sigFieldDimensions(fieldType);
+  try {
+    await apiPost(`/v1/signature-packets/${encodeURIComponent(packet.packet_id)}/fields`, {
+      action: "create",
+      page: 1,
+      x: relX,
+      y: relY,
+      width: dims.width,
+      height: dims.height,
+      field_type: fieldType,
+      assigned_signer_id: assignedSignerId,
+      required,
+    });
+    await sigLoadPacket(packet.packet_id);
+    sigStatus("Field added.");
+  } catch (e) {
+    sigStatus(String(e.message || e));
+  }
+}
+
+function initSignatureComposerUi() {
+  if (!document.getElementById("signaturePacketSection")) return;
+  document.getElementById("sigCreateDraftBtn").onclick = async () => {
+    try {
+      await sigCreateDraft();
+    } catch (e) {
+      sigStatus(String(e.message || e));
+    }
+  };
+  document.getElementById("sigLoadPacketBtn").onclick = async () => {
+    try {
+      await sigLoadPacket(readInput("sigPacketId"));
+      sigStatus("Packet loaded.");
+    } catch (e) {
+      sigStatus(String(e.message || e));
+    }
+  };
+  document.getElementById("sigSendPacketBtn").onclick = async () => {
+    try {
+      await sigSendPacket();
+    } catch (e) {
+      sigStatus(String(e.message || e));
+    }
+  };
+  document.getElementById("sigCanvas").onclick = (ev) => {
+    sigPlaceFieldFromEvent(ev);
+  };
+  renderSigPacketSummary();
+  renderSigSigners();
+  renderSigFields();
 }

@@ -54,7 +54,7 @@ class Settings:
 
     # Sessions
     ui_session_ttl_seconds: int = int(os.environ.get("UI_SESSION_TTL_SECONDS", str(30 * 24 * 3600)))
-    ui_inactivity_seconds: int = int(os.environ.get("UI_INACTIVITY_SECONDS", "900"))
+    ui_inactivity_seconds: int = int(os.environ.get("UI_INACTIVITY_SECONDS", str(2 * 3600)))
     session_challenge_ttl_seconds: int = int(os.environ.get("SESSION_CHALLENGE_TTL_SECONDS", "300"))
     ui_stepup_max_age_seconds: int = int(os.environ.get("UI_STEPUP_MAX_AGE_SECONDS", "300"))
     ui_session_cookie_name: str = os.environ.get("UI_SESSION_COOKIE_NAME", "ui_session")
@@ -243,12 +243,25 @@ class Settings:
     billing_dunning_retry_schedule_seconds: str = os.environ.get("BILLING_DUNNING_RETRY_SCHEDULE_SECONDS", "3600,86400,172800")
     billing_dunning_scan_limit: int = int(os.environ.get("BILLING_DUNNING_SCAN_LIMIT", "200"))
 
+    # Tickets
+    tickets_table_name: str = os.environ.get("TICKETS_TABLE_NAME", "tickets")
+    tickets_owner_index_name: str = os.environ.get("TICKETS_OWNER_INDEX_NAME", "owner_sub-updated_at-index")
+    tickets_assignee_index_name: str = os.environ.get("TICKETS_ASSIGNEE_INDEX_NAME", "assigned_admin_sub-updated_at-index")
+    tickets_status_index_name: str = os.environ.get("TICKETS_STATUS_INDEX_NAME", "status-updated_at-index")
+    tickets_space_index_name: str = os.environ.get("TICKETS_SPACE_INDEX_NAME", "space_id-updated_at-index")
+    tickets_space_status_index_name: str = os.environ.get("TICKETS_SPACE_STATUS_INDEX_NAME", "space_status-updated_at-index")
+    tickets_space_assignee_index_name: str = os.environ.get("TICKETS_SPACE_ASSIGNEE_INDEX_NAME", "space_assignee-updated_at-index")
+    tickets_member_spaces_index_name: str = os.environ.get("TICKETS_MEMBER_SPACES_INDEX_NAME", "member_sub-space_id-index")
+
     # Profile
     profile_table_name: str = os.environ.get("PROFILE_TABLE_NAME", "profiles")
     addresses_table_name: str = os.environ.get("ADDRESSES_TABLE_NAME", "addresses")
 
     # Calendar
     calendar_table_name: str = os.environ.get("CALENDAR_TABLE_NAME", "calendar")
+
+    # Contacts
+    contacts_table_name: str = os.environ.get("DDB_CONTACTS_TABLE", "Contacts")
 
     # Purchase history
     purchase_transactions_table_name: str = os.environ.get(
@@ -267,6 +280,36 @@ class Settings:
     # File manager
     filemgr_table_name: str = os.environ.get("FILEMGR_TABLE", "")
     projects_table_name: str = os.environ.get("PROJECTS_TABLE_NAME", "projects")
+    signature_packets_table_name: str = os.environ.get("SIGNATURE_PACKETS_TABLE_NAME", "signature_packets")
+    signature_packet_signers_table_name: str = os.environ.get(
+        "SIGNATURE_PACKET_SIGNERS_TABLE_NAME",
+        "signature_packet_signers",
+    )
+    signature_packet_fields_table_name: str = os.environ.get(
+        "SIGNATURE_PACKET_FIELDS_TABLE_NAME",
+        "signature_packet_fields",
+    )
+    signature_packet_events_table_name: str = os.environ.get(
+        "SIGNATURE_PACKET_EVENTS_TABLE_NAME",
+        "signature_packet_events",
+    )
+    signature_packet_artifacts_table_name: str = os.environ.get(
+        "SIGNATURE_PACKET_ARTIFACTS_TABLE_NAME",
+        "signature_packet_artifacts",
+    )
+    signature_pdf_enabled: bool = os.environ.get("SIGNATURE_PDF_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    signature_packet_expiration_hours: int = int(os.environ.get("SIGNATURE_PACKET_EXPIRATION_HOURS", "168"))
+    signature_packet_max_signers: int = int(os.environ.get("SIGNATURE_PACKET_MAX_SIGNERS", "10"))
+    signature_packet_max_fields: int = int(os.environ.get("SIGNATURE_PACKET_MAX_FIELDS", "200"))
+    signature_packet_renderer_timeout_seconds: int = int(
+        os.environ.get("SIGNATURE_PACKET_RENDERER_TIMEOUT_SECONDS", "60")
+    )
+    signature_packet_legal_notice_version: str = os.environ.get("SIGNATURE_PACKET_LEGAL_NOTICE_VERSION", "2026-01")
+    signature_packet_legal_notice_text: str = os.environ.get(
+        "SIGNATURE_PACKET_LEGAL_NOTICE_TEXT",
+        "By signing this document, you agree your signature is legally binding.",
+    )
+    signature_packet_reminder_schedule_hours: str = os.environ.get("SIGNATURE_PACKET_REMINDER_SCHEDULE_HOURS", "24,72,168")
     filemgr_bucket: str = os.environ.get("FILEMGR_BUCKET", "")
     filemgr_retention_days: int = int(os.environ.get("FILEMGR_RETENTION_DAYS", "30"))
     filemgr_purge_scan_limit: int = int(os.environ.get("FILEMGR_PURGE_SCAN_LIMIT", "200"))
@@ -347,6 +390,21 @@ class Settings:
     api_usage_account_monthly_calls_limit: int = int(os.environ.get("API_USAGE_ACCOUNT_MONTHLY_CALLS_LIMIT", "0"))
     api_usage_account_monthly_spend_micros_limit: int = int(os.environ.get("API_USAGE_ACCOUNT_MONTHLY_SPEND_MICROS_LIMIT", "0"))
 
+    # Catalog commercialization
+    catalog_commercialization_enabled: bool = os.environ.get("CATALOG_COMMERCIALIZATION_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    catalog_file_bundle_enabled: bool = os.environ.get("CATALOG_FILE_BUNDLE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    catalog_api_package_enabled: bool = os.environ.get("CATALOG_API_PACKAGE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    catalog_internal_api_package_enabled: bool = os.environ.get("CATALOG_INTERNAL_API_PACKAGE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    catalog_pricing_catalog: str = os.environ.get("CATALOG_PRICING_CATALOG", "")
+    catalog_products_table_name: str = os.environ.get("CATALOG_PRODUCTS_TABLE_NAME", "catalog_products")
+    catalog_product_versions_table_name: str = os.environ.get("CATALOG_PRODUCT_VERSIONS_TABLE_NAME", "catalog_product_versions")
+    orders_table_name: str = os.environ.get("ORDERS_TABLE_NAME", "orders")
+    order_items_table_name: str = os.environ.get("ORDER_ITEMS_TABLE_NAME", "order_items")
+    payments_table_name: str = os.environ.get("PAYMENTS_TABLE_NAME", "payments")
+    entitlements_table_name: str = os.environ.get("ENTITLEMENTS_TABLE_NAME", "entitlements")
+    entitlement_usage_events_table_name: str = os.environ.get("ENTITLEMENT_USAGE_EVENTS_TABLE_NAME", "entitlement_usage_events")
+    api_entitlement_low_balance_thresholds: str = os.environ.get("API_ENTITLEMENT_LOW_BALANCE_THRESHOLDS", "0.2,0.1,0.05")
+    api_entitlement_near_cap_thresholds: str = os.environ.get("API_ENTITLEMENT_NEAR_CAP_THRESHOLDS", "0.8,0.9,0.95")
 
 
     # Messaging feature flags

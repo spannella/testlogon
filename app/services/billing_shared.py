@@ -163,6 +163,49 @@ def compute_due(balance_item: Dict[str, Any]) -> Dict[str, int]:
     }
 
 
+WALLET_SK = "WALLET"
+
+
+def get_wallet_balance(table: Any, pk: str) -> Dict[str, Any]:
+    row = ddb_get(table, pk, WALLET_SK) or {}
+    return {
+        "wallet_balance_cents": int(row.get("wallet_balance_cents", 0)),
+        "currency": row.get("currency", "usd"),
+        "updated_at": row.get("updated_at"),
+    }
+
+
+def apply_wallet_delta(table: Any, pk: str, delta_cents: int, *, currency: str = "usd") -> int:
+    """Atomically add delta_cents to wallet balance.
+
+    For deposits (delta > 0): uses if_not_exists to create row if needed.
+    For withdrawals (delta < 0): requires existing balance >= abs(delta);
+    raises ConditionalCheckFailedException if insufficient.
+    """
+    if delta_cents >= 0:
+        # Deposit: create row if it doesn't exist, add to balance
+        result = table.update_item(
+            Key={"pk": pk, "sk": WALLET_SK},
+            UpdateExpression=(
+                "SET wallet_balance_cents = if_not_exists(wallet_balance_cents, :z) + :d, "
+                "currency = :c, updated_at = :t"
+            ),
+            ExpressionAttributeValues={":z": 0, ":d": delta_cents, ":c": currency, ":t": now_ts()},
+            ReturnValues="ALL_NEW",
+        )
+    else:
+        # Withdrawal: only succeed if existing balance >= needed amount
+        needed = abs(delta_cents)
+        result = table.update_item(
+            Key={"pk": pk, "sk": WALLET_SK},
+            UpdateExpression="SET wallet_balance_cents = wallet_balance_cents + :d, updated_at = :t",
+            ConditionExpression="wallet_balance_cents >= :needed",
+            ExpressionAttributeValues={":d": delta_cents, ":t": now_ts(), ":needed": needed},
+            ReturnValues="ALL_NEW",
+        )
+    return int(result["Attributes"].get("wallet_balance_cents", 0))
+
+
 def ulidish() -> str:
     return f"{int(now_ts() * 1000)}_{secrets.token_hex(8)}"
 

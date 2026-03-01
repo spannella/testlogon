@@ -212,6 +212,27 @@ FILEMGR_PREVIEW_QUEUE_DEPTH = Gauge(
     "filemgr_preview_queue_depth",
     "Approximate in-flight preview jobs in this worker process",
 )
+SIGNATURE_PACKET_RENDER_JOBS = Counter(
+    "signature_packet_render_jobs_total",
+    "Signature packet final-PDF render job outcomes",
+    ["outcome", "reason"],
+)
+SIGNATURE_PACKET_RENDER_LATENCY = Histogram(
+    "signature_packet_render_duration_seconds",
+    "Signature packet final-PDF render duration",
+    ["outcome"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120),
+)
+SIGNATURE_PACKET_EVENTS = Counter(
+    "signature_packet_events_total",
+    "Signature packet append-only lifecycle events",
+    ["event_type"],
+)
+SIGNATURE_PACKET_REMINDER_EMAILS = Counter(
+    "signature_packet_reminder_emails_total",
+    "Signature packet reminder email outcomes",
+    ["outcome", "reason"],
+)
 
 MESSAGING_GALLERY_REQUESTS = Counter(
     "messaging_gallery_requests_total",
@@ -393,6 +414,18 @@ PROVIDER_FAILURE_ALERTS = Counter(
     ["provider"],
 )
 
+ENTITLEMENT_CHECKS = Counter(
+    "entitlement_checks_total",
+    "Entitlement check outcomes by product family",
+    ["product_family", "outcome", "reason"],
+)
+ENTITLEMENT_CHECK_LATENCY = Histogram(
+    "entitlement_check_latency_seconds",
+    "Entitlement check latency by product family",
+    ["product_family"],
+    buckets=(0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5),
+)
+
 _START_TIME = time.monotonic()
 _ACTIVE_SESSIONS_BY_USER: dict[str, int] = {}
 _ACTIVE_SESSIONS_COUNT = 0
@@ -568,6 +601,20 @@ def record_helpdesk_no_agents_notice(outcome: str) -> None:
 
 def record_helpdesk_time_to_first_claim_ms(elapsed_ms: float) -> None:
     HELPDESK_TIME_TO_FIRST_CLAIM_MS.observe(max(0.0, float(elapsed_ms)))
+
+
+def record_entitlement_check(*, product_family: str, outcome: str, reason: str = "") -> None:
+    ENTITLEMENT_CHECKS.labels(
+        product_family=(product_family or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+        reason=(reason or "none").lower(),
+    ).inc()
+
+
+def record_entitlement_check_latency(*, product_family: str, elapsed_seconds: float) -> None:
+    ENTITLEMENT_CHECK_LATENCY.labels(
+        product_family=(product_family or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
 
 
 def record_admin_scope_denied(*, route: str, required_scope: str, admin_profile_type: str) -> None:
@@ -756,6 +803,29 @@ def record_filemgr_preview_queue_depth_delta(delta: int) -> None:
     if delta == 0:
         return
     FILEMGR_PREVIEW_QUEUE_DEPTH.inc(float(delta))
+
+
+def record_signature_packet_render_job(*, outcome: str, reason: str = "none") -> None:
+    SIGNATURE_PACKET_RENDER_JOBS.labels(
+        outcome=(outcome or "unknown").lower(),
+        reason=(reason or "none").lower(),
+    ).inc()
+
+
+def record_signature_packet_render_latency(*, outcome: str, elapsed_seconds: float) -> None:
+    SIGNATURE_PACKET_RENDER_LATENCY.labels(outcome=(outcome or "unknown").lower()).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_signature_packet_event(*, event_type: str) -> None:
+    SIGNATURE_PACKET_EVENTS.labels(event_type=(event_type or "unknown").lower()).inc()
+
+
+def record_signature_packet_reminder_email(*, outcome: str, reason: str = "none") -> None:
+    SIGNATURE_PACKET_REMINDER_EMAILS.labels(
+        outcome=(outcome or "unknown").lower(),
+        reason=(reason or "none").lower(),
+    ).inc()
+
 
 
 def record_messaging_gallery_request(*, gallery_type: str, outcome: str) -> None:

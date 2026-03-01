@@ -1,5 +1,6 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, Headphones } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -9,16 +10,55 @@ import {
   isMessagingViewOnceVideoEnabled,
 } from "@/lib/featureFlags";
 import { encryptMessage, type MessageEncryptionEnvelope } from "@/lib/messageEncryption";
-import type { SendTextMessageReq } from "@/api/types";
+import type { Message, PaymentMethod, SendTextMessageReq, FileEntry, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq } from "@/api/types";
+import { CalendarPickerDialog } from "./CalendarPickerDialog";
+import { EventPickerDialog } from "./EventPickerDialog";
+import { MeetingPollComposer } from "./MeetingPollComposer";
+import { getPaymentMethods } from "@/api/endpoints/billing";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { FilePickerDialog } from "./FilePickerDialog";
 
 interface ComposeBarProps {
   onSendText: (payload: SendTextMessageReq) => void;
-  onSendImage?: (file: File, options?: { consumption_policy?: "none" | "view_once" }) => void;
+  onSendImage?: (file: File, options?: {
+    consumption_policy?: "none" | "view_once";
+    caption?: string;
+    expires_in_seconds?: number;
+    lock_price_cents?: number;
+    lock_description?: string;
+    tip_amount_cents?: number;
+    tip_payment_method_id?: string;
+    send_at?: number;
+    encryption_password?: string;
+  }) => void;
   onSendVideoAttachment?: (file: File, options?: { consumption_policy?: "none" | "view_once" }) => void;
   onSendAudioRecording?: (file: File, options?: { consumption_policy?: "none" | "listen_once" }) => void;
+  onSendGallery?: (params: {
+    freeFiles: File[];
+    lockedFiles: File[];
+    text?: string;
+    lock_price_cents?: number;
+    lock_description?: string;
+    expires_in_seconds?: number;
+    send_at?: number;
+    tip_amount_cents?: number;
+    tip_payment_method_id?: string;
+  }) => void;
+  onSendFileShare?: (params: SendFileShareReq) => void;
+  onSendCalendarShare?: (params: SendCalendarShareReq) => void;
+  onSendCalendarEvent?: (params: SendCalendarEventReq) => void;
+  onSendMeetingPoll?: (params: SendMeetingPollReq) => void;
   sending?: boolean;
   disabled?: boolean;
   onKeystroke?: () => void;
+  replyingTo?: Message | null;
+  onCancelReply?: () => void;
 }
 
 export function ComposeBar({
@@ -26,26 +66,90 @@ export function ComposeBar({
   onSendImage,
   onSendVideoAttachment,
   onSendAudioRecording,
+  onSendGallery,
+  onSendFileShare,
+  onSendCalendarShare,
+  onSendCalendarEvent,
+  onSendMeetingPoll,
   sending,
   disabled,
   onKeystroke,
+  replyingTo,
+  onCancelReply,
 }: ComposeBarProps) {
   const [text, setText] = React.useState("");
   const [encryptEnabled, setEncryptEnabled] = React.useState(false);
   const [password, setPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
+  const [showPassword, setShowPassword] = React.useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = React.useState(false);
   const [encrypting, setEncrypting] = React.useState(false);
   const [encryptError, setEncryptError] = React.useState<string | null>(null);
   const [viewOnceImage, setViewOnceImage] = React.useState(false);
   const [viewOnceVideo, setViewOnceVideo] = React.useState(false);
   const [listenOnceAudio, setListenOnceAudio] = React.useState(false);
+  const [pendingFile, setPendingFile] = React.useState<{ file: File; previewUrl: string; kind: "image" | "video" | "audio" } | null>(null);
+  const [lockEnabled, setLockEnabled] = React.useState(false);
+  const [lockPrice, setLockPrice] = React.useState("");
+  const [lockDescription, setLockDescription] = React.useState("");
+  const [tipEnabled, setTipEnabled] = React.useState(false);
+  const [tipAmount, setTipAmount] = React.useState("");
+  const [tipPaymentMethodId, setTipPaymentMethodId] = React.useState<string | null>(null);
+  const [scheduledInput, setScheduledInput] = React.useState<string>("");  // raw "YYYY-MM-DDTHH:mm"
+  const [scheduledAt, setScheduledAt] = React.useState<Date | null>(null);
+  const [scheduleOpen, setScheduleOpen] = React.useState(false);
+  const [scheduleTimezone, setScheduleTimezone] = React.useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const [viewOnceText, setViewOnceText] = React.useState(false);
+  const [expiresEnabled, setExpiresEnabled] = React.useState(false);
+  const [expiresDuration, setExpiresDuration] = React.useState("3600");
+  // Gallery mode state
+  const [galleryMode, setGalleryMode] = React.useState(false);
+  const [galleryFreeFiles, setGalleryFreeFiles] = React.useState<File[]>([]);
+  const [galleryLockedFiles, setGalleryLockedFiles] = React.useState<File[]>([]);
+  const galleryFreeInputRef = React.useRef<HTMLInputElement>(null);
+  const galleryLockedInputRef = React.useRef<HTMLInputElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [filePickerOpen, setFilePickerOpen] = React.useState(false);
+  const [pendingFileShare, setPendingFileShare] = React.useState<{
+    entry: FileEntry;
+    permission: "read" | "write";
+  } | null>(null);
+  const [calendarPickerOpen, setCalendarPickerOpen] = React.useState(false);
+  const [eventPickerOpen, setEventPickerOpen] = React.useState(false);
+  const [meetingPollOpen, setMeetingPollOpen] = React.useState(false);
+
+  // Parse a datetime-local string ("YYYY-MM-DDTHH:mm") as the given timezone,
+  // returning the equivalent UTC Date.
+  const parseDateTimeInTz = React.useCallback((localStr: string, tz: string): Date => {
+    // Treat localStr as UTC first, then find the offset so that the UTC Date
+    // maps back to exactly localStr when formatted in tz.
+    const asUtc = new Date(localStr + ":00Z");
+    // Format the guess in target TZ (sv locale gives "YYYY-MM-DD HH:mm:ss")
+    const fmtResult = new Intl.DateTimeFormat("sv", {
+      timeZone: tz,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hour12: false,
+    }).format(asUtc);
+    // Parse that as UTC so we can diff
+    const tzAsUtc = new Date(fmtResult.replace(" ", "T") + "Z");
+    // diff = how many ms asUtc is ahead of what TZ actually shows
+    const diff = asUtc.getTime() - tzAsUtc.getTime();
+    return new Date(asUtc.getTime() + diff);
+  }, []);
 
   const featureEnabled = isMessagingEncryptionEnabled();
   const onceImageEnabled = isMessagingViewOnceImageEnabled();
   const onceVideoEnabled = isMessagingViewOnceVideoEnabled();
   const onceAudioEnabled = isMessagingListenOnceAudioEnabled();
+
+  const { data: paymentMethods = [] } = useQuery<PaymentMethod[]>({
+    queryKey: ["billing", "payment-methods"],
+    queryFn: getPaymentMethods,
+    staleTime: 5 * 60 * 1000,
+  });
+  const hasPaymentMethods = paymentMethods.length > 0;
 
   const resetTextArea = () => {
     if (textareaRef.current) {
@@ -53,9 +157,35 @@ export function ComposeBar({
     }
   };
 
+  const buildExtraPayload = (): Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents" | "tip_payment_method_id"> => {
+    const extra: Pick<SendTextMessageReq, "lock_price_cents" | "lock_description" | "send_at" | "view_once" | "expires_in_seconds" | "tip_amount_cents" | "tip_payment_method_id"> = {};
+    if (lockEnabled) {
+      const cents = Math.round(parseFloat(lockPrice) * 100);
+      if (!isNaN(cents) && cents > 0) extra.lock_price_cents = cents;
+      if (lockDescription.trim()) extra.lock_description = lockDescription.trim();
+    }
+    if (tipEnabled) {
+      const cents = Math.round(parseFloat(tipAmount) * 100);
+      if (!isNaN(cents) && cents > 0) extra.tip_amount_cents = cents;
+      if (tipPaymentMethodId) extra.tip_payment_method_id = tipPaymentMethodId;
+    }
+    if (scheduledAt) {
+      extra.send_at = Math.floor(scheduledAt.getTime() / 1000);
+    }
+    if (viewOnceText) {
+      extra.view_once = true;
+    }
+    if (expiresEnabled) {
+      const secs = parseInt(expiresDuration, 10);
+      if (!isNaN(secs) && secs >= 10) extra.expires_in_seconds = secs;
+    }
+    return extra;
+  };
+
   const buildEncryptedPayload = async (trimmed: string): Promise<SendTextMessageReq | null> => {
+    const extra = buildExtraPayload();
     if (!encryptEnabled) {
-      return { text: trimmed };
+      return { text: trimmed, ...extra };
     }
 
     if (!featureEnabled) {
@@ -72,8 +202,9 @@ export function ComposeBar({
     setEncrypting(true);
     try {
       const envelope: MessageEncryptionEnvelope = await encryptMessage(trimmed, password);
-      return { encryption: envelope };
-    } catch {
+      return { encryption: envelope, ...extra };
+    } catch (err) {
+      console.error("[encryption] encryptMessage threw:", err);
       setEncryptError("Failed to encrypt message locally. Please try again.");
       return null;
     } finally {
@@ -81,19 +212,109 @@ export function ComposeBar({
     }
   };
 
+  const clearPendingFile = () => {
+    if (pendingFile) {
+      URL.revokeObjectURL(pendingFile.previewUrl);
+      setPendingFile(null);
+    }
+  };
+
   const handleSubmit = async () => {
+    if (sending || encrypting) return;
     const trimmed = text.trim();
-    if (!trimmed || sending || encrypting) return;
 
-    const payload = await buildEncryptedPayload(trimmed);
-    if (!payload) return;
+    // Gallery mode: submit gallery instead of normal message
+    if (galleryMode && onSendGallery) {
+      if (galleryFreeFiles.length === 0 && galleryLockedFiles.length === 0) return;
+      const extraPayload = buildExtraPayload();
+      onSendGallery({
+        freeFiles: galleryFreeFiles,
+        lockedFiles: galleryLockedFiles,
+        text: trimmed || undefined,
+        lock_price_cents: galleryLockedFiles.length > 0 ? extraPayload.lock_price_cents : undefined,
+        lock_description: galleryLockedFiles.length > 0 ? extraPayload.lock_description : undefined,
+        expires_in_seconds: extraPayload.expires_in_seconds,
+        send_at: extraPayload.send_at,
+        tip_amount_cents: extraPayload.tip_amount_cents,
+        tip_payment_method_id: extraPayload.tip_payment_method_id,
+      });
+      setText("");
+      resetTextArea();
+      setGalleryFreeFiles([]);
+      setGalleryLockedFiles([]);
+      setGalleryMode(false);
+      if (lockEnabled) { setLockEnabled(false); setLockPrice(""); setLockDescription(""); }
+      if (tipEnabled) { setTipEnabled(false); setTipAmount(""); setTipPaymentMethodId(null); }
+      if (scheduledAt) { setScheduledAt(null); setScheduledInput(""); setScheduleOpen(false); }
+      if (expiresEnabled) { setExpiresEnabled(false); setExpiresDuration("3600"); }
+      return;
+    }
 
-    onSendText(payload);
-    setText("");
-    resetTextArea();
-    if (encryptEnabled) {
-      setPassword("");
-      setConfirmPassword("");
+    // File share mode: send file share message
+    if (pendingFileShare && onSendFileShare) {
+      const extraPayload = buildExtraPayload();
+      onSendFileShare({
+        file_path: pendingFileShare.entry.path,
+        permission: pendingFileShare.permission,
+        text: trimmed || undefined,
+        send_at: extraPayload.send_at,
+      });
+      setPendingFileShare(null);
+      setText("");
+      resetTextArea();
+      if (scheduledAt) { setScheduledAt(null); setScheduledInput(""); setScheduleOpen(false); }
+      return;
+    }
+
+    if (!trimmed && !pendingFile) return;
+
+    const resetTextState = () => {
+      setText("");
+      resetTextArea();
+      if (encryptEnabled) { setPassword(""); setConfirmPassword(""); }
+      if (lockEnabled) { setLockEnabled(false); setLockPrice(""); setLockDescription(""); }
+      if (tipEnabled) { setTipEnabled(false); setTipAmount(""); setTipPaymentMethodId(null); }
+      if (scheduledAt) { setScheduledAt(null); setScheduledInput(""); setScheduleOpen(false); }
+      if (viewOnceText) setViewOnceText(false);
+      if (expiresEnabled) { setExpiresEnabled(false); setExpiresDuration("3600"); }
+    };
+
+    // For image/PDF: send image with text as caption in a single bubble
+    if (pendingFile && (pendingFile.kind === "image") && onSendImage) {
+      const extraPayload = buildExtraPayload();
+      onSendImage(pendingFile.file, {
+        consumption_policy: viewOnceImage ? "view_once" : "none",
+        caption: trimmed || undefined,
+        expires_in_seconds: extraPayload.expires_in_seconds,
+        lock_price_cents: extraPayload.lock_price_cents,
+        lock_description: extraPayload.lock_description,
+        tip_amount_cents: extraPayload.tip_amount_cents,
+        tip_payment_method_id: tipPaymentMethodId ?? undefined,
+        send_at: extraPayload.send_at,
+        encryption_password: encryptEnabled ? password : undefined,
+      });
+      clearPendingFile();
+      resetTextState();
+      return;
+    }
+
+    // For video/audio: send media first, then text separately
+    if (pendingFile) {
+      const { file, kind } = pendingFile;
+      if (kind === "video" && onSendVideoAttachment) {
+        onSendVideoAttachment(file, { consumption_policy: viewOnceVideo ? "view_once" : "none" });
+      } else if (kind === "audio" && onSendAudioRecording) {
+        onSendAudioRecording(file, { consumption_policy: listenOnceAudio ? "listen_once" : "none" });
+      }
+      clearPendingFile();
+    }
+
+    // Send text if present
+    if (trimmed) {
+      const payload = await buildEncryptedPayload(trimmed);
+      if (!payload) return;
+      onSendText(payload);
+      resetTextState();
     }
   };
 
@@ -113,38 +334,45 @@ export function ComposeBar({
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) {
-      e.target.value = "";
-      return;
-    }
-
-    if (file.type.startsWith("image/") && onSendImage) {
-      onSendImage(file, { consumption_policy: viewOnceImage ? "view_once" : "none" });
-    } else if (file.type.startsWith("video/") && onSendVideoAttachment) {
-      onSendVideoAttachment(file, { consumption_policy: viewOnceVideo ? "view_once" : "none" });
-    } else if (file.type.startsWith("audio/") && onSendAudioRecording) {
-      onSendAudioRecording(file, { consumption_policy: listenOnceAudio ? "listen_once" : "none" });
-    }
-
     e.target.value = "";
+    if (!file) return;
+
+    // Clear any existing pending file
+    if (pendingFile) URL.revokeObjectURL(pendingFile.previewUrl);
+
+    let kind: "image" | "video" | "audio" | null = null;
+    if ((file.type.startsWith("image/") || file.type === "application/pdf") && onSendImage) kind = "image";
+    else if (file.type.startsWith("video/") && onSendVideoAttachment) kind = "video";
+    else if (file.type.startsWith("audio/") && onSendAudioRecording) kind = "audio";
+
+    if (!kind) return;
+
+    const previewUrl = URL.createObjectURL(file);
+    setPendingFile({ file, previewUrl, kind });
   };
 
   return (
     <div className="border-t border-border bg-card px-4 py-3">
       <div className="mb-2 flex items-center justify-between">
-        <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-          <input
-            type="checkbox"
-            checked={encryptEnabled}
-            onChange={(e) => {
-              setEncryptEnabled(e.target.checked);
-              setEncryptError(null);
-            }}
-            disabled={disabled || sending || encrypting || !featureEnabled}
-          />
-          <Lock className="h-3.5 w-3.5" />
-          Encrypt message
-        </label>
+        <TooltipProvider delayDuration={0}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={encryptEnabled}
+                  onChange={(e) => {
+                    setEncryptEnabled(e.target.checked);
+                    setEncryptError(null);
+                  }}
+                  disabled={disabled || sending || encrypting || !featureEnabled}
+                />
+                <Lock className="h-3.5 w-3.5" />
+                Encrypt message
+              </label>
+            </TooltipTrigger>
+          </Tooltip>
+        </TooltipProvider>
         {encryptEnabled && (
           <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
             Encrypted send enabled
@@ -156,56 +384,518 @@ export function ComposeBar({
         <div className="mb-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-xs text-amber-900">
           <p className="font-medium">This message will be encrypted locally before sending.</p>
           <p className="mt-1">If password is lost, recipients cannot decrypt this message.</p>
-          <div className="mt-2 grid gap-2 sm:grid-cols-2">
-            <input
-              type="password"
-              placeholder="Encryption password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="rounded border border-input bg-background px-2 py-1 text-xs"
-              autoComplete="new-password"
-            />
-            <input
-              type="password"
-              placeholder="Confirm password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="rounded border border-input bg-background px-2 py-1 text-xs"
-              autoComplete="new-password"
-            />
-          </div>
+          <>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <div className="relative">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    placeholder="Encryption password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full rounded border border-input bg-background px-2 py-1 pr-7 text-xs"
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    tabIndex={-1}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                  </button>
+                </div>
+                <div className="relative">
+                  <input
+                    type={showConfirmPassword ? "text" : "password"}
+                    placeholder="Confirm password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className={cn(
+                      "w-full rounded border bg-background px-2 py-1 pr-7 text-xs",
+                      confirmPassword && password
+                        ? password === confirmPassword
+                          ? "border-green-500"
+                          : "border-red-400"
+                        : "border-input",
+                    )}
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword((v) => !v)}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    tabIndex={-1}
+                    aria-label={showConfirmPassword ? "Hide password" : "Show password"}
+                  >
+                    {showConfirmPassword ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                  </button>
+                </div>
+              </div>
+              {confirmPassword && password && password !== confirmPassword && (
+                <p className="mt-1 text-[11px] text-red-700">Passwords do not match</p>
+              )}
+              {confirmPassword && password && password === confirmPassword && (
+                <p className="mt-1 text-[11px] text-green-700">Passwords match</p>
+              )}
+            </>
           {encryptError && <p className="mt-2 text-[11px] text-red-700">{encryptError}</p>}
         </div>
       )}
 
-      {(onceImageEnabled || onceVideoEnabled || onceAudioEnabled) && (
-        <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-          {onceImageEnabled && onSendImage && (
-            <label className="inline-flex items-center gap-2">
+      {/* View-once text + Lock + Tip + Expiry controls row */}
+      <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        {!pendingFile && (
+          <label className="inline-flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={viewOnceText}
+              onChange={(e) => setViewOnceText(e.target.checked)}
+              disabled={disabled || sending || encrypting}
+            />
+            <Eye className="h-3.5 w-3.5" />
+            View once
+          </label>
+        )}
+        <label className="inline-flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={lockEnabled}
+            onChange={(e) => {
+              setLockEnabled(e.target.checked);
+              if (e.target.checked) setTipEnabled(false);
+            }}
+            disabled={disabled || sending || encrypting}
+          />
+          <Lock className="h-3.5 w-3.5" />
+          Require tip to unlock
+        </label>
+        <TooltipProvider delayDuration={0}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <label className={cn("inline-flex items-center gap-1.5", !hasPaymentMethods && "cursor-not-allowed opacity-50")}>
+                <input
+                  type="checkbox"
+                  checked={tipEnabled}
+                  onChange={(e) => {
+                    if (!hasPaymentMethods) return;
+                    setTipEnabled(e.target.checked);
+                    if (e.target.checked) setLockEnabled(false);
+                  }}
+                  disabled={disabled || sending || encrypting || !hasPaymentMethods}
+                  className={cn(!hasPaymentMethods && "pointer-events-none")}
+                />
+                <DollarSign className="h-3.5 w-3.5" />
+                Attach tip
+              </label>
+            </TooltipTrigger>
+            {!hasPaymentMethods && (
+              <TooltipContent>Add a payment method in Billing to attach tips</TooltipContent>
+            )}
+          </Tooltip>
+        </TooltipProvider>
+        <label className="inline-flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            checked={expiresEnabled}
+            onChange={(e) => setExpiresEnabled(e.target.checked)}
+            disabled={disabled || sending || encrypting}
+          />
+          Message expires
+        </label>
+        {expiresEnabled && (
+          <select
+            value={expiresDuration}
+            onChange={(e) => setExpiresDuration(e.target.value)}
+            className="rounded border border-input bg-background px-1 py-0.5 text-xs"
+            disabled={disabled || sending}
+          >
+            <option value="60">1 minute</option>
+            <option value="300">5 minutes</option>
+            <option value="3600">1 hour</option>
+            <option value="86400">1 day</option>
+            <option value="604800">7 days</option>
+          </select>
+        )}
+      </div>
+      {lockEnabled && (
+        <div className="mb-2 rounded-md border border-border bg-muted/30 p-2 text-xs space-y-1.5">
+          <div className="flex items-center gap-2">
+            <label className="text-muted-foreground shrink-0">Price ($)</label>
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={lockPrice}
+              onChange={(e) => setLockPrice(e.target.value)}
+              placeholder="e.g. 1.00"
+              className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
+              disabled={disabled || sending}
+            />
+          </div>
+          <textarea
+            value={lockDescription}
+            onChange={(e) => setLockDescription(e.target.value)}
+            placeholder="Lock description (optional)"
+            rows={2}
+            className="w-full resize-none rounded border border-input bg-background px-2 py-1 text-xs"
+            disabled={disabled || sending}
+          />
+        </div>
+      )}
+      {tipEnabled && (
+        <div className="mb-2 rounded-md border border-green-200 bg-green-50 p-2 text-xs space-y-2">
+          <p className="font-medium text-green-800">Attach a tip to this message</p>
+          <div className="flex items-center gap-2">
+            <label className="shrink-0 text-green-700">Amount ($)</label>
+            <input
+              type="number"
+              min="0.01"
+              step="0.01"
+              value={tipAmount}
+              onChange={(e) => setTipAmount(e.target.value)}
+              placeholder="e.g. 5.00"
+              className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
+              disabled={disabled || sending}
+            />
+          </div>
+          {paymentMethods.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-green-700">Pay with:</p>
+              <div className="space-y-1">
+                {paymentMethods.map((pm) => {
+                  const label = pm.brand
+                    ? `${pm.brand.charAt(0).toUpperCase() + pm.brand.slice(1)} •••• ${pm.last4}`
+                    : (pm.label ?? pm.method_type);
+                  const isSelected = tipPaymentMethodId === pm.payment_method_id;
+                  return (
+                    <button
+                      key={pm.payment_method_id}
+                      type="button"
+                      onClick={() => setTipPaymentMethodId(pm.payment_method_id)}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded border px-2 py-1 text-xs transition-colors hover:bg-green-100",
+                        isSelected ? "border-green-500 bg-green-100" : "border-green-200 bg-white",
+                      )}
+                    >
+                      <span className="flex-1 text-left">{label}</span>
+                      {pm.is_default && <span className="text-[10px] text-green-600">Default</span>}
+                      {isSelected && <span className="text-[10px] font-bold text-green-700">✓</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Gallery mode UI */}
+      {galleryMode && onSendGallery && (
+        <div className="mb-2 rounded-md border border-border bg-muted/30 p-2 text-xs space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-foreground">Gallery message</span>
+            <button
+              type="button"
+              onClick={() => { setGalleryMode(false); setGalleryFreeFiles([]); setGalleryLockedFiles([]); }}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Exit gallery mode"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          {/* Free items zone (images + videos) */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">Free items ({galleryFreeFiles.length}/20)</span>
+              <button
+                type="button"
+                onClick={() => galleryFreeInputRef.current?.click()}
+                disabled={disabled || sending || galleryFreeFiles.length >= 20}
+                className="inline-flex items-center gap-1 rounded border border-input bg-background px-2 py-0.5 text-xs hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ImageIcon className="h-3 w-3" /> Add
+              </button>
+            </div>
+            <input
+              ref={galleryFreeInputRef}
+              type="file"
+              accept="image/*,video/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                e.target.value = "";
+                setGalleryFreeFiles((prev) => [...prev, ...files].slice(0, 20));
+              }}
+            />
+            {galleryFreeFiles.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {galleryFreeFiles.map((f, i) => (
+                  <div key={i} className="group relative">
+                    {f.type.startsWith("video/") ? (
+                      <video
+                        src={URL.createObjectURL(f)}
+                        className="h-12 w-12 rounded object-cover"
+                        muted
+                        playsInline
+                        preload="metadata"
+                      />
+                    ) : (
+                      <img
+                        src={URL.createObjectURL(f)}
+                        alt={f.name}
+                        className="h-12 w-12 rounded object-cover"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setGalleryFreeFiles((prev) => prev.filter((_, j) => j !== i))}
+                      className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full bg-destructive text-white group-hover:flex"
+                      aria-label="Remove"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Locked items zone (images + videos) */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">
+                <Lock className="inline h-3 w-3 mr-0.5" />
+                Locked items ({galleryLockedFiles.length}/30)
+              </span>
+              <button
+                type="button"
+                onClick={() => galleryLockedInputRef.current?.click()}
+                disabled={disabled || sending || galleryLockedFiles.length >= 30}
+                className="inline-flex items-center gap-1 rounded border border-input bg-background px-2 py-0.5 text-xs hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <ImageIcon className="h-3 w-3" /> Add
+              </button>
+            </div>
+            <input
+              ref={galleryLockedInputRef}
+              type="file"
+              accept="image/*,video/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                const files = Array.from(e.target.files ?? []);
+                e.target.value = "";
+                setGalleryLockedFiles((prev) => [...prev, ...files].slice(0, 30));
+              }}
+            />
+            {galleryLockedFiles.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {galleryLockedFiles.map((f, i) => (
+                  <div key={i} className="group relative">
+                    {f.type.startsWith("video/") ? (
+                      <video
+                        src={URL.createObjectURL(f)}
+                        className="h-12 w-12 rounded object-cover opacity-70"
+                        muted
+                        playsInline
+                        preload="metadata"
+                      />
+                    ) : (
+                      <img
+                        src={URL.createObjectURL(f)}
+                        alt={f.name}
+                        className="h-12 w-12 rounded object-cover opacity-70"
+                      />
+                    )}
+                    <Lock className="absolute bottom-0.5 right-0.5 h-3 w-3 text-white drop-shadow" />
+                    <button
+                      type="button"
+                      onClick={() => setGalleryLockedFiles((prev) => prev.filter((_, j) => j !== i))}
+                      className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full bg-destructive text-white group-hover:flex"
+                      aria-label="Remove"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {galleryLockedFiles.length > 0 && !lockEnabled && (
+              <p className="text-[10px] text-amber-600">Set a lock price below to require payment for locked items.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Reply context */}
+      {replyingTo && (
+        <div className="mb-2 flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
+          <Reply className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+          <div className="min-w-0 flex-1 text-xs">
+            <p className="font-semibold text-primary">{replyingTo.sender_id}</p>
+            <p className="truncate text-muted-foreground">
+              {replyingTo.kind === "image" ? "[Image]"
+               : replyingTo.kind === "video" ? "[Video]"
+               : replyingTo.kind === "audio" ? "[Audio]"
+               : replyingTo.kind === "file" ? (replyingTo.file?.name ?? "[File]")
+               : replyingTo.is_encrypted ? "[Encrypted message]"
+               : (replyingTo.text ?? "").slice(0, 100) || "[Message]"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onCancelReply}
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+            aria-label="Cancel reply"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Scheduled pill */}
+      {scheduledAt && (
+        <div className="mb-2 flex items-center gap-2">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-1 text-[11px] font-medium text-blue-800">
+            <Clock className="h-3 w-3" />
+            Scheduled: {scheduledAt.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+          </span>
+          <button
+            type="button"
+            onClick={() => setScheduledAt(null)}
+            className="text-muted-foreground hover:text-foreground"
+            aria-label="Remove schedule"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Pending file share preview */}
+      {pendingFileShare && (
+        <div className="mb-2 rounded-lg border border-border bg-muted/40 p-3 space-y-2">
+          <div className="flex items-start gap-3">
+            <FileText className="h-8 w-8 shrink-0 text-muted-foreground mt-0.5" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">{pendingFileShare.entry.name}</p>
+              {pendingFileShare.entry.size != null && (
+                <p className="text-xs text-muted-foreground">
+                  {pendingFileShare.entry.size < 1024
+                    ? `${pendingFileShare.entry.size} B`
+                    : pendingFileShare.entry.size < 1024 ** 2
+                    ? `${(pendingFileShare.entry.size / 1024).toFixed(1)} KB`
+                    : `${(pendingFileShare.entry.size / 1024 ** 2).toFixed(1)} MB`}
+                </p>
+              )}
+              {pendingFileShare.entry.is_encrypted && (
+                <p className="flex items-center gap-1 text-xs text-amber-600 mt-0.5">
+                  <Lock className="h-3 w-3" /> Encrypted
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setPendingFileShare(null)}
+              className="shrink-0 rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Remove file share"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground shrink-0">Permission:</span>
+            <div className="flex rounded border border-input overflow-hidden text-xs">
+              <button
+                type="button"
+                onClick={() => setPendingFileShare((prev) => prev ? { ...prev, permission: "read" } : prev)}
+                className={cn(
+                  "px-2.5 py-0.5 transition-colors",
+                  pendingFileShare.permission === "read"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:bg-muted",
+                )}
+              >
+                View only
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingFileShare((prev) => prev ? { ...prev, permission: "write" } : prev)}
+                className={cn(
+                  "px-2.5 py-0.5 border-l border-input transition-colors",
+                  pendingFileShare.permission === "write"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:bg-muted",
+                )}
+              >
+                View + Edit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pending file preview */}
+      {pendingFile && (
+        <div className="mb-2 flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-2">
+          <div className="flex items-center gap-2">
+            {pendingFile.kind === "image" && !pendingFile.file.type.includes("pdf") ? (
+              <img
+                src={pendingFile.previewUrl}
+                alt="Attachment preview"
+                className="h-16 w-16 rounded-md object-cover shrink-0"
+              />
+            ) : (
+              <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-md bg-muted">
+                {pendingFile.file.type.includes("pdf") ? (
+                  <FileText className="h-6 w-6 text-red-500" />
+                ) : (
+                  <ImageIcon className="h-6 w-6 text-muted-foreground" />
+                )}
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-medium">{pendingFile.file.name}</p>
+              <p className="text-xs text-muted-foreground capitalize">{pendingFile.kind} • ready to send</p>
+            </div>
+            <button
+              type="button"
+              onClick={clearPendingFile}
+              className="shrink-0 rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Remove attachment"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+          {/* View-once option inside file preview */}
+          {pendingFile.kind === "image" && onceImageEnabled && onSendImage && (
+            <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
               <input
                 type="checkbox"
                 checked={viewOnceImage}
                 onChange={(e) => setViewOnceImage(e.target.checked)}
                 disabled={disabled || sending || encrypting}
               />
-              <Eye className="h-3.5 w-3.5" />
-              View once (image)
+              <EyeSlash className="h-3.5 w-3.5" />
+              Recipient can only view once
             </label>
           )}
-          {onceVideoEnabled && onSendVideoAttachment && (
-            <label className="inline-flex items-center gap-2">
+          {pendingFile.kind === "video" && onceVideoEnabled && onSendVideoAttachment && (
+            <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
               <input
                 type="checkbox"
                 checked={viewOnceVideo}
                 onChange={(e) => setViewOnceVideo(e.target.checked)}
                 disabled={disabled || sending || encrypting}
               />
-              <Eye className="h-3.5 w-3.5" />
-              View once (video)
+              <EyeSlash className="h-3.5 w-3.5" />
+              Recipient can only view once
             </label>
           )}
-          {onceAudioEnabled && onSendAudioRecording && (
-            <label className="inline-flex items-center gap-2">
+          {pendingFile.kind === "audio" && onceAudioEnabled && onSendAudioRecording && (
+            <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
               <input
                 type="checkbox"
                 checked={listenOnceAudio}
@@ -213,7 +903,7 @@ export function ComposeBar({
                 disabled={disabled || sending || encrypting}
               />
               <Headphones className="h-3.5 w-3.5" />
-              Listen once (audio)
+              Recipient can only listen once
             </label>
           )}
         </div>
@@ -227,7 +917,7 @@ export function ComposeBar({
               size="icon"
               className="h-9 w-9 shrink-0"
               onClick={() => fileInputRef.current?.click()}
-              disabled={disabled || sending || encrypting}
+              disabled={disabled || sending || encrypting || !!pendingFile || galleryMode}
               aria-label="Attach file"
             >
               <Paperclip className="h-4 w-4" />
@@ -235,11 +925,67 @@ export function ComposeBar({
             <input
               ref={fileInputRef}
               type="file"
-              accept="image/*,video/*,audio/*"
+              accept="image/*,video/*,audio/*,application/pdf"
               className="hidden"
               onChange={handleFileChange}
             />
           </>
+        )}
+        {onSendGallery && (
+          <Button
+            variant={galleryMode ? "secondary" : "ghost"}
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            onClick={() => { setGalleryMode((v) => !v); setPendingFile(null); }}
+            disabled={disabled || sending || encrypting}
+            aria-label="Gallery message"
+          >
+            <Images className="h-4 w-4" />
+          </Button>
+        )}
+        {onSendFileShare && (
+          <Button
+            variant={pendingFileShare ? "secondary" : "ghost"}
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            onClick={() => setFilePickerOpen(true)}
+            disabled={disabled || sending || encrypting}
+            aria-label="Share file from Files"
+          >
+            <FolderOpen className="h-4 w-4" />
+          </Button>
+        )}
+        {(onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll) && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-9 w-9 shrink-0"
+                aria-label="Calendar actions"
+                disabled={disabled || sending}
+              >
+                <CalendarDays className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align="start">
+              {onSendCalendarShare && (
+                <DropdownMenuItem onClick={() => setCalendarPickerOpen(true)}>
+                  <CalendarDays className="mr-2 h-4 w-4" /> Share my calendar
+                </DropdownMenuItem>
+              )}
+              {onSendCalendarEvent && (
+                <DropdownMenuItem onClick={() => setEventPickerOpen(true)}>
+                  <CalendarCheck className="mr-2 h-4 w-4" /> Share an event
+                </DropdownMenuItem>
+              )}
+              {onSendMeetingPoll && (
+                <DropdownMenuItem onClick={() => setMeetingPollOpen(true)}>
+                  <Users className="mr-2 h-4 w-4" /> Schedule a meeting
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         )}
 
         <textarea
@@ -262,11 +1008,90 @@ export function ComposeBar({
           )}
         />
 
+        <div className="relative">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            onClick={() => setScheduleOpen((v) => !v)}
+            disabled={disabled || sending || encrypting}
+            aria-label="Schedule send"
+          >
+            <Clock className="h-4 w-4" />
+          </Button>
+          {scheduleOpen && (
+            <div className="absolute bottom-full right-0 mb-2 min-w-[260px] rounded-lg border border-border bg-card p-3 shadow-lg">
+              <p className="mb-2 text-xs font-medium">Schedule send</p>
+              <input
+                type="datetime-local"
+                value={scheduledInput}
+                className="mb-2 w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setScheduledInput(val);
+                  if (val) {
+                    setScheduledAt(parseDateTimeInTz(val, scheduleTimezone));
+                  } else {
+                    setScheduledAt(null);
+                  }
+                }}
+              />
+              <div className="flex items-center gap-1.5">
+                <Globe className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <select
+                  value={scheduleTimezone}
+                  onChange={(e) => {
+                    const tz = e.target.value;
+                    setScheduleTimezone(tz);
+                    // Re-parse the existing input with the new timezone
+                    if (scheduledInput) setScheduledAt(parseDateTimeInTz(scheduledInput, tz));
+                  }}
+                  className="flex-1 rounded border border-input bg-background px-1 py-0.5 text-xs"
+                >
+                  {[
+                    "America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles",
+                    "America/Anchorage", "Pacific/Honolulu",
+                    "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Moscow",
+                    "Asia/Dubai", "Asia/Kolkata", "Asia/Singapore", "Asia/Tokyo",
+                    "Australia/Sydney", "Pacific/Auckland",
+                    "UTC",
+                  ].map((tz) => (
+                    <option key={tz} value={tz}>{tz.replace("_", " ")}</option>
+                  ))}
+                </select>
+              </div>
+              {scheduledAt && (
+                <p className="mt-1.5 text-[11px] text-muted-foreground">
+                  Sends: {scheduledAt.toLocaleString(undefined, { timeZoneName: "short" })}
+                </p>
+              )}
+              {scheduledAt && (
+                <button
+                  type="button"
+                  className="mt-2 w-full rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground"
+                  onClick={() => setScheduleOpen(false)}
+                >
+                  Confirm
+                </button>
+              )}
+            </div>
+          )}
+        </div>
         <Button
           size="icon"
           className="h-9 w-9 shrink-0 rounded-full"
           onClick={() => void handleSubmit()}
-          disabled={disabled || sending || encrypting || !text.trim()}
+          disabled={
+            disabled || sending || encrypting ||
+            (pendingFileShare
+              ? false
+              : galleryMode
+              ? (galleryFreeFiles.length === 0 && galleryLockedFiles.length === 0) ||
+                (galleryLockedFiles.length > 0 && lockEnabled && (!lockPrice || parseFloat(lockPrice) < 0.01))
+              : (!text.trim() && !pendingFile)
+            ) ||
+            (tipEnabled && (!tipAmount || !tipPaymentMethodId))
+          }
           aria-label="Send message"
         >
           {sending || encrypting ? (
@@ -276,6 +1101,42 @@ export function ComposeBar({
           )}
         </Button>
       </div>
+
+      <FilePickerDialog
+        open={filePickerOpen}
+        onClose={() => setFilePickerOpen(false)}
+        onSelect={(entry, perm) => {
+          setPendingFileShare({ entry, permission: perm });
+          setFilePickerOpen(false);
+        }}
+      />
+      {onSendCalendarShare && (
+        <CalendarPickerDialog
+          open={calendarPickerOpen}
+          onClose={() => setCalendarPickerOpen(false)}
+          onSelect={(params) => {
+            onSendCalendarShare(params);
+          }}
+        />
+      )}
+      {onSendCalendarEvent && (
+        <EventPickerDialog
+          open={eventPickerOpen}
+          onClose={() => setEventPickerOpen(false)}
+          onSelect={(params) => {
+            onSendCalendarEvent(params);
+          }}
+        />
+      )}
+      {onSendMeetingPoll && (
+        <MeetingPollComposer
+          open={meetingPollOpen}
+          onClose={() => setMeetingPollOpen(false)}
+          onSend={(params) => {
+            onSendMeetingPoll(params);
+          }}
+        />
+      )}
     </div>
   );
 }

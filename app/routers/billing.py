@@ -34,11 +34,14 @@ from app.models import (
     StripeRefundReq,
     StripePaymentMethodOut,
     VerifyMicrodepositsReq,
+    WalletDepositReq,
+    WalletWithdrawReq,
 )
 from app.services.sessions import require_ui_session
 from app.services.alerts import audit_event
 from app.services.billing_shared import (
     apply_balance_delta,
+    apply_wallet_delta,
     compute_due,
     ddb_del,
     ddb_get,
@@ -46,9 +49,11 @@ from app.services.billing_shared import (
     ddb_query_pk,
     ddb_update,
     ensure_balance_row,
+    get_wallet_balance,
     new_ledger_entry,
     settle_or_reverse_ledger,
     user_pk,
+    WALLET_SK,
 )
 from app.services.profile import get_profile
 from app.services.purchase_history import mark_completed, mark_reverted, record_billing_transaction
@@ -1245,3 +1250,109 @@ def list_subscriptions(ctx=Depends(require_ui_session), actor: AuthenticatedUser
     else:
         items = getattr(resp, "data", []) or []
     return {"items": items}
+
+
+# ─── Wallet endpoints ─────────────────────────────────────────────────────────
+
+@dual_route("GET", "/billing/wallet")
+def get_wallet_endpoint(ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, Any]:
+    user_id = _billing_read_user_sub(ctx, user_sub, actor)
+    return get_wallet_balance(T.billing, user_pk(user_id))
+
+
+@dual_route("POST", "/billing/wallet/deposit")
+def wallet_deposit(body: WalletDepositReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, Any]:
+    ensure_stripe_configured()
+    user_id, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
+    pk = user_pk(user_id)
+
+    billing = ddb_get(T.billing, pk, "BILLING") or {"currency": "usd", "default_payment_method_id": None}
+    payment_method_id = body.payment_method_id or billing.get("default_payment_method_id")
+    if not payment_method_id:
+        raise HTTPException(400, "No payment method provided")
+
+    currency = billing.get("currency", "usd")
+    customer_id = get_or_create_customer(user_id)
+    idem = body.idempotency_key or f"wallet_deposit:{user_id}:{body.amount_cents}:{int(now_ts()/30)}"
+
+    try:
+        pi = stripe.PaymentIntent.create(
+            amount=int(body.amount_cents),
+            currency=currency,
+            customer=customer_id,
+            payment_method=payment_method_id,
+            off_session=True,
+            confirm=True,
+            metadata={"app_user_id": user_id, "purpose": "wallet_deposit"},
+            idempotency_key=idem,
+        )
+    except stripe.error.CardError as exc:
+        audit_event("billing_wallet_deposit", user_id, req, outcome="failure", amount_cents=int(body.amount_cents), reason=str(exc), **admin_tags)
+        raise HTTPException(402, str(exc))
+
+    state = "settled" if pi.get("status") == "succeeded" else "pending"
+    led_sk, led_item = new_ledger_entry(
+        key_name="pk",
+        key_value=pk,
+        entry_type="credit",
+        amount_cents=int(body.amount_cents),
+        state=state,
+        reason="wallet_deposit",
+        meta={"idempotency_key": idem, "payment_method_id": payment_method_id},
+        extra={"stripe_payment_intent_id": pi["id"]},
+    )
+    ddb_put(T.billing, led_item)
+
+    wallet_balance_cents = 0
+    if pi.get("status") == "succeeded":
+        wallet_balance_cents = apply_wallet_delta(T.billing, pk, int(body.amount_cents), currency=currency)
+        settle_or_reverse_ledger(T.billing, "pk", pk, led_sk, "settled")
+
+    audit_event(
+        "billing_wallet_deposit",
+        user_id,
+        req,
+        outcome="success",
+        amount_cents=int(body.amount_cents),
+        currency=currency,
+        payment_intent_id=pi.get("id"),
+        status=pi.get("status"),
+        ledger_sk=led_sk,
+        **admin_tags,
+    )
+    return {"status": pi.get("status"), "payment_intent_id": pi["id"], "wallet_balance_cents": wallet_balance_cents}
+
+
+@dual_route("POST", "/billing/wallet/withdraw")
+def wallet_withdraw(body: WalletWithdrawReq, req: Request = None, ctx=Depends(require_ui_session), actor: AuthenticatedUser = Depends(get_authenticated_user), user_sub: Optional[str] = None) -> Dict[str, Any]:
+    user_id, admin_tags = _billing_write_user_context(ctx, user_sub, actor)
+    pk = user_pk(user_id)
+
+    try:
+        wallet_balance_cents = apply_wallet_delta(T.billing, pk, -int(body.amount_cents))
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            raise HTTPException(400, "Insufficient wallet balance")
+        raise
+
+    led_sk, led_item = new_ledger_entry(
+        key_name="pk",
+        key_value=pk,
+        entry_type="debit",
+        amount_cents=int(body.amount_cents),
+        state="settled",
+        reason="wallet_withdrawal",
+        meta={},
+    )
+    ddb_put(T.billing, led_item)
+
+    audit_event(
+        "billing_wallet_withdraw",
+        user_id,
+        req,
+        outcome="success",
+        amount_cents=int(body.amount_cents),
+        ledger_sk=led_sk,
+        **admin_tags,
+    )
+    return {"ok": True, "wallet_balance_cents": wallet_balance_cents}

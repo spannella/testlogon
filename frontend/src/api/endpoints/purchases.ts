@@ -66,8 +66,10 @@ export const respondCancel = (txnId: string, decision: string, note?: string) =>
 // ─── Events & Receipt ───────────────────────────────────────────
 
 export interface TransactionEvent {
-  event_type: string;
-  ts: number;
+  event_name?: string;
+  event_type?: string;
+  created_at?: number;
+  ts?: number;
   detail?: string;
   [key: string]: unknown;
 }

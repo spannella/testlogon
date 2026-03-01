@@ -7,6 +7,8 @@ import {
   Minus,
   Trash2,
   PackagePlus,
+  Package,
+  ArrowLeft,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -22,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   getCarts,
   createCart,
@@ -148,6 +151,12 @@ export function Cart() {
 
   return (
     <div className="space-y-4">
+      {/* Back to shop */}
+      <Button variant="ghost" size="sm" onClick={() => navigate("/shop")}>
+        <ArrowLeft className="mr-1 h-4 w-4" />
+        Back to shop
+      </Button>
+
       {/* Cart selector + actions */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-2">
@@ -231,11 +240,34 @@ export function Cart() {
                   key={item.sku}
                   className="flex items-center gap-4 px-4 py-3"
                 >
+                  {/* Thumbnail */}
+                  <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-muted flex items-center justify-center">
+                    {item.image_url ? (
+                      <img src={item.image_url} alt={item.name} className="h-full w-full object-cover" />
+                    ) : (
+                      <Package className="h-5 w-5 text-muted-foreground/50" />
+                    )}
+                  </div>
+
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium">{item.name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      SKU: {item.sku}
-                    </p>
+                    {item.category_id && item.item_id ? (
+                      <button
+                        className="text-sm font-medium hover:underline text-left truncate"
+                        onClick={() => navigate(`/shop/${item.category_id}/${item.item_id}`)}
+                      >
+                        {item.name}
+                      </button>
+                    ) : (
+                      <p className="text-sm font-medium truncate">{item.name}</p>
+                    )}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <p className="text-xs text-muted-foreground cursor-default truncate max-w-[120px]">
+                          {item.sku.length > 12 ? `${item.sku.slice(0, 12)}…` : item.sku}
+                        </p>
+                      </TooltipTrigger>
+                      <TooltipContent>SKU: {item.sku}</TooltipContent>
+                    </Tooltip>
                   </div>
                   <span className="text-xs text-muted-foreground">
                     {formatCents(item.unit_price_cents)} each

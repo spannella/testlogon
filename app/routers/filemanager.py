@@ -65,9 +65,26 @@ from app.metrics import (
     record_filemgr_preview_hover_play_failure,
 )
 from app.services.purchase_history import record_receipt_download
+from app.services.file_bundle_entitlements import assert_file_bundle_access
+from app.services.internal_api_entitlements import enforce_internal_api_entitlement
 from app.services.sessions import require_ui_session
 
 router = APIRouter(prefix="/v1/fs", tags=["filemanager"])
+
+
+def _enforce_filemanager_internal_entitlement(
+    *,
+    user: str,
+    action: str,
+    request_id: Optional[str] = None,
+) -> None:
+    req_id = (request_id or "").strip() or f"filemanager:{action}:{user}:{int(time.time() * 1000)}"
+    enforce_internal_api_entitlement(
+        user_id=user,
+        namespace="filemanager",
+        action=action,
+        request_id=req_id,
+    )
 
 
 def _encode_cursor(cursor: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -228,6 +245,7 @@ def list_files(
     sort_dir: str = Query("asc", pattern="^(asc|desc)$"),
     user: str = Depends(_current_user),
 ):
+    _enforce_filemanager_internal_entitlement(user=user, action="list_directory")
     if not isinstance(limit, int):
         limit = 50
     if not isinstance(sort_by, str):
@@ -534,6 +552,11 @@ def upload_fs_file(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    _enforce_filemanager_internal_entitlement(
+        user=user,
+        action="upload_file",
+        request_id=(req.headers.get("X-Request-Id") if req else None),
+    )
     encrypted_flag = encrypted if isinstance(encrypted, bool) else False
     encryption_meta = _parse_encryption_meta(enc_meta) if encrypted_flag else None
     result = upload_file(user, path, file, encryption_meta=encryption_meta)
@@ -566,6 +589,11 @@ def presign_fs_upload(inp: PresignUploadIn, user: str = Depends(_current_user)):
 
 @router.post("/complete-upload")
 def complete_fs_upload(inp: CompleteUploadIn, req: Request = None, user: str = Depends(_current_user)):
+    _enforce_filemanager_internal_entitlement(
+        user=user,
+        action="upload_file",
+        request_id=(req.headers.get("X-Request-Id") if req else inp.ticket_id),
+    )
     result = register_presigned_upload(
         user,
         inp.path,
@@ -590,7 +618,13 @@ def complete_fs_upload(inp: CompleteUploadIn, req: Request = None, user: str = D
 
 @router.get("/download")
 def download_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
+    _enforce_filemanager_internal_entitlement(
+        user=user,
+        action="download_file",
+        request_id=(req.headers.get("X-Request-Id") if req else None),
+    )
     result = download_file(user, path)
+    assert_file_bundle_access(user, result["node"])
     assert_download_allowed(user, requested_bytes=int(result["node"].get("size") or 0))
     node = result["node"]
     obj = result["object"]
@@ -635,8 +669,14 @@ def download_fs_file(path: str = Query(...), req: Request = None, user: str = De
 
 @router.get("/preview")
 def preview_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
+    _enforce_filemanager_internal_entitlement(
+        user=user,
+        action="preview_file",
+        request_id=(req.headers.get("X-Request-Id") if req else None),
+    )
     started = time.perf_counter()
     result = download_file(user, path)
+    assert_file_bundle_access(user, result["node"])
     node = result["node"]
     obj = result["object"]
     preview_info = preview_capability_from_node(node)
@@ -750,6 +790,11 @@ def thumbnail_fs_file(path: str = Query(...), req: Request = None, user: str = D
 
 @router.delete("/file")
 def remove_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
+    _enforce_filemanager_internal_entitlement(
+        user=user,
+        action="delete_file",
+        request_id=(req.headers.get("X-Request-Id") if req else None),
+    )
     remove_file(user, path)
     audit_event("filemgr_file_removed", user, req, outcome="success", path=path, **_file_audit_fields(file_path=norm_path(path, is_folder=False), owner=user))
     return {"ok": True}
@@ -945,13 +990,18 @@ def share_fs_node(
     to_user: str = Body(..., embed=True),
     permission: Annotated[str, Body(embed=True)] = "read",
     expires_at: Annotated[Optional[str], Body(embed=True)] = None,
+    signature_packet_id: Annotated[Optional[str], Body(embed=True)] = None,
     req: Request = None,
     user: str = Depends(_current_user),
 ):
-    if permission == "read" and expires_at is None:
-        share_node(user, path, to_user)
-    else:
-        share_node(user, path, to_user, permission=permission, expires_at=expires_at)
+    share_node(
+        user,
+        path,
+        to_user,
+        permission=permission,
+        expires_at=expires_at,
+        signature_packet_id=signature_packet_id,
+    )
     audit_event(
         "filemgr_node_shared",
         user,
@@ -961,6 +1011,7 @@ def share_fs_node(
         shared_with=to_user,
         permission=permission,
         expires_at=expires_at,
+        signature_packet_id=signature_packet_id,
         **_file_audit_fields(file_path=norm_path(path, is_folder=None), owner=user),
     )
     return {"ok": True}
@@ -1101,8 +1152,14 @@ def shared_download_fs_file(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    _enforce_filemanager_internal_entitlement(
+        user=user,
+        action="download_file",
+        request_id=(req.headers.get("X-Request-Id") if req else None),
+    )
     require_shared_access(user, owner, path, permission="read")
     result = download_file(owner, path)
+    assert_file_bundle_access(user, result["node"])
     assert_download_allowed(user, requested_bytes=int(result["node"].get("size") or 0))
     node = result["node"]
     obj = result["object"]
@@ -1152,9 +1209,15 @@ def shared_preview_fs_file(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    _enforce_filemanager_internal_entitlement(
+        user=user,
+        action="preview_file",
+        request_id=(req.headers.get("X-Request-Id") if req else None),
+    )
     started = time.perf_counter()
     require_shared_access(user, owner, path, permission="read")
     result = download_file(owner, path)
+    assert_file_bundle_access(user, result["node"])
     node = result["node"]
     obj = result["object"]
     preview_info = preview_capability_from_node(node)

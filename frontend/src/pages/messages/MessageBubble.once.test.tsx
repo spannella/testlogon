@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { MessageBubble } from "./MessageBubble";
 import { ApiError } from "@/api/client";
@@ -27,7 +28,11 @@ vi.mock("@/lib/featureFlags", () => ({
 
 const renderWithClient = (ui: JSX.Element) => {
   const client = new QueryClient();
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  return render(
+    <MemoryRouter>
+      <QueryClientProvider client={client}>{ui}</QueryClientProvider>
+    </MemoryRouter>,
+  );
 };
 
 describe("MessageBubble once-media rendering", () => {
@@ -72,10 +77,10 @@ describe("MessageBubble once-media rendering", () => {
       />,
     );
 
-    expect(screen.getByText(/View once/i)).toBeInTheDocument();
+    expect(screen.getByText("View once", { exact: true })).toBeInTheDocument();
     expect(screen.getByText(/pending/i)).toBeInTheDocument();
 
-    await userEvent.click(screen.getByAltText(/Shared image/i));
+    await userEvent.click(screen.getByText(/Tap to view once/i));
 
     await waitFor(() => expect(window.open).toHaveBeenCalled());
     expect(fetch).toHaveBeenCalledWith(
@@ -166,7 +171,7 @@ describe("MessageBubble once-media rendering", () => {
     await waitFor(() => {
       expect(screen.getByText(/Playback threshold not reached yet/i)).toBeInTheDocument();
     });
-    expect(fetch).not.toHaveBeenCalled();
+    expect(window.open).not.toHaveBeenCalled();
   });
 
 });

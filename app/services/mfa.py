@@ -184,12 +184,28 @@ def totp_confirm_enroll(user_sub: str, device_id: str, totp_code: str, totp_code
 
     # Use a generous window (±5 intervals = ±150 s) to tolerate slow typists and
     # the required wait between the two codes.
-    if not totp.verify(code1, valid_window=5):
+    import time as _time
+    window = 5
+
+    if not totp.verify(code1, valid_window=window):
         raise HTTPException(401, "Invalid first code")
-    if not totp.verify(code2, valid_window=5):
+    if not totp.verify(code2, valid_window=window):
         raise HTTPException(401, "Invalid second code")
-    if code1 == code2:
-        raise HTTPException(401, "Please enter two different codes")
+
+    # Enforce that the two codes come from different TOTP 30-second windows.
+    # Find which window (counter) each code belongs to so we can compare them.
+    def find_counter(code: str) -> Optional[int]:
+        now_ts_int = int(_time.time())
+        now_ctr = now_ts_int // 30
+        for offset in range(-window, window + 1):
+            if totp.at(now_ts_int + offset * 30) == code:
+                return now_ctr + offset
+        return None
+
+    counter1 = find_counter(code1)
+    counter2 = find_counter(code2)
+    if counter1 is not None and counter2 is not None and counter1 == counter2:
+        raise HTTPException(401, "Please wait for the next 30-second window and enter a new code")
 
     T.totp.update_item(Key={"user_sub": user_sub, "device_id": device_id}, UpdateExpression="SET enabled = :t, confirmed_at = :now", ExpressionAttributeValues={":t": True, ":now": now_ts()})
 

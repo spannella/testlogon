@@ -1,18 +1,25 @@
 import * as React from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Images, Users } from "lucide-react";
+import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { ArrowLeft, Images, Users, Clock } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
   getMessages,
   sendTextMessage,
   sendImageMessage,
+  sendGalleryMessage,
+  sendFileShareMessage,
+  sendCalendarShareMessage,
+  sendCalendarEventMessage,
+  sendMeetingPollMessage,
   markRead,
+  claimHelpdeskConversation,
 } from "@/api/endpoints/messaging";
 import { useAuthStore } from "@/stores/authStore";
-import type { Conversation, Message, SendTextMessageReq } from "@/api/types";
+import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq } from "@/api/types";
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
 import { PresenceDot } from "./PresenceDot";
@@ -20,13 +27,16 @@ import { TypingIndicator, useTypingSignal } from "./TypingIndicator";
 import { ParticipantsPanel } from "./ParticipantsPanel";
 import { isMessagingGalleryEnabled } from "@/lib/featureFlags";
 import { ConversationGallery } from "./ConversationGallery";
+import { ScheduledMessages } from "./ScheduledMessages";
 
 interface ConversationViewProps {
   conversation: Conversation;
   onBack?: () => void;
+  /** Called immediately after a successful helpdesk claim with the new routing state. */
+  onClaimSuccess?: (state: string, agentUserId: string) => void;
 }
 
-export function ConversationView({ conversation, onBack }: ConversationViewProps) {
+export function ConversationView({ conversation, onBack, onClaimSuccess }: ConversationViewProps) {
   const userId = useAuthStore((s) => s.userId);
   const queryClient = useQueryClient();
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -36,9 +46,15 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
   const isGroup = conversation.type === "group";
   const [participantsOpen, setParticipantsOpen] = React.useState(false);
   const [galleryOpen, setGalleryOpen] = React.useState(false);
+  const [scheduledOpen, setScheduledOpen] = React.useState(false);
   const galleryEnabled = isMessagingGalleryEnabled();
   const [jumpTargetMessageId, setJumpTargetMessageId] = React.useState<string | null>(null);
   const [highlightMessageId, setHighlightMessageId] = React.useState<string | null>(null);
+  const [replyingTo, setReplyingTo] = React.useState<Message | null>(null);
+  const [viewedOnceIds, setViewedOnceIds] = React.useState<Set<string>>(new Set());
+  const handleViewOnce = React.useCallback((id: string) => {
+    setViewedOnceIds((prev) => new Set([...prev, id]));
+  }, []);
 
   // ── Messages query ──────────────────────────────────────────────
 
@@ -47,14 +63,24 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
 
   const allMessages = React.useMemo(() => {
     if (!data?.pages) return [];
-    // Pages come newest-first from the API; reverse to display oldest at top
+    // Pages come newest-first from the API (each page itself is also newest-first).
+    // Iterate pages oldest→newest, and reverse each page's messages so the final
+    // array is chronological oldest→newest for top-to-bottom display.
     const msgs: Message[] = [];
     for (let i = data.pages.length - 1; i >= 0; i--) {
       const page = data.pages[i];
-      if (page) msgs.push(...(page.messages ?? []));
+      if (page) msgs.push(...(page.messages ?? []).slice().reverse());
     }
     return msgs;
   }, [data]);
+
+  // ── Message lookup map for reply previews ──────────────────────
+
+  const messageById = React.useMemo(() => {
+    const map = new Map<string, Message>();
+    for (const msg of allMessages) map.set(msg.message_id, msg);
+    return map;
+  }, [allMessages]);
 
   // ── Auto-scroll to bottom on new messages ───────────────────────
 
@@ -99,24 +125,241 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
 
   // ── Send mutations ─────────────────────────────────────────────
 
+  type MessagesPage = { messages: Message[]; next_cursor?: string };
+
   const sendText = useMutation({
     mutationFn: (payload: SendTextMessageReq) => sendTextMessage(convoId, payload),
-    onSuccess: () => {
+    onMutate: async (payload) => {
+      // Skip optimistic update for scheduled messages - they won't appear until send_at
+      if (payload.send_at) return { snapshot: undefined, isScheduled: true };
+
+      await queryClient.cancelQueries({ queryKey: ["messages", convoId] });
+      const snapshot = queryClient.getQueryData(["messages", convoId]);
+
+      const optimistic: Message = {
+        message_id: `optimistic-${Date.now()}`,
+        conversation_id: convoId,
+        sender_id: userId ?? "",
+        kind: "text",
+        text: payload.encryption ? "" : (payload.text ?? ""),
+        is_encrypted: !!payload.encryption,
+        encryption: payload.encryption,
+        created_at: Date.now() / 1000,
+        reactions_counts: {},
+        reply_to_message_id: payload.reply_to_message_id,
+      };
+
+      queryClient.setQueryData<InfiniteData<MessagesPage>>(
+        ["messages", convoId],
+        (old) => {
+          if (!old?.pages.length) return old;
+          // pages[0] is the newest page and its messages are newest-first.
+          // Prepend the optimistic message so that after allMessages reversal
+          // it appears at the bottom (newest position) rather than the top.
+          const pages = old.pages.map((p, i) =>
+            i === 0 ? { ...p, messages: [optimistic, ...(p.messages ?? [])] } : p,
+          );
+          return { ...old, pages };
+        },
+      );
+
+      return { snapshot, isScheduled: false };
+    },
+    onSuccess: (_data, payload, context) => {
+      if (context?.isScheduled) {
+        // Show toast for scheduled messages instead of adding to chat
+        const scheduledDate = new Date((payload.send_at ?? 0) * 1000);
+        toast.success(
+          `Message scheduled for ${scheduledDate.toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            timeZoneName: "short",
+          })}`,
+        );
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: (err: Error, _payload, context) => {
+      if (context?.snapshot) {
+        queryClient.setQueryData(["messages", convoId], context.snapshot);
+      }
+      toast.error(err.message || "Failed to send message");
     },
   });
 
   const sendImage = useMutation({
-    mutationFn: (args: { file: File; consumptionPolicy?: "none" | "view_once" }) => {
+    mutationFn: (args: {
+      file: File;
+      consumptionPolicy?: "none" | "view_once";
+      caption?: string;
+      expires_in_seconds?: number;
+      lock_price_cents?: number;
+      lock_description?: string;
+      tip_amount_cents?: number;
+      tip_payment_method_id?: string;
+      send_at?: number;
+      encryption_password?: string;
+    }) => {
       const fd = new FormData();
       fd.append("file", args.file);
-      return sendImageMessage(convoId, fd, { consumption_policy: args.consumptionPolicy ?? "none" });
+      return sendImageMessage(convoId, fd, {
+        consumption_policy: args.consumptionPolicy ?? "none",
+        caption: args.caption,
+        expires_in_seconds: args.expires_in_seconds,
+        lock_price_cents: args.lock_price_cents,
+        lock_description: args.lock_description,
+        tip_amount_cents: args.tip_amount_cents,
+        tip_payment_method_id: args.tip_payment_method_id,
+        send_at: args.send_at,
+        encryption_password: args.encryption_password,
+      });
     },
+    onMutate: async (args) => {
+      // Skip optimistic update for scheduled image messages
+      if (args.send_at) return { snapshot: undefined, optimisticUrl: undefined, isScheduled: true };
+
+      await queryClient.cancelQueries({ queryKey: ["messages", convoId] });
+      const snapshot = queryClient.getQueryData(["messages", convoId]);
+
+      // Optimistic placeholder so the user sees immediate feedback during upload
+      const optimistic: Message = {
+        message_id: `optimistic-img-${Date.now()}`,
+        conversation_id: convoId,
+        sender_id: userId ?? "",
+        kind: args.file.type === "application/pdf" ? "file" : "image",
+        text: args.caption,
+        created_at: Date.now() / 1000,
+        reactions_counts: {},
+        // Show a local object URL as preview (will be replaced by the real URL after success)
+        image: args.file.type.startsWith("image/")
+          ? { url: URL.createObjectURL(args.file) }
+          : undefined,
+        file: args.file.type === "application/pdf"
+          ? { name: args.file.name, size: args.file.size, content_type: args.file.type }
+          : undefined,
+      };
+
+      queryClient.setQueryData<InfiniteData<MessagesPage>>(
+        ["messages", convoId],
+        (old) => {
+          if (!old?.pages.length) return old;
+          const pages = old.pages.map((p, i) =>
+            i === 0 ? { ...p, messages: [optimistic, ...(p.messages ?? [])] } : p,
+          );
+          return { ...old, pages };
+        },
+      );
+
+      return { snapshot, optimisticUrl: optimistic.image?.url, isScheduled: false };
+    },
+    onSuccess: (_data, args, context) => {
+      if (context?.optimisticUrl) URL.revokeObjectURL(context.optimisticUrl);
+      if (context?.isScheduled) {
+        const scheduledDate = new Date((args.send_at ?? 0) * 1000);
+        toast.success(
+          `Image scheduled for ${scheduledDate.toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            timeZoneName: "short",
+          })}`,
+        );
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: (_err, _args, context) => {
+      if (context?.optimisticUrl) URL.revokeObjectURL(context.optimisticUrl);
+      if (context?.snapshot) {
+        queryClient.setQueryData(["messages", convoId], context.snapshot);
+      }
+      toast.error("Failed to send image");
+    },
+  });
+
+  const sendGallery = useMutation({
+    mutationFn: (args: {
+      freeFiles: File[];
+      lockedFiles: File[];
+      text?: string;
+      lock_price_cents?: number;
+      lock_description?: string;
+      expires_in_seconds?: number;
+      send_at?: number;
+      tip_amount_cents?: number;
+      tip_payment_method_id?: string;
+    }) => sendGalleryMessage(convoId, args),
+    onSuccess: (_data, args) => {
+      if (args.send_at) {
+        const scheduledDate = new Date(args.send_at * 1000);
+        toast.success(
+          `Gallery scheduled for ${scheduledDate.toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+            timeZoneName: "short",
+          })}`,
+        );
+        return;
+      }
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to send gallery"),
+  });
+
+  const sendFileShare = useMutation({
+    mutationFn: (params: SendFileShareReq) => sendFileShareMessage(convoId, params),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
       queryClient.invalidateQueries({ queryKey: ["conversations"] });
     },
+    onError: () => toast.error("Failed to share file"),
+  });
+
+  const sendCalendarShare = useMutation({
+    mutationFn: (params: SendCalendarShareReq) => sendCalendarShareMessage(convoId, params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to share calendar"),
+  });
+
+  const sendCalendarEvent = useMutation({
+    mutationFn: (params: SendCalendarEventReq) => sendCalendarEventMessage(convoId, params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to share event"),
+  });
+
+  const sendMeetingPoll = useMutation({
+    mutationFn: (params: SendMeetingPollReq) => sendMeetingPollMessage(convoId, params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: () => toast.error("Failed to create poll"),
+  });
+
+  const claimMutation = useMutation({
+    mutationFn: () => claimHelpdeskConversation(convoId),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      queryClient.invalidateQueries({ queryKey: ["helpdesk-queue"] });
+      // Immediately notify parent so it can update activeConvo without waiting for refetch.
+      onClaimSuccess?.(data.state, data.assigned_agent_user_id);
+    },
+    onError: () => toast.error("Failed to claim conversation"),
   });
 
   // ── Conversation title / header ────────────────────────────────
@@ -183,6 +426,9 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
         )}
         <div className="relative">
           <Avatar className="h-9 w-9">
+            {dmPartner?.profile_photo_url && (
+              <AvatarImage src={dmPartner.profile_photo_url} alt={dmPartner.display_name ?? dmPartner.user_id} />
+            )}
             <AvatarFallback className="text-xs">
               {title.slice(0, 2).toUpperCase()}
             </AvatarFallback>
@@ -210,6 +456,15 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
             Media & Links
           </Button>
         )}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0"
+          onClick={() => setScheduledOpen(true)}
+          aria-label="Scheduled messages"
+        >
+          <Clock className="h-4 w-4" />
+        </Button>
         {isGroup && (
           <Button
             variant="ghost"
@@ -222,6 +477,16 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
           </Button>
         )}
       </div>
+
+      {/* Helpdesk routing banner */}
+      {conversation.routing_mode === "helpdesk_bridge" && conversation.routing_state && (
+        <HelpdeskRoutingBanner
+          conversation={conversation}
+          currentUserId={userId ?? ""}
+          onClaim={() => claimMutation.mutate()}
+          isClaiming={claimMutation.isPending}
+        />
+      )}
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
@@ -266,6 +531,10 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
                 isOwn={msg.sender_id === userId}
                 showSender={isGroup}
                 conversationId={convoId}
+                onReply={(m) => setReplyingTo(m)}
+                replyToMessage={msg.reply_to_message_id ? messageById.get(msg.reply_to_message_id) : undefined}
+                viewedOnceIds={viewedOnceIds}
+                onViewOnce={handleViewOnce}
               />
             </div>
           ))
@@ -277,10 +546,34 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
 
       {/* Compose */}
       <ComposeBar
-        onSendText={(payload) => sendText.mutate(payload)}
-        onSendImage={(file, options) => sendImage.mutate({ file, consumptionPolicy: options?.consumption_policy })}
-        sending={sendText.isPending || sendImage.isPending}
+        onSendText={(payload) => {
+          sendText.mutate({
+            ...payload,
+            reply_to_message_id: replyingTo?.message_id,
+          });
+          setReplyingTo(null);
+        }}
+        onSendImage={(file, options) => sendImage.mutate({
+          file,
+          consumptionPolicy: options?.consumption_policy,
+          caption: options?.caption,
+          expires_in_seconds: options?.expires_in_seconds,
+          lock_price_cents: options?.lock_price_cents,
+          lock_description: options?.lock_description,
+          tip_amount_cents: options?.tip_amount_cents,
+          tip_payment_method_id: options?.tip_payment_method_id,
+          send_at: options?.send_at,
+          encryption_password: options?.encryption_password,
+        })}
+        onSendGallery={(params) => sendGallery.mutate(params)}
+        onSendFileShare={(params) => sendFileShare.mutate(params)}
+        onSendCalendarShare={(params) => sendCalendarShare.mutate(params)}
+        onSendCalendarEvent={(params) => sendCalendarEvent.mutate(params)}
+        onSendMeetingPoll={(params) => sendMeetingPoll.mutate(params)}
+        sending={sendText.isPending || sendImage.isPending || sendGallery.isPending || sendFileShare.isPending || sendCalendarShare.isPending || sendCalendarEvent.isPending || sendMeetingPoll.isPending}
         onKeystroke={onKeystroke}
+        replyingTo={replyingTo}
+        onCancelReply={() => setReplyingTo(null)}
       />
 
 
@@ -295,6 +588,13 @@ export function ConversationView({ conversation, onBack }: ConversationViewProps
           }}
         />
       )}
+
+      {/* Scheduled messages panel */}
+      <ScheduledMessages
+        open={scheduledOpen}
+        onOpenChange={setScheduledOpen}
+        conversationId={convoId}
+      />
 
       {/* Group participants panel */}
       {isGroup && (
@@ -321,4 +621,60 @@ function useMessagesQuery(conversationId: string) {
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
   });
+}
+
+// ─── Helpdesk Routing Banner ─────────────────────────────────────
+
+interface HelpdeskRoutingBannerProps {
+  conversation: Conversation;
+  currentUserId: string;
+  onClaim: () => void;
+  isClaiming: boolean;
+}
+
+function HelpdeskRoutingBanner({ conversation, currentUserId, onClaim, isClaiming }: HelpdeskRoutingBannerProps) {
+  const state = conversation.routing_state ?? "";
+  const assignedAgent = conversation.active_agent_user_id ?? "";
+
+  let bgClass = "bg-muted";
+  let text = "";
+  let showClaim = false;
+
+  if (state === "awaiting_agent") {
+    bgClass = "bg-amber-50 border-amber-200 text-amber-800";
+    text = "Waiting for agent";
+    showClaim = true;
+  } else if (state === "assigned" && assignedAgent === currentUserId) {
+    bgClass = "bg-green-50 border-green-200 text-green-800";
+    text = "You are handling this conversation";
+  } else if (state === "assigned") {
+    bgClass = "bg-yellow-50 border-yellow-200 text-yellow-800";
+    text = "Assigned to another agent";
+  } else if (state === "paused_no_agents_online") {
+    bgClass = "bg-red-50 border-red-200 text-red-800";
+    text = "No agents online — will resume when an agent comes online";
+  } else if (state === "closed") {
+    bgClass = "bg-muted border-border text-muted-foreground";
+    text = "Conversation closed";
+  } else {
+    return null;
+  }
+
+  return (
+    <div className={cn("flex items-center gap-3 border-b px-4 py-2 text-sm font-medium", bgClass)}>
+      <span className="flex-1">{text}</span>
+      {showClaim && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 shrink-0"
+          onClick={onClaim}
+          disabled={isClaiming}
+          aria-label="Claim this helpdesk conversation"
+        >
+          {isClaiming ? "Claiming…" : "Claim"}
+        </Button>
+      )}
+    </div>
+  );
 }

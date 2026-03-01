@@ -1,10 +1,11 @@
 import * as React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Search, Plus, MessageSquare } from "lucide-react";
+import { Search, Plus, MessageSquare, Users } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -13,8 +14,8 @@ import {
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { cn } from "@/lib/utils";
-import { getConversations, startConversation } from "@/api/endpoints/messaging";
-import type { Conversation } from "@/api/types";
+import { getConversations, startConversation, startGroupConversation } from "@/api/endpoints/messaging";
+import type { Conversation, Message, UserSearchResult } from "@/api/types";
 import { PresenceDot } from "./PresenceDot";
 import { UserSearch } from "./UserSearch";
 import { useAuthStore } from "@/stores/authStore";
@@ -27,6 +28,9 @@ interface ConversationListProps {
 export function ConversationList({ activeId, onSelect }: ConversationListProps) {
   const [search, setSearch] = React.useState("");
   const [newConvoOpen, setNewConvoOpen] = React.useState(false);
+  const [isGroupMode, setIsGroupMode] = React.useState(false);
+  const [groupTitle, setGroupTitle] = React.useState("");
+  const [groupParticipants, setGroupParticipants] = React.useState<UserSearchResult[]>([]);
   const userId = useAuthStore((s) => s.userId);
 
   const queryClient = useQueryClient();
@@ -34,14 +38,45 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
   const { data, isLoading } = useQuery({
     queryKey: ["conversations"],
     queryFn: () => getConversations(),
+    refetchOnWindowFocus: true,
+    refetchOnMount: true,
+    staleTime: 0,
   });
+
+  const addConvoToCache = (convo: Conversation) => {
+    queryClient.setQueryData(
+      ["conversations"],
+      (old: { conversations: Conversation[]; next_cursor?: string } | Conversation[] | undefined) => {
+        const existing: Conversation[] = Array.isArray(old) ? old : (old?.conversations ?? []);
+        if (existing.some((c) => c.conversation_id === convo.conversation_id)) return old;
+        const updated = [convo, ...existing];
+        return Array.isArray(old) ? updated : { ...(old ?? {}), conversations: updated };
+      },
+    );
+    queryClient.invalidateQueries({ queryKey: ["conversations"] });
+  };
 
   const createConvo = useMutation({
     mutationFn: (pid: string) => startConversation({ participant_ids: [pid], type: "dm" }),
     onSuccess: (convo) => {
-      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      addConvoToCache(convo);
       onSelect(convo);
       setNewConvoOpen(false);
+    },
+  });
+
+  const createGroupConvo = useMutation({
+    mutationFn: () =>
+      startGroupConversation({
+        participant_ids: groupParticipants.map((p) => p.user_id),
+        title: groupTitle.trim() || undefined,
+      }),
+    onSuccess: (convo) => {
+      addConvoToCache(convo);
+      onSelect(convo);
+      setNewConvoOpen(false);
+      setGroupParticipants([]);
+      setGroupTitle("");
     },
   });
 
@@ -50,7 +85,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
   const filtered = search.trim()
     ? conversations.filter((c) => {
         const q = search.toLowerCase();
-        const title = conversationName(c).toLowerCase();
+        const title = conversationName(c, userId ?? undefined).toLowerCase();
         const lastMsg = (c.last_message?.text ?? c.last_message_preview ?? "").toLowerCase();
         return title.includes(q) || lastMsg.includes(q);
       })
@@ -95,7 +130,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
         ) : (
           <div className="space-y-0.5 p-2">
             {filtered.map((convo) => {
-              const name = conversationName(convo);
+              const name = conversationName(convo, userId ?? undefined);
               const initials = name.slice(0, 2).toUpperCase();
               const active = convo.conversation_id === activeId;
               const lastMsg = convo.last_message;
@@ -113,9 +148,15 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
                   onClick={() => onSelect(convo)}
                 >
                   <div className="relative shrink-0">
-                    <Avatar className="h-10 w-10">
-                      <AvatarFallback className="text-xs">{initials}</AvatarFallback>
-                    </Avatar>
+                    {(() => {
+                      const other = convo.type === "dm" ? convo.participants.find((p) => p.user_id !== userId) : undefined;
+                      return (
+                        <Avatar className="h-10 w-10">
+                          {other?.profile_photo_url && <AvatarImage src={other.profile_photo_url} alt={other.display_name ?? other.user_id} />}
+                          <AvatarFallback className="text-xs">{initials}</AvatarFallback>
+                        </Avatar>
+                      );
+                    })()}
                     {convo.type === "dm" && (() => {
                       const other = convo.participants.find((p) => p.user_id !== userId);
                       return other ? <PresenceDot userId={other.user_id} /> : null;
@@ -137,7 +178,7 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
                         "truncate text-xs",
                         unread ? "font-medium text-foreground" : "text-muted-foreground",
                       )}>
-                        {lastMsg?.text ?? convo.last_message_preview ?? "No messages yet"}
+                        {getPreviewText(lastMsg, convo)}
                       </span>
                       {unread && (
                         <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
@@ -154,14 +195,22 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
       </div>
 
       {/* New conversation button */}
-      <div className="border-t border-border p-3">
+      <div className="border-t border-border p-3 flex gap-2">
         <Button
           variant="outline"
-          className="w-full"
-          onClick={() => setNewConvoOpen(true)}
+          className="flex-1"
+          onClick={() => { setIsGroupMode(false); setNewConvoOpen(true); }}
         >
           <Plus className="h-4 w-4" />
-          New conversation
+          New DM
+        </Button>
+        <Button
+          variant="outline"
+          className="flex-1"
+          onClick={() => { setIsGroupMode(true); setGroupParticipants([]); setGroupTitle(""); setNewConvoOpen(true); }}
+        >
+          <Users className="h-4 w-4" />
+          New Group
         </Button>
       </div>
 
@@ -169,15 +218,63 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
       <Dialog open={newConvoOpen} onOpenChange={setNewConvoOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>New Conversation</DialogTitle>
+            <DialogTitle>{isGroupMode ? "New Group Conversation" : "New Direct Message"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <UserSearch
-              placeholder="Search for a user..."
-              onSelect={(user) => createConvo.mutate(user.user_id)}
-            />
-            {createConvo.isPending && (
-              <p className="text-sm text-muted-foreground">Starting conversation...</p>
+            {isGroupMode ? (
+              <>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Group name (optional)</label>
+                  <Input
+                    placeholder="e.g. Team Chat"
+                    value={groupTitle}
+                    onChange={(e) => setGroupTitle(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Add participants</label>
+                  <UserSearch
+                    placeholder="Search for users..."
+                    onSelect={(user) => {
+                      if (!groupParticipants.find((p) => p.user_id === user.user_id)) {
+                        setGroupParticipants((prev) => [...prev, user]);
+                      }
+                    }}
+                  />
+                </div>
+                {groupParticipants.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {groupParticipants.map((p) => (
+                      <Badge key={p.user_id} variant="secondary" className="gap-1">
+                        {p.display_name ?? p.user_id}
+                        <button
+                          onClick={() => setGroupParticipants((prev) => prev.filter((x) => x.user_id !== p.user_id))}
+                          className="ml-1 text-muted-foreground hover:text-foreground"
+                        >
+                          ×
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                <Button
+                  className="w-full"
+                  onClick={() => createGroupConvo.mutate()}
+                  disabled={groupParticipants.length === 0 || createGroupConvo.isPending}
+                >
+                  {createGroupConvo.isPending ? "Creating..." : `Create Group (${groupParticipants.length} participant${groupParticipants.length !== 1 ? "s" : ""})`}
+                </Button>
+              </>
+            ) : (
+              <>
+                <UserSearch
+                  placeholder="Search for a user..."
+                  onSelect={(user) => createConvo.mutate(user.user_id)}
+                />
+                {createConvo.isPending && (
+                  <p className="text-sm text-muted-foreground">Starting conversation...</p>
+                )}
+              </>
             )}
           </div>
         </DialogContent>
@@ -188,15 +285,21 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
-function conversationName(c: Conversation): string {
+function getPreviewText(lastMsg: Message | undefined, convo: Conversation): string {
+  if (!lastMsg) return convo.last_message_preview ?? "No messages yet";
+  if (lastMsg.expired) return "[This message has expired]";
+  if (lastMsg.view_once && lastMsg.text === null) return "[Already viewed]";
+  if (lastMsg.locked && !lastMsg.is_unlocked) return "[Locked message]";
+  return lastMsg.text ?? convo.last_message_preview ?? "No messages yet";
+}
+
+function conversationName(c: Conversation, currentUserId?: string): string {
   if (c.title) return c.title;
-  if (c.participants.length > 0) {
-    return c.participants
-      .slice(0, 3)
-      .map((p) => p.display_name ?? p.user_id)
-      .join(", ");
-  }
-  return "Conversation";
+  const pool = (c.type === "dm" && currentUserId)
+    ? c.participants.filter((p) => p.user_id !== currentUserId)
+    : c.participants;
+  const shown = (pool.length ? pool : c.participants).slice(0, 3);
+  return shown.map((p) => p.display_name ?? p.user_id).join(", ") || "Conversation";
 }
 
 function formatTimestamp(ts: number): string {

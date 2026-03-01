@@ -7,6 +7,8 @@ type RawConversation = Partial<Conversation> & {
   last_read_at?: number | string;
   unread_count?: number | string;
   last_message_at?: number | string;
+  active_agent_claimed_at?: number | string;
+  assignment_version?: number | string;
 };
 
 type RawMessage = Partial<Message> & {
@@ -92,8 +94,26 @@ export function adaptMessage(raw: RawMessage): Message {
     media_kind: raw.media_kind,
     consumption_state: raw.consumption_state,
     consumed_at: raw.consumed_at != null ? toNum(raw.consumed_at) : undefined,
+    lock_price_cents: raw.lock_price_cents,
+    lock_description: raw.lock_description,
+    is_unlocked: raw.is_unlocked,
+    locked: raw.locked,
+    tip_amount_cents: raw.tip_amount_cents,
+    tip_currency: raw.tip_currency,
+    view_once: raw.view_once,
+    expires_at: raw.expires_at,
+    expired: raw.expired,
+    scheduled: raw.scheduled,
+    deliver_at: raw.deliver_at,
     edited: Boolean(raw.edited_at),
     revoked: Boolean(raw.revoked_at),
+    file_share: raw.file_share,
+    calendar_share: raw.calendar_share,
+    calendar_event: raw.calendar_event,
+    meeting_poll: raw.meeting_poll,
+    free_images: raw.free_images,
+    locked_images: raw.locked_images,
+    locked_image_count: raw.locked_image_count,
   };
 }
 
@@ -117,5 +137,11 @@ export function adaptConversation(raw: RawConversation): Conversation {
     unread_count: toNum(raw.unread_count),
     participants: Array.isArray(raw.participants) ? raw.participants : [],
     last_message: raw.last_message ? adaptMessage(raw.last_message) : undefined,
+    routing_mode: raw.routing_mode,
+    routing_group_id: raw.routing_group_id,
+    routing_state: raw.routing_state,
+    active_agent_user_id: raw.active_agent_user_id,
+    active_agent_claimed_at: raw.active_agent_claimed_at != null ? toNum(raw.active_agent_claimed_at) : undefined,
+    assignment_version: raw.assignment_version != null ? toNum(raw.assignment_version) : undefined,
   };
 }

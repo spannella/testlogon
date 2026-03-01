@@ -8,10 +8,34 @@ class MockEventSource {
   onmessage: ((event: MessageEvent) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
 
+  private _listeners: Map<string, ((event: MessageEvent) => void)[]> = new Map();
+
   static instances: MockEventSource[] = [];
 
   constructor(_url: string, _init?: EventSourceInit) {
     MockEventSource.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: (event: MessageEvent) => void) {
+    if (!this._listeners.has(type)) {
+      this._listeners.set(type, []);
+    }
+    this._listeners.get(type)!.push(listener);
+  }
+
+  removeEventListener(type: string, listener: (event: MessageEvent) => void) {
+    const listeners = this._listeners.get(type);
+    if (listeners) {
+      this._listeners.set(type, listeners.filter((l) => l !== listener));
+    }
+  }
+
+  dispatchNamedEvent(type: string, data: unknown) {
+    const event = { type, data: JSON.stringify(data) } as MessageEvent;
+    const listeners = this._listeners.get(type) ?? [];
+    for (const listener of listeners) {
+      listener(event);
+    }
   }
 
   close() {}
@@ -40,8 +64,9 @@ describe("useMessagingStream", () => {
       </QueryClientProvider>,
     );
 
-    const es = MockEventSource.instances[0];
+    const es = MockEventSource.instances[0]!;
     expect(es).toBeTruthy();
+    if (!es) throw new Error("Expected EventSource instance");
 
     es.onmessage?.({
       data: JSON.stringify({ type: "once_media_consumed", conversation_id: "c-1" }),
@@ -50,7 +75,7 @@ describe("useMessagingStream", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["messages", "c-1"] });
   });
 
-  it("invalidates conversations and messages on new_message", () => {
+  it("invalidates conversations and messages on message:new", () => {
     vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
 
     const client = new QueryClient();
@@ -62,10 +87,12 @@ describe("useMessagingStream", () => {
       </QueryClientProvider>,
     );
 
-    const es = MockEventSource.instances[0];
-    es.onmessage?.({
-      data: JSON.stringify({ type: "new_message", conversation_id: "c-2" }),
-    } as MessageEvent);
+    const es = MockEventSource.instances[0]!;
+    expect(es).toBeTruthy();
+    if (!es) throw new Error("Expected EventSource instance");
+
+    // Dispatch a named SSE event (as the backend sends: "event: message:new")
+    es.dispatchNamedEvent("message:new", { conversation_id: "c-2" });
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["conversations"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["messages", "c-2"] });

@@ -13,6 +13,7 @@ import {
   User,
   Shield,
   Bell,
+  LifeBuoy,
   Settings,
   UsersRound,
 } from "lucide-react";
@@ -45,6 +46,8 @@ const MORE_LINKS = [
   { label: "Profile", path: "/profile", icon: User },
   { label: "Security", path: "/security", icon: Shield },
   { label: "Alerts", path: "/alerts", icon: Bell },
+  { label: "Tickets", path: "/tickets", icon: LifeBuoy },
+  { label: "Ticket Spaces", path: "/tickets/spaces", icon: LifeBuoy },
   { label: "Settings", path: "/settings", icon: Settings },
   { label: "Role Mgmt", path: "/root/roles", icon: UsersRound },
 ];

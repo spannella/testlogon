@@ -23,6 +23,7 @@ const ProductDetail = lazy(() => import("@/pages/shop/ProductDetail"));
 const CartPage = lazy(() => import("@/pages/shop/CartPage"));
 const Checkout = lazy(() => import("@/pages/shop/Checkout"));
 const FeedPage = lazy(() => import("@/pages/feed/FeedPage"));
+const PostDetailPage = lazy(() => import("@/pages/feed/PostDetailPage"));
 const AlertsPage = lazy(() => import("@/pages/alerts/AlertsPage"));
 const SecurityPage = lazy(() => import("@/pages/security/SecurityPage"));
 const ProfilePage = lazy(() => import("@/pages/settings/ProfilePage"));
@@ -30,6 +31,12 @@ const SettingsPage = lazy(() => import("@/pages/settings/SettingsPage"));
 const PurchasesPage = lazy(() => import("@/pages/purchases/PurchasesPage"));
 const SubscriptionsPage = lazy(() => import("@/pages/subscriptions/SubscriptionsPage"));
 const RootRoleManagementPage = lazy(() => import("@/pages/admin/RootRoleManagementPage"));
+const PublicEventPage = lazy(() => import("@/pages/calendar/PublicEventPage"));
+const ContactsPage = lazy(() => import("@/pages/contacts/ContactsPage"));
+const HelpdeskPage = lazy(() => import("@/pages/helpdesk/HelpdeskPage"));
+const TicketsPage = lazy(() => import("@/pages/tickets/TicketsPage"));
+const TicketSpacesPage = lazy(() => import("@/pages/tickets/TicketSpacesPage"));
+const TicketSpaceDetailPage = lazy(() => import("@/pages/tickets/TicketSpaceDetailPage"));
 
 function PageSpinner() {
   return (
@@ -48,11 +55,14 @@ export default function App() {
         <Route path="/register" element={<Register />} />
         <Route path="/password-recovery" element={<PasswordRecovery />} />
         <Route path="/magic-link-verify" element={<MagicLinkVerify />} />
+        <Route path="/event/:calendarId/:eventId" element={<PublicEventPage />} />
 
         {/* Protected routes inside AppShell layout */}
         <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
           <Route index element={<Dashboard />} />
           <Route path="messages" element={<MessagesPage />} />
+          <Route path="contacts" element={<ContactsPage />} />
+          <Route path="helpdesk" element={<HelpdeskPage />} />
           <Route path="files" element={<FilesPage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
@@ -63,7 +73,11 @@ export default function App() {
           <Route path="cart" element={<CartPage />} />
           <Route path="cart/checkout" element={<Checkout />} />
           <Route path="feed" element={<FeedPage />} />
+          <Route path="posts/:postId" element={<PostDetailPage />} />
           <Route path="alerts" element={<AlertsPage />} />
+          <Route path="tickets" element={<TicketsPage />} />
+          <Route path="tickets/spaces" element={<TicketSpacesPage />} />
+          <Route path="tickets/spaces/:spaceId" element={<TicketSpaceDetailPage />} />
           <Route path="security" element={<SecurityPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />

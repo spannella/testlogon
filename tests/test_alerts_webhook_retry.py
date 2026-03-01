@@ -144,3 +144,86 @@ def test_audit_event_records_delivery_failure_telemetry() -> None:
     assert failures[1]["target"] == "siem_webhook"
     record.assert_any_call("alerts_delivery_failure")
     warning.assert_called_once()
+
+
+def test_ticket_event_types_are_first_class_alert_types() -> None:
+    for event_type in (
+        "ticket_created",
+        "ticket_assigned",
+        "ticket_replied",
+        "ticket_status_changed",
+        "ticket_reopened",
+    ):
+        assert event_type in alerts.ALERT_EVENT_TYPES
+
+
+def test_event_to_type_maps_ticket_events_without_fallback() -> None:
+    assert alerts.event_to_type("ticket_created", "success") == "ticket_created"
+    assert alerts.event_to_type("ticket_assigned", "success") == "ticket_assigned"
+    assert alerts.event_to_type("ticket_replied", "success") == "ticket_replied"
+    assert alerts.event_to_type("ticket_status_changed", "success") == "ticket_status_changed"
+    assert alerts.event_to_type("ticket_reopened", "success") == "ticket_reopened"
+
+
+def test_render_ticket_email_template_includes_required_fields() -> None:
+    subj, body = alerts.render_ticket_email_template(
+        alert_type="ticket_assigned",
+        outcome="success",
+        payload={
+            "ticket_id": "tkt_123",
+            "ticket_subject": "Login issue",
+            "actor_sub": "admin-1",
+            "assignee_admin_sub": "admin-2",
+        },
+    )
+    assert "tkt_123" in subj
+    assert "Ticket ID: tkt_123" in body
+    assert "Subject: Login issue" in body
+    assert "Actor: admin-1" in body
+    assert "Assignee: admin-2" in body
+    assert "/tickets/tkt_123" in body
+
+
+def test_audit_event_uses_ticket_email_template_for_ticket_alerts() -> None:
+    sent = {}
+
+    def fake_send_alert_email(to_emails, subject, body_text):
+        sent["to"] = to_emails
+        sent["subject"] = subject
+        sent["body"] = body_text
+
+    prefs = {
+        "emails": ["user@example.test"],
+        "sms_numbers": [],
+        "email_event_types": ["ticket_replied"],
+        "sms_event_types": [],
+        "webhook_urls": [],
+        "webhook_event_types": [],
+    }
+    with patch.object(alerts, "write_alert", return_value={"alert_id": "a1"}), patch.object(
+        alerts, "get_profile_identity", return_value={}
+    ), patch.object(alerts, "send_push_for_alert"), patch.object(
+        alerts, "send_alert_webhook", return_value={"enabled": False, "delivered": False, "reason": "disabled"}
+    ), patch.object(
+        alerts, "send_siem_event", return_value={"enabled": False, "delivered": False, "reason": "disabled"}
+    ), patch.object(
+        alerts, "get_alert_prefs", return_value=prefs
+    ), patch.object(
+        alerts, "can_send_alert_channel", return_value=True
+    ), patch.object(
+        alerts, "send_alert_email", side_effect=fake_send_alert_email
+    ), patch.object(alerts, "record_auth_event"):
+        alerts.audit_event(
+            "ticket_replied",
+            "user-1",
+            None,
+            outcome="success",
+            ticket_id="tkt_123",
+            ticket_subject="Reset password",
+            actor_sub="admin-1",
+        )
+
+    assert sent["to"] == ["user@example.test"]
+    assert "Ticket #tkt_123" in sent["subject"]
+    assert "Subject: Reset password" in sent["body"]
+    assert "Actor: admin-1" in sent["body"]

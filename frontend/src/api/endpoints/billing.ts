@@ -14,6 +14,9 @@ import type {
   SetDefaultReq,
   BillingCheckoutReq,
   OkResp,
+  WalletBalance,
+  WalletDepositReq,
+  WalletWithdrawReq,
 } from "@/api/types";
 
 export const getConfig = () =>
@@ -81,3 +84,12 @@ export const getPayments = (limit = 50) =>
 
 export const getSubscriptions = (limit = 50) =>
   api.get<{ items: Subscription[] }>("/ui/billing/subscriptions", { limit: String(limit) });
+
+export const getWallet = () =>
+  api.get<WalletBalance>("/ui/billing/wallet");
+
+export const depositToWallet = (body: WalletDepositReq) =>
+  api.post<{ status: string; payment_intent_id: string; wallet_balance_cents: number }>("/ui/billing/wallet/deposit", body);
+
+export const withdrawFromWallet = (body: WalletWithdrawReq) =>
+  api.post<{ ok: boolean; wallet_balance_cents: number }>("/ui/billing/wallet/withdraw", body);
