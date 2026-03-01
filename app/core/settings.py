@@ -379,6 +379,13 @@ class Settings:
     api_usage_rate_limit_counts_toward_quota: bool = os.environ.get("API_USAGE_RATE_LIMIT_COUNTS_TOWARD_QUOTA", "true").lower() in ("1", "true", "yes", "on")
     api_usage_auth_failed_billable: bool = os.environ.get("API_USAGE_AUTH_FAILED_BILLABLE", "false").lower() in ("1", "true", "yes", "on")
     api_usage_auth_failed_counts_toward_quota: bool = os.environ.get("API_USAGE_AUTH_FAILED_COUNTS_TOWARD_QUOTA", "true").lower() in ("1", "true", "yes", "on")
+
+
+    # Newsfeed rich-content validation
+    newsfeed_content_max_plain_chars: int = int(os.environ.get("NEWSFEED_CONTENT_MAX_PLAIN_CHARS", "10000"))
+    newsfeed_content_max_markdown_chars: int = int(os.environ.get("NEWSFEED_CONTENT_MAX_MARKDOWN_CHARS", "20000"))
+    newsfeed_content_max_rich_nodes: int = int(os.environ.get("NEWSFEED_CONTENT_MAX_RICH_NODES", "500"))
+    newsfeed_content_max_rich_depth: int = int(os.environ.get("NEWSFEED_CONTENT_MAX_RICH_DEPTH", "20"))
     api_usage_pricing_catalog: str = os.environ.get("API_USAGE_PRICING_CATALOG", "")
     api_usage_default_pricing_catalog_version: str = os.environ.get("API_USAGE_DEFAULT_PRICING_CATALOG_VERSION", "v1")
     api_usage_pricing_missing_route_behavior: str = os.environ.get("API_USAGE_PRICING_MISSING_ROUTE_BEHAVIOR", "default_route")
@@ -406,6 +413,10 @@ class Settings:
     api_entitlement_low_balance_thresholds: str = os.environ.get("API_ENTITLEMENT_LOW_BALANCE_THRESHOLDS", "0.2,0.1,0.05")
     api_entitlement_near_cap_thresholds: str = os.environ.get("API_ENTITLEMENT_NEAR_CAP_THRESHOLDS", "0.8,0.9,0.95")
 
+
+    # Newsfeed rich-content feature flags
+    newsfeed_markdown_enabled: bool = os.environ.get("NEWSFEED_MARKDOWN_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    newsfeed_richtext_enabled: bool = os.environ.get("NEWSFEED_RICHTEXT_ENABLED", "false").lower() in ("1", "true", "yes", "on")
 
     # Messaging feature flags
     messaging_encrypted_messages_enabled: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_ENABLED", "false").lower() == "true"

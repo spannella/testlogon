@@ -10,7 +10,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { MarkdownComposer, type EditorMode, type RichDoc, richDocToPlain, buildContentPayload } from "./MarkdownComposer";
 import { editPost, uploadPostImage } from "@/api/endpoints/newsfeed";
 
 const MAX_IMAGES = 10;
@@ -21,6 +21,7 @@ interface EditPostDialogProps {
   postId: string;
   initialBody: string;
   initialImageUrls?: string[];
+  initialBodyRich?: RichDoc | null;
 }
 
 export function EditPostDialog({
@@ -29,29 +30,34 @@ export function EditPostDialog({
   postId,
   initialBody,
   initialImageUrls,
+  initialBodyRich,
 }: EditPostDialogProps) {
   const queryClient = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [body, setBody] = useState(initialBody);
+  const [editorMode, setEditorMode] = useState<EditorMode>(initialBodyRich ? "rich" : "plain");
+  const [richDoc, setRichDoc] = useState<RichDoc | null>(initialBodyRich ?? null);
   const [imageUrls, setImageUrls] = useState<string[]>(initialImageUrls ?? []);
   const [uploading, setUploading] = useState(false);
 
   // Sync with props when dialog opens
   useEffect(() => {
     if (open) {
-      setBody(initialBody);
+      setBody(initialBodyRich ? richDocToPlain(initialBodyRich) || initialBody : initialBody);
       setImageUrls(initialImageUrls ?? []);
+      setEditorMode(initialBodyRich ? "rich" : "plain");
+      setRichDoc(initialBodyRich ?? null);
     }
-  }, [open, initialBody, initialImageUrls]);
+  }, [open, initialBody, initialImageUrls, initialBodyRich]);
 
   const mutation = useMutation({
-    mutationFn: () => editPost(postId, { body, image_urls: imageUrls }),
+    mutationFn: () => editPost(postId, { ...buildContentPayload(body, editorMode, richDoc), image_urls: imageUrls }),
     onSuccess: () => {
       toast.success("Post updated");
       void queryClient.invalidateQueries({ queryKey: ["feed"] });
       onOpenChange(false);
     },
-    onError: () => toast.error("Failed to update post"),
+    onError: (err: unknown) => toast.error(err instanceof Error ? err.message : "Failed to update post"),
   });
 
   const handleSave = () => {
@@ -96,11 +102,14 @@ export function EditPostDialog({
           <DialogTitle>Edit Post</DialogTitle>
         </DialogHeader>
 
-        <Textarea
+        <MarkdownComposer
+          mode={editorMode}
+          onModeChange={setEditorMode}
           value={body}
-          onChange={(e) => setBody(e.target.value)}
+          onChange={setBody}
+          richDoc={richDoc}
+          onRichDocChange={setRichDoc}
           rows={5}
-          className="resize-none"
           placeholder="Write something..."
         />
 

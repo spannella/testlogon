@@ -3,17 +3,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
+from html import escape
 import os
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Annotated, Any, Dict, List, Literal, Optional, Set
+from typing import Annotated, Any, Dict, List, Literal, Optional, Set, Tuple
 
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from starlette.responses import StreamingResponse
 
 from app.core.aws import ddb
@@ -44,6 +46,18 @@ sqs = sqs_client() if EVENTS_SQS_URL else None
 
 router = APIRouter(tags=["newsfeed"])
 logger = logging.getLogger(__name__)
+
+
+def _emit_newsfeed_content_metric(event: str, **fields: Any) -> None:
+    logger.info("newsfeed content metric", extra={"event": event, **fields})
+
+
+def _emit_newsfeed_content_reject(reason_code: str, *, source: str, body_format: Optional[str] = None) -> None:
+    logger.warning(
+        "newsfeed content reject",
+        extra={"event": "newsfeed_content_reject", "source": source, "reason_code": reason_code, "body_format": body_format or "unknown"},
+    )
+
 
 
 # -----------------------------
@@ -360,12 +374,345 @@ class Attachment(BaseModel):
     url: Optional[str] = None
 
 
-class CreatePostRequest(BaseModel):
-    body: str
+BodyFormat = Literal["plain", "markdown", "rich"]
+
+ALLOWED_MARKDOWN_HTML_TAGS: Set[str] = {"p", "br", "strong", "em", "code", "pre", "blockquote", "ul", "ol", "li", "a"}
+ALLOWED_MARKDOWN_HTML_ATTRS: Dict[str, Set[str]] = {"a": {"href", "rel", "target"}}
+ALLOWED_MARKDOWN_URL_PROTOCOLS: Set[str] = {"https", "mailto"}
+
+ALLOWED_RICH_NODE_TYPES: Set[str] = {
+    "doc", "paragraph", "text", "heading", "blockquote", "bulletList", "orderedList", "listItem", "codeBlock", "hardBreak",
+}
+ALLOWED_RICH_MARK_TYPES: Set[str] = {"bold", "italic", "code", "link"}
+ALLOWED_RICH_NODE_ATTRS: Dict[str, Set[str]] = {
+    "heading": {"level"},
+}
+ALLOWED_RICH_MARK_ATTRS: Dict[str, Set[str]] = {
+    "link": {"href", "title", "target", "rel"},
+}
+
+
+def _is_safe_rich_link_url(url: str) -> bool:
+    return _is_safe_markdown_url(url)
+
+
+def _raise_rich_schema_error(reason_code: str, message: str) -> None:
+    logger.warning("newsfeed rich schema validation failed", extra={"reason_code": reason_code, "detail": message})
+    raise ValueError(f"invalid_content_schema:{reason_code}: {message}")
+
+
+def _validate_rich_node_or_error(node: Any, *, path: str = "doc") -> int:
+    if not isinstance(node, dict):
+        _raise_rich_schema_error("node_not_object", f"{path} must be a JSON object")
+
+    node_type = node.get("type")
+    if not isinstance(node_type, str):
+        _raise_rich_schema_error("node_missing_type", f"{path}.type must be a string")
+    if node_type not in ALLOWED_RICH_NODE_TYPES:
+        _raise_rich_schema_error("unsupported_node_type", f"{path}.type '{node_type}' is not allowed")
+    if node_type in {"html", "raw", "rawHtml", "script"}:
+        _raise_rich_schema_error("raw_html_not_allowed", f"{path}.type '{node_type}' is not allowed")
+
+    attrs = node.get("attrs")
+    if attrs is not None:
+        if not isinstance(attrs, dict):
+            _raise_rich_schema_error("invalid_node_attrs", f"{path}.attrs must be an object")
+        allowed_attrs = ALLOWED_RICH_NODE_ATTRS.get(node_type, set())
+        extra_attrs = set(attrs.keys()) - allowed_attrs
+        if extra_attrs:
+            _raise_rich_schema_error("unsupported_node_attr", f"{path}.attrs contains unsupported keys: {sorted(extra_attrs)}")
+
+    if node_type == "text":
+        if not isinstance(node.get("text"), str):
+            _raise_rich_schema_error("invalid_text_node", f"{path}.text must be a string")
+
+    marks = node.get("marks")
+    if marks is not None:
+        if not isinstance(marks, list):
+            _raise_rich_schema_error("invalid_marks", f"{path}.marks must be an array")
+        for i, mark in enumerate(marks):
+            mark_path = f"{path}.marks[{i}]"
+            if not isinstance(mark, dict):
+                _raise_rich_schema_error("mark_not_object", f"{mark_path} must be an object")
+            mark_type = mark.get("type")
+            if mark_type not in ALLOWED_RICH_MARK_TYPES:
+                _raise_rich_schema_error("unsupported_mark_type", f"{mark_path}.type '{mark_type}' is not allowed")
+            mark_attrs = mark.get("attrs")
+            if mark_attrs is not None:
+                if not isinstance(mark_attrs, dict):
+                    _raise_rich_schema_error("invalid_mark_attrs", f"{mark_path}.attrs must be an object")
+                allowed_mark_attrs = ALLOWED_RICH_MARK_ATTRS.get(mark_type, set())
+                extra_mark_attrs = set(mark_attrs.keys()) - allowed_mark_attrs
+                if extra_mark_attrs:
+                    _raise_rich_schema_error("unsupported_mark_attr", f"{mark_path}.attrs contains unsupported keys: {sorted(extra_mark_attrs)}")
+                if mark_type == "link" and "href" in mark_attrs and not _is_safe_rich_link_url(str(mark_attrs.get("href") or "")):
+                    _raise_rich_schema_error("unsafe_link_protocol", f"{mark_path}.attrs.href uses a blocked protocol")
+
+    children = node.get("content")
+    count = 1
+    if children is not None:
+        if not isinstance(children, list):
+            _raise_rich_schema_error("invalid_content_children", f"{path}.content must be an array")
+        for idx, child in enumerate(children):
+            count += _validate_rich_node_or_error(child, path=f"{path}.content[{idx}]")
+    return count
+
+
+def _is_safe_markdown_url(url: str) -> bool:
+    candidate = (url or "").strip()
+    if not candidate or any(ch in candidate for ch in ['"', "'", " ", "\n", "\r", "\t"]):
+        return False
+    parsed = urlparse(candidate)
+    scheme = (parsed.scheme or "").lower()
+    if not (scheme and scheme in ALLOWED_MARKDOWN_URL_PROTOCOLS):
+        return False
+    if scheme == "https" and not parsed.netloc:
+        return False
+    if scheme == "mailto" and not parsed.path:
+        return False
+    return True
+
+
+def _sanitize_markdown_inline(text: str) -> str:
+    safe = escape(text or "")
+    safe = re.sub(r"`([^`]+)`", lambda m: f"<code>{m.group(1)}</code>", safe)
+    safe = re.sub(r"\*\*([^*]+)\*\*", lambda m: f"<strong>{m.group(1)}</strong>", safe)
+    safe = re.sub(r"\*([^*]+)\*", lambda m: f"<em>{m.group(1)}</em>", safe)
+
+    def _link_sub(match: re.Match[str]) -> str:
+        label = match.group(1)
+        href = match.group(2).strip()
+        if not _is_safe_markdown_url(href):
+            _emit_newsfeed_content_reject("unsafe_link_protocol", source="markdown_sanitizer", body_format="markdown")
+            return label
+        return f'<a href="{escape(href, quote=True)}" rel="nofollow noopener noreferrer" target="_blank">{label}</a>'
+
+    safe = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _link_sub, safe)
+    return safe
+
+
+def render_markdown_sanitized_html(markdown_text: str) -> str:
+    text = (markdown_text or "").strip()
+    if not text:
+        return ""
+
+    lines = text.splitlines()
+    html_parts: List[str] = []
+    in_ul = False
+    in_ol = False
+
+    def _close_lists() -> None:
+        nonlocal in_ul, in_ol
+        if in_ul:
+            html_parts.append("</ul>")
+            in_ul = False
+        if in_ol:
+            html_parts.append("</ol>")
+            in_ol = False
+
+    for raw in lines:
+        line = raw.rstrip()
+        stripped = line.strip()
+        if not stripped:
+            _close_lists()
+            continue
+
+        if stripped.startswith("- "):
+            if in_ol:
+                html_parts.append("</ol>")
+                in_ol = False
+            if not in_ul:
+                html_parts.append("<ul>")
+                in_ul = True
+            html_parts.append(f"<li>{_sanitize_markdown_inline(stripped[2:].strip())}</li>")
+            continue
+
+        if re.match(r"^\d+\.\s+", stripped):
+            if in_ul:
+                html_parts.append("</ul>")
+                in_ul = False
+            if not in_ol:
+                html_parts.append("<ol>")
+                in_ol = True
+            item_text = re.sub(r"^\d+\.\s+", "", stripped, count=1)
+            html_parts.append(f"<li>{_sanitize_markdown_inline(item_text)}</li>")
+            continue
+
+        _close_lists()
+        if stripped.startswith(">"):
+            html_parts.append(f"<blockquote>{_sanitize_markdown_inline(stripped[1:].strip())}</blockquote>")
+            continue
+        html_parts.append(f"<p>{_sanitize_markdown_inline(stripped)}</p>")
+
+    _close_lists()
+    return "".join(html_parts)
+
+
+def _content_limit_int(name: str, default: int) -> int:
+    raw = getattr(S, name, default)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = default
+    return value if value > 0 else default
+
+
+def _content_max_plain_chars() -> int:
+    return _content_limit_int("newsfeed_content_max_plain_chars", 10000)
+
+
+def _content_max_markdown_chars() -> int:
+    return _content_limit_int("newsfeed_content_max_markdown_chars", 20000)
+
+
+def _content_max_rich_nodes() -> int:
+    return _content_limit_int("newsfeed_content_max_rich_nodes", 500)
+
+
+def _content_max_rich_depth() -> int:
+    return _content_limit_int("newsfeed_content_max_rich_depth", 20)
+
+
+def _walk_rich_tree_stats(node: Any, *, depth: int = 1) -> tuple[int, int]:
+    if not isinstance(node, (dict, list)):
+        return (0, depth)
+    if isinstance(node, list):
+        count = 0
+        max_depth = depth
+        for child in node:
+            c_count, c_depth = _walk_rich_tree_stats(child, depth=depth)
+            count += c_count
+            max_depth = max(max_depth, c_depth)
+        return count, max_depth
+
+    count = 1
+    max_depth = depth
+    for child in node.get("content") or []:
+        c_count, c_depth = _walk_rich_tree_stats(child, depth=depth + 1)
+        count += c_count
+        max_depth = max(max_depth, c_depth)
+    return count, max_depth
+
+
+def _validate_rich_schema_or_error(doc: Any) -> None:
+    if not isinstance(doc, dict):
+        _raise_rich_schema_error("root_not_object", "body_rich must be a JSON object")
+    if doc.get("type") != "doc":
+        _raise_rich_schema_error("root_not_doc", "body_rich.type must be 'doc'")
+    content = doc.get("content")
+    if not isinstance(content, list):
+        _raise_rich_schema_error("root_content_not_array", "body_rich.content must be a JSON array")
+
+    node_count = _validate_rich_node_or_error(doc, path="doc")
+    _legacy_node_count, max_depth = _walk_rich_tree_stats(doc)
+    max_nodes = _content_max_rich_nodes()
+    max_allowed_depth = _content_max_rich_depth()
+    if node_count > max_nodes:
+        _raise_rich_schema_error("node_limit_exceeded", f"body_rich node count exceeds max ({max_nodes})")
+    if max_depth > max_allowed_depth:
+        _raise_rich_schema_error("depth_limit_exceeded", f"body_rich depth exceeds max ({max_allowed_depth})")
+
+
+class ContentFieldsMixin(BaseModel):
+    # Legacy compatibility field kept for older clients.
+    body: Optional[str] = None
+    # Canonical content envelope fields.
+    body_plain: Optional[str] = None
+    body_markdown: Optional[str] = None
+    body_markdown_html: Optional[str] = None
+    body_rich: Optional[Dict[str, Any]] = None
+    body_format: Optional[BodyFormat] = None
+    body_version: Optional[int] = Field(default=1, ge=1)
+
+    @model_validator(mode="after")
+    def validate_content_fields(self):
+        has_legacy = bool((self.body or "").strip())
+        has_plain = bool((self.body_plain or "").strip())
+        has_markdown = bool((self.body_markdown or "").strip())
+        has_rich = bool(self.body_rich)
+
+        if not (has_legacy or has_plain or has_markdown or has_rich):
+            raise ValueError("invalid_content_payload: one of body/body_plain/body_markdown/body_rich is required")
+
+        chosen_format = self.body_format or (
+            "rich" if has_rich else "markdown" if has_markdown else "plain"
+        )
+        if chosen_format == "rich" and not has_rich:
+            raise ValueError("invalid_content_payload: body_rich is required when body_format is rich")
+        if chosen_format == "markdown" and not has_markdown:
+            raise ValueError("invalid_content_payload: body_markdown is required when body_format is markdown")
+
+        if chosen_format == "markdown" and not bool(getattr(S, "newsfeed_markdown_enabled", False)):
+            _emit_newsfeed_content_reject("markdown_feature_disabled", source="validator", body_format="markdown")
+            raise ValueError("feature_disabled: markdown format is disabled")
+        if chosen_format == "rich" and not bool(getattr(S, "newsfeed_richtext_enabled", False)):
+            _emit_newsfeed_content_reject("rich_feature_disabled", source="validator", body_format="rich")
+            raise ValueError("feature_disabled: rich format is disabled")
+
+        if chosen_format == "rich" and not (has_plain or has_legacy):
+            raise ValueError("invalid_content_payload: body_plain (or legacy body) is required when body_rich is provided")
+
+        plain_text = (self.body_plain or self.body or "").strip()
+        markdown_text = (self.body_markdown or "").strip()
+        if plain_text and len(plain_text) > _content_max_plain_chars():
+            raise ValueError(
+                f"invalid_content_payload: body_plain/body exceeds max length ({_content_max_plain_chars()})"
+            )
+        if markdown_text and len(markdown_text) > _content_max_markdown_chars():
+            raise ValueError(
+                f"invalid_content_payload: body_markdown exceeds max length ({_content_max_markdown_chars()})"
+            )
+        if has_rich:
+            _validate_rich_schema_or_error(self.body_rich)
+        return self
+
+
+def _content_from_payload(req: ContentFieldsMixin) -> Dict[str, Any]:
+    body_plain = (req.body_plain or req.body or "").strip()
+    body_markdown = (req.body_markdown or "").strip() or None
+    body_rich = req.body_rich or None
+    body_format: BodyFormat = req.body_format or (
+        "rich" if body_rich else "markdown" if body_markdown else "plain"
+    )
+    if body_format == "markdown" and not body_plain:
+        body_plain = body_markdown or ""
+    body_markdown_html = render_markdown_sanitized_html(body_markdown or "") if body_markdown else None
+    return {
+        "body": body_plain,
+        "body_plain": body_plain,
+        "body_markdown": body_markdown,
+        "body_markdown_html": body_markdown_html,
+        "body_rich": body_rich,
+        "body_format": body_format,
+        "body_version": int(req.body_version or 1),
+    }
+
+
+class CreatePostRequest(ContentFieldsMixin):
     image_urls: List[str] = Field(default_factory=list)
     visibility: Literal["followers", "public"] = "followers"
     unlock_price_cents: Optional[int] = Field(default=None, ge=0)
     file_paths: List[str] = Field(default_factory=list)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"body": "Legacy plain text post", "visibility": "followers"},
+                {
+                    "body_plain": "Hello world",
+                    "body_markdown": "# Hello world",
+                    "body_format": "markdown",
+                    "body_version": 1,
+                },
+                {
+                    "body_plain": "Hello rich world",
+                    "body_rich": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Hello rich world"}]}]},
+                    "body_format": "rich",
+                    "body_version": 1,
+                },
+            ]
+        }
+    }
 
 
 class PostResponse(BaseModel):
@@ -373,6 +720,12 @@ class PostResponse(BaseModel):
     author_id: str
     created_at: str
     body: str
+    body_plain: Optional[str] = None
+    body_markdown: Optional[str] = None
+    body_markdown_html: Optional[str] = None
+    body_rich: Optional[Dict[str, Any]] = None
+    body_format: BodyFormat = "plain"
+    body_version: int = 1
     image_urls: List[str] = Field(default_factory=list)
     visibility: str
     locked: bool
@@ -381,13 +734,25 @@ class PostResponse(BaseModel):
     comment_count: int = 0
 
 
-class CreateCommentRequest(BaseModel):
-    body: str
+class CreateCommentRequest(ContentFieldsMixin):
     parent_comment_id: Optional[str] = None
 
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"body": "Legacy plain comment"},
+                {"body_plain": "Item one", "body_markdown": "- Item one", "body_format": "markdown"},
+                {
+                    "body_plain": "Rich comment",
+                    "body_rich": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Rich comment"}]}]},
+                    "body_format": "rich",
+                },
+            ]
+        }
+    }
 
-class EditCommentRequest(BaseModel):
-    body: str
+
+class EditCommentRequest(ContentFieldsMixin):
     expected_version: int = Field(default=1, ge=1)
 
 
@@ -400,6 +765,12 @@ class CommentResponse(BaseModel):
     deleted: bool = False
     parent_comment_id: Optional[str] = None
     body: Optional[str] = None
+    body_plain: Optional[str] = None
+    body_markdown: Optional[str] = None
+    body_markdown_html: Optional[str] = None
+    body_rich: Optional[Dict[str, Any]] = None
+    body_format: BodyFormat = "plain"
+    body_version: int = 1
     version: int = 1
     tip_total_cents: int = 0
 
@@ -417,8 +788,7 @@ class HidePostRequest(BaseModel):
     post_id: str
 
 
-class EditPostRequest(BaseModel):
-    body: str
+class EditPostRequest(ContentFieldsMixin):
     image_urls: Optional[List[str]] = None
 
 
@@ -453,10 +823,83 @@ class PostTipRequest(BaseModel):
 class ReactionRequest(BaseModel):
     emoji: str = Field(..., min_length=1, max_length=10)
 
+class ContentRenderTelemetryRequest(BaseModel):
+    reason: Literal["unsupported_format", "render_exception"]
+    body_format: Optional[str] = None
+    surface: Literal["post", "comment", "unknown"] = "unknown"
+
 
 # -----------------------------
 # Post serialization helper
 # -----------------------------
+def _rich_doc_to_plain_text(doc: Any) -> str:
+    """Best-effort plain text extraction for legacy fallback rendering."""
+    parts: List[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            text = node.get("text")
+            if isinstance(text, str) and text:
+                parts.append(text)
+            for child in node.get("content") or []:
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(doc)
+    return " ".join(part.strip() for part in parts if part and part.strip()).strip()
+
+
+def _coerce_body_text(value: Any) -> Optional[str]:
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    return None
+
+
+def _resolve_read_body_fields(item: Dict[str, Any]) -> Tuple[str, Optional[str], Optional[str], Optional[str], Optional[Dict[str, Any]], BodyFormat, int]:
+    """Resolve legacy/new content fields for response serialization with rollout-safe fallbacks."""
+    legacy_body = _coerce_body_text(item.get("body"))
+    body_plain = _coerce_body_text(item.get("body_plain"))
+    body_markdown = _coerce_body_text(item.get("body_markdown"))
+    body_rich = item.get("body_rich") if isinstance(item.get("body_rich"), dict) else None
+    rich_plain = _rich_doc_to_plain_text(body_rich) if body_rich else None
+
+    resolved_plain = body_plain or legacy_body or body_markdown or rich_plain or ""
+    resolved_body = resolved_plain
+
+    body_markdown_html = item.get("body_markdown_html")
+    if not isinstance(body_markdown_html, str) or not body_markdown_html.strip():
+        body_markdown_html = render_markdown_sanitized_html(body_markdown or "") if body_markdown else None
+
+    raw_body_format = item.get("body_format")
+    if raw_body_format in {"plain", "markdown", "rich"}:
+        body_format: BodyFormat = raw_body_format
+    elif body_rich:
+        body_format = "rich"
+    elif body_markdown:
+        body_format = "markdown"
+    else:
+        body_format = "plain"
+
+    markdown_enabled = bool(getattr(S, "newsfeed_markdown_enabled", False))
+    rich_enabled = bool(getattr(S, "newsfeed_richtext_enabled", False))
+
+    if body_format == "rich" and not rich_enabled:
+        body_format = "plain"
+        body_rich = None
+        body_markdown = None
+        body_markdown_html = None
+    elif body_format == "markdown" and not markdown_enabled:
+        body_format = "plain"
+        body_markdown = None
+        body_markdown_html = None
+
+    body_version = int(item.get("body_version") or 1)
+    return resolved_body, resolved_plain or None, body_markdown, body_markdown_html, body_rich, body_format, body_version
+
+
 def _reaction_summaries(reactions_map: Dict, viewer_id: Optional[str] = None):
     """Compute per-emoji counts and the viewer's own reactions from a DDB reactions map."""
     counts: Dict[str, int] = {}
@@ -471,10 +914,8 @@ def _reaction_summaries(reactions_map: Dict, viewer_id: Optional[str] = None):
 
 def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: bool = False, unlocked: bool = False, viewer_id: Optional[str] = None) -> Dict[str, Any]:
     """Map a raw DDB post item to the FeedPost shape expected by the frontend."""
-    body = post.get("body", "")
-    # Handle legacy dict-format bodies gracefully
-    if isinstance(body, dict):
-        body = "[Content unavailable]"
+    body, body_plain, body_markdown, body_markdown_html, body_rich, body_format, body_version = _resolve_read_body_fields(post)
+
     # Support both old image_url (str) and new image_urls (list)
     image_urls = list(post.get("image_urls") or [])
     if not image_urls and post.get("image_url"):
@@ -482,6 +923,12 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
     if locked_body:
         body = "[Locked content]"
         image_urls = []
+        body_plain = body
+        body_markdown = None
+        body_markdown_html = None
+        body_rich = None
+        body_format = "plain"
+        body_version = 1
     reactions_map = post.get("reactions") or {}
     reactions_counts, my_reactions = _reaction_summaries(reactions_map, viewer_id)
     post_id = post["post_id"]
@@ -501,6 +948,12 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "created_at": post.get("created_at", ""),
         "updated_at": post.get("updated_at"),
         "body": body,
+        "body_plain": body_plain,
+        "body_markdown": body_markdown,
+        "body_markdown_html": body_markdown_html,
+        "body_rich": body_rich,
+        "body_format": body_format,
+        "body_version": body_version,
         "image_urls": image_urls,
         "file_attachments": file_attachments,
         "visibility": post.get("visibility", "followers"),
@@ -518,11 +971,14 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
 
 def _comment_to_dict(it: Dict[str, Any]) -> Dict[str, Any]:
     """Map a raw DDB comment item to the FeedComment shape expected by the frontend."""
-    body = it.get("body")
-    if isinstance(body, dict):
-        body = None  # deleted or legacy rich-text; treat as no body
+    body, body_plain, body_markdown, body_markdown_html, body_rich, body_format, _body_version = _resolve_read_body_fields(it)
     if it.get("deleted"):
         body = None
+        body_plain = None
+        body_markdown = None
+        body_markdown_html = None
+        body_rich = None
+        body_format = "plain"
     return {
         "comment_id": it["comment_id"],
         "post_id": it["post_id"],
@@ -532,6 +988,12 @@ def _comment_to_dict(it: Dict[str, Any]) -> Dict[str, Any]:
         "deleted": bool(it.get("deleted")),
         "parent_comment_id": it.get("parent_comment_id"),
         "body": body,
+        "body_plain": body_plain,
+        "body_markdown": body_markdown,
+        "body_markdown_html": body_markdown_html,
+        "body_rich": body_rich,
+        "body_format": body_format,
+        "body_version": _body_version,
         "version": int(it.get("version", 1)),
         "tip_total_cents": int(it.get("tip_total_cents", 0)),
     }
@@ -810,6 +1272,8 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
 
     unlock_price_cents = req.unlock_price_cents if req.unlock_price_cents and req.unlock_price_cents > 0 else None
     locked = unlock_price_cents is not None
+    content = _content_from_payload(req)
+    _emit_newsfeed_content_metric("create_post", surface="post", body_format=content.get("body_format", "plain"))
 
     # Validate and collect file attachment metadata (max 5)
     file_attachments = []
@@ -831,7 +1295,7 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "post_id": post_id,
         "user_id": user_id,
         "created_at": created_at,
-        "body": req.body,
+        **content,
         "image_urls": req.image_urls,
         "visibility": req.visibility,
         "locked": locked,
@@ -859,7 +1323,13 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         post_id=post_id,
         author_id=user_id,
         created_at=created_at,
-        body=req.body,
+        body=content["body"],
+        body_plain=content["body_plain"],
+        body_markdown=content["body_markdown"],
+        body_markdown_html=content["body_markdown_html"],
+        body_rich=content["body_rich"],
+        body_format=content["body_format"],
+        body_version=content["body_version"],
         image_urls=req.image_urls,
         visibility=req.visibility,
         locked=locked,
@@ -876,16 +1346,18 @@ def edit_post(post_id: str, req: EditPostRequest, user_id: UserIdDep):
         raise HTTPException(status_code=404, detail="Post not found")
     if post.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Not your post")
+    content = _content_from_payload(req)
+    _emit_newsfeed_content_metric("edit_post", surface="post", body_format=content.get("body_format", "plain"))
     image_urls_in_payload = "image_urls" in req.model_fields_set
     if image_urls_in_payload and req.image_urls:
-        update_expr = "SET #body = :b, image_urls = :imgs, updated_at = :u"
-        expr_vals = {":b": req.body, ":imgs": req.image_urls, ":u": now_iso()}
+        update_expr = "SET #body = :b, body_plain = :bp, body_markdown = :bm, body_markdown_html = :bmh, body_rich = :br, body_format = :bf, body_version = :bv, image_urls = :imgs, updated_at = :u"
+        expr_vals = {":b": content["body"], ":bp": content["body_plain"], ":bm": content["body_markdown"], ":bmh": content["body_markdown_html"], ":br": content["body_rich"], ":bf": content["body_format"], ":bv": content["body_version"], ":imgs": req.image_urls, ":u": now_iso()}
     elif image_urls_in_payload:
-        update_expr = "SET #body = :b, updated_at = :u REMOVE image_urls"
-        expr_vals = {":b": req.body, ":u": now_iso()}
+        update_expr = "SET #body = :b, body_plain = :bp, body_markdown = :bm, body_markdown_html = :bmh, body_rich = :br, body_format = :bf, body_version = :bv, updated_at = :u REMOVE image_urls"
+        expr_vals = {":b": content["body"], ":bp": content["body_plain"], ":bm": content["body_markdown"], ":bmh": content["body_markdown_html"], ":br": content["body_rich"], ":bf": content["body_format"], ":bv": content["body_version"], ":u": now_iso()}
     else:
-        update_expr = "SET #body = :b, updated_at = :u"
-        expr_vals = {":b": req.body, ":u": now_iso()}
+        update_expr = "SET #body = :b, body_plain = :bp, body_markdown = :bm, body_markdown_html = :bmh, body_rich = :br, body_format = :bf, body_version = :bv, updated_at = :u"
+        expr_vals = {":b": content["body"], ":bp": content["body_plain"], ":bm": content["body_markdown"], ":bmh": content["body_markdown_html"], ":br": content["body_rich"], ":bf": content["body_format"], ":bv": content["body_version"], ":u": now_iso()}
     updated = ddb_update_item(
         key={"pk": pk_post(post_id), "sk": sk_post()},
         update_expr=update_expr,
@@ -1332,6 +1804,8 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
     comment_id = new_id("cmt")
     created_at = now_iso()
     parent = req.parent_comment_id
+    content = _content_from_payload(req)
+    _emit_newsfeed_content_metric("create_comment", surface="comment", body_format=content.get("body_format", "plain"))
 
     item = {
         "pk": pk_post_comments(post_id),
@@ -1344,7 +1818,7 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         "updated_at": None,
         "deleted": False,
         "parent_comment_id": parent,
-        "body": req.body,
+        **content,
         "version": 1,
         "tip_total_cents": 0,
         "GSI2PK": pk_post_comments(post_id),
@@ -1398,7 +1872,13 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         updated_at=None,
         deleted=False,
         parent_comment_id=parent,
-        body=req.body,
+        body=content["body"],
+        body_plain=content["body_plain"],
+        body_markdown=content["body_markdown"],
+        body_markdown_html=content["body_markdown_html"],
+        body_rich=content["body_rich"],
+        body_format=content["body_format"],
+        body_version=content["body_version"],
         version=1,
         tip_total_cents=0,
     )
@@ -1454,11 +1934,13 @@ def edit_comment(post_id: str, comment_id: str, req: EditCommentRequest, user_id
     key = {"pk": target["pk"], "sk": target["sk"]}
     new_version = int(req.expected_version) + 1
 
+    content = _content_from_payload(req)
+    _emit_newsfeed_content_metric("edit_comment", surface="comment", body_format=content.get("body_format", "plain"))
     updated = ddb_update_item(
         key=key,
-        update_expr="SET #body = :b, updated_at = :u, version = :nv",
+        update_expr="SET #body = :b, body_plain = :bp, body_markdown = :bm, body_markdown_html = :bmh, body_rich = :br, body_format = :bf, body_version = :bv, updated_at = :u, version = :nv",
         expr_names={"#body": "body"},
-        expr_vals={":b": req.body, ":u": now_iso(), ":nv": new_version, ":ev": int(req.expected_version)},
+        expr_vals={":b": content["body"], ":bp": content["body_plain"], ":bm": content["body_markdown"], ":bmh": content["body_markdown_html"], ":br": content["body_rich"], ":bf": content["body_format"], ":bv": content["body_version"], ":u": now_iso(), ":nv": new_version, ":ev": int(req.expected_version)},
         condition_expr="version = :ev",
     )
 
@@ -1470,7 +1952,13 @@ def edit_comment(post_id: str, comment_id: str, req: EditCommentRequest, user_id
         updated_at=updated.get("updated_at"),
         deleted=bool(updated.get("deleted")),
         parent_comment_id=updated.get("parent_comment_id"),
-        body=updated.get("body") if not updated.get("deleted") else None,
+        body=(updated.get("body_plain") or updated.get("body")) if not updated.get("deleted") else None,
+        body_plain=updated.get("body_plain") if not updated.get("deleted") else None,
+        body_markdown=updated.get("body_markdown") if not updated.get("deleted") else None,
+        body_markdown_html=updated.get("body_markdown_html") if not updated.get("deleted") else None,
+        body_rich=updated.get("body_rich") if not updated.get("deleted") else None,
+        body_format=updated.get("body_format") if updated.get("body_format") in {"plain", "markdown", "rich"} else "plain",
+        body_version=int(updated.get("body_version") or 1),
         version=int(updated.get("version", 1)),
         tip_total_cents=int(updated.get("tip_total_cents", 0)),
     )
@@ -1679,6 +2167,13 @@ def list_notifications(
         ExclusiveStartKey=eks if eks else None,
     )
     return {"items": resp.get("Items", []), "next_cursor": encode_cursor(resp.get("LastEvaluatedKey"))}
+
+
+
+@router.post("/telemetry/content-render")
+def content_render_telemetry(req: ContentRenderTelemetryRequest, user_id: UserIdDep):
+    _emit_newsfeed_content_reject(req.reason, source="renderer", body_format=req.body_format)
+    return {"ok": True}
 
 
 # -----------------------------
