@@ -1456,6 +1456,12 @@ export interface FeedPost {
   post_id: string;
   author_id: string;
   body: string;
+  body_plain?: string;
+  body_markdown?: string;
+  body_markdown_html?: string;
+  body_rich?: Record<string, unknown>;
+  body_format?: "plain" | "markdown" | "rich";
+  body_version?: number;
   image_urls?: string[];
   file_attachments?: PostFileAttachment[];
   unlock_price_cents?: number;
@@ -1475,6 +1481,12 @@ export interface FeedComment {
   post_id: string;
   author_id: string;
   body: string;
+  body_plain?: string;
+  body_markdown?: string;
+  body_markdown_html?: string;
+  body_rich?: Record<string, unknown>;
+  body_format?: "plain" | "markdown" | "rich";
+  body_version?: number;
   created_at: string;
   updated_at?: string;
   deleted?: boolean;
@@ -1483,23 +1495,43 @@ export interface FeedComment {
 }
 
 export interface CreatePostReq {
-  body: string;
+  body?: string;
+  body_plain?: string;
+  body_markdown?: string;
+  body_rich?: Record<string, unknown>;
+  body_format?: "plain" | "markdown" | "rich";
+  body_version?: number;
   image_urls?: string[];
   file_paths?: string[];
   unlock_price_cents?: number;
 }
 
 export interface CreateCommentReq {
-  body: string;
+  body?: string;
+  body_plain?: string;
+  body_markdown?: string;
+  body_rich?: Record<string, unknown>;
+  body_format?: "plain" | "markdown" | "rich";
+  body_version?: number;
 }
 
 export interface EditPostReq {
-  body: string;
+  body?: string;
+  body_plain?: string;
+  body_markdown?: string;
+  body_rich?: Record<string, unknown>;
+  body_format?: "plain" | "markdown" | "rich";
+  body_version?: number;
   image_urls?: string[] | null;
 }
 
 export interface EditCommentReq {
-  body: string;
+  body?: string;
+  body_plain?: string;
+  body_markdown?: string;
+  body_rich?: Record<string, unknown>;
+  body_format?: "plain" | "markdown" | "rich";
+  body_version?: number;
 }
 
 export interface HidePostReq {

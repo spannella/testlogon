@@ -3,7 +3,6 @@ import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-q
 import { Send, MoreHorizontal, Pencil, Trash2, X, Check, DollarSign } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -22,6 +21,8 @@ import {
 import { useAuthStore } from "@/stores/authStore";
 import type { FeedComment } from "@/api/types";
 import { TipDialog } from "./TipDialog";
+import { MarkdownComposer, type EditorMode, type RichDoc, richDocToPlain, buildContentPayload } from "./MarkdownComposer";
+import { RichContentRenderer } from "./RichContentRenderer";
 
 interface CommentsThreadProps {
   postId: string;
@@ -31,6 +32,8 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
   const userId = useAuthStore((s) => s.userId);
   const queryClient = useQueryClient();
   const [body, setBody] = useState("");
+  const [editorMode, setEditorMode] = useState<EditorMode>("plain");
+  const [richDoc, setRichDoc] = useState<RichDoc | null>(null);
 
   const commentsQuery = useInfiniteQuery({
     queryKey: ["comments", postId],
@@ -40,14 +43,16 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
   });
 
   const sendMutation = useMutation({
-    mutationFn: () => createComment(postId, { body }),
+    mutationFn: () => createComment(postId, buildContentPayload(body, editorMode, richDoc)),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["comments", postId] });
       queryClient.invalidateQueries({ queryKey: ["feed"] });
       setBody("");
+      setEditorMode("plain");
+      setRichDoc(null);
     },
-    onError: () => {
-      toast.error("Failed to post comment");
+    onError: (err: unknown) => {
+      toast.error(err instanceof Error ? err.message : "Failed to post comment");
     },
   });
 
@@ -94,21 +99,28 @@ export function CommentsThread({ postId }: CommentsThreadProps) {
       )}
 
       {/* Add comment */}
-      <form onSubmit={handleSubmit} className="flex gap-2">
-        <Input
-          placeholder="Write a comment..."
+      <form onSubmit={handleSubmit} className="space-y-2">
+        <MarkdownComposer
+          mode={editorMode}
+          onModeChange={setEditorMode}
           value={body}
-          onChange={(e) => setBody(e.target.value)}
-          className="text-sm"
+          onChange={setBody}
+          richDoc={richDoc}
+          onRichDocChange={setRichDoc}
+          placeholder="Write a comment..."
+          rows={2}
         />
-        <Button
-          type="submit"
-          size="icon"
-          variant="ghost"
-          disabled={!body.trim() || sendMutation.isPending}
-        >
-          <Send className="h-4 w-4" />
-        </Button>
+        <div className="flex justify-end">
+          <Button
+            type="submit"
+            size="sm"
+            variant="ghost"
+            disabled={!body.trim() || sendMutation.isPending}
+          >
+            <Send className="mr-1 h-4 w-4" />
+            Post
+          </Button>
+        </div>
       </form>
     </div>
   );
@@ -122,21 +134,52 @@ interface CommentRowProps {
   isOwn: boolean;
 }
 
+
+function commentMode(comment: FeedComment): EditorMode {
+  if (comment.body_format === "rich" && comment.body_rich) return "rich";
+  if (comment.body_format === "markdown" && (comment.body_markdown || comment.body_plain || comment.body)) return "markdown";
+  return "plain";
+}
+
+function commentDraftText(comment: FeedComment): string {
+  if (comment.body_format === "markdown") return comment.body_markdown ?? comment.body_plain ?? comment.body;
+  if (comment.body_format === "rich") {
+    const doc = (comment.body_rich as RichDoc | undefined) ?? null;
+    return doc ? (richDocToPlain(doc) || comment.body_plain || comment.body) : (comment.body_plain || comment.body);
+  }
+  return comment.body_plain ?? comment.body;
+}
+
+function CommentBodyView({ comment }: { comment: FeedComment }) {
+  return (
+    <RichContentRenderer
+      body={comment.body}
+      bodyPlain={comment.body_plain}
+      bodyMarkdown={comment.body_markdown}
+      bodyMarkdownHtml={comment.body_markdown_html}
+      bodyRich={(comment.body_rich as Record<string, unknown> | null) ?? null}
+      bodyFormat={comment.body_format}
+    />
+  );
+}
+
 function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
-  const [editBody, setEditBody] = useState(comment.body);
+  const [editBody, setEditBody] = useState(commentDraftText(comment));
+  const [editMode, setEditMode] = useState<EditorMode>(commentMode(comment));
+  const [editRichDoc, setEditRichDoc] = useState<RichDoc | null>((comment.body_rich as RichDoc | undefined) ?? null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [tipOpen, setTipOpen] = useState(false);
 
   const editMut = useMutation({
-    mutationFn: () => editComment(postId, comment.comment_id, { body: editBody }),
+    mutationFn: () => editComment(postId, comment.comment_id, buildContentPayload(editBody, editMode, editRichDoc)),
     onSuccess: () => {
       toast.success("Comment updated");
       void queryClient.invalidateQueries({ queryKey: ["comments", postId] });
       setEditing(false);
     },
-    onError: () => toast.error("Failed to update comment"),
+    onError: (err: unknown) => toast.error(err instanceof Error ? err.message : "Failed to update comment"),
   });
 
   const deleteMut = useMutation({
@@ -162,13 +205,19 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
   }
 
   const startEdit = () => {
-    setEditBody(comment.body);
+    const existingRich = (comment.body_rich as RichDoc | undefined) ?? null;
+    setEditBody(commentDraftText(comment));
+    setEditMode(commentMode(comment));
+    setEditRichDoc(existingRich);
     setEditing(true);
   };
 
   const cancelEdit = () => {
     setEditing(false);
-    setEditBody(comment.body);
+    const existingRich = (comment.body_rich as RichDoc | undefined) ?? null;
+    setEditBody(commentDraftText(comment));
+    setEditMode(commentMode(comment));
+    setEditRichDoc(existingRich);
   };
 
   const saveEdit = () => {
@@ -196,37 +245,39 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
           </div>
 
           {editing ? (
-            <div className="mt-1 flex items-center gap-1">
-              <Input
+            <div className="mt-1 space-y-2">
+              <MarkdownComposer
+                mode={editMode}
+                onModeChange={setEditMode}
                 value={editBody}
-                onChange={(e) => setEditBody(e.target.value)}
-                className="h-7 text-sm"
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") saveEdit();
-                  if (e.key === "Escape") cancelEdit();
-                }}
+                onChange={setEditBody}
+                richDoc={editRichDoc}
+                onRichDocChange={setEditRichDoc}
+                placeholder="Write a comment..."
+                rows={2}
               />
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 shrink-0"
-                onClick={saveEdit}
-                disabled={!editBody.trim() || editMut.isPending}
-              >
-                <Check className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 shrink-0"
-                onClick={cancelEdit}
-              >
-                <X className="h-3.5 w-3.5" />
-              </Button>
+              <div className="flex items-center justify-end gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  onClick={saveEdit}
+                  disabled={!editBody.trim() || editMut.isPending}
+                >
+                  <Check className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  onClick={cancelEdit}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             </div>
           ) : (
-            <p className="text-sm">{comment.body}</p>
+            <CommentBodyView comment={comment} />
           )}
 
           {/* Tip total + tip button for non-own comments */}
