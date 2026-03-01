@@ -91,3 +91,7 @@ See [Internal Dev Log UI (local/dev)](docs/internal-dev-log-ui.md) for quickstar
 ## Related docs
 - **Billing**: Stripe details live in [Stripe billing](docs/stripe.md). PayPal details live in [PayPal billing](docs/paypal.md). CCBill details live in [CCBill billing](docs/ccbill.md).
 - **Endpoints**: See the routers and services catalog in [File reference](docs/file-reference.md).
+
+## Deployment initializer scaffold
+- New scaffold lives in `deployment_initializer/` with React + TypeScript frontend, FastAPI backend, and infra script placeholders.
+- See `deployment_initializer/README.md` for setup, local run commands, and CI checks.

@@ -21,6 +21,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { CommentsThread } from "./CommentsThread";
 import { PostActions } from "./PostActions";
 import { EditPostDialog } from "./EditPostDialog";
+import { RichContentRenderer } from "./RichContentRenderer";
 import { TipDialog } from "./TipDialog";
 import { SharePostDialog } from "./SharePostDialog";
 import { FilePreview } from "@/pages/files/FilePreview";
@@ -288,9 +289,16 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
         <div className="mt-3">
           {isLocked ? (
             <div className="relative">
-              <p className="whitespace-pre-wrap text-sm blur-sm select-none">
-                {post.body}
-              </p>
+              <div className="blur-sm select-none">
+                <RichContentRenderer
+                  body={post.body}
+                  bodyPlain={post.body_plain}
+                  bodyMarkdown={post.body_markdown}
+                  bodyMarkdownHtml={post.body_markdown_html}
+                  bodyRich={(post.body_rich as Record<string, unknown> | null) ?? null}
+                  bodyFormat={post.body_format}
+                />
+              </div>
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-background/60 rounded">
                 <Lock className="h-6 w-6 text-muted-foreground" />
                 {paymentMethods.length === 0 ? (
@@ -312,7 +320,14 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
               </div>
             </div>
           ) : (
-            <p className="whitespace-pre-wrap text-sm">{post.body}</p>
+            <RichContentRenderer
+              body={post.body}
+              bodyPlain={post.body_plain}
+              bodyMarkdown={post.body_markdown}
+              bodyMarkdownHtml={post.body_markdown_html}
+              bodyRich={(post.body_rich as Record<string, unknown> | null) ?? null}
+              bodyFormat={post.body_format}
+            />
           )}
         </div>
 
@@ -432,6 +447,7 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
         postId={post.post_id}
         initialBody={post.body}
         initialImageUrls={imageUrls}
+        initialBodyRich={(post.body_rich as any) ?? null}
       />
 
       {/* Tip dialog */}

@@ -3,11 +3,11 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { createPost, uploadPostImage } from "@/api/endpoints/newsfeed";
 import { downloadUrl } from "@/api/endpoints/files";
 import { FilePickerDialog } from "@/pages/messages/FilePickerDialog";
+import { MarkdownComposer, type EditorMode, type RichDoc, buildContentPayload } from "./MarkdownComposer";
 import type { FileEntry } from "@/api/types";
 
 const MAX_IMAGES = 10;
@@ -17,6 +17,8 @@ export function CreatePost() {
   const queryClient = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [body, setBody] = useState("");
+  const [editorMode, setEditorMode] = useState<EditorMode>("plain");
+  const [richDoc, setRichDoc] = useState<RichDoc | null>(null);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -35,7 +37,7 @@ export function CreatePost() {
   const mutation = useMutation({
     mutationFn: () =>
       createPost({
-        body,
+        ...buildContentPayload(body, editorMode, richDoc),
         ...(imageUrls.length > 0 ? { image_urls: imageUrls } : {}),
         ...(pendingFiles.length > 0 ? { file_paths: pendingFiles.map((f) => f.path) } : {}),
         ...(unlockPriceCents ? { unlock_price_cents: unlockPriceCents } : {}),
@@ -43,14 +45,17 @@ export function CreatePost() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["feed"] });
       setBody("");
+      setEditorMode("plain");
+      setRichDoc(null);
       setImageUrls([]);
       setPendingFiles([]);
       setLockEnabled(false);
       setLockPrice("");
       toast.success("Post published");
     },
-    onError: () => {
-      toast.error("Failed to create post");
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : "Failed to create post";
+      toast.error(msg);
     },
   });
 
@@ -153,10 +158,14 @@ export function CreatePost() {
     <Card>
       <CardContent className="p-4">
         <form onSubmit={handleSubmit} className="space-y-3">
-          <Textarea
-            placeholder="What's on your mind?"
+          <MarkdownComposer
+            mode={editorMode}
+            onModeChange={setEditorMode}
             value={body}
-            onChange={(e) => setBody(e.target.value)}
+            onChange={setBody}
+            richDoc={richDoc}
+            onRichDocChange={setRichDoc}
+            placeholder="What's on your mind?"
             rows={3}
           />
 

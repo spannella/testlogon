@@ -41,3 +41,6 @@ export const isMessagingListenOnceAudioEnabled = () => isMessagingOnceMediaCompo
 
 export const devtoolsLogUiEnabled = toBool(env.VITE_ENABLE_DEVTOOLS_LOG_UI, false);
 export const isDevtoolsLogUiEnabled = () => devtoolsLogUiEnabled;
+
+export const newsfeedMarkdownEnabled = toBool(env.VITE_NEWSFEED_MARKDOWN_ENABLED, false);
+export const newsfeedRichtextEnabled = toBool(env.VITE_NEWSFEED_RICHTEXT_ENABLED, false);
