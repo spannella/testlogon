@@ -1195,6 +1195,16 @@ class AddChargeReq(BaseModel):
     reason: str = "usage"
 
 
+class WalletDepositReq(BaseModel):
+    amount_cents: int = Field(ge=100)  # minimum $1.00
+    payment_method_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
+
+class WalletWithdrawReq(BaseModel):
+    amount_cents: int = Field(ge=100)  # minimum $1.00
+
+
 class AccountStatusReq(BaseModel):
     reason: Optional[str] = None
 

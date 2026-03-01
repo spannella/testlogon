@@ -7,9 +7,10 @@ import { BillingOverview } from "./BillingOverview";
 import { PaymentMethods } from "./PaymentMethods";
 import { Ledger } from "./Ledger";
 import { Subscriptions } from "./Subscriptions";
+import { Wallet } from "./Wallet";
 import ImpersonationRouteIndicator from "@/components/shared/ImpersonationRouteIndicator";
 
-const TAB_VALUES = ["usage", "overview", "methods", "ledger", "subscriptions"] as const;
+const TAB_VALUES = ["usage", "overview", "wallet", "methods", "ledger", "subscriptions"] as const;
 
 type TabValue = (typeof TAB_VALUES)[number];
 
@@ -40,6 +41,7 @@ export default function BillingPage() {
         <TabsList>
           <TabsTrigger value="usage">Usage</TabsTrigger>
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="wallet">Wallet</TabsTrigger>
           <TabsTrigger value="methods">Methods</TabsTrigger>
           <TabsTrigger value="ledger">Ledger</TabsTrigger>
           <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
@@ -49,6 +51,9 @@ export default function BillingPage() {
         </TabsContent>
         <TabsContent value="overview">
           <BillingOverview onTabChange={setTab} />
+        </TabsContent>
+        <TabsContent value="wallet">
+          <Wallet />
         </TabsContent>
         <TabsContent value="methods">
           <PaymentMethods />

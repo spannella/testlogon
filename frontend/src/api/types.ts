@@ -1812,3 +1812,21 @@ export interface UpdateContactReq {
   is_favorite?: boolean;
   is_blocked?: boolean;
 }
+
+// ─── Wallet ───────────────────────────────────────────────────────────────────
+
+export interface WalletBalance {
+  wallet_balance_cents: number;
+  currency: string;
+  updated_at?: number;
+}
+
+export interface WalletDepositReq {
+  amount_cents: number;
+  payment_method_id?: string;
+  idempotency_key?: string;
+}
+
+export interface WalletWithdrawReq {
+  amount_cents: number;
+}
