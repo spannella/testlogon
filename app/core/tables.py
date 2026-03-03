@@ -31,6 +31,13 @@ class Tables:
     subscriptions: Any
     projects: Any
     contacts: Any
+    message_visibility_overrides: Any
+    conversation_pins: Any
+    message_reports: Any
+    message_report_context: Any
+    message_legal_holds: Any
+    message_archive_chain_heads: Any
+    message_compliance_exports: Any
     catalog_products: Any
     catalog_product_versions: Any
     orders: Any
@@ -69,6 +76,13 @@ T = Tables(
     subscriptions=ddb.Table(S.subscriptions_table_name),
     projects=ddb.Table(S.projects_table_name),
     contacts=ddb.Table(S.contacts_table_name),
+    message_visibility_overrides=ddb.Table(S.message_visibility_overrides_table_name),
+    conversation_pins=ddb.Table(S.conversation_pins_table_name),
+    message_reports=ddb.Table(S.message_reports_table_name),
+    message_report_context=ddb.Table(S.message_report_context_table_name),
+    message_legal_holds=ddb.Table(S.message_legal_holds_table_name),
+    message_archive_chain_heads=ddb.Table(S.message_archive_chain_heads_table_name),
+    message_compliance_exports=ddb.Table(S.message_compliance_exports_table_name),
     catalog_products=ddb.Table(S.catalog_products_table_name),
     catalog_product_versions=ddb.Table(S.catalog_product_versions_table_name),
     orders=ddb.Table(S.orders_table_name),

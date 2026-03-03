@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { ArrowLeft, Images, Users, Clock } from "lucide-react";
+import { ArrowLeft, Images, Users, Clock, MoreHorizontal, EyeOff, Pin } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -28,6 +28,16 @@ import { ParticipantsPanel } from "./ParticipantsPanel";
 import { isMessagingGalleryEnabled } from "@/lib/featureFlags";
 import { ConversationGallery } from "./ConversationGallery";
 import { ScheduledMessages } from "./ScheduledMessages";
+import { HiddenMessagesPanel } from "./HiddenMessagesPanel";
+import { PinnedMessageBanner } from "./PinnedMessageBanner";
+import { PinnedMessagesPanel } from "./PinnedMessagesPanel";
+import { useMessageJump } from "./useMessageJump";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface ConversationViewProps {
   conversation: Conversation;
@@ -47,9 +57,10 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const [participantsOpen, setParticipantsOpen] = React.useState(false);
   const [galleryOpen, setGalleryOpen] = React.useState(false);
   const [scheduledOpen, setScheduledOpen] = React.useState(false);
+  const [hiddenOpen, setHiddenOpen] = React.useState(false);
+  const [pinsOpen, setPinsOpen] = React.useState(false);
   const galleryEnabled = isMessagingGalleryEnabled();
-  const [jumpTargetMessageId, setJumpTargetMessageId] = React.useState<string | null>(null);
-  const [highlightMessageId, setHighlightMessageId] = React.useState<string | null>(null);
+  const [dismissedPinnedMessageId, setDismissedPinnedMessageId] = React.useState<string | null>(null);
   const [replyingTo, setReplyingTo] = React.useState<Message | null>(null);
   const [viewedOnceIds, setViewedOnceIds] = React.useState<Set<string>>(new Set());
   const handleViewOnce = React.useCallback((id: string) => {
@@ -60,6 +71,12 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
 
   const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } =
     useMessagesQuery(convoId);
+
+  const { jumpToMessage, highlightMessageId } = useMessageJump({
+    hasNextPage,
+    fetchNextPage,
+    onMissingMessage: () => toast.error("Could not find that message in this conversation."),
+  });
 
   const allMessages = React.useMemo(() => {
     if (!data?.pages) return [];
@@ -377,41 +394,29 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     ? conversation.participants.find((p) => p.user_id !== userId)
     : undefined;
 
+  const latestPinnedMessageId = conversation.latest_pinned_message_id;
+  const latestPinnedAt = conversation.latest_pinned_at;
+  const latestPinnedMessage = latestPinnedMessageId ? messageById.get(latestPinnedMessageId) : undefined;
+  const latestPinnedPreview = latestPinnedMessage?.text
+    ?? (latestPinnedMessage?.is_encrypted ? "[Encrypted message]" : undefined)
+    ?? (latestPinnedMessage?.kind === "image" ? "[Image]" : undefined)
+    ?? (latestPinnedMessage?.kind === "file" ? "[File]" : undefined)
+    ?? (latestPinnedMessage?.kind === "video" ? "[Video]" : undefined)
+    ?? (latestPinnedMessage?.kind === "audio" ? "[Audio]" : undefined)
+    ?? "Pinned message";
+
   // Typing signal
   const onKeystroke = useTypingSignal(convoId);
 
 
   React.useEffect(() => {
-    if (!jumpTargetMessageId) return;
+    const storageKey = `messaging:pinned-banner-dismissed:${convoId}`;
+    const cached = window.sessionStorage.getItem(storageKey);
+    setDismissedPinnedMessageId(cached);
+  }, [convoId]);
 
-    let cancelled = false;
-    const run = async () => {
-      let attempts = 0;
-      while (!cancelled) {
-        const el = document.getElementById(`msg-${jumpTargetMessageId}`);
-        if (el) {
-          el.scrollIntoView({ behavior: "smooth", block: "center" });
-          setHighlightMessageId(jumpTargetMessageId);
-          window.setTimeout(() => {
-            setHighlightMessageId((current) => (current === jumpTargetMessageId ? null : current));
-          }, 2000);
-          setJumpTargetMessageId(null);
-          return;
-        }
-        if (!hasNextPage || attempts >= 10) {
-          setJumpTargetMessageId(null);
-          return;
-        }
-        attempts += 1;
-        await fetchNextPage();
-      }
-    };
+  const bannerDismissedForCurrentPin = latestPinnedMessageId && dismissedPinnedMessageId === latestPinnedMessageId;
 
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [jumpTargetMessageId, hasNextPage, fetchNextPage]);
 
   // ── Render ──────────────────────────────────────────────────────
 
@@ -465,6 +470,27 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         >
           <Clock className="h-4 w-4" />
         </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" aria-label="Conversation menu">
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => setScheduledOpen(true)}>
+              <Clock className="mr-2 h-4 w-4" />
+              Scheduled messages
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setPinsOpen(true)}>
+              <Pin className="mr-2 h-4 w-4" />
+              View all pins
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setHiddenOpen(true)}>
+              <EyeOff className="mr-2 h-4 w-4" />
+              Hidden messages
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         {isGroup && (
           <Button
             variant="ghost"
@@ -477,6 +503,21 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
           </Button>
         )}
       </div>
+
+      {latestPinnedMessageId && !bannerDismissedForCurrentPin && (
+        <PinnedMessageBanner
+          latestPinnedMessageId={latestPinnedMessageId}
+          latestPinnedAt={latestPinnedAt}
+          previewText={latestPinnedPreview}
+          onViewAllPins={() => setPinsOpen(true)}
+          onJumpToMessage={jumpToMessage}
+          onDismiss={() => {
+            const storageKey = `messaging:pinned-banner-dismissed:${convoId}`;
+            window.sessionStorage.setItem(storageKey, latestPinnedMessageId);
+            setDismissedPinnedMessageId(latestPinnedMessageId);
+          }}
+        />
+      )}
 
       {/* Helpdesk routing banner */}
       {conversation.routing_mode === "helpdesk_bridge" && conversation.routing_state && (
@@ -584,7 +625,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
           conversationId={convoId}
           onJumpToMessage={(messageId) => {
             setGalleryOpen(false);
-            setJumpTargetMessageId(messageId);
+            jumpToMessage(messageId);
           }}
         />
       )}
@@ -594,6 +635,29 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         open={scheduledOpen}
         onOpenChange={setScheduledOpen}
         conversationId={convoId}
+      />
+
+
+      <HiddenMessagesPanel
+        open={hiddenOpen}
+        onOpenChange={setHiddenOpen}
+        conversationId={convoId}
+        onJumpToMessage={(messageId) => {
+          setHiddenOpen(false);
+          jumpToMessage(messageId);
+        }}
+      />
+
+      <PinnedMessagesPanel
+        open={pinsOpen}
+        onOpenChange={setPinsOpen}
+        conversationId={convoId}
+        participants={conversation.participants}
+        messageById={messageById}
+        onJumpToMessage={(messageId) => {
+          setPinsOpen(false);
+          jumpToMessage(messageId);
+        }}
       />
 
       {/* Group participants panel */}

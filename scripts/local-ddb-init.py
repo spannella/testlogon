@@ -203,6 +203,97 @@ def _table_defs() -> List[TableDef]:
         TableDef(os.getenv("DDB_MESSAGE_VIEWS", "MessageViews"), "conversation_id", "message_user"),
         TableDef(os.getenv("DDB_MESSAGE_RECEIPTS", "MessageReceipts"), "conversation_id", "message_user"),
         TableDef(
+            _resolve_table_name(S.message_visibility_overrides_table_name, "MessageVisibilityOverrides"),
+            "conversation_id",
+            "message_user",
+            gsi=[
+                {
+                    "index_name": "ByConversationUserUpdatedAt",
+                    "partition_key": "conversation_user",
+                    "sort_key": "updated_at",
+                }
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.conversation_pins_table_name, "ConversationPins"),
+            "conversation_id",
+            "message_id",
+            gsi=[
+                {
+                    "index_name": "ByConversationActivePinnedAt",
+                    "partition_key": "conversation_active",
+                    "sort_key": "pinned_at",
+                },
+                {
+                    "index_name": "ByConversationLatestActivePin",
+                    "partition_key": "conversation_active",
+                    "sort_key": "latest_pin_sort",
+                },
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.message_reports_table_name, "MessageReports"),
+            "report_id",
+            gsi=[
+                {
+                    "index_name": "ByConversationCreatedAt",
+                    "partition_key": "conversation_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByStatusCreatedAt",
+                    "partition_key": "status",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByReporterCreatedAt",
+                    "partition_key": "reported_by_user_id",
+                    "sort_key": "created_at",
+                },
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.message_report_context_table_name, "MessageReportContext"),
+            "report_id",
+            "message_id",
+        ),
+        TableDef(
+            _resolve_table_name(S.message_legal_holds_table_name, "MessageLegalHolds"),
+            "hold_id",
+            gsi=[
+                {
+                    "index_name": "ByConversationStatusCreatedAt",
+                    "partition_key": "conversation_status",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByStatusCreatedAt",
+                    "partition_key": "status",
+                    "sort_key": "created_at",
+                },
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.message_archive_chain_heads_table_name, "MessageArchiveChainHeads"),
+            "partition_key",
+        ),
+        TableDef(
+            _resolve_table_name(S.message_compliance_exports_table_name, "MessageComplianceExports"),
+            "export_id",
+            gsi=[
+                {
+                    "index_name": "ByCaseCreatedAt",
+                    "partition_key": "case_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByStatusCreatedAt",
+                    "partition_key": "status",
+                    "sort_key": "created_at",
+                },
+            ],
+        ),
+        TableDef(
             os.getenv("DDB_MESSAGE_CONSUMPTION", "MessageConsumption"),
             "conversation_id",
             "recipient_message",

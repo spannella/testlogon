@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/messaging-compliance-archive-event-v1.json",
+  "title": "MessagingComplianceArchiveEventV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "event_ts",
+    "tenant_id",
+    "conversation_id",
+    "message_id",
+    "actor_user_id",
+    "effective_user_id",
+    "event_type",
+    "payload",
+    "payload_hash",
+    "prev_hash"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "event_ts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "conversation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "message_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "actor_user_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "effective_user_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "message.sent",
+        "message.edited",
+        "message.deleted",
+        "message.revoked",
+        "attachment.added",
+        "attachment.removed",
+        "conversation.member_joined",
+        "conversation.member_left",
+        "conversation.role_changed",
+        "report.submitted",
+        "report.status_changed"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    },
+    "payload_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "prev_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

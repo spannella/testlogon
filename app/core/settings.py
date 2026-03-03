@@ -263,6 +263,143 @@ class Settings:
     # Contacts
     contacts_table_name: str = os.environ.get("DDB_CONTACTS_TABLE", "Contacts")
 
+    # Messaging
+    message_visibility_overrides_table_name: str = os.environ.get(
+        "DDB_MESSAGE_VISIBILITY_OVERRIDES",
+        "MessageVisibilityOverrides",
+    )
+    conversation_pins_table_name: str = os.environ.get(
+        "DDB_CONVERSATION_PINS",
+        "ConversationPins",
+    )
+    message_reports_table_name: str = os.environ.get(
+        "DDB_MESSAGE_REPORTS",
+        "MessageReports",
+    )
+    message_report_context_table_name: str = os.environ.get(
+        "DDB_MESSAGE_REPORT_CONTEXT",
+        "MessageReportContext",
+    )
+    message_legal_holds_table_name: str = os.environ.get(
+        "DDB_MESSAGE_LEGAL_HOLDS",
+        "MessageLegalHolds",
+    )
+    messaging_hidden_timeline_filter_enabled: bool = os.environ.get(
+        "MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED",
+        "true",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_hide_controls_enabled: bool = os.environ.get(
+        "MESSAGING_HIDE_CONTROLS_ENABLED",
+        "true",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_pins_enabled: bool = os.environ.get(
+        "MESSAGING_PINS_ENABLED",
+        "true",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_reporting_enabled: bool = os.environ.get(
+        "MESSAGING_REPORTING_ENABLED",
+        "true",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_report_rate_limit_enabled: bool = os.environ.get(
+        "MESSAGING_REPORT_RATE_LIMIT_ENABLED",
+        "true",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_report_rate_limit_user_window_seconds: int = int(
+        os.environ.get("MESSAGING_REPORT_RATE_LIMIT_USER_WINDOW_SECONDS", "60")
+    )
+    messaging_report_rate_limit_user_max: int = int(
+        os.environ.get("MESSAGING_REPORT_RATE_LIMIT_USER_MAX", "5")
+    )
+    messaging_report_rate_limit_conversation_window_seconds: int = int(
+        os.environ.get("MESSAGING_REPORT_RATE_LIMIT_CONVERSATION_WINDOW_SECONDS", "60")
+    )
+    messaging_report_rate_limit_conversation_max: int = int(
+        os.environ.get("MESSAGING_REPORT_RATE_LIMIT_CONVERSATION_MAX", "20")
+    )
+    messaging_compliance_archive_enabled: bool = os.environ.get(
+        "MESSAGING_COMPLIANCE_ARCHIVE_ENABLED",
+        "false",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_compliance_archive_enforce_write_success: bool = os.environ.get(
+        "MESSAGING_COMPLIANCE_ARCHIVE_ENFORCE_WRITE_SUCCESS",
+        "false",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_compliance_archive_storage_mode: str = os.environ.get(
+        "MESSAGING_COMPLIANCE_ARCHIVE_STORAGE_MODE",
+        "filesystem",
+    )
+    messaging_compliance_archive_root_dir: str = os.environ.get(
+        "MESSAGING_COMPLIANCE_ARCHIVE_ROOT_DIR",
+        ".compliance_archive",
+    )
+    messaging_archive_retention_default_class: str = os.environ.get(
+        "MESSAGING_ARCHIVE_RETENTION_DEFAULT_CLASS",
+        "regulatory",
+    )
+    messaging_archive_retention_class_days_json: str = os.environ.get(
+        "MESSAGING_ARCHIVE_RETENTION_CLASS_DAYS_JSON",
+        '{"short":30,"standard":365,"regulatory":2555}',
+    )
+    messaging_archive_retention_event_class_overrides_json: str = os.environ.get(
+        "MESSAGING_ARCHIVE_RETENTION_EVENT_CLASS_OVERRIDES_JSON",
+        "{}",
+    )
+    messaging_archive_retention_tenant_overrides_json: str = os.environ.get(
+        "MESSAGING_ARCHIVE_RETENTION_TENANT_OVERRIDES_JSON",
+        "{}",
+    )
+    message_archive_chain_heads_table_name: str = os.environ.get(
+        "DDB_MESSAGE_ARCHIVE_CHAIN_HEADS",
+        "MessageArchiveChainHeads",
+    )
+    message_compliance_exports_table_name: str = os.environ.get(
+        "DDB_MESSAGE_COMPLIANCE_EXPORTS",
+        "MessageComplianceExports",
+    )
+    messaging_compliance_export_root_dir: str = os.environ.get(
+        "MESSAGING_COMPLIANCE_EXPORT_ROOT_DIR",
+        ".compliance_exports",
+    )
+    messaging_compliance_export_default_ttl_seconds: int = int(
+        os.environ.get("MESSAGING_COMPLIANCE_EXPORT_DEFAULT_TTL_SECONDS", str(7 * 24 * 3600))
+    )
+    messaging_compliance_export_manifest_signing_key: str = os.environ.get(
+        "MESSAGING_COMPLIANCE_EXPORT_MANIFEST_SIGNING_KEY",
+        "dev-export-signing-key",
+    )
+    messaging_compliance_export_manifest_signing_key_id: str = os.environ.get(
+        "MESSAGING_COMPLIANCE_EXPORT_MANIFEST_SIGNING_KEY_ID",
+        "dev-key-v1",
+    )
+    messaging_compliance_export_enabled: bool = os.environ.get(
+        "MESSAGING_COMPLIANCE_EXPORT_ENABLED",
+        "false",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_compliance_legal_hold_enabled: bool = os.environ.get(
+        "MESSAGING_COMPLIANCE_LEGAL_HOLD_ENABLED",
+        "false",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_supervisory_feed_enabled: bool = os.environ.get(
+        "MESSAGING_SUPERVISORY_FEED_ENABLED",
+        "false",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_supervisory_feed_mode: str = os.environ.get(
+        "MESSAGING_SUPERVISORY_FEED_MODE",
+        "log",
+    )
+    messaging_supervisory_feed_queue_url: str = os.environ.get(
+        "MESSAGING_SUPERVISORY_FEED_QUEUE_URL",
+        "",
+    )
+    messaging_supervisory_feed_file_path: str = os.environ.get(
+        "MESSAGING_SUPERVISORY_FEED_FILE_PATH",
+        ".supervisory_feed/events.jsonl",
+    )
+    messaging_supervisory_feed_rules_json: str = os.environ.get(
+        "MESSAGING_SUPERVISORY_FEED_RULES_JSON",
+        '{"report.":{"priority":"high","assignment_queue":"moderation"},"message.deleted":{"priority":"medium","assignment_queue":"supervision"},"message.revoked":{"priority":"medium","assignment_queue":"supervision"},"legal_hold.":{"priority":"high","assignment_queue":"compliance"}}',
+    )
+
     # Purchase history
     purchase_transactions_table_name: str = os.environ.get(
         "PURCHASE_TRANSACTIONS_TABLE_NAME",
