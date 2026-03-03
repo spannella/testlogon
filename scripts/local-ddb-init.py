@@ -56,6 +56,17 @@ def _table_defs() -> List[TableDef]:
         ),
         TableDef(_resolve_table_name(S.subscriptions_table_name, "subscriptions"), "pk", "sk"),
         TableDef(
+            _resolve_table_name(S.questionnaire_table_name, "questionnaires"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": S.questionnaire_owner_index_name, "partition_key": "gsi_owner_pk", "sort_key": "gsi_owner_sk"},
+                {"index_name": S.questionnaire_status_index_name, "partition_key": "gsi_status_pk", "sort_key": "gsi_status_sk"},
+                {"index_name": S.questionnaire_published_index_name, "partition_key": "gsi_published_pk", "sort_key": "gsi_published_sk"},
+                {"index_name": S.questionnaire_response_status_index_name, "partition_key": "gsi_response_status_pk", "sort_key": "gsi_response_status_sk"},
+            ],
+        ),
+        TableDef(
             _resolve_table_name(S.projects_table_name, "projects"),
             "PK",
             "SK",
