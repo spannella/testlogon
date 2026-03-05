@@ -20,6 +20,84 @@ This service is a FastAPI backend for security workflows (sessions, MFA, alerts)
 - **CCBill**: Tokenizes cards via the Advanced Widget and reconciles via `/api/ccbill/webhook`.
 - **Ledger model**: Billing transactions are recorded in the DynamoDB billing table using ledger entries plus payment records.
 
+## Questionnaire data model (QNR-001 ERD)
+The questionnaire feature uses a single DynamoDB table (`questionnaires`) with typed entities and indexed access paths.
+
+```mermaid
+erDiagram
+    Questionnaire ||--o{ QuestionnaireVersion : publishes
+    QuestionnaireVersion ||--o{ Section : contains
+    Section ||--o{ Question : contains
+    QuestionnaireVersion ||--o{ ValidationRule : enforces
+    QuestionnaireVersion ||--o{ ResponseSession : receives
+    ResponseSession ||--o{ Answer : records
+
+    Questionnaire {
+      string questionnaire_id PK
+      string owner_id
+      string status
+      string published_version_id
+      datetime created_at
+      datetime updated_at
+    }
+
+    QuestionnaireVersion {
+      string version_id PK
+      string questionnaire_id FK
+      int version_number
+      json schema_json
+      datetime published_at
+      string published_slug
+    }
+
+    Section {
+      string section_id PK
+      string version_id FK
+      string title
+      int position
+    }
+
+    Question {
+      string question_id PK
+      string section_id FK
+      string type
+      bool required
+      int position
+    }
+
+    ValidationRule {
+      string rule_id PK
+      string version_id FK
+      string scope
+      string rule_type
+      json rule_config_json
+    }
+
+    ResponseSession {
+      string response_session_id PK
+      string version_id FK
+      string status
+      datetime started_at
+      datetime submitted_at
+    }
+
+    Answer {
+      string answer_id PK
+      string response_session_id FK
+      string question_id FK
+      json value_json
+      bool is_valid
+    }
+```
+
+### Access/index strategy
+- Owner lookup index: list questionnaires by creator.
+- Questionnaire status index: list drafts/published/archived.
+- Published lookup index: resolve published questionnaire schema by slug.
+- Response status index: monitor in-progress/submitted response sessions.
+
+These indexes are created in local bootstrap (`scripts/local-ddb-init.py`) and migration tooling (`scripts/migrations/20260302_questionnaire_schema.py`).
+
 ## Observability and metrics
 The service exposes Prometheus-style metrics via `app/metrics.py` (if enabled), tracking request counts, latency, and sizes.
 

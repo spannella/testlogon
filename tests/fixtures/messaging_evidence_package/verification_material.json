@@ -1,0 +1,8 @@
+{
+  "manifest_signing_key": "golden-fixture-secret",
+  "manifest_signing_key_id": "fixture-key-1",
+  "record_checksums": [
+    "4e332d1d431d5fed5ef9f2e4f89a3e3267aae7a80d048f8565ea14bd6e28b68a",
+    "cb70cc4b67b7ffe97dbf4f6c28bcf187b8a4e9a80f678ea1d302af30d6cb61fc"
+  ]
+}

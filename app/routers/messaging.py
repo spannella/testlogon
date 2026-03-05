@@ -28,7 +28,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 from pydantic_core import PydanticCustomError
 
-from app.auth.deps import extract_bearer_token, get_authenticated_user_sub
+from app.auth.deps import AuthenticatedUser, extract_bearer_token, get_authenticated_user, get_authenticated_user_sub
+from app.auth.policy import require_admin_scope
 from app.metrics import (
     record_helpdesk_alert_sent,
     record_helpdesk_claim,
@@ -37,11 +38,15 @@ from app.metrics import (
     record_helpdesk_failover,
     record_helpdesk_no_agents_notice,
     record_helpdesk_time_to_first_claim_ms,
+    record_messaging_archive_export_outcome,
     record_messaging_gallery_cursor_page_depth,
     record_messaging_gallery_latency,
-    record_messaging_gallery_request
+    record_messaging_gallery_request,
+    record_messaging_message_control_action,
+    record_messaging_report_validation_error,
 )
 from app.core.settings import S
+from app.core.cursor import decode_cursor, encode_cursor
 from app.core.aws import ddb
 from app.core.tables import T
 from app.core.aws_clients import s3_client
@@ -64,6 +69,9 @@ from app.services.messaging_gallery import fetch_gallery_page
 from app.services.messaging_gallery_index import fetch_gallery_index_page, sync_gallery_index_entries
 from app.services.profile import get_profile_identity
 from app.services.sessions import require_ui_session
+from app.services.messaging_archive_writer import MessagingArchiveWriteError, _archive_root_dir, emit_messaging_archive_event
+from app.services.messaging_archive_query import query_archive_records
+from app.services.messaging_archive_export import build_case_export_bundle
 from app.services.signature_packet_store import get_signature_packet_progress_for_user
 from app.services.subscription_access import require_subscription_access
 from app.services.internal_api_entitlements import enforce_internal_api_entitlement
@@ -134,12 +142,124 @@ tbl_msg_consumption = ddb.Table(DDB_MESSAGE_CONSUMPTION)
 router = APIRouter(prefix="/messaging", tags=["messaging"])
 logger = logging.getLogger(__name__)
 
+
+require_legal_hold_admin = require_admin_scope("content_moderation")
+require_compliance_query_admin = require_admin_scope("content_moderation")
+require_compliance_export_admin = require_admin_scope("content_moderation")
+
+
+async def require_legal_hold_operator(user: AuthenticatedUser = Depends(get_authenticated_user), request: Request = None) -> AuthenticatedUser:
+    return await require_legal_hold_admin(request=request, user=user)
+
+
+async def require_compliance_query_operator(user: AuthenticatedUser = Depends(get_authenticated_user), request: Request = None) -> AuthenticatedUser:
+    return await require_compliance_query_admin(request=request, user=user)
+
+
+async def require_compliance_export_operator(user: AuthenticatedUser = Depends(get_authenticated_user), request: Request = None) -> AuthenticatedUser:
+    return await require_compliance_export_admin(request=request, user=user)
+
+
+def _log_message_control_action(*, actor_user_id: str, conversation_id: str, message_id: str, action: str, result: str, detail: str = "") -> None:
+    logger.info(
+        "messaging.message_control",
+        extra={
+            "actor_user_id": actor_user_id,
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            "action": action,
+            "result": result,
+            "detail": detail,
+        },
+    )
+
+def _emit_archive_event_or_503(*, event_id: str, event_ts: int, conversation_id: str, message_id: str, actor_user_id: str, event_type: str, payload: dict) -> None:
+    try:
+        emit_messaging_archive_event(
+            event_id=event_id,
+            event_ts=event_ts,
+            tenant_id="default",
+            conversation_id=conversation_id,
+            message_id=message_id,
+            actor_user_id=actor_user_id,
+            effective_user_id=actor_user_id,
+            event_type=event_type,
+            payload=payload,
+        )
+    except MessagingArchiveWriteError as exc:
+        raise HTTPException(status_code=503, detail="Compliance archive write failed") from exc
+
+
+def _emit_message_lifecycle_archive_event_or_503(
+    *,
+    mutation: str,
+    event_ts: int,
+    conversation_id: str,
+    message_id: str,
+    actor_user_id: str,
+    event_type: str,
+    payload: dict,
+) -> None:
+    _emit_archive_event_or_503(
+        event_id=f"msg_{mutation}_{conversation_id}_{message_id}_{event_ts}_{actor_user_id}",
+        event_ts=event_ts,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        actor_user_id=actor_user_id,
+        event_type=event_type,
+        payload=payload,
+    )
+
+
+
+def _emit_conversation_membership_archive_event_or_503(
+    *,
+    event_ts: int,
+    conversation_id: str,
+    subject_user_id: str,
+    actor_user_id: str,
+    event_type: str,
+    payload: dict,
+) -> None:
+    _emit_archive_event_or_503(
+        event_id=f"membership_{event_type}_{conversation_id}_{subject_user_id}_{event_ts}_{actor_user_id}",
+        event_ts=event_ts,
+        conversation_id=conversation_id,
+        message_id=f"membership_{subject_user_id}",
+        actor_user_id=actor_user_id,
+        event_type=event_type,
+        payload=payload,
+    )
+
+
+
+def _emit_report_archive_event_or_503(
+    *,
+    event_ts: int,
+    conversation_id: str,
+    message_id: str,
+    actor_user_id: str,
+    report_id: str,
+    event_type: Literal["report.submitted", "report.status_changed"],
+    payload: dict,
+) -> None:
+    _emit_archive_event_or_503(
+        event_id=f"report_{event_type}_{conversation_id}_{message_id}_{report_id}_{event_ts}_{actor_user_id}",
+        event_ts=event_ts,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        actor_user_id=actor_user_id,
+        event_type=event_type,
+        payload={"report_id": report_id, **payload},
+    )
+
 MESSAGE_TEXT_MAX_CHARS = 4000
 ENCRYPTED_CIPHERTEXT_MAX_BYTES = 8192
 ENCRYPTED_EDIT_ERROR_CODE = "encrypted_message_edit_unsupported"
 NO_AGENTS_ONLINE_NOTICE_TEXT = "No helpdesk agents are online right now. Please try again later."
 NO_AGENTS_NOTICE_THROTTLE_SEC = int(os.getenv("NO_AGENTS_NOTICE_THROTTLE_SEC", "600"))
 HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED = os.getenv("HELPDESK_AUTO_CLAIM_ON_REPLY_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED = bool(getattr(S, "messaging_hidden_timeline_filter_enabled", True))
 
 HELPDESK_ROUTING_EVENT_SCHEMA_VERSION = 1
 HELPDESK_ROUTING_LIFECYCLE_EVENT_TYPES = {
@@ -548,6 +668,9 @@ class FindOrCreateDmIn(BaseModel):
 class ConversationOut(BaseModel):
     conversation_id: str
     type: str
+    latest_pinned_message_id: Optional[str] = None
+    latest_pinned_by_user_id: Optional[str] = None
+    latest_pinned_at: Optional[int] = None
     title: Optional[str] = None
     description: Optional[str] = None
     icon: Optional[str] = None
@@ -890,6 +1013,9 @@ class PresenceOut(BaseModel):
 class MessagingConfigOut(BaseModel):
     messaging_encrypted_messages_enabled: bool
     messaging_gallery_enabled: bool
+    messaging_hide_controls_enabled: bool
+    messaging_pins_enabled: bool
+    messaging_reporting_enabled: bool
 
 
 class ParticipantOut(BaseModel):
@@ -1125,6 +1251,161 @@ class UnlockOut(BaseModel):
     message_id: str
     unlock_payment_id: str
     amount_cents: int
+
+
+class MessageControlsErrorOut(BaseModel):
+    detail: str
+    error_code: Optional[str] = None
+
+
+class MessageControlActionOut(BaseModel):
+    ok: bool
+    conversation_id: str
+    message_id: str
+    action: Literal["hidden", "visible", "pinned", "unpinned"]
+    updated_at: int
+
+
+class HiddenMessagesPageOut(BaseModel):
+    items: List[MessageOut]
+    next_cursor: Optional[str] = None
+
+
+class ConversationPinOut(BaseModel):
+    conversation_id: str
+    message_id: str
+    pinned_by_user_id: str
+    pinned_at: int
+    is_active: bool
+
+
+class ConversationPinsPageOut(BaseModel):
+    items: List[ConversationPinOut]
+    next_cursor: Optional[str] = None
+
+
+class ReportMessageIn(BaseModel):
+    reason_code: str = Field(min_length=2, max_length=64)
+    statement: str = Field(min_length=5, max_length=2000)
+
+    @model_validator(mode="after")
+    def _validate_and_normalize(self):
+        self.reason_code = (self.reason_code or "").strip().lower()
+        self.statement = (self.statement or "").strip()
+        if not self.reason_code:
+            record_messaging_report_validation_error(reason="reason_code_required")
+            raise ValueError("reason_code is required")
+        if len(self.statement) < 5:
+            record_messaging_report_validation_error(reason="statement_too_short")
+            raise ValueError("statement must be at least 5 characters")
+        if len(self.statement) > 2000:
+            record_messaging_report_validation_error(reason="statement_too_long")
+            raise ValueError("statement must be at most 2000 characters")
+        return self
+
+
+class ReportMessageOut(BaseModel):
+    ok: bool
+    report_id: str
+    conversation_id: str
+    message_id: str
+    reason_code: str
+    status: Literal["submitted"]
+    created_at: int
+
+
+
+class ReportStatusUpdateIn(BaseModel):
+    status: Literal["submitted", "under_review", "actioned", "dismissed"]
+    note: Optional[str] = Field(default=None, max_length=1000)
+
+
+class ReportStatusUpdateOut(BaseModel):
+    ok: bool
+    report_id: str
+    conversation_id: str
+    message_id: str
+    status: Literal["submitted", "under_review", "actioned", "dismissed"]
+    updated_at: int
+
+
+class LegalHoldCreateIn(BaseModel):
+    case_id: str = Field(min_length=2, max_length=128)
+    reason: str = Field(min_length=4, max_length=2000)
+    message_id: Optional[str] = Field(default=None, max_length=128)
+    report_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class LegalHoldOut(BaseModel):
+    hold_id: str
+    tenant_id: str
+    conversation_id: str
+    message_id: Optional[str] = None
+    report_id: Optional[str] = None
+    case_id: str
+    reason: str
+    status: Literal["active", "released"]
+    created_at: int
+    created_by_user_id: str
+    released_at: Optional[int] = None
+    released_by_user_id: Optional[str] = None
+
+
+class LegalHoldReleaseIn(BaseModel):
+    reason: str = Field(min_length=4, max_length=2000)
+
+
+class ComplianceArchiveEventOut(BaseModel):
+    event_id: str
+    event_ts: int
+    event_type: str
+    conversation_id: str
+    message_id: str
+    actor_user_id: str
+    effective_user_id: str
+    object_key: str
+    payload_hash: str
+    prev_hash: str
+    schema_version: int
+    payload: Optional[Dict[str, Any]] = None
+
+
+class ComplianceArchiveEventsPageOut(BaseModel):
+    items: List[ComplianceArchiveEventOut]
+    next_cursor: Optional[str] = None
+    total_matches: int
+
+
+class ComplianceArchiveExportCreateIn(BaseModel):
+    case_id: str = Field(min_length=1, max_length=128)
+    from_ts: int = Field(ge=0)
+    to_ts: int = Field(ge=0)
+    conversation_id: Optional[str] = None
+    user_id: Optional[str] = None
+    include_payload: bool = True
+
+
+class ComplianceArchiveExportOut(BaseModel):
+    export_id: str
+    case_id: str
+    tenant_id: str
+    status: Literal["queued", "running", "completed", "failed"]
+    created_at: int
+    updated_at: int
+    requested_by_user_id: str
+    expires_at: int
+    record_count: int = 0
+    result_manifest_uri: Optional[str] = None
+    error: Optional[str] = None
+
+
+MESSAGE_CONTROLS_ERROR_RESPONSES = {
+    401: {"model": MessageControlsErrorOut, "description": "Unauthorized"},
+    403: {"model": MessageControlsErrorOut, "description": "Forbidden"},
+    404: {"model": MessageControlsErrorOut, "description": "Not Found"},
+    422: {"model": MessageControlsErrorOut, "description": "Validation Error"},
+    429: {"model": MessageControlsErrorOut, "description": "Rate Limited"},
+}
 
 
 # -------------------------
@@ -1387,6 +1668,46 @@ def _messaging_gallery_index_enabled() -> bool:
         "true" if S.messaging_gallery_index_enabled else "false",
     ) not in ("0", "false", "False")
     return bool(enabled and tbl_gallery_index is not None and _aws_credentials_available())
+
+
+def _messaging_hide_controls_enabled() -> bool:
+    return os.getenv(
+        "MESSAGING_HIDE_CONTROLS_ENABLED",
+        "true" if S.messaging_hide_controls_enabled else "false",
+    ) not in ("0", "false", "False")
+
+
+def _messaging_pins_enabled() -> bool:
+    return os.getenv(
+        "MESSAGING_PINS_ENABLED",
+        "true" if S.messaging_pins_enabled else "false",
+    ) not in ("0", "false", "False")
+
+
+def _messaging_reporting_enabled() -> bool:
+    return os.getenv(
+        "MESSAGING_REPORTING_ENABLED",
+        "true" if S.messaging_reporting_enabled else "false",
+    ) not in ("0", "false", "False")
+
+
+def _messaging_compliance_export_enabled() -> bool:
+    return os.getenv(
+        "MESSAGING_COMPLIANCE_EXPORT_ENABLED",
+        "true" if S.messaging_compliance_export_enabled else "false",
+    ) not in ("0", "false", "False")
+
+
+def _messaging_compliance_legal_hold_enabled() -> bool:
+    return os.getenv(
+        "MESSAGING_COMPLIANCE_LEGAL_HOLD_ENABLED",
+        "true" if S.messaging_compliance_legal_hold_enabled else "false",
+    ) not in ("0", "false", "False")
+
+
+def _require_message_controls_capability(enabled: bool, detail: str) -> None:
+    if not enabled:
+        raise HTTPException(status_code=403, detail=detail)
 
 
 def _encode_gallery_index_cursor(sort_key: str) -> str:
@@ -2443,10 +2764,37 @@ def _find_existing_dm(user_sub: str, target_sub: str) -> Optional[str]:
     return None
 
 
+def _get_latest_active_pin(conversation_id: str) -> Optional[dict]:
+    try:
+        resp = T.conversation_pins.query(
+            IndexName="ByConversationActivePinnedAt",
+            KeyConditionExpression=Key("conversation_active").eq(f"{conversation_id}#1"),
+            ScanIndexForward=False,
+            Limit=1,
+        )
+    except Exception:
+        return None
+
+    items = resp.get("Items", [])
+    if not items:
+        return None
+    pin = items[0]
+    return {
+        "message_id": str(pin.get("message_id") or ""),
+        "pinned_by_user_id": str(pin.get("pinned_by_user_id") or ""),
+        "pinned_at": int(pin.get("pinned_at", 0) or 0),
+    }
+
+
 def _conversation_out_from_items(*, conversation_id: str, convo: dict, participant: dict, viewer_user_id: str) -> ConversationOut:
+    latest_pin = _get_latest_active_pin(conversation_id)
+
     out = ConversationOut(
         conversation_id=conversation_id,
         type=convo.get("type", "dm"),
+        latest_pinned_message_id=(latest_pin or {}).get("message_id") or None,
+        latest_pinned_by_user_id=(latest_pin or {}).get("pinned_by_user_id") or None,
+        latest_pinned_at=int((latest_pin or {}).get("pinned_at", 0) or 0) or None,
         title=convo.get("title"),
         description=convo.get("description"),
         icon=convo.get("icon"),
@@ -2637,6 +2985,37 @@ def _apply_helpdesk_routing_transition(
         metadata=metadata or {},
     )
     tbl_routing_events.put_item(Item=event_item, ConditionExpression="attribute_not_exists(event_id)")
+
+    routing_event_type = str(event_item.get("event_type") or "")
+    if routing_event_type in {"helpdesk.conversation.assigned", "helpdesk.conversation.released"}:
+        assignment_kind = "assigned" if routing_event_type.endswith("assigned") else "released"
+        assignment_target_user = str(event_item.get("active_agent_user_id") or actor_user_id)
+        if assignment_target_user:
+            emit_messaging_archive_event(
+                event_id=f"assignment_{conversation_id}_{event_item.get('event_id','')}",
+                event_ts=event_created_at,
+                tenant_id="default",
+                conversation_id=conversation_id,
+                message_id=f"membership_{assignment_target_user}",
+                actor_user_id=actor_user_id,
+                effective_user_id=assignment_target_user,
+                event_type="conversation.role_changed",
+                payload={
+                    "transition": "assignment_changed",
+                    "assignment": assignment_kind,
+                    "subject_user_id": assignment_target_user,
+                    "routing_event_id": str(event_item.get("event_id") or ""),
+                    "routing_event_type": routing_event_type,
+                    "from_state": str(event_item.get("from_state") or ""),
+                    "to_state": str(event_item.get("to_state") or ""),
+                    "assignment_version": int(event_item.get("assignment_version", 0) or 0),
+                    "timeline_state": {
+                        "routing_state": str(event_item.get("routing_state") or ""),
+                        "occurred_at": int(event_item.get("created_at", event_created_at) or event_created_at),
+                    },
+                },
+            )
+
     _fanout_helpdesk_lifecycle_event(conversation=convo, event_item=event_item, actor_user_id=actor_user_id)
     return {"transition": result, "event": event_item, "conversation": convo}
 
@@ -3480,6 +3859,22 @@ def start_conversation(
         unread_count=0,
     )
     convo.participants = _get_conversation_participants_enriched(cid, profile_cache)
+    for pid in participant_ids:
+        participant_status = "active" if (pid == user_id or inp.type == "dm") else "pending"
+        _emit_conversation_membership_archive_event_or_503(
+            event_ts=created_at,
+            conversation_id=cid,
+            subject_user_id=pid,
+            actor_user_id=user_id,
+            event_type="conversation.member_joined",
+            payload={
+                "transition": "conversation_created",
+                "subject_user_id": pid,
+                "status": participant_status,
+                "role": "admin" if pid == user_id else "member",
+                "timeline_state": {"conversation_created_at": created_at, "participant_count": len(participant_ids)},
+            },
+        )
     audit_event(
         "messaging_conversation_started",
         user_id,
@@ -3759,6 +4154,7 @@ def add_participants(
 
     added = 0
     ts = now_ts()
+    added_participants: list[tuple[str, str, str]] = []
     for pid in dict.fromkeys(inp.participant_ids):
         if pid == user_id:
             continue
@@ -3767,17 +4163,19 @@ def add_participants(
         if existing:
             if existing.get("status") in ("active", "pending"):
                 continue
+            restored_role = str(existing.get("role") or "member")
             tbl_parts.update_item(
                 Key={"user_id": pid, "conversation_id": conversation_id},
                 UpdateExpression="SET #s = :pending, #r = :role, joined_at = :zero, left_at = :zero, unread_count = :zero",
                 ExpressionAttributeNames={"#s": "status", "#r": "role"},
                 ExpressionAttributeValues={
                     ":pending": "pending",
-                    ":role": existing.get("role") or "member",
+                    ":role": restored_role,
                     ":zero": 0,
                 },
             )
             added += 1
+            added_participants.append((pid, "pending", restored_role))
             continue
 
         tbl_parts.put_item(
@@ -3796,12 +4194,28 @@ def add_participants(
             }
         )
         added += 1
+        added_participants.append((pid, "pending", "member"))
 
     if added:
         tbl_convos.update_item(
             Key={"conversation_id": conversation_id},
             UpdateExpression="ADD participant_count :inc",
             ExpressionAttributeValues={":inc": added},
+        )
+    for participant_id, participant_status, participant_role in added_participants:
+        _emit_conversation_membership_archive_event_or_503(
+            event_ts=ts,
+            conversation_id=conversation_id,
+            subject_user_id=participant_id,
+            actor_user_id=user_id,
+            event_type="conversation.member_joined",
+            payload={
+                "transition": "participant_added",
+                "subject_user_id": participant_id,
+                "status": participant_status,
+                "role": participant_role,
+                "timeline_state": {"participant_count_delta": added},
+            },
         )
     audit_event(
         "messaging_conversation_participants_added",
@@ -3827,8 +4241,8 @@ def remove_participant(
     part = get_participant_any(participant_id, conversation_id)
     if not part:
         raise HTTPException(404, "Participant not found")
+    ts = now_ts()
     if part.get("status") != "left":
-        ts = now_ts()
         tbl_parts.update_item(
             Key={"user_id": participant_id, "conversation_id": conversation_id},
             UpdateExpression="SET #s = :left, left_at = :ts",
@@ -3840,6 +4254,19 @@ def remove_participant(
             UpdateExpression="ADD participant_count :neg",
             ExpressionAttributeValues={":neg": -1},
         )
+    _emit_conversation_membership_archive_event_or_503(
+        event_ts=ts,
+        conversation_id=conversation_id,
+        subject_user_id=participant_id,
+        actor_user_id=user_id,
+        event_type="conversation.member_left",
+        payload={
+            "transition": "participant_removed",
+            "subject_user_id": participant_id,
+            "prior_status": str(part.get("status") or ""),
+            "timeline_state": {"left_at": ts},
+        },
+    )
     audit_event(
         "messaging_conversation_participant_removed",
         user_id,
@@ -3863,11 +4290,25 @@ def update_participant_role(
     part = get_participant_any(participant_id, conversation_id)
     if not part:
         raise HTTPException(404, "Participant not found")
+    prior_role = str(part.get("role") or "member")
     tbl_parts.update_item(
         Key={"user_id": participant_id, "conversation_id": conversation_id},
         UpdateExpression="SET #r = :role",
         ExpressionAttributeNames={"#r": "role"},
         ExpressionAttributeValues={":role": inp.role},
+    )
+    _emit_conversation_membership_archive_event_or_503(
+        event_ts=now_ts(),
+        conversation_id=conversation_id,
+        subject_user_id=participant_id,
+        actor_user_id=user_id,
+        event_type="conversation.role_changed",
+        payload={
+            "transition": "role_changed",
+            "subject_user_id": participant_id,
+            "from_role": prior_role,
+            "to_role": inp.role,
+        },
     )
     audit_event(
         "messaging_conversation_participant_role_updated",
@@ -3898,6 +4339,18 @@ def leave_conversation(conversation_id: str, req: Request = None, user_id: str =
         Key={"conversation_id": conversation_id},
         UpdateExpression="ADD participant_count :neg",
         ExpressionAttributeValues={":neg": -1},
+    )
+    _emit_conversation_membership_archive_event_or_503(
+        event_ts=ts,
+        conversation_id=conversation_id,
+        subject_user_id=user_id,
+        actor_user_id=user_id,
+        event_type="conversation.member_left",
+        payload={
+            "transition": "self_left",
+            "subject_user_id": user_id,
+            "timeline_state": {"left_at": ts},
+        },
     )
     audit_event(
         "messaging_conversation_left",
@@ -4015,6 +4468,7 @@ def _claim_helpdesk_conversation_internal(
     # Add the claiming agent as an active participant (admin role) so they can send messages.
     # Use a conditional put to avoid overwriting an existing participant record.
     existing_part = tbl_parts.get_item(Key={"user_id": user_id, "conversation_id": conversation_id}).get("Item")
+    membership_transition = "none"
     if not existing_part:
         tbl_parts.put_item(Item={
             "user_id": user_id,
@@ -4034,12 +4488,34 @@ def _claim_helpdesk_conversation_internal(
             UpdateExpression="ADD participant_count :inc",
             ExpressionAttributeValues={":inc": 1},
         )
+        membership_transition = "helpdesk_agent_joined"
     elif existing_part.get("status") != "active":
         tbl_parts.update_item(
             Key={"user_id": user_id, "conversation_id": conversation_id},
             UpdateExpression="SET #s = :active, role = :role, joined_at = :ts",
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={":active": "active", ":role": "admin", ":ts": ts},
+        )
+        membership_transition = "helpdesk_agent_reactivated"
+
+    if membership_transition != "none":
+        _emit_conversation_membership_archive_event_or_503(
+            event_ts=ts,
+            conversation_id=conversation_id,
+            subject_user_id=user_id,
+            actor_user_id=user_id,
+            event_type="conversation.member_joined",
+            payload={
+                "transition": membership_transition,
+                "subject_user_id": user_id,
+                "status": "active",
+                "role": "admin",
+                "timeline_state": {
+                    "routing_event_id": str(result.get("event", {}).get("event_id") or ""),
+                    "routing_state": str(updated.get("routing_state") or "assigned"),
+                    "assignment_version": int(updated.get("assignment_version") or (current_version + 1)),
+                },
+            },
         )
 
     audit_event(
@@ -4240,6 +4716,139 @@ def list_participants(conversation_id: str, user_id: str = Depends(get_messaging
     return out
 
 
+
+REPORT_CONTEXT_RADIUS = 5
+REPORT_CONTEXT_SCAN_LIMIT = 500
+
+
+def _message_allowed_in_report_context(item: dict, user_id: str) -> bool:
+    # Only include messages visible to reporter and not hard-revoked/deleted artifacts.
+    if not _filter_message_visible(item, user_id):
+        return False
+    if item.get("revoked_at"):
+        return False
+    return True
+
+
+
+
+def _query_report_count(*, index_name: str, partition_key_name: str, partition_key_value: str, since_ts: int, limit: int) -> int:
+    resp = T.message_reports.query(
+        IndexName=index_name,
+        KeyConditionExpression=Key(partition_key_name).eq(partition_key_value) & Key("created_at").gte(since_ts),
+        Select="COUNT",
+        Limit=max(1, limit),
+        ScanIndexForward=False,
+    )
+    return int(resp.get("Count", 0) or 0)
+
+
+def _enforce_report_rate_limits(conversation_id: str, user_id: str, now: int) -> None:
+    enabled = os.environ.get(
+        "MESSAGING_REPORT_RATE_LIMIT_ENABLED",
+        "true" if S.messaging_report_rate_limit_enabled else "false",
+    ).lower() in ("1", "true", "yes", "on")
+    if not enabled:
+        return
+
+    user_window = max(1, int(os.environ.get("MESSAGING_REPORT_RATE_LIMIT_USER_WINDOW_SECONDS", str(S.messaging_report_rate_limit_user_window_seconds))))
+    user_max = max(1, int(os.environ.get("MESSAGING_REPORT_RATE_LIMIT_USER_MAX", str(S.messaging_report_rate_limit_user_max))))
+    convo_window = max(1, int(os.environ.get("MESSAGING_REPORT_RATE_LIMIT_CONVERSATION_WINDOW_SECONDS", str(S.messaging_report_rate_limit_conversation_window_seconds))))
+    convo_max = max(1, int(os.environ.get("MESSAGING_REPORT_RATE_LIMIT_CONVERSATION_MAX", str(S.messaging_report_rate_limit_conversation_max))))
+
+    user_count = _query_report_count(
+        index_name="ByReporterCreatedAt",
+        partition_key_name="reported_by_user_id",
+        partition_key_value=user_id,
+        since_ts=now - user_window,
+        limit=user_max,
+    )
+    if user_count >= user_max:
+        record_messaging_message_control_action(action="report", result="rate_limited")
+        _log_message_control_action(actor_user_id=user_id, conversation_id=conversation_id, message_id="", action="report", result="rate_limited", detail="scope=user")
+        audit_event("messaging_report_rate_limited", user_id, None, outcome="rate_limited", scope="user", conversation_id=conversation_id, count=user_count, window_seconds=user_window)
+        raise HTTPException(status_code=429, detail="Rate limit exceeded for message reports", headers={"Retry-After": str(user_window)})
+
+    convo_count = _query_report_count(
+        index_name="ByConversationCreatedAt",
+        partition_key_name="conversation_id",
+        partition_key_value=conversation_id,
+        since_ts=now - convo_window,
+        limit=convo_max,
+    )
+    if convo_count >= convo_max:
+        record_messaging_message_control_action(action="report", result="rate_limited")
+        _log_message_control_action(actor_user_id=user_id, conversation_id=conversation_id, message_id="", action="report", result="rate_limited", detail="scope=conversation")
+        audit_event("messaging_report_rate_limited", user_id, None, outcome="rate_limited", scope="conversation", conversation_id=conversation_id, count=convo_count, window_seconds=convo_window)
+        raise HTTPException(status_code=429, detail="Rate limit exceeded for message reports", headers={"Retry-After": str(convo_window)})
+
+def _load_report_context_message_ids(conversation_id: str, target_message_id: str, user_id: str) -> List[str]:
+    """Build immutable, server-side report context around a target message (±REPORT_CONTEXT_RADIUS)."""
+    items: List[dict] = []
+    last_key: Optional[dict] = None
+
+    while len(items) < REPORT_CONTEXT_SCAN_LIMIT:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("conversation_id").eq(conversation_id),
+            "ScanIndexForward": False,
+            "Limit": 100,
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+
+        resp = tbl_msgs.query(**kwargs)
+        page_items = resp.get("Items", []) or []
+        if not page_items:
+            break
+        items.extend(page_items)
+
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+
+    items.sort(key=lambda i: (int(i.get("created_at", 0) or 0), str(i.get("message_id") or "")))
+    allowed = [i for i in items if _message_allowed_in_report_context(i, user_id)]
+
+    target_index = next((idx for idx, itm in enumerate(allowed) if str(itm.get("message_id") or "") == target_message_id), -1)
+    if target_index < 0:
+        return [target_message_id]
+
+    start = max(0, target_index - REPORT_CONTEXT_RADIUS)
+    end = min(len(allowed), target_index + REPORT_CONTEXT_RADIUS + 1)
+    context_ids = [str(itm.get("message_id") or "") for itm in allowed[start:end] if itm.get("message_id")]
+    if target_message_id not in context_ids:
+        context_ids.append(target_message_id)
+    return context_ids
+
+def _load_hidden_message_ids_for_user(conversation_id: str, user_id: str, message_ids: Sequence[str]) -> set[str]:
+    if not message_ids:
+        return set()
+
+    keys = [
+        {"conversation_id": conversation_id, "message_user": f"{mid}#{user_id}"}
+        for mid in message_ids
+        if mid
+    ]
+    if not keys:
+        return set()
+
+    hidden: set[str] = set()
+    table_name = T.message_visibility_overrides.name
+
+    for i in range(0, len(keys), 100):
+        chunk = keys[i : i + 100]
+        resp = ddb.meta.client.batch_get_item(RequestItems={table_name: {"Keys": chunk}})
+        items = resp.get("Responses", {}).get(table_name, [])
+        for item in items:
+            if str(item.get("state") or "") != "hidden":
+                continue
+            message_id = str(item.get("message_id") or "").strip()
+            if message_id:
+                hidden.add(message_id)
+
+    return hidden
+
+
 # -------------------------
 # Messages (list/send)
 # -------------------------
@@ -4252,16 +4861,6 @@ def list_messages(
 ):
     require_participant_active(user_id, conversation_id)
 
-    kwargs: Dict[str, Any] = {
-        "KeyConditionExpression": Key("conversation_id").eq(conversation_id),
-        "ScanIndexForward": False,
-        "Limit": limit,
-    }
-    if before:
-        kwargs["ExclusiveStartKey"] = {"conversation_id": conversation_id, "message_id": before}
-
-    resp = tbl_msgs.query(**kwargs)
-    items = resp.get("Items", [])
     try:
         parts = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id)).get("Items", [])
     except Exception:
@@ -4270,11 +4869,41 @@ def list_messages(
         parts = []
 
     out: List[MessageOut] = []
-    for m in items:
-        if not _filter_message_visible(m, user_id):
-            continue
-        msg = _message_out_from_item(m, user_id)
-        out.append(_apply_message_receipts(msg, m, parts))
+    last_key = {"conversation_id": conversation_id, "message_id": before} if before else None
+
+    while len(out) < limit:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("conversation_id").eq(conversation_id),
+            "ScanIndexForward": False,
+            "Limit": limit,
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+
+        resp = tbl_msgs.query(**kwargs)
+        items = resp.get("Items", [])
+        if not items:
+            break
+
+        hidden_ids: set[str] = set()
+        if MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED:
+            message_ids = [str(item.get("message_id") or "") for item in items]
+            hidden_ids = _load_hidden_message_ids_for_user(conversation_id, user_id, message_ids)
+
+        for m in items:
+            if m.get("message_id") in hidden_ids:
+                continue
+            if not _filter_message_visible(m, user_id):
+                continue
+            msg = _message_out_from_item(m, user_id)
+            out.append(_apply_message_receipts(msg, m, parts))
+            if len(out) >= limit:
+                break
+
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+
     # Sort by created_at descending (newest first) so the response is in
     # chronological order regardless of DynamoDB sort-key (message_id) ordering.
     out.sort(key=lambda m: m.created_at, reverse=True)
@@ -4753,6 +5382,15 @@ def send_text_message(
         scheduled=is_scheduled,
         tip_amount_cents=tip_amount_cents,
     )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": is_scheduled, "message": _serialize_message_event_payload(item, user_id)},
+    )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     return message
 
@@ -4989,6 +5627,15 @@ def create_image_message(
         reply_to_message_id=inp.reply_to_message_id,
         tip_amount_cents=tip_amount_cents,
     )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": is_scheduled_img, "message": _serialize_message_event_payload(item, user_id)},
+    )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     _meter_messaging_attachment_upload(
         user_id=user_id,
@@ -5190,6 +5837,15 @@ def create_gallery_message(
         message_id=mid,
         kind="gallery",
     )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": is_scheduled_gal, "message": _serialize_message_event_payload(item, user_id)},
+    )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     return message
 
@@ -5297,6 +5953,15 @@ def create_file_share_message(
         message_id=mid,
         kind="file_share",
         scheduled=is_scheduled_fs,
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": is_scheduled_fs, "message": _serialize_message_event_payload(item, user_id)},
     )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     return _message_out_from_item(item, user_id)
@@ -5467,6 +6132,15 @@ def create_calendar_share_message(
         kind="calendar_share",
         scheduled=is_scheduled_cs,
     )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": is_scheduled_cs, "message": _serialize_message_event_payload(item, user_id)},
+    )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     return _message_out_from_item(item, user_id)
 
@@ -5573,6 +6247,15 @@ def create_calendar_event_message(
         kind="calendar_event",
         scheduled=is_scheduled_ce,
     )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": is_scheduled_ce, "message": _serialize_message_event_payload(item, user_id)},
+    )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     return _message_out_from_item(item, user_id)
 
@@ -5675,6 +6358,15 @@ def create_meeting_poll_message(
         conversation_id=conversation_id,
         message_id=mid,
         kind="meeting_poll",
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": False, "message": _serialize_message_event_payload(item, user_id)},
     )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     return _message_out_from_item(item, user_id)
@@ -5972,6 +6664,15 @@ def create_file_message(
         message_id=mid,
         kind=inp.kind,
         reply_to_message_id=inp.reply_to_message_id,
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": False, "message": _serialize_message_event_payload(item, user_id)},
     )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     if inp.consumption_policy != CONSUMPTION_POLICY_NONE and item.get("media_kind"):
@@ -6291,6 +6992,7 @@ def delete_message_for_me(
     )
     msg = _get_message_or_404(conversation_id, message_id)
     _sync_gallery_index_message(msg)
+    ts = now_ts()
     audit_event(
         "messaging_message_deleted",
         user_id,
@@ -6298,6 +7000,15 @@ def delete_message_for_me(
         outcome="success",
         conversation_id=conversation_id,
         message_id=message_id,
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="delete",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        actor_user_id=user_id,
+        event_type="message.deleted",
+        payload={"mutation": "delete", "scope": "for_me", "deleted_for_user_id": user_id},
     )
     return {"ok": True}
 
@@ -6353,6 +7064,15 @@ def revoke_message_for_all(
         revoked_at=ts,
     )
     item = _get_message_or_404(conversation_id, message_id)
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="revoke",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        actor_user_id=user_id,
+        event_type="message.revoked",
+        payload={"mutation": "revoke", "message": _serialize_message_event_payload(item, user_id)},
+    )
     return _message_out_from_item(item, user_id)
 
 
@@ -6516,6 +7236,15 @@ def edit_message(
         outcome="success",
         conversation_id=conversation_id,
         message_id=message_id,
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="edit",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        actor_user_id=user_id,
+        event_type="message.edited",
+        payload={"mutation": "edit", "previous_text": old_text, "message": _serialize_message_event_payload(item, user_id)},
     )
     return message
 
@@ -6689,6 +7418,15 @@ def forward_message(
         source_conversation_id=inp.source_conversation_id,
         source_message_id=inp.source_message_id,
     )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=target_conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": False, "message": _serialize_message_event_payload(item, user_id)},
+    )
     return message
 
 
@@ -6817,6 +7555,1036 @@ def get_message_views(
 
     out.sort(key=lambda x: x.last_viewed_at, reverse=True)
     return out
+
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/hide",
+    response_model=MessageControlActionOut,
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def hide_message_for_me(
+    conversation_id: str,
+    message_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Hide a message for the current participant (idempotent upsert)."""
+    _require_message_controls_capability(_messaging_hide_controls_enabled(), "Message hide controls are disabled")
+    require_participant_active(user_id, conversation_id)
+    _ = _get_message_or_404(conversation_id, message_id)
+    ts = now_ts()
+    message_user = f"{message_id}#{user_id}"
+    conversation_user = f"{conversation_id}#{user_id}"
+
+    # Idempotent upsert keyed by (conversation_id, message_user).
+    T.message_visibility_overrides.update_item(
+        Key={"conversation_id": conversation_id, "message_user": message_user},
+        UpdateExpression=(
+            "SET message_id = :mid, user_id = :uid, #state = :state, "
+            "updated_at = :updated_at, conversation_user = :conversation_user"
+        ),
+        ExpressionAttributeNames={"#state": "state"},
+        ExpressionAttributeValues={
+            ":mid": message_id,
+            ":uid": user_id,
+            ":state": "hidden",
+            ":updated_at": ts,
+            ":conversation_user": conversation_user,
+        },
+    )
+
+    record_messaging_message_control_action(action="hide", result="success")
+    _log_message_control_action(actor_user_id=user_id, conversation_id=conversation_id, message_id=message_id, action="hide", result="success")
+    _emit_archive_event_or_503(
+        event_id=f"mc_hide_{conversation_id}_{message_id}_{ts}_{user_id}",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        actor_user_id=user_id,
+        event_type="message.deleted",
+        payload={"action": "hide", "state": "hidden"},
+    )
+    return MessageControlActionOut(
+        ok=True,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        action="hidden",
+        updated_at=ts,
+    )
+
+
+@router.delete(
+    "/conversations/{conversation_id}/messages/{message_id}/hide",
+    response_model=MessageControlActionOut,
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def unhide_message_for_me(
+    conversation_id: str,
+    message_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Unhide a message for the current participant (idempotent upsert)."""
+    _require_message_controls_capability(_messaging_hide_controls_enabled(), "Message hide controls are disabled")
+    require_participant_active(user_id, conversation_id)
+    _ = _get_message_or_404(conversation_id, message_id)
+    ts = now_ts()
+    message_user = f"{message_id}#{user_id}"
+    conversation_user = f"{conversation_id}#{user_id}"
+
+    # Idempotent upsert keyed by (conversation_id, message_user).
+    T.message_visibility_overrides.update_item(
+        Key={"conversation_id": conversation_id, "message_user": message_user},
+        UpdateExpression=(
+            "SET message_id = :mid, user_id = :uid, #state = :state, "
+            "updated_at = :updated_at, conversation_user = :conversation_user"
+        ),
+        ExpressionAttributeNames={"#state": "state"},
+        ExpressionAttributeValues={
+            ":mid": message_id,
+            ":uid": user_id,
+            ":state": "visible",
+            ":updated_at": ts,
+            ":conversation_user": conversation_user,
+        },
+    )
+
+    record_messaging_message_control_action(action="unhide", result="success")
+    _log_message_control_action(actor_user_id=user_id, conversation_id=conversation_id, message_id=message_id, action="unhide", result="success")
+    _emit_archive_event_or_503(
+        event_id=f"mc_unhide_{conversation_id}_{message_id}_{ts}_{user_id}",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        actor_user_id=user_id,
+        event_type="message.edited",
+        payload={"action": "unhide", "state": "visible"},
+    )
+    return MessageControlActionOut(
+        ok=True,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        action="visible",
+        updated_at=ts,
+    )
+
+
+@router.get(
+    "/conversations/{conversation_id}/hidden-messages",
+    response_model=HiddenMessagesPageOut,
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def list_hidden_messages(
+    conversation_id: str,
+    cursor: Optional[str] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """List hidden messages for the current participant with stable pagination."""
+    _require_message_controls_capability(_messaging_hide_controls_enabled(), "Message hide controls are disabled")
+    require_participant_active(user_id, conversation_id)
+
+    eks = decode_cursor(cursor)
+    if cursor and not eks:
+        raise HTTPException(status_code=400, detail="invalid cursor")
+
+    out: list[MessageOut] = []
+    last_evaluated_key = eks
+
+    while len(out) < limit:
+        remaining = max(1, limit - len(out))
+        resp = T.message_visibility_overrides.query(
+            IndexName="ByConversationUserUpdatedAt",
+            KeyConditionExpression=Key("conversation_user").eq(f"{conversation_id}#{user_id}"),
+            FilterExpression=Attr("state").eq("hidden"),
+            ScanIndexForward=True,
+            Limit=remaining,
+            **({"ExclusiveStartKey": last_evaluated_key} if last_evaluated_key else {}),
+        )
+
+        items = resp.get("Items", [])
+        for override in items:
+            if str(override.get("state") or "") != "hidden":
+                continue
+            mid = str(override.get("message_id") or "").strip()
+            if not mid:
+                continue
+            msg = tbl_msgs.get_item(Key={"conversation_id": conversation_id, "message_id": mid}).get("Item")
+            if not msg:
+                continue
+            out.append(_message_out_from_item(msg, user_id))
+            if len(out) >= limit:
+                break
+
+        last_evaluated_key = resp.get("LastEvaluatedKey")
+        if not last_evaluated_key:
+            break
+
+    return HiddenMessagesPageOut(
+        items=out,
+        next_cursor=encode_cursor(last_evaluated_key),
+    )
+
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/pin",
+    response_model=MessageControlActionOut,
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def pin_message(
+    conversation_id: str,
+    message_id: str,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Pin a message in a conversation (participant-scoped authorization)."""
+    _require_message_controls_capability(_messaging_pins_enabled(), "Message pin controls are disabled")
+    require_participant_active(user_id, conversation_id)
+    _ = _get_message_or_404(conversation_id, message_id)
+
+    ts = now_ts()
+    conversation_active = f"{conversation_id}#1"
+    latest_pin_sort = f"{ts:013d}#{message_id}"
+
+    T.conversation_pins.update_item(
+        Key={"conversation_id": conversation_id, "message_id": message_id},
+        UpdateExpression=(
+            "SET pinned_by_user_id = :pinned_by_user_id, pinned_at = :pinned_at, "
+            "is_active = :is_active, conversation_active = :conversation_active, "
+            "latest_pin_sort = :latest_pin_sort REMOVE unpinned_by_user_id, unpinned_at"
+        ),
+        ExpressionAttributeValues={
+            ":pinned_by_user_id": user_id,
+            ":pinned_at": ts,
+            ":is_active": True,
+            ":conversation_active": conversation_active,
+            ":latest_pin_sort": latest_pin_sort,
+        },
+    )
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="message:pinned",
+        payload={
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            "pinned_by_user_id": user_id,
+            "pinned_at": ts,
+        },
+        respect_mute=False,
+    )
+    audit_event(
+        "messaging_message_pinned",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+        pinned_by_user_id=user_id,
+        pinned_at=ts,
+    )
+
+    record_messaging_message_control_action(action="pin", result="success")
+    _log_message_control_action(actor_user_id=user_id, conversation_id=conversation_id, message_id=message_id, action="pin", result="success")
+    _emit_archive_event_or_503(
+        event_id=f"mc_pin_{conversation_id}_{message_id}_{ts}_{user_id}",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        actor_user_id=user_id,
+        event_type="message.edited",
+        payload={"action": "pin", "is_active": True},
+    )
+    return MessageControlActionOut(
+        ok=True,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        action="pinned",
+        updated_at=ts,
+    )
+
+
+@router.delete(
+    "/conversations/{conversation_id}/messages/{message_id}/pin",
+    response_model=MessageControlActionOut,
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def unpin_message(
+    conversation_id: str,
+    message_id: str,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Unpin a message in a conversation (participant-scoped authorization)."""
+    _require_message_controls_capability(_messaging_pins_enabled(), "Message pin controls are disabled")
+    require_participant_active(user_id, conversation_id)
+    _ = _get_message_or_404(conversation_id, message_id)
+
+    ts = now_ts()
+
+    T.conversation_pins.update_item(
+        Key={"conversation_id": conversation_id, "message_id": message_id},
+        UpdateExpression=(
+            "SET is_active = :is_active, unpinned_by_user_id = :unpinned_by_user_id, "
+            "unpinned_at = :unpinned_at, conversation_active = :conversation_inactive, "
+            "latest_pin_sort = :latest_pin_sort"
+        ),
+        ExpressionAttributeValues={
+            ":is_active": False,
+            ":unpinned_by_user_id": user_id,
+            ":unpinned_at": ts,
+            ":conversation_inactive": f"{conversation_id}#0",
+            ":latest_pin_sort": f"{ts:013d}#{message_id}",
+        },
+    )
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        event_type="message:unpinned",
+        payload={
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            "unpinned_by_user_id": user_id,
+            "unpinned_at": ts,
+        },
+        respect_mute=False,
+    )
+    audit_event(
+        "messaging_message_unpinned",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+        unpinned_by_user_id=user_id,
+        unpinned_at=ts,
+    )
+
+    record_messaging_message_control_action(action="unpin", result="success")
+    _log_message_control_action(actor_user_id=user_id, conversation_id=conversation_id, message_id=message_id, action="unpin", result="success")
+    _emit_archive_event_or_503(
+        event_id=f"mc_unpin_{conversation_id}_{message_id}_{ts}_{user_id}",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        actor_user_id=user_id,
+        event_type="message.edited",
+        payload={"action": "unpin", "is_active": False},
+    )
+    return MessageControlActionOut(
+        ok=True,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        action="unpinned",
+        updated_at=ts,
+    )
+
+
+@router.get(
+    "/conversations/{conversation_id}/pins",
+    response_model=ConversationPinsPageOut,
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def list_conversation_pins(
+    conversation_id: str,
+    cursor: Optional[str] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """List active pins in a conversation ordered by newest pin first."""
+    require_participant_active(user_id, conversation_id)
+
+    eks = decode_cursor(cursor)
+    if cursor and not eks:
+        raise HTTPException(status_code=400, detail="invalid cursor")
+
+    resp = T.conversation_pins.query(
+        IndexName="ByConversationActivePinnedAt",
+        KeyConditionExpression=Key("conversation_active").eq(f"{conversation_id}#1"),
+        ScanIndexForward=False,
+        Limit=limit,
+        **({"ExclusiveStartKey": eks} if eks else {}),
+    )
+
+    items = []
+    for pin in resp.get("Items", []):
+        items.append(
+            ConversationPinOut(
+                conversation_id=conversation_id,
+                message_id=str(pin.get("message_id") or ""),
+                pinned_by_user_id=str(pin.get("pinned_by_user_id") or ""),
+                pinned_at=int(pin.get("pinned_at", 0) or 0),
+                is_active=bool(pin.get("is_active", False)),
+            )
+        )
+
+    return ConversationPinsPageOut(items=items, next_cursor=encode_cursor(resp.get("LastEvaluatedKey")))
+
+
+
+
+def _is_record_under_active_legal_hold(*, tenant_id: str, conversation_id: str, message_id: str) -> bool:
+    conversation_status = f"{conversation_id}#active"
+    last_key = None
+    while True:
+        kwargs: Dict[str, Any] = {
+            "IndexName": "ByConversationStatusCreatedAt",
+            "KeyConditionExpression": Key("conversation_status").eq(conversation_status),
+            "ScanIndexForward": False,
+            "Limit": 100,
+        }
+        if last_key:
+            kwargs["ExclusiveStartKey"] = last_key
+        resp = T.message_legal_holds.query(**kwargs)
+        for item in resp.get("Items", []):
+            if str(item.get("tenant_id") or "") != tenant_id:
+                continue
+            hold_message_id = str(item.get("message_id") or "")
+            if hold_message_id and hold_message_id == message_id:
+                return True
+            # conversation-scoped legal hold (no message_id) blocks all records in conversation
+            if not hold_message_id:
+                return True
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+    return False
+
+@router.post(
+    "/conversations/{conversation_id}/messages/{message_id}/report",
+    response_model=ReportMessageOut,
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def report_message(
+    conversation_id: str,
+    message_id: str,
+    inp: ReportMessageIn,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Submit a moderation report for a message in a conversation the user participates in."""
+    _require_message_controls_capability(_messaging_reporting_enabled(), "Message reporting is disabled")
+    require_participant_active(user_id, conversation_id)
+    _ = _get_message_or_404(conversation_id, message_id)
+
+    ts = now_ts()
+    _enforce_report_rate_limits(conversation_id, user_id, ts)
+
+    report_id = f"rpt_{new_id()}"
+    context_message_ids = _load_report_context_message_ids(conversation_id, message_id, user_id)
+
+    T.message_reports.put_item(
+        Item={
+            "report_id": report_id,
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            "reported_by_user_id": user_id,
+            "reason_code": inp.reason_code,
+            "statement": inp.statement,
+            "context_message_ids": context_message_ids,
+            "created_at": ts,
+            "status": "submitted",
+        }
+    )
+
+    for context_message_id in context_message_ids:
+        T.message_report_context.put_item(
+            Item={
+                "report_id": report_id,
+                "message_id": context_message_id,
+                "conversation_id": conversation_id,
+                "created_at": ts,
+            }
+        )
+
+    record_messaging_message_control_action(action="report", result="success")
+    _log_message_control_action(actor_user_id=user_id, conversation_id=conversation_id, message_id=message_id, action="report", result="success", detail=f"reason={inp.reason_code}")
+    _emit_report_archive_event_or_503(
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        actor_user_id=user_id,
+        report_id=report_id,
+        event_type="report.submitted",
+        payload={
+            "action": "report",
+            "reason_code": inp.reason_code,
+            "status": "submitted",
+            "timeline_state": {"created_at": ts, "reported_by_user_id": user_id},
+        },
+    )
+    return ReportMessageOut(
+        ok=True,
+        report_id=report_id,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        reason_code=inp.reason_code,
+        status="submitted",
+        created_at=ts,
+    )
+
+
+@router.patch(
+    "/conversations/{conversation_id}/reports/{report_id}/status",
+    response_model=ReportStatusUpdateOut,
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def update_report_status(
+    conversation_id: str,
+    report_id: str,
+    inp: ReportStatusUpdateIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Update moderation status for a report and archive the status transition."""
+    require_participant_role(user_id, conversation_id, {"admin"})
+    report_item = T.message_reports.get_item(Key={"report_id": report_id}).get("Item") or {}
+    if not report_item:
+        raise HTTPException(status_code=404, detail="Report not found")
+    if str(report_item.get("conversation_id") or "") != conversation_id:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    ts = now_ts()
+    previous_status = str(report_item.get("status") or "submitted")
+    note = (inp.note or "").strip()
+
+    update_expr = "SET #status = :status, updated_at = :ts, updated_by_user_id = :uid"
+    expr_names = {"#status": "status"}
+    expr_values: Dict[str, Any] = {":status": inp.status, ":ts": ts, ":uid": user_id}
+    if note:
+        update_expr += ", moderation_note = :note"
+        expr_values[":note"] = note
+
+    T.message_reports.update_item(
+        Key={"report_id": report_id},
+        UpdateExpression=update_expr,
+        ExpressionAttributeNames=expr_names,
+        ExpressionAttributeValues=expr_values,
+    )
+
+    _emit_report_archive_event_or_503(
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=str(report_item.get("message_id") or ""),
+        actor_user_id=user_id,
+        report_id=report_id,
+        event_type="report.status_changed",
+        payload={
+            "action": "report_status_update",
+            "from_status": previous_status,
+            "to_status": inp.status,
+            "note": note or None,
+            "timeline_state": {"updated_at": ts, "updated_by_user_id": user_id},
+        },
+    )
+
+    audit_event(
+        "messaging_report_status_updated",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        report_id=report_id,
+        from_status=previous_status,
+        to_status=inp.status,
+    )
+
+    return ReportStatusUpdateOut(
+        ok=True,
+        report_id=report_id,
+        conversation_id=conversation_id,
+        message_id=str(report_item.get("message_id") or ""),
+        status=inp.status,
+        updated_at=ts,
+    )
+
+
+@router.post(
+    "/conversations/{conversation_id}/legal-holds",
+    response_model=LegalHoldOut,
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def create_message_legal_hold(
+    conversation_id: str,
+    inp: LegalHoldCreateIn,
+    req: Request = None,
+    actor: AuthenticatedUser = Depends(require_legal_hold_operator),
+):
+    _require_message_controls_capability(_messaging_compliance_legal_hold_enabled(), "Compliance legal hold is disabled")
+    actor_user_id = str(actor.sub or "")
+    require_participant_active(actor_user_id, conversation_id)
+
+    target_message_id = (inp.message_id or "").strip()
+    target_report_id = (inp.report_id or "").strip()
+    if target_message_id:
+        _ = _get_message_or_404(conversation_id, target_message_id)
+    elif target_report_id:
+        rpt = T.message_reports.get_item(Key={"report_id": target_report_id}).get("Item") or {}
+        if not rpt or str(rpt.get("conversation_id") or "") != conversation_id:
+            raise HTTPException(status_code=404, detail="Report not found")
+        target_message_id = str(rpt.get("message_id") or "")
+    else:
+        raise HTTPException(status_code=422, detail="message_id or report_id is required")
+
+    ts = now_ts()
+    hold_id = f"lh_{new_id()}"
+    item = {
+        "hold_id": hold_id,
+        "tenant_id": "default",
+        "conversation_id": conversation_id,
+        "conversation_status": f"{conversation_id}#active",
+        "message_id": target_message_id or "",
+        "report_id": target_report_id or "",
+        "case_id": inp.case_id.strip(),
+        "reason": inp.reason.strip(),
+        "status": "active",
+        "created_at": ts,
+        "created_by_user_id": actor_user_id,
+        "updated_at": ts,
+    }
+    T.message_legal_holds.put_item(Item=item)
+
+    audit_event(
+        "messaging_legal_hold_created",
+        actor_user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        hold_id=hold_id,
+        case_id=item["case_id"],
+        message_id=target_message_id or None,
+        report_id=target_report_id or None,
+    )
+
+    return LegalHoldOut(
+        hold_id=hold_id,
+        tenant_id="default",
+        conversation_id=conversation_id,
+        message_id=target_message_id or None,
+        report_id=target_report_id or None,
+        case_id=item["case_id"],
+        reason=item["reason"],
+        status="active",
+        created_at=ts,
+        created_by_user_id=actor_user_id,
+    )
+
+
+@router.post(
+    "/conversations/{conversation_id}/legal-holds/{hold_id}/release",
+    response_model=LegalHoldOut,
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def release_message_legal_hold(
+    conversation_id: str,
+    hold_id: str,
+    inp: LegalHoldReleaseIn,
+    req: Request = None,
+    actor: AuthenticatedUser = Depends(require_legal_hold_operator),
+):
+    _require_message_controls_capability(_messaging_compliance_legal_hold_enabled(), "Compliance legal hold is disabled")
+    actor_user_id = str(actor.sub or "")
+    require_participant_active(actor_user_id, conversation_id)
+
+    hold = T.message_legal_holds.get_item(Key={"hold_id": hold_id}).get("Item") or {}
+    if not hold or str(hold.get("conversation_id") or "") != conversation_id:
+        raise HTTPException(status_code=404, detail="Legal hold not found")
+
+    ts = now_ts()
+    T.message_legal_holds.update_item(
+        Key={"hold_id": hold_id},
+        UpdateExpression=(
+            "SET #status = :released, conversation_status = :conversation_status, "
+            "released_at = :ts, released_by_user_id = :uid, release_reason = :reason, updated_at = :ts"
+        ),
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues={
+            ":released": "released",
+            ":conversation_status": f"{conversation_id}#released",
+            ":ts": ts,
+            ":uid": actor_user_id,
+            ":reason": inp.reason.strip(),
+        },
+    )
+
+    audit_event(
+        "messaging_legal_hold_released",
+        actor_user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        hold_id=hold_id,
+    )
+
+    return LegalHoldOut(
+        hold_id=hold_id,
+        tenant_id=str(hold.get("tenant_id") or "default"),
+        conversation_id=conversation_id,
+        message_id=str(hold.get("message_id") or "") or None,
+        report_id=str(hold.get("report_id") or "") or None,
+        case_id=str(hold.get("case_id") or ""),
+        reason=str(hold.get("reason") or ""),
+        status="released",
+        created_at=int(hold.get("created_at", 0) or 0),
+        created_by_user_id=str(hold.get("created_by_user_id") or ""),
+        released_at=ts,
+        released_by_user_id=actor_user_id,
+    )
+
+
+@router.get(
+    "/conversations/{conversation_id}/legal-holds",
+    response_model=List[LegalHoldOut],
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def list_message_legal_holds(
+    conversation_id: str,
+    status: Literal["active", "released", "all"] = Query("active"),
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    actor: AuthenticatedUser = Depends(require_legal_hold_operator),
+):
+    _require_message_controls_capability(_messaging_compliance_legal_hold_enabled(), "Compliance legal hold is disabled")
+    actor_user_id = str(actor.sub or "")
+    require_participant_active(actor_user_id, conversation_id)
+
+    items: List[dict] = []
+    if status in {"active", "released"}:
+        resp = T.message_legal_holds.query(
+            IndexName="ByConversationStatusCreatedAt",
+            KeyConditionExpression=Key("conversation_status").eq(f"{conversation_id}#{status}"),
+            ScanIndexForward=False,
+            Limit=limit,
+        )
+        items = resp.get("Items", [])
+    else:
+        for st in ("active", "released"):
+            resp = T.message_legal_holds.query(
+                IndexName="ByConversationStatusCreatedAt",
+                KeyConditionExpression=Key("conversation_status").eq(f"{conversation_id}#{st}"),
+                ScanIndexForward=False,
+                Limit=limit,
+            )
+            items.extend(resp.get("Items", []))
+        items.sort(key=lambda x: int(x.get("created_at", 0) or 0), reverse=True)
+        items = items[:limit]
+
+    out: List[LegalHoldOut] = []
+    for item in items:
+        out.append(LegalHoldOut(
+            hold_id=str(item.get("hold_id") or ""),
+            tenant_id=str(item.get("tenant_id") or "default"),
+            conversation_id=conversation_id,
+            message_id=str(item.get("message_id") or "") or None,
+            report_id=str(item.get("report_id") or "") or None,
+            case_id=str(item.get("case_id") or ""),
+            reason=str(item.get("reason") or ""),
+            status=str(item.get("status") or "active"),
+            created_at=int(item.get("created_at", 0) or 0),
+            created_by_user_id=str(item.get("created_by_user_id") or ""),
+            released_at=int(item.get("released_at", 0) or 0) or None,
+            released_by_user_id=str(item.get("released_by_user_id") or "") or None,
+        ))
+    return out
+
+
+@router.get(
+    "/compliance/archive/events",
+    response_model=ComplianceArchiveEventsPageOut,
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def query_compliance_archive_events(
+    conversation_id: Optional[str] = None,
+    user_id_filter: Annotated[Optional[str], Query(alias="user_id")] = None,
+    from_ts: Annotated[Optional[int], Query(ge=0)] = None,
+    to_ts: Annotated[Optional[int], Query(ge=0)] = None,
+    cursor: Optional[str] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    sort: Literal["asc", "desc"] = "desc",
+    include_payload: bool = False,
+    actor: AuthenticatedUser = Depends(require_compliance_query_operator),
+):
+    _ = actor
+    if from_ts is not None and to_ts is not None and from_ts > to_ts:
+        raise HTTPException(status_code=422, detail="from_ts must be <= to_ts")
+
+    offset = 0
+    if cursor:
+        parsed = decode_cursor(cursor)
+        if not parsed or "offset" not in parsed:
+            raise HTTPException(status_code=400, detail="invalid cursor")
+        try:
+            offset = max(0, int(parsed.get("offset", 0) or 0))
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail="invalid cursor") from exc
+
+    result = query_archive_records(
+        root_dir=_archive_root_dir(),
+        tenant_id="default",
+        conversation_id=(conversation_id or None),
+        user_id=(user_id_filter or None),
+        from_ts=from_ts,
+        to_ts=to_ts,
+        sort_order=sort,
+        limit=limit,
+        offset=offset,
+        include_payload=include_payload,
+    )
+
+    items = [ComplianceArchiveEventOut(**item) for item in result.items]
+    next_cursor = encode_cursor({"offset": result.next_offset}) if result.next_offset is not None else None
+    return ComplianceArchiveEventsPageOut(items=items, next_cursor=next_cursor, total_matches=result.total_matches)
+
+
+def _exports_root_dir() -> str:
+    return (S.messaging_compliance_export_root_dir or ".compliance_exports").strip() or ".compliance_exports"
+
+
+def _default_export_ttl_seconds() -> int:
+    return max(60, int(S.messaging_compliance_export_default_ttl_seconds or 0))
+
+
+def _load_export_or_404(export_id: str) -> dict[str, Any]:
+    item = T.message_compliance_exports.get_item(Key={"export_id": export_id}).get("Item") or {}
+    if not item:
+        raise HTTPException(status_code=404, detail="Export not found")
+    return item
+
+
+def _ensure_export_not_expired(item: dict[str, Any]) -> None:
+    expires_at = int(item.get("expires_at", 0) or 0)
+    if expires_at and now_ts() > expires_at:
+        raise HTTPException(status_code=410, detail="Export artifact expired")
+
+
+def _run_export_job(export_id: str, request: ComplianceArchiveExportCreateIn, actor_user_id: str) -> ComplianceArchiveExportOut:
+    ts = now_ts()
+    query_snapshot = {
+        "conversation_id": (request.conversation_id or None),
+        "user_id": (request.user_id or None),
+        "from_ts": int(request.from_ts),
+        "to_ts": int(request.to_ts),
+        "sort": "asc",
+        "include_payload": bool(request.include_payload),
+    }
+
+    T.message_compliance_exports.update_item(
+        Key={"export_id": export_id},
+        UpdateExpression="SET #status=:running, updated_at=:ts",
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues={":running": "running", ":ts": ts},
+    )
+    try:
+        artifact = build_case_export_bundle(
+            export_id=export_id,
+            case_id=request.case_id.strip(),
+            tenant_id="default",
+            requested_by_user_id=actor_user_id,
+            generated_at=ts,
+            expires_at=ts + _default_export_ttl_seconds(),
+            archive_root_dir=_archive_root_dir(),
+            export_root_dir=_exports_root_dir(),
+            manifest_signing_key=S.messaging_compliance_export_manifest_signing_key,
+            manifest_signing_key_id=S.messaging_compliance_export_manifest_signing_key_id,
+            query_snapshot=query_snapshot,
+        )
+    except Exception as exc:  # noqa: BLE001
+        T.message_compliance_exports.update_item(
+            Key={"export_id": export_id},
+            UpdateExpression="SET #status=:failed, error=:error, updated_at=:ts",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={":failed": "failed", ":error": str(exc), ":ts": now_ts()},
+        )
+        raise
+
+    done_ts = now_ts()
+    manifest_uri = f"file://{artifact.manifest_path}"
+    T.message_compliance_exports.update_item(
+        Key={"export_id": export_id},
+        UpdateExpression=(
+            "SET #status=:completed, updated_at=:ts, manifest_uri=:manifest_uri, "
+            "artifact_dir=:artifact_dir, manifest_path=:manifest_path, records_path=:records_path, "
+            "record_count=:record_count"
+        ),
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues={
+            ":completed": "completed",
+            ":ts": done_ts,
+            ":manifest_uri": manifest_uri,
+            ":artifact_dir": artifact.artifact_dir,
+            ":manifest_path": artifact.manifest_path,
+            ":records_path": artifact.records_path,
+            ":record_count": artifact.record_count,
+        },
+    )
+
+    item = _load_export_or_404(export_id)
+    return ComplianceArchiveExportOut(
+        export_id=export_id,
+        case_id=str(item.get("case_id") or ""),
+        tenant_id=str(item.get("tenant_id") or "default"),
+        status=str(item.get("status") or "completed"),
+        created_at=int(item.get("created_at", 0) or 0),
+        updated_at=int(item.get("updated_at", done_ts) or done_ts),
+        requested_by_user_id=str(item.get("requested_by_user_id") or actor_user_id),
+        expires_at=int(item.get("expires_at", 0) or 0),
+        record_count=int(item.get("record_count", 0) or 0),
+        result_manifest_uri=str(item.get("manifest_uri") or "") or None,
+        error=str(item.get("error") or "") or None,
+    )
+
+
+@router.post(
+    "/compliance/archive/exports",
+    response_model=ComplianceArchiveExportOut,
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def create_compliance_archive_export(
+    inp: ComplianceArchiveExportCreateIn,
+    req: Request = None,
+    actor: AuthenticatedUser = Depends(require_compliance_export_operator),
+):
+    _require_message_controls_capability(_messaging_compliance_export_enabled(), "Compliance export is disabled")
+    actor_user_id = str(actor.sub or "")
+    if inp.from_ts > inp.to_ts:
+        raise HTTPException(status_code=422, detail="from_ts must be <= to_ts")
+
+    ts = now_ts()
+    export_id = f"exp_{new_id()}"
+    item = {
+        "export_id": export_id,
+        "tenant_id": "default",
+        "case_id": inp.case_id.strip(),
+        "status": "queued",
+        "created_at": ts,
+        "updated_at": ts,
+        "requested_by_user_id": actor_user_id,
+        "expires_at": ts + _default_export_ttl_seconds(),
+        "query_snapshot": {
+            "conversation_id": inp.conversation_id,
+            "user_id": inp.user_id,
+            "from_ts": inp.from_ts,
+            "to_ts": inp.to_ts,
+            "include_payload": inp.include_payload,
+        },
+    }
+    T.message_compliance_exports.put_item(Item=item)
+
+    try:
+        out = _run_export_job(export_id, inp, actor_user_id)
+        record_messaging_archive_export_outcome(outcome="success")
+    except Exception as exc:  # noqa: BLE001
+        record_messaging_archive_export_outcome(outcome="failure")
+        audit_event("messaging_compliance_export_failed", actor_user_id, req, outcome="failed", export_id=export_id, case_id=inp.case_id, error=str(exc))
+        raise HTTPException(status_code=500, detail="export generation failed") from exc
+
+    audit_event("messaging_compliance_export_created", actor_user_id, req, outcome="success", export_id=export_id, case_id=inp.case_id)
+    return out
+
+
+@router.get(
+    "/compliance/archive/exports/{export_id}",
+    response_model=ComplianceArchiveExportOut,
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def get_compliance_archive_export(
+    export_id: str,
+    actor: AuthenticatedUser = Depends(require_compliance_export_operator),
+):
+    _require_message_controls_capability(_messaging_compliance_export_enabled(), "Compliance export is disabled")
+    _ = actor
+    item = _load_export_or_404(export_id)
+    return ComplianceArchiveExportOut(
+        export_id=export_id,
+        case_id=str(item.get("case_id") or ""),
+        tenant_id=str(item.get("tenant_id") or "default"),
+        status=str(item.get("status") or "queued"),
+        created_at=int(item.get("created_at", 0) or 0),
+        updated_at=int(item.get("updated_at", 0) or 0),
+        requested_by_user_id=str(item.get("requested_by_user_id") or ""),
+        expires_at=int(item.get("expires_at", 0) or 0),
+        record_count=int(item.get("record_count", 0) or 0),
+        result_manifest_uri=str(item.get("manifest_uri") or "") or None,
+        error=str(item.get("error") or "") or None,
+    )
+
+
+@router.get(
+    "/compliance/archive/exports",
+    response_model=List[ComplianceArchiveExportOut],
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def list_compliance_archive_exports(
+    case_id: str,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    actor: AuthenticatedUser = Depends(require_compliance_export_operator),
+):
+    _require_message_controls_capability(_messaging_compliance_export_enabled(), "Compliance export is disabled")
+    _ = actor
+    resp = T.message_compliance_exports.query(
+        IndexName="ByCaseCreatedAt",
+        KeyConditionExpression=Key("case_id").eq(case_id),
+        ScanIndexForward=False,
+        Limit=limit,
+    )
+    out: List[ComplianceArchiveExportOut] = []
+    for item in resp.get("Items", []):
+        out.append(ComplianceArchiveExportOut(
+            export_id=str(item.get("export_id") or ""),
+            case_id=str(item.get("case_id") or ""),
+            tenant_id=str(item.get("tenant_id") or "default"),
+            status=str(item.get("status") or "queued"),
+            created_at=int(item.get("created_at", 0) or 0),
+            updated_at=int(item.get("updated_at", 0) or 0),
+            requested_by_user_id=str(item.get("requested_by_user_id") or ""),
+            expires_at=int(item.get("expires_at", 0) or 0),
+            record_count=int(item.get("record_count", 0) or 0),
+            result_manifest_uri=str(item.get("manifest_uri") or "") or None,
+            error=str(item.get("error") or "") or None,
+        ))
+    return out
+
+
+@router.get(
+    "/compliance/archive/exports/{export_id}/manifest",
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def get_compliance_archive_export_manifest(
+    export_id: str,
+    actor: AuthenticatedUser = Depends(require_compliance_export_operator),
+):
+    _require_message_controls_capability(_messaging_compliance_export_enabled(), "Compliance export is disabled")
+    _ = actor
+    item = _load_export_or_404(export_id)
+    _ensure_export_not_expired(item)
+    if str(item.get("status") or "") != "completed":
+        raise HTTPException(status_code=409, detail="export not completed")
+    p = str(item.get("manifest_path") or "")
+    if not p or not os.path.exists(p):
+        raise HTTPException(status_code=404, detail="manifest not found")
+    with open(p, "r", encoding="utf-8") as f:
+        return json.loads(f.read())
+
+
+@router.get(
+    "/compliance/archive/exports/{export_id}/records",
+    responses=MESSAGE_CONTROLS_ERROR_RESPONSES,
+)
+def get_compliance_archive_export_records(
+    export_id: str,
+    actor: AuthenticatedUser = Depends(require_compliance_export_operator),
+):
+    _require_message_controls_capability(_messaging_compliance_export_enabled(), "Compliance export is disabled")
+    _ = actor
+    item = _load_export_or_404(export_id)
+    _ensure_export_not_expired(item)
+    if str(item.get("status") or "") != "completed":
+        raise HTTPException(status_code=409, detail="export not completed")
+    p = str(item.get("records_path") or "")
+    if not p or not os.path.exists(p):
+        raise HTTPException(status_code=404, detail="records not found")
+    with open(p, "rb") as f:
+        content = f.read()
+    return StreamingResponse(iter([content]), media_type="application/x-ndjson")
 
 
 # -------------------------
@@ -6996,6 +8764,9 @@ def messaging_config(user_id: str = Depends(get_messaging_user_id)):
     return MessagingConfigOut(
         messaging_encrypted_messages_enabled=_encrypted_messages_enabled(),
         messaging_gallery_enabled=_messaging_gallery_enabled(),
+        messaging_hide_controls_enabled=_messaging_hide_controls_enabled(),
+        messaging_pins_enabled=_messaging_pins_enabled(),
+        messaging_reporting_enabled=_messaging_reporting_enabled(),
     )
 
 
@@ -7041,6 +8812,7 @@ def cancel_scheduled_message(
         raise HTTPException(403, "Only the sender can cancel a scheduled message")
     if msg.get("status") != "scheduled":
         raise HTTPException(400, "Message is not scheduled")
+    ts = now_ts()
     tbl_msgs.delete_item(Key={"conversation_id": conversation_id, "message_id": message_id})
     audit_event(
         "messaging_scheduled_message_cancelled",
@@ -7049,6 +8821,15 @@ def cancel_scheduled_message(
         outcome="success",
         conversation_id=conversation_id,
         message_id=message_id,
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="delete",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        actor_user_id=user_id,
+        event_type="message.deleted",
+        payload={"mutation": "delete", "reason": "scheduled_cancelled", "message": _serialize_message_event_payload(msg, user_id)},
     )
     return {"ok": True, "message_id": message_id}
 
@@ -7134,6 +8915,27 @@ def _deliver_scheduled_message(item: dict) -> None:
         "payload": {"conversation_id": conversation_id, "message_id": message_id},
         "ttl": ts_notify + 7 * 24 * 3600,
     })
+
+    delivered_item = dict(item)
+    delivered_item.pop("status", None)
+    delivered_item.pop("deliver_at", None)
+    delivered_item["created_at"] = ts
+    emit_messaging_archive_event(
+        event_id=f"msg_scheduled_delivery_{conversation_id}_{message_id}_{ts}_{user_id}",
+        event_ts=ts,
+        tenant_id="default",
+        conversation_id=conversation_id,
+        message_id=message_id,
+        actor_user_id=user_id,
+        effective_user_id=user_id,
+        event_type="message.edited",
+        payload={
+            "mutation": "scheduled_delivery_transition",
+            "from_status": "scheduled",
+            "to_status": "sent",
+            "message": _serialize_message_event_payload(delivered_item, user_id),
+        },
+    )
     logger.info("Delivered scheduled message %s in conversation %s", message_id, conversation_id)
 
 

@@ -29,6 +29,11 @@ import type {
   MeetingPollState,
   HelpdeskClaimOut,
   RoutingEventOut,
+  MessageControlActionResp,
+  HiddenMessagesResp,
+  ConversationPinsResp,
+  ReportMessageReq,
+  ReportMessageResp,
 } from "@/api/types";
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
 import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
@@ -243,6 +248,33 @@ export const reactToMessage = (conversationId: string, messageId: string, emoji:
 
 export const deleteMessage = (conversationId: string, messageId: string) =>
   api.del(`/messaging/conversations/${conversationId}/messages/${messageId}`);
+
+export const hideMessage = (conversationId: string, messageId: string) =>
+  api.post<MessageControlActionResp>(`/messaging/conversations/${conversationId}/messages/${messageId}/hide`);
+
+export const unhideMessage = (conversationId: string, messageId: string) =>
+  api.del<MessageControlActionResp>(`/messaging/conversations/${conversationId}/messages/${messageId}/hide`);
+
+export const getHiddenMessages = (conversationId: string, cursor?: string, limit = 50) =>
+  api.get<HiddenMessagesResp>(
+    `/messaging/conversations/${conversationId}/hidden-messages`,
+    { ...(cursor ? { cursor } : {}), limit: String(limit) },
+  );
+
+export const pinMessage = (conversationId: string, messageId: string) =>
+  api.post<MessageControlActionResp>(`/messaging/conversations/${conversationId}/messages/${messageId}/pin`);
+
+export const unpinMessage = (conversationId: string, messageId: string) =>
+  api.del<MessageControlActionResp>(`/messaging/conversations/${conversationId}/messages/${messageId}/pin`);
+
+export const getPinnedMessages = (conversationId: string, cursor?: string, limit = 50) =>
+  api.get<ConversationPinsResp>(
+    `/messaging/conversations/${conversationId}/pins`,
+    { ...(cursor ? { cursor } : {}), limit: String(limit) },
+  );
+
+export const reportMessage = (conversationId: string, messageId: string, body: ReportMessageReq) =>
+  api.post<ReportMessageResp>(`/messaging/conversations/${conversationId}/messages/${messageId}/report`, body);
 
 export const markRead = (conversationId: string, lastReadAt: number) =>
   api.post(`/messaging/conversations/${conversationId}/read`, { last_read_at: lastReadAt });

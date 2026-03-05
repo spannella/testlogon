@@ -584,6 +584,10 @@ export interface Conversation {
   active_agent_user_id?: string;
   active_agent_claimed_at?: number;
   assignment_version?: number;
+  // Latest active pin projection
+  latest_pinned_message_id?: string;
+  latest_pinned_by_user_id?: string;
+  latest_pinned_at?: number;
   // UI convenience fields (derived client-side)
   participants: Participant[];
   last_message?: Message;
@@ -970,6 +974,54 @@ export interface MessageViewer {
   user_id: string;
   last_viewed_at: number;
   view_count: number;
+}
+
+export interface MessageControlsErrorResp {
+  detail: string;
+  error_code?: string;
+}
+
+export type MessageControlAction = "hidden" | "visible" | "pinned" | "unpinned";
+
+export interface MessageControlActionResp {
+  ok: boolean;
+  conversation_id: string;
+  message_id: string;
+  action: MessageControlAction;
+  updated_at: number;
+}
+
+export interface HiddenMessagesResp {
+  items: Message[];
+  next_cursor?: string;
+}
+
+export interface ConversationPin {
+  conversation_id: string;
+  message_id: string;
+  pinned_by_user_id: string;
+  pinned_at: number;
+  is_active: boolean;
+}
+
+export interface ConversationPinsResp {
+  items: ConversationPin[];
+  next_cursor?: string;
+}
+
+export interface ReportMessageReq {
+  reason_code: string;
+  statement: string;
+}
+
+export interface ReportMessageResp {
+  ok: boolean;
+  report_id: string;
+  conversation_id: string;
+  message_id: string;
+  reason_code: string;
+  status: "submitted";
+  created_at: number;
 }
 
 
@@ -1976,4 +2028,190 @@ export interface DevtoolsBillingLedgerOut {
   summary: DevtoolsBillingLedgerSummaryOut;
   next_cursor?: string | null;
   parse_warnings: DevtoolsParseWarningOut[];
+}
+
+// ─── Questionnaire Validation Contract (shared FE/BE) ───────────
+
+export const QUESTIONNAIRE_VALIDATION_CONTRACT_VERSION = "2026-03-validation-v1" as const;
+
+export type QuestionnaireValidationScopeKey = string; // question_id | group:<id> | form:<rule_id>
+
+export interface QuestionnaireValidationIssue {
+  code: string;
+  message: string;
+  blocking?: boolean;
+  rule_id?: string;
+}
+
+export interface QuestionnaireValidationReq {
+  contract_version?: typeof QUESTIONNAIRE_VALIDATION_CONTRACT_VERSION;
+  answers_by_question_id: Record<string, unknown>;
+  group_rules?: Array<Record<string, unknown>>;
+  form_rules?: Array<Record<string, unknown>>;
+  final_submit?: boolean;
+}
+
+export interface QuestionnaireValidationResp {
+  contract_version: typeof QUESTIONNAIRE_VALIDATION_CONTRACT_VERSION;
+  is_valid: boolean;
+  can_submit: boolean;
+  has_blocking_form_error: boolean;
+  errors: Record<QuestionnaireValidationScopeKey, QuestionnaireValidationIssue[]>;
+}
+
+// ─── Questionnaire Builder ───────────────────────────────────────
+
+export type QuestionnaireStatus = "draft" | "published" | "archived";
+
+export interface QuestionnaireDraft {
+  questionnaire_id: string;
+  owner_id: string;
+  title: string;
+  description?: string;
+  status: QuestionnaireStatus;
+  updated_at: string;
+  created_at?: string;
+}
+
+export interface QuestionnaireDraftListResp {
+  items: QuestionnaireDraft[];
+}
+
+export interface QuestionnaireDraftUpdateReq {
+  title?: string;
+  description?: string;
+}
+
+export interface QuestionnaireSection {
+  questionnaire_id: string;
+  section_id: string;
+  title: string;
+  description?: string;
+  position: number;
+  updated_at?: string;
+}
+
+export interface QuestionnaireSectionCreateReq {
+  section_id: string;
+  title: string;
+  description?: string;
+}
+
+export interface QuestionnaireSectionUpdateReq {
+  title?: string;
+  description?: string;
+}
+
+
+export type QuestionnaireQuestionType =
+  | "text"
+  | "select"
+  | "multiselect"
+  | "radio"
+  | "slider"
+  | "date"
+  | "time"
+  | "timezone"
+  | "address";
+
+export interface QuestionnaireQuestion {
+  question_id: string;
+  section_id: string;
+  type: QuestionnaireQuestionType;
+  label: string;
+  required: boolean;
+  hint?: string;
+  config_json: Record<string, unknown>;
+  position: number;
+}
+
+export interface QuestionnaireQuestionCreateReq {
+  section_id: string;
+  question_id: string;
+  type: QuestionnaireQuestionType;
+  label: string;
+  required?: boolean;
+  hint?: string;
+  config_json: Record<string, unknown>;
+}
+
+export interface QuestionnaireQuestionUpdateReq {
+  label?: string;
+  required?: boolean;
+  hint?: string;
+  config_json?: Record<string, unknown>;
+}
+
+
+export interface QuestionnaireVersion {
+  version_id: string;
+  questionnaire_id: string;
+  version_number: number;
+  status: string;
+  published_slug?: string;
+  published_at: string;
+  published_by?: string;
+  schema_json: Record<string, unknown>;
+}
+
+
+
+export interface PublishedQuestionnaireVersion {
+  questionnaire_id: string;
+  version_id: string;
+  version_number: number;
+  published_slug: string;
+  visibility: "private" | "public" | "unlisted";
+  allow_anonymous: boolean;
+  schema_json: Record<string, unknown>;
+  published_at: string;
+}
+
+export interface QuestionnaireSessionState {
+  response_session_id: string;
+  questionnaire_id: string;
+  version_id: string;
+  status: "in_progress" | "submitted";
+  started_at: string;
+  current_section_index?: number;
+  current_question_id?: string;
+  respondent_id?: string | null;
+}
+
+export interface QuestionnaireSessionStateResp {
+  session: QuestionnaireSessionState;
+  answers_by_question_id: Record<string, unknown>;
+}
+
+
+
+
+export interface QuestionnaireAnalyticsPoint {
+  label?: string;
+  key?: string;
+  count: number;
+}
+
+export interface QuestionnaireVersionAnalytics {
+  version_id: string;
+  version_number?: number;
+  published_at?: string;
+  funnel: { starts: number; completions: number; completion_rate: number };
+  average_completion_seconds: number | null;
+  dropoff_points: QuestionnaireAnalyticsPoint[];
+  validation_hotspots: QuestionnaireAnalyticsPoint[];
+}
+
+export interface QuestionnaireAnalyticsResp {
+  analytics: {
+    generated_at: string;
+    freshness_sla_seconds: number;
+    versions: QuestionnaireVersionAnalytics[];
+    totals: {
+      starts: number;
+      completions: number;
+      top_dropoffs: QuestionnaireAnalyticsPoint[];
+      top_validation_hotspots: QuestionnaireAnalyticsPoint[];
+    };
+  };
 }

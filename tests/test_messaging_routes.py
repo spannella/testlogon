@@ -3012,6 +3012,7 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "tbl_routing_events", tbl_routing_events),
             patch.object(messaging, "tbl_events", tbl_user_events),
             patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "emit_messaging_archive_event") as archive_emit,
             patch.object(messaging, "new_id", return_value="evt1"),
         ):
             result = messaging._apply_helpdesk_routing_transition(
@@ -3030,6 +3031,8 @@ class TestMessagingRoutes(unittest.TestCase):
         self.assertIn("assignment_version", payload)
         self.assertEqual(result["event"]["event_type"], "helpdesk.conversation.assigned")
         self.assertEqual(result["event"]["metadata"]["reason"], "claim")
+        archive_emit.assert_called_once()
+        self.assertEqual(archive_emit.call_args.kwargs["event_type"], "conversation.role_changed")
 
 
     def test_project_helpdesk_lifecycle_payload_masks_for_end_user(self):
@@ -3467,3 +3470,166 @@ class TestMessagingRoutes(unittest.TestCase):
 
         self.assertEqual(ctx.exception.status_code, 403)
         self.assertEqual(ctx.exception.detail["reason"], "exhausted")
+
+
+    def test_send_text_message_emits_archive_lifecycle_event(self):
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "now_ts", return_value=55),
+            patch.object(messaging, "new_id", return_value="xyz"),
+            patch.object(messaging, "tbl_msgs", Mock()),
+            patch.object(messaging, "tbl_convos", Mock()),
+            patch.object(messaging, "_emit_message_lifecycle_archive_event_or_503") as archive_emit,
+            patch.object(messaging, "fanout_event_to_conversation"),
+        ):
+            messaging.send_text_message(
+                "c1",
+                messaging.SendTextMessageIn(text="Hello world"),
+                user_id="user-1",
+            )
+
+        archive_emit.assert_called_once()
+        self.assertEqual(archive_emit.call_args.kwargs["event_type"], "message.sent")
+        self.assertEqual(archive_emit.call_args.kwargs["mutation"], "send")
+
+    def test_edit_message_emits_archive_lifecycle_event(self):
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(
+                messaging,
+                "_get_message_or_404",
+                side_effect=[
+                    {
+                        "conversation_id": "c1",
+                        "message_id": "m1",
+                        "sender_id": "u1",
+                        "created_at": 1,
+                        "kind": "text",
+                        "text": "old",
+                    },
+                    {
+                        "conversation_id": "c1",
+                        "message_id": "m1",
+                        "sender_id": "u1",
+                        "created_at": 1,
+                        "kind": "text",
+                        "text": "new",
+                    },
+                ],
+            ),
+            patch.object(messaging, "tbl_msgs", Mock()),
+            patch.object(messaging, "tbl_edits", Mock()),
+            patch.object(messaging, "_reaction_summaries", return_value=({}, [])),
+            patch.object(messaging, "fanout_event_to_conversation"),
+            patch.object(messaging, "_emit_message_lifecycle_archive_event_or_503") as archive_emit,
+        ):
+            messaging.edit_message("c1", "m1", messaging.EditMessageIn(text="new"), user_id="u1")
+
+        archive_emit.assert_called_once()
+        self.assertEqual(archive_emit.call_args.kwargs["event_type"], "message.edited")
+        self.assertEqual(archive_emit.call_args.kwargs["mutation"], "edit")
+
+    def test_revoke_message_emits_archive_lifecycle_event(self):
+        encrypted_msg = {
+            "conversation_id": "c1",
+            "message_id": "m1",
+            "sender_id": "u1",
+            "created_at": 1,
+            "kind": "text",
+            "text": "hello",
+        }
+        revoked_msg = {**encrypted_msg, "revoked_at": 10, "revoked_by": "u1"}
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_ensure_can_revoke_message"),
+            patch.object(messaging, "_get_message_or_404", side_effect=[encrypted_msg, revoked_msg]),
+            patch.object(messaging, "tbl_msgs", Mock()),
+            patch.object(messaging, "tbl_convos", Mock()),
+            patch.object(messaging, "fanout_event_to_conversation"),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "_reaction_summaries", return_value=({}, [])),
+            patch.object(messaging, "_emit_message_lifecycle_archive_event_or_503") as archive_emit,
+        ):
+            messaging.revoke_message_for_all("c1", "m1", user_id="u1")
+
+        archive_emit.assert_called_once()
+        self.assertEqual(archive_emit.call_args.kwargs["event_type"], "message.revoked")
+        self.assertEqual(archive_emit.call_args.kwargs["mutation"], "revoke")
+
+    def test_cancel_scheduled_message_emits_archive_deleted_event(self):
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_message_or_404", return_value={"sender_id": "u1", "status": "scheduled", "conversation_id": "c1", "message_id": "m1", "kind": "text", "created_at": 1, "text": "scheduled"}),
+            patch.object(messaging, "tbl_msgs", Mock()),
+            patch.object(messaging, "_emit_message_lifecycle_archive_event_or_503") as archive_emit,
+            patch.object(messaging, "now_ts", return_value=99),
+        ):
+            messaging.cancel_scheduled_message("c1", "m1", user_id="u1")
+
+        archive_emit.assert_called_once()
+        self.assertEqual(archive_emit.call_args.kwargs["event_type"], "message.deleted")
+        self.assertEqual(archive_emit.call_args.kwargs["mutation"], "delete")
+
+
+    def test_add_participants_emits_membership_archive_events(self):
+        with (
+            patch.object(messaging, "require_participant_role"),
+            patch.object(messaging, "require_subscription_access"),
+            patch.object(messaging, "get_participant_any", return_value=None),
+            patch.object(messaging, "tbl_parts", Mock()),
+            patch.object(messaging, "tbl_convos", Mock()),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "_emit_conversation_membership_archive_event_or_503") as emit_archive,
+        ):
+            resp = messaging.add_participants("c1", messaging.AddParticipantsIn(participant_ids=["u2", "u3"]), user_id="u1")
+
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["added_count"], 2)
+        self.assertEqual(emit_archive.call_count, 2)
+        self.assertTrue(all(c.kwargs["event_type"] == "conversation.member_joined" for c in emit_archive.call_args_list))
+
+    def test_remove_participant_emits_membership_archive_event(self):
+        with (
+            patch.object(messaging, "require_participant_role"),
+            patch.object(messaging, "get_participant_any", return_value={"status": "active", "role": "member"}),
+            patch.object(messaging, "tbl_parts", Mock()),
+            patch.object(messaging, "tbl_convos", Mock()),
+            patch.object(messaging, "now_ts", return_value=11),
+            patch.object(messaging, "_emit_conversation_membership_archive_event_or_503") as emit_archive,
+        ):
+            resp = messaging.remove_participant("c1", "u2", user_id="u1")
+
+        self.assertTrue(resp["ok"])
+        emit_archive.assert_called_once()
+        self.assertEqual(emit_archive.call_args.kwargs["event_type"], "conversation.member_left")
+
+    def test_update_participant_role_emits_role_change_archive_event(self):
+        with (
+            patch.object(messaging, "require_participant_role"),
+            patch.object(messaging, "get_participant_any", return_value={"status": "active", "role": "member"}),
+            patch.object(messaging, "tbl_parts", Mock()),
+            patch.object(messaging, "now_ts", return_value=12),
+            patch.object(messaging, "_emit_conversation_membership_archive_event_or_503") as emit_archive,
+        ):
+            resp = messaging.update_participant_role("c1", "u2", messaging.UpdateParticipantRoleIn(role="admin"), user_id="u1")
+
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["role"], "admin")
+        emit_archive.assert_called_once()
+        self.assertEqual(emit_archive.call_args.kwargs["event_type"], "conversation.role_changed")
+
+    def test_leave_conversation_emits_member_left_archive_event(self):
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "tbl_parts", Mock()),
+            patch.object(messaging, "tbl_convos", Mock()),
+            patch.object(messaging, "now_ts", return_value=13),
+            patch.object(messaging, "_emit_conversation_membership_archive_event_or_503") as emit_archive,
+        ):
+            resp = messaging.leave_conversation("c1", user_id="u1")
+
+        self.assertTrue(resp["ok"])
+        emit_archive.assert_called_once()
+        self.assertEqual(emit_archive.call_args.kwargs["event_type"], "conversation.member_left")

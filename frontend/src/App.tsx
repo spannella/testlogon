@@ -39,6 +39,8 @@ const TicketsPage = lazy(() => import("@/pages/tickets/TicketsPage"));
 const TicketSpacesPage = lazy(() => import("@/pages/tickets/TicketSpacesPage"));
 const TicketSpaceDetailPage = lazy(() => import("@/pages/tickets/TicketSpaceDetailPage"));
 const DevToolsLogUiPage = lazy(() => import("@/pages/devtools/DevToolsLogUiPage"));
+const QuestionnaireBuilderPage = lazy(() => import("@/pages/questionnaires/QuestionnaireBuilderPage"));
+const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/QuestionnaireRespondentPage"));
 
 function PageSpinner() {
   return (
@@ -60,6 +62,7 @@ export default function App() {
         <Route path="/password-recovery" element={<PasswordRecovery />} />
         <Route path="/magic-link-verify" element={<MagicLinkVerify />} />
         <Route path="/event/:calendarId/:eventId" element={<PublicEventPage />} />
+        <Route path="/questionnaires/published/:publishedSlug/respond" element={<QuestionnaireRespondentPage />} />
 
         {/* Protected routes inside AppShell layout */}
         <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
@@ -70,6 +73,7 @@ export default function App() {
           <Route path="files" element={<FilesPage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
+          <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
           <Route path="billing" element={<BillingPage />} />
           <Route path="calendar" element={<CalendarPage />} />
           <Route path="shop" element={<CatalogPage />} />

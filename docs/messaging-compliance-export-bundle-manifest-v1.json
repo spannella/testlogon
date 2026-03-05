@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/messaging-compliance-export-bundle-manifest-v1.json",
+  "title": "MessagingComplianceExportBundleManifestV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest_version",
+    "export_id",
+    "case_id",
+    "tenant_id",
+    "archive_schema_version",
+    "generated_at",
+    "generated_by_user_id",
+    "records_file",
+    "bundle_checksums",
+    "signature",
+    "query_snapshot"
+  ],
+  "properties": {
+    "manifest_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "export_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "case_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "tenant_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "archive_schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "generated_at": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "generated_by_user_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "records_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "record_count"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "record_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "bundle_checksums": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["manifest_sha256", "records_sha256"],
+      "properties": {
+        "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "records_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "value"],
+      "properties": {
+        "algorithm": {"type": "string", "minLength": 1, "maxLength": 64},
+        "key_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "value": {"type": "string", "minLength": 1},
+        "certificate_chain": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "query_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from_ts", "to_ts"],
+      "properties": {
+        "conversation_id": {"type": "string"},
+        "message_id": {"type": "string"},
+        "actor_user_id": {"type": "string"},
+        "effective_user_id": {"type": "string"},
+        "event_types": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1}
+        },
+        "from_ts": {"type": "integer", "minimum": 0},
+        "to_ts": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

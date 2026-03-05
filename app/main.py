@@ -65,6 +65,7 @@ from app.routers.browser_ssh_terminal import (
     browser_ssh_terminal_enabled,
     router as browser_ssh_terminal_router,
 )
+from app.routers.questionnaires import router as questionnaires_router
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
@@ -223,6 +224,7 @@ def create_app() -> FastAPI:
     app.include_router(ticket_spaces_router)
     app.include_router(internal_devtools_router)
     app.include_router(browser_ssh_terminal_router)
+    app.include_router(questionnaires_router)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)
 
