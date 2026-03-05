@@ -11,6 +11,22 @@ let toastSse = null;
 
 let toastWs = null;
 
+const browserSshTerminalState = {
+  enabled: false,
+  wsPath: "/api/browser-ssh/ws",
+  authType: "password",
+  active: false,
+  socket: null,
+  terminal: null,
+  fitAddon: null,
+  lastSize: { cols: 0, rows: 0 },
+  resizeListenerBound: false,
+  contextMenuBound: false,
+  phase: "disconnected",
+  lastConnectPayload: null,
+};
+
+
 async function startToastWebSocket() {
   if (toastWs) return true;
   if (!WS_URL) return false;
@@ -2726,6 +2742,480 @@ function openConfirmEmailModal(sentTo, challenge_id) {
   });
 }
 
+
+function setBrowserSshStatus(message) {
+  const el = document.getElementById("browserSshStatus");
+  if (el) el.textContent = message || "";
+}
+
+function setBrowserSshPhase(phase) {
+  const next = String(phase || "disconnected");
+  browserSshTerminalState.phase = next;
+  const badge = document.getElementById("browserSshStateBadge");
+  if (badge) {
+    badge.textContent = next.replace("_", " ");
+    badge.dataset.phase = next;
+  }
+  const retryBtn = document.getElementById("browserSshRetryBtn");
+  if (retryBtn) {
+    const showRetry = next === "auth_failed" || next === "network_error" || next === "disconnected";
+    retryBtn.classList.toggle("hidden", !showRetry || browserSshTerminalState.active);
+  }
+}
+
+function setBrowserSshPhaseWithMessage(phase, message) {
+  setBrowserSshPhase(phase);
+  if (typeof message === "string") {
+    setBrowserSshStatus(message);
+  }
+}
+function browserSshShouldReuseCredentials() {
+  const el = document.getElementById("browserSshReuseCreds");
+  return !!(el && el.checked);
+}
+
+function browserSshClearSensitiveInputs() {
+  ["browserSshPassword", "browserSshPrivateKey", "browserSshPassphrase"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  });
+  const keyFile = document.getElementById("browserSshPrivateKeyFile");
+  if (keyFile) keyFile.value = "";
+}
+
+function browserSshBuildConnectPayloadFromForm() {
+  const payload = {
+    host: browserSshFieldValue("browserSshHost"),
+    port: Number(browserSshFieldValue("browserSshPort")),
+    username: browserSshFieldValue("browserSshUsername"),
+    authType: browserSshTerminalState.authType,
+  };
+  if (browserSshTerminalState.authType === "password") {
+    payload.password = browserSshFieldValue("browserSshPassword");
+  } else {
+    payload.privateKey = browserSshFieldValue("browserSshPrivateKey");
+    const passphrase = browserSshFieldValue("browserSshPassphrase");
+    if (passphrase) payload.passphrase = passphrase;
+  }
+  return payload;
+}
+
+function browserSshStoreReconnectPayload(payload) {
+  if (browserSshShouldReuseCredentials()) {
+    browserSshTerminalState.lastConnectPayload = JSON.parse(JSON.stringify(payload));
+  } else {
+    browserSshTerminalState.lastConnectPayload = null;
+  }
+}
+
+function browserSshClearReconnectData() {
+  browserSshTerminalState.lastConnectPayload = null;
+}
+
+
+function setBrowserSshSizeStatus(message) {
+  const el = document.getElementById("browserSshSize");
+  if (el) el.textContent = message || "";
+}
+
+function browserSshNormalizePasteText(text) {
+  return String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+}
+
+function browserSshSendInput(data) {
+  if (!data) return false;
+  if (!browserSshTerminalState.socket || browserSshTerminalState.socket.readyState !== WebSocket.OPEN) {
+    setBrowserSshStatus("Cannot send input: connect to an SSH session first.");
+    return false;
+  }
+  browserSshTerminalState.socket.send(JSON.stringify({ type: "input", payload: { data } }));
+  return true;
+}
+
+function browserSshShowClipboardHelp(action) {
+  setBrowserSshStatus(`Clipboard ${action} blocked by browser permissions. Grant clipboard access or use browser paste shortcuts in the terminal.`);
+}
+
+async function browserSshCopySelection() {
+  if (!browserSshTerminalState.terminal) return;
+  const selection = browserSshTerminalState.terminal.getSelection ? browserSshTerminalState.terminal.getSelection() : "";
+  if (!selection) {
+    setBrowserSshStatus("Select terminal text to copy.");
+    return;
+  }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(selection);
+      setBrowserSshStatus("Copied terminal selection to clipboard.");
+      return;
+    }
+  } catch (e) {
+    // fallback below
+  }
+
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = selection;
+    ta.setAttribute("readonly", "readonly");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand && document.execCommand("copy");
+    document.body.removeChild(ta);
+    if (ok) {
+      setBrowserSshStatus("Copied terminal selection to clipboard.");
+      return;
+    }
+  } catch (e) {
+    // handled below
+  }
+
+  browserSshShowClipboardHelp("copy");
+}
+
+async function browserSshPasteFromClipboard() {
+  try {
+    if (!(navigator.clipboard && navigator.clipboard.readText)) {
+      browserSshShowClipboardHelp("paste");
+      return;
+    }
+    const raw = await navigator.clipboard.readText();
+    const normalized = browserSshNormalizePasteText(raw);
+    if (!normalized) {
+      setBrowserSshStatus("Clipboard is empty.");
+      return;
+    }
+    if (browserSshSendInput(normalized)) {
+      setBrowserSshStatus(`Pasted ${normalized.length} characters to remote shell.`);
+    }
+  } catch (e) {
+    browserSshShowClipboardHelp("paste");
+  }
+}
+
+function hideBrowserSshContextMenu() {
+  const menu = document.getElementById("browserSshContextMenu");
+  if (menu) menu.classList.add("hidden");
+}
+
+function bindBrowserSshClipboardAndContextMenu() {
+  const viewport = document.getElementById("browserSshTerminalViewport");
+  const copyBtn = document.getElementById("browserSshCopyBtn");
+  const pasteBtn = document.getElementById("browserSshPasteBtn");
+  const menu = document.getElementById("browserSshContextMenu");
+  const menuCopy = document.getElementById("browserSshContextCopy");
+  const menuPaste = document.getElementById("browserSshContextPaste");
+
+  if (copyBtn && copyBtn.dataset.browserSshBound !== "1") {
+    copyBtn.addEventListener("click", () => { browserSshCopySelection(); });
+    copyBtn.dataset.browserSshBound = "1";
+  }
+  if (pasteBtn && pasteBtn.dataset.browserSshBound !== "1") {
+    pasteBtn.addEventListener("click", () => { browserSshPasteFromClipboard(); });
+    pasteBtn.dataset.browserSshBound = "1";
+  }
+
+  if (menuCopy && menuCopy.dataset.browserSshBound !== "1") {
+    menuCopy.addEventListener("click", () => { hideBrowserSshContextMenu(); browserSshCopySelection(); });
+    menuCopy.dataset.browserSshBound = "1";
+  }
+  if (menuPaste && menuPaste.dataset.browserSshBound !== "1") {
+    menuPaste.addEventListener("click", () => { hideBrowserSshContextMenu(); browserSshPasteFromClipboard(); });
+    menuPaste.dataset.browserSshBound = "1";
+  }
+
+  if (viewport && menu && viewport.dataset.browserSshContextBound !== "1") {
+    viewport.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      const rect = viewport.getBoundingClientRect();
+      const x = Math.max(0, Math.min(event.clientX - rect.left, rect.width - 140));
+      const y = Math.max(0, Math.min(event.clientY - rect.top, rect.height - 40));
+      menu.style.left = `${x}px`;
+      menu.style.top = `${y}px`;
+      menu.classList.remove("hidden");
+    });
+    viewport.dataset.browserSshContextBound = "1";
+  }
+
+  if (!browserSshTerminalState.contextMenuBound) {
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!target || !menu) return;
+      if (menu.contains(target)) return;
+      hideBrowserSshContextMenu();
+    });
+    browserSshTerminalState.contextMenuBound = true;
+  }
+}
+
+function browserSshEmitResize(cols, rows) {
+  const nextCols = Number(cols || 0);
+  const nextRows = Number(rows || 0);
+  if (nextCols <= 0 || nextRows <= 0) return;
+  if (browserSshTerminalState.lastSize.cols === nextCols && browserSshTerminalState.lastSize.rows === nextRows) {
+    return;
+  }
+  browserSshTerminalState.lastSize = { cols: nextCols, rows: nextRows };
+  setBrowserSshSizeStatus(`Terminal size: ${nextCols}x${nextRows}`);
+  if (browserSshTerminalState.socket && browserSshTerminalState.socket.readyState === WebSocket.OPEN) {
+    browserSshTerminalState.socket.send(JSON.stringify({ type: "resize", payload: { cols: nextCols, rows: nextRows } }));
+  }
+}
+
+function browserSshFitTerminal() {
+  if (!browserSshTerminalState.terminal || !browserSshTerminalState.fitAddon) return;
+  try {
+    browserSshTerminalState.fitAddon.fit();
+    browserSshEmitResize(browserSshTerminalState.terminal.cols, browserSshTerminalState.terminal.rows);
+  } catch (e) {
+    // Ignore fit failures during hidden layout transitions.
+  }
+}
+
+function browserSshRenderTerminalIdleState(reason) {
+  if (!browserSshTerminalState.terminal) return;
+  const term = browserSshTerminalState.terminal;
+  term.writeln("\r\n\x1b[90m--- session status ---\x1b[0m");
+  term.writeln(`\x1b[90m${String(reason || "Disconnected.")}\x1b[0m`);
+  term.writeln("\x1b[90mUse Connect or Reconnect to start a new SSH session.\x1b[0m");
+}
+
+function initBrowserSshTerminal() {
+  const host = document.getElementById("browserSshTerminal");
+  if (!host || browserSshTerminalState.terminal) return;
+  if (!window.Terminal || !window.FitAddon || !window.FitAddon.FitAddon) {
+    setBrowserSshStatus("xterm.js assets failed to load.");
+    return;
+  }
+
+  const term = new window.Terminal({
+    convertEol: true,
+    cursorBlink: true,
+    fontSize: 13,
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    theme: { background: "#111111", foreground: "#f5f5f5" },
+  });
+  const fitAddon = new window.FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(host);
+  browserSshTerminalState.terminal = term;
+  browserSshTerminalState.fitAddon = fitAddon;
+  if (window.__BROWSER_SSH_TEST_HOOKS__) {
+    window.__BROWSER_SSH_TEST_HOOKS__.terminal = term;
+  }
+
+  term.writeln("Browser SSH terminal ready.");
+  term.writeln("Shortcuts: copy (Ctrl/Cmd+C with selection), paste (Ctrl/Cmd+V), Shift+Insert, right-click menu.");
+  browserSshRenderTerminalIdleState("No active SSH session.");
+
+  term.attachCustomKeyEventHandler((event) => {
+    if (event.type !== "keydown") return true;
+    const key = String(event.key || "").toLowerCase();
+    const withMeta = event.ctrlKey || event.metaKey;
+    const withShift = event.shiftKey;
+
+    const isCopy = (withMeta && key === "c") || (event.ctrlKey && withShift && key === "c");
+    if (isCopy && term.getSelection && term.getSelection()) {
+      event.preventDefault();
+      browserSshCopySelection();
+      return false;
+    }
+
+    const isPaste = (withMeta && key === "v") || (event.ctrlKey && withShift && key === "v") || (withShift && key === "insert");
+    if (isPaste) {
+      event.preventDefault();
+      browserSshPasteFromClipboard();
+      return false;
+    }
+
+    return true;
+  });
+
+  term.onData((data) => {
+    browserSshSendInput(data);
+  });
+
+  browserSshFitTerminal();
+  if (!browserSshTerminalState.resizeListenerBound) {
+    window.addEventListener("resize", browserSshFitTerminal);
+    browserSshTerminalState.resizeListenerBound = true;
+  }
+}
+
+function applyBrowserSshTerminalVisibility(enabled) {
+  const section = document.getElementById("browserSshTerminalSection");
+  const btn = document.getElementById("btnBrowserSshTerminal");
+  if (section) section.classList.toggle("hidden", !enabled);
+  if (btn) btn.classList.toggle("hidden", !enabled);
+  if (enabled) {
+    initBrowserSshTerminal();
+    requestAnimationFrame(() => browserSshFitTerminal());
+  }
+}
+
+function browserSshFieldValue(id) {
+  const el = document.getElementById(id);
+  return el ? String(el.value || "").trim() : "";
+}
+
+function browserSshPortValid(rawPort) {
+  const n = Number(rawPort);
+  return Number.isInteger(n) && n >= 1 && n <= 65535;
+}
+
+function browserSshLooksLikePrivateKey(value) {
+  const key = String(value || "").trim();
+  if (!key) return false;
+  if (!key.startsWith("-----BEGIN ")) return false;
+  if (key.includes("-----END OPENSSH PRIVATE KEY-----")) return true;
+  if (key.includes("-----END RSA PRIVATE KEY-----")) return true;
+  if (key.includes("-----END EC PRIVATE KEY-----")) return true;
+  if (key.includes("-----END DSA PRIVATE KEY-----")) return true;
+  if (key.includes("-----END PRIVATE KEY-----")) return true;
+  return false;
+}
+
+function browserSshValidationState() {
+  const host = browserSshFieldValue("browserSshHost");
+  const port = browserSshFieldValue("browserSshPort");
+  const username = browserSshFieldValue("browserSshUsername");
+  const authTypeEl = document.getElementById("browserSshAuthType");
+  const authType = authTypeEl ? authTypeEl.value : "password";
+  const password = browserSshFieldValue("browserSshPassword");
+  const privateKey = browserSshFieldValue("browserSshPrivateKey");
+
+  if (!browserSshTerminalState.enabled) {
+    return { valid: false, message: "Feature disabled." };
+  }
+  if (!host) {
+    return { valid: false, message: "Host is required." };
+  }
+  if (!browserSshPortValid(port)) {
+    return { valid: false, message: "Port must be an integer from 1 to 65535." };
+  }
+  if (!username) {
+    return { valid: false, message: "Username is required." };
+  }
+  if (authType === "password") {
+    if (!password) {
+      return { valid: false, message: "Password is required for password auth." };
+    }
+  } else {
+    if (!privateKey) {
+      return { valid: false, message: "Private key is required for private key auth." };
+    }
+    if (!browserSshLooksLikePrivateKey(privateKey)) {
+      return { valid: false, message: "Unsupported private key format. Paste PEM/OpenSSH private key text." };
+    }
+  }
+  return { valid: true, message: "Ready to connect." };
+}
+
+function applyBrowserSshAuthVisibility() {
+  const authTypeEl = document.getElementById("browserSshAuthType");
+  const authType = authTypeEl ? authTypeEl.value : "password";
+  browserSshTerminalState.authType = authType;
+  const passwordRow = document.getElementById("browserSshPasswordRow");
+  const privateKeyRow = document.getElementById("browserSshPrivateKeyRow");
+  if (passwordRow) passwordRow.classList.toggle("hidden", authType !== "password");
+  if (privateKeyRow) privateKeyRow.classList.toggle("hidden", authType === "password");
+}
+
+function applyBrowserSshConnectionState(active) {
+  browserSshTerminalState.active = !!active;
+  const connectBtn = document.getElementById("browserSshConnectBtn");
+  const disconnectBtn = document.getElementById("browserSshDisconnectBtn");
+  const retryBtn = document.getElementById("browserSshRetryBtn");
+  if (disconnectBtn) disconnectBtn.classList.toggle("hidden", !browserSshTerminalState.active);
+  if (connectBtn) connectBtn.disabled = browserSshTerminalState.active || !browserSshValidationState().valid;
+  if (retryBtn) {
+    const showRetry = !browserSshTerminalState.active && ["auth_failed", "network_error", "disconnected"].includes(browserSshTerminalState.phase);
+    retryBtn.classList.toggle("hidden", !showRetry);
+  }
+}
+
+function updateBrowserSshFormState() {
+  applyBrowserSshAuthVisibility();
+  const validation = browserSshValidationState();
+  if (!browserSshTerminalState.active) {
+    if (browserSshTerminalState.phase === "disconnected") setBrowserSshStatus(validation.message);
+  }
+  applyBrowserSshConnectionState(browserSshTerminalState.active);
+}
+
+function browserSshSocketUrl() {
+  const base = new URL(API_BASE, window.location.origin);
+  const proto = base.protocol === "https:" ? "wss:" : "ws:";
+  const path = browserSshTerminalState.wsPath.startsWith("/")
+    ? browserSshTerminalState.wsPath
+    : `/${browserSshTerminalState.wsPath}`;
+  return `${proto}//${base.host}${path}`;
+}
+
+function bindBrowserSshFormEvents() {
+  ["browserSshHost", "browserSshPort", "browserSshUsername", "browserSshPassword", "browserSshPrivateKey", "browserSshPassphrase"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el || el.dataset.browserSshBound === "1") return;
+    const evt = el.tagName === "TEXTAREA" ? "input" : "input";
+    el.addEventListener(evt, updateBrowserSshFormState);
+    el.dataset.browserSshBound = "1";
+  });
+  const authTypeEl = document.getElementById("browserSshAuthType");
+  if (authTypeEl && authTypeEl.dataset.browserSshBound !== "1") {
+    authTypeEl.addEventListener("change", updateBrowserSshFormState);
+    authTypeEl.dataset.browserSshBound = "1";
+  }
+
+  const keyFile = document.getElementById("browserSshPrivateKeyFile");
+  if (keyFile && keyFile.dataset.browserSshBound !== "1") {
+    keyFile.addEventListener("change", () => {
+      const file = keyFile.files && keyFile.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const val = typeof reader.result === "string" ? reader.result : "";
+        const keyField = document.getElementById("browserSshPrivateKey");
+        if (keyField) keyField.value = val;
+        keyFile.value = "";
+        updateBrowserSshFormState();
+        setBrowserSshStatus("Private key loaded in memory. It is not saved to disk by this app.");
+      };
+      reader.onerror = () => {
+        keyFile.value = "";
+        setBrowserSshStatus("Failed to read private key file.");
+      };
+      reader.readAsText(file);
+    });
+    keyFile.dataset.browserSshBound = "1";
+  }
+}
+
+async function refreshBrowserSshTerminalConfig() {
+  try {
+    const cfg = await apiPublic("/api/browser-ssh/config");
+    browserSshTerminalState.enabled = !!cfg.enabled;
+    browserSshTerminalState.wsPath = cfg.ws_path || "/api/browser-ssh/ws";
+    applyBrowserSshTerminalVisibility(browserSshTerminalState.enabled);
+    bindBrowserSshFormEvents();
+    bindBrowserSshClipboardAndContextMenu();
+    initBrowserSshTerminal();
+    requestAnimationFrame(() => browserSshFitTerminal());
+    const wsPath = document.getElementById("browserSshWsPath");
+    if (wsPath) wsPath.textContent = `WS endpoint: ${browserSshTerminalState.wsPath}`;
+    updateBrowserSshFormState();
+    if (!browserSshTerminalState.enabled) {
+      setBrowserSshPhaseWithMessage("disconnected", "Feature disabled.");
+    } else if (!browserSshTerminalState.socket) {
+      setBrowserSshPhaseWithMessage("disconnected", "Ready to connect.");
+    }
+  } catch (e) {
+    applyBrowserSshTerminalVisibility(false);
+    setBrowserSshPhaseWithMessage("network_error", "Failed to load SSH terminal feature config.");
+  }
+}
+
 async function refreshAll() {
   document.getElementById("globalErr").textContent = "";
   try {
@@ -2751,6 +3241,7 @@ async function refreshAll() {
       refreshCalendarAccess(),
       refreshCalendarShares(),
       refreshCalendarEvents(),
+      refreshBrowserSshTerminalConfig(),
     ]);
     await pollToastsOnce();
     resumeAfterPasswordReset();
@@ -7649,6 +8140,137 @@ document.getElementById("catalogSearchClearBtn").onclick = clearCatalogSearch;
 
 document.getElementById("purchaseSearchBtn").onclick = searchPurchaseHistory;
 document.getElementById("purchaseSearchClearBtn").onclick = clearPurchaseSearch;
+
+
+document.getElementById("browserSshConnectBtn").onclick = async () => {
+  const validation = browserSshValidationState();
+  if (!validation.valid) {
+    if (browserSshTerminalState.phase === "disconnected") setBrowserSshStatus(validation.message);
+    applyBrowserSshConnectionState(false);
+    return;
+  }
+  if (browserSshTerminalState.active) {
+    return;
+  }
+  try {
+    const socket = new WebSocket(browserSshSocketUrl());
+    browserSshTerminalState.socket = socket;
+    setBrowserSshPhaseWithMessage("connecting", "Connecting...");
+    socket.onopen = () => {
+      applyBrowserSshConnectionState(false);
+      setBrowserSshPhaseWithMessage("connecting", `Connected to gateway at ${browserSshTerminalState.wsPath} (negotiating).`);
+      browserSshFitTerminal();
+      const connectPayload = browserSshBuildConnectPayloadFromForm();
+      browserSshStoreReconnectPayload(connectPayload);
+      socket.send(JSON.stringify({ type: "connect", payload: connectPayload }));
+    };
+    socket.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data || "{}");
+        const payload = msg.payload || {};
+        if (msg.type === "status" && payload.message) {
+          if (payload.phase === "connected" && payload.connected === true) {
+            setBrowserSshPhaseWithMessage("connected", String(payload.message || "Connected."));
+            applyBrowserSshConnectionState(true);
+          } else if (payload.phase === "resized") {
+            setBrowserSshStatus(String(payload.message || "Terminal resized."));
+          } else {
+            setBrowserSshStatus(String(payload.message || ""));
+          }
+        }
+        if (msg.type === "error" && payload.message) {
+          applyBrowserSshConnectionState(false);
+          if (payload.code === "auth_failed") {
+            setBrowserSshPhaseWithMessage("auth_failed", "Authentication failed. Verify credentials and try again.");
+            browserSshRenderTerminalIdleState("Authentication failed.");
+            if (!browserSshShouldReuseCredentials()) {
+              browserSshClearSensitiveInputs();
+              browserSshClearReconnectData();
+            }
+          } else if (payload.request_type === "connect") {
+            setBrowserSshPhaseWithMessage("network_error", "Unable to establish SSH session. Check host/port and network, then retry.");
+            browserSshRenderTerminalIdleState("Connection failed.");
+            if (!browserSshShouldReuseCredentials()) {
+              browserSshClearSensitiveInputs();
+              browserSshClearReconnectData();
+            }
+          } else {
+            setBrowserSshStatus(`Error: ${String(payload.message)}`);
+          }
+          if (payload.request_type === "connect" && browserSshTerminalState.socket) {
+            browserSshTerminalState.socket.close();
+          }
+        }
+        if (msg.type === "output" && payload.data && browserSshTerminalState.terminal) {
+          browserSshTerminalState.terminal.write(String(payload.data));
+        }
+      } catch (e) {
+        // ignore parse errors for scaffold flow
+      }
+    };
+    socket.onerror = () => {
+      setBrowserSshPhaseWithMessage("network_error", "Network error while communicating with SSH gateway.");
+    };
+    socket.onclose = () => {
+      browserSshTerminalState.socket = null;
+      applyBrowserSshConnectionState(false);
+      if (browserSshTerminalState.phase === "connected" || browserSshTerminalState.phase === "connecting") {
+        setBrowserSshPhaseWithMessage("disconnected", "Disconnected.");
+        browserSshRenderTerminalIdleState("Disconnected.");
+      } else if (!["auth_failed", "network_error"].includes(browserSshTerminalState.phase)) {
+        setBrowserSshPhase("disconnected");
+      }
+      if (!browserSshShouldReuseCredentials()) {
+        browserSshClearSensitiveInputs();
+        browserSshClearReconnectData();
+      }
+    };
+  } catch (e) {
+    applyBrowserSshConnectionState(false);
+    setBrowserSshPhaseWithMessage("network_error", "Unable to start SSH connection. Please retry.");
+  }
+};
+
+document.getElementById("browserSshDisconnectBtn").onclick = () => {
+  if (browserSshTerminalState.socket) {
+    browserSshTerminalState.socket.close();
+    return;
+  }
+  applyBrowserSshConnectionState(false);
+  setBrowserSshPhaseWithMessage("disconnected", "Disconnected.");
+  browserSshRenderTerminalIdleState("Disconnected.");
+  if (!browserSshShouldReuseCredentials()) {
+    browserSshClearSensitiveInputs();
+    browserSshClearReconnectData();
+  }
+};
+
+document.getElementById("browserSshRetryBtn").onclick = () => {
+  if (!browserSshShouldReuseCredentials() || !browserSshTerminalState.lastConnectPayload) {
+    setBrowserSshStatus("Reconnect requires explicit opt-in. Enable 'Allow reconnect to reuse prior credentials' or re-enter credentials and click Connect.");
+    return;
+  }
+  const payload = browserSshTerminalState.lastConnectPayload;
+  const host = document.getElementById("browserSshHost");
+  const port = document.getElementById("browserSshPort");
+  const username = document.getElementById("browserSshUsername");
+  const authType = document.getElementById("browserSshAuthType");
+  const password = document.getElementById("browserSshPassword");
+  const key = document.getElementById("browserSshPrivateKey");
+  const passphrase = document.getElementById("browserSshPassphrase");
+  if (host) host.value = payload.host || "";
+  if (port) port.value = String(payload.port || "22");
+  if (username) username.value = payload.username || "";
+  if (authType) authType.value = payload.authType || "password";
+  if (password) password.value = payload.password || "";
+  if (key) key.value = payload.privateKey || "";
+  if (passphrase) passphrase.value = payload.passphrase || "";
+  updateBrowserSshFormState();
+  const connectBtn = document.getElementById("browserSshConnectBtn");
+  if (connectBtn && !connectBtn.disabled) {
+    connectBtn.click();
+  }
+};
 
 document.getElementById("btnRefreshAll").onclick = refreshAll;
 document.getElementById("btnClearSession").onclick = async () => {
