@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.internal/schemas/questionnaire-validation-contract-v1.json",
+  "title": "Questionnaire Validation Contract v1",
+  "type": "object",
+  "properties": {
+    "contract_version": { "const": "2026-03-validation-v1" },
+    "is_valid": { "type": "boolean" },
+    "can_submit": { "type": "boolean" },
+    "has_blocking_form_error": { "type": "boolean" },
+    "errors": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "type": "string" },
+            "message": { "type": "string" },
+            "blocking": { "type": "boolean" },
+            "rule_id": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      }
+    }
+  },
+  "required": [
+    "contract_version",
+    "is_valid",
+    "can_submit",
+    "has_blocking_form_error",
+    "errors"
+  ],
+  "additionalProperties": false
+}

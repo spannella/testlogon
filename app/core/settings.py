@@ -570,6 +570,16 @@ class Settings:
     messaging_gallery_index_enabled: bool = os.environ.get("MESSAGING_GALLERY_INDEX_ENABLED", "false").lower() == "true"
     # Subscriptions
     subscriptions_table_name: str = os.environ.get("SUBSCRIPTIONS_TABLE_NAME", "subscriptions")
+    questionnaire_table_name: str = os.environ.get("QUESTIONNAIRE_TABLE_NAME", "questionnaires")
+    questionnaire_owner_index_name: str = os.environ.get("QUESTIONNAIRE_OWNER_INDEX_NAME", "owner-updated-index")
+    questionnaire_status_index_name: str = os.environ.get("QUESTIONNAIRE_STATUS_INDEX_NAME", "status-updated-index")
+    questionnaire_published_index_name: str = os.environ.get("QUESTIONNAIRE_PUBLISHED_INDEX_NAME", "published_slug-index")
+    questionnaire_response_status_index_name: str = os.environ.get("QUESTIONNAIRE_RESPONSE_STATUS_INDEX_NAME", "response_status-updated-index")
+    questionnaire_anon_submit_max_per_window: int = int(os.environ.get("QUESTIONNAIRE_ANON_SUBMIT_MAX_PER_WINDOW", "30"))
+    questionnaire_anon_submit_window_seconds: int = int(os.environ.get("QUESTIONNAIRE_ANON_SUBMIT_WINDOW_SECONDS", "300"))
+    questionnaire_captcha_required_anonymous: bool = os.environ.get("QUESTIONNAIRE_CAPTCHA_REQUIRED_ANONYMOUS", "false").lower() in ("1", "true", "yes", "on")
+    questionnaire_captcha_static_token: str = os.environ.get("QUESTIONNAIRE_CAPTCHA_STATIC_TOKEN", "")
+    questionnaire_encrypt_sensitive_answers: bool = os.environ.get("QUESTIONNAIRE_ENCRYPT_SENSITIVE_ANSWERS", "false").lower() in ("1", "true", "yes", "on")
 
 
 S = Settings()
