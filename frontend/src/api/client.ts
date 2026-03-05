@@ -134,9 +134,9 @@ async function refreshSession(): Promise<void> {
  */
 export async function api<T>(
   path: string,
-  options: RequestInit & { params?: Record<string, string> } = {},
+  options: RequestInit & { params?: Record<string, string>; silent403?: boolean } = {},
 ): Promise<T> {
-  const { params, ...init } = options;
+  const { params, silent403, ...init } = options;
 
   // Build URL with query params
   let url = withApiBase(path);
@@ -227,7 +227,7 @@ export async function api<T>(
       (body as Record<string, unknown>)?.detail,
       "Permission denied",
     );
-    toast.error(detail);
+    if (!silent403) toast.error(detail);
     throw new ApiError(403, detail, body);
   }
 

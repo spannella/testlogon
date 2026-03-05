@@ -9,6 +9,7 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
+    dedupe: ["react", "react-dom"],
   },
   server: {
     host: "0.0.0.0",   // listen on all interfaces so the EC2 server is reachable
