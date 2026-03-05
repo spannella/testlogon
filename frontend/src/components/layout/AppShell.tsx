@@ -7,12 +7,19 @@ import ImpersonationBanner from "@/components/shared/ImpersonationBanner";
 import { PageTransition } from "@/components/shared/PageTransition";
 import { OfflineBanner } from "@/components/shared/OfflineBanner";
 import { SessionExpiryWarning } from "@/components/shared/SessionExpiryWarning";
+import { useOfflineQueue } from "@/hooks/useOfflineQueue";
 import {
   Sheet,
   SheetContent,
   SheetTitle,
 } from "@/components/ui/sheet";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
+
+/** Mounts the offline queue flush side-effect — renders nothing. */
+function OfflineQueueFlusher() {
+  useOfflineQueue();
+  return null;
+}
 
 export default function AppShell() {
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
@@ -43,6 +50,7 @@ export default function AppShell() {
       {/* Main area */}
       <div className="flex flex-1 flex-col overflow-hidden">
         <OfflineBanner />
+        <OfflineQueueFlusher />
         <Header onMobileMenuToggle={() => setMobileMenuOpen(true)} />
         <ImpersonationBanner />
         <SessionExpiryWarning />

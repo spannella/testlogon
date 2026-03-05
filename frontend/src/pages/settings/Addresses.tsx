@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Plus, Pencil, Trash2, Star } from "lucide-react";
+import { Plus, Pencil, Trash2, Star, CheckCircle, XCircle, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,14 +20,41 @@ import {
 } from "@/components/ui/dialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { AddressMap } from "@/components/shared/AddressMap";
+
+// ─── Error boundary (contains map crashes) ───────────────────────
+
+class MapErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: boolean }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { error: false };
+  }
+  static getDerivedStateFromError() {
+    return { error: true };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="mt-2 flex h-48 items-center justify-center rounded-md border text-xs text-muted-foreground">
+          Map preview unavailable
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 import {
   getAddresses,
   createAddress,
   updateAddress,
   deleteAddress,
   setPrimaryAddress,
+  validateAddress,
 } from "@/api/endpoints/profile";
-import type { Address, AddressIn } from "@/api/types";
+import type { Address, AddressIn, AddressValidateResp } from "@/api/types";
 
 // ─── Schema ──────────────────────────────────────────────────────
 
@@ -52,6 +79,8 @@ export function Addresses() {
   const [dialogOpen, setDialogOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<Address | null>(null);
   const [deleting, setDeleting] = React.useState<Address | null>(null);
+  const [validationResult, setValidationResult] = React.useState<AddressValidateResp | null>(null);
+  const [validationError, setValidationError] = React.useState<string | null>(null);
 
   const addressesQuery = useQuery({
     queryKey: ["addresses"],
@@ -73,8 +102,25 @@ export function Addresses() {
     },
   });
 
+  // Debounced address string for map preview
+  const [debouncedAddress, setDebouncedAddress] = React.useState("");
+  const watchedLine1 = form.watch("line1");
+  const watchedCity = form.watch("city");
+  const watchedState = form.watch("state");
+  const watchedPostal = form.watch("postal_code");
+  const watchedCountry = form.watch("country");
+  React.useEffect(() => {
+    const parts = [watchedLine1, watchedCity, watchedState, watchedPostal, watchedCountry].filter(Boolean);
+    const full = parts.join(", ");
+    const t = setTimeout(() => setDebouncedAddress(full), 600);
+    return () => clearTimeout(t);
+  }, [watchedLine1, watchedCity, watchedState, watchedPostal, watchedCountry]);
+
   const openAdd = () => {
     setEditing(null);
+    setValidationResult(null);
+    setValidationError(null);
+    setDebouncedAddress("");
     form.reset({
       name: "",
       label: "",
@@ -91,6 +137,8 @@ export function Addresses() {
 
   const openEdit = (addr: Address) => {
     setEditing(addr);
+    setValidationResult(null);
+    setValidationError(null);
     form.reset({
       name: addr.name ?? "",
       label: addr.label ?? "",
@@ -144,6 +192,20 @@ export function Addresses() {
     onError: () => {
       toast.error("Failed to set primary address");
     },
+  });
+
+  const validateMutation = useMutation({
+    mutationFn: () =>
+      validateAddress({
+        line1: form.getValues("line1"),
+        line2: form.getValues("line2"),
+        city: form.getValues("city"),
+        state: form.getValues("state"),
+        postal_code: form.getValues("postal_code"),
+        country: form.getValues("country"),
+      }),
+    onSuccess: (data) => setValidationResult(data),
+    onError: () => setValidationError("Validation service unavailable"),
   });
 
   const addresses: Address[] = Array.isArray(addressesQuery.data)
@@ -250,7 +312,7 @@ export function Addresses() {
 
       {/* Add / Edit dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editing ? "Edit Address" : "Add Address"}</DialogTitle>
           </DialogHeader>
@@ -299,6 +361,70 @@ export function Addresses() {
                 <Input id="addr-notes" {...form.register("notes")} />
               </div>
             </div>
+
+            {/* Map preview */}
+            <MapErrorBoundary>
+              <AddressMap address={debouncedAddress} />
+            </MapErrorBoundary>
+
+            {/* UPS Validation */}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setValidationError(null);
+                  setValidationResult(null);
+                  validateMutation.mutate();
+                }}
+                disabled={validateMutation.isPending || !form.getValues("line1")}
+              >
+                {validateMutation.isPending ? "Validating…" : "Validate Address (UPS)"}
+              </Button>
+              {validationResult && (
+                validationResult.valid ? (
+                  <span className="flex items-center gap-1 text-sm text-green-600">
+                    <CheckCircle className="h-4 w-4" /> Valid address
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-sm text-destructive">
+                    <XCircle className="h-4 w-4" /> Address not found
+                  </span>
+                )
+              )}
+              {validationError && (
+                <span className="flex items-center gap-1 text-sm text-amber-600">
+                  <AlertCircle className="h-4 w-4" />{validationError}
+                </span>
+              )}
+            </div>
+
+            {/* Suggestions */}
+            {validationResult?.candidates && validationResult.candidates.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">Suggested correction — click to apply:</p>
+                {validationResult.candidates.map((c, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className="w-full rounded border px-3 py-2 text-left text-xs hover:bg-muted"
+                    onClick={() => {
+                      form.setValue("line1", c.line1);
+                      form.setValue("line2", c.line2 ?? "");
+                      form.setValue("city", c.city);
+                      form.setValue("state", c.state);
+                      form.setValue("postal_code", c.postal_code);
+                      form.setValue("country", c.country);
+                      setValidationResult(null);
+                    }}
+                  >
+                    {[c.line1, c.line2, c.city, c.state, c.postal_code, c.country].filter(Boolean).join(", ")}
+                  </button>
+                ))}
+              </div>
+            )}
+
             <DialogFooter>
               <Button type="submit" disabled={saveMutation.isPending}>
                 {saveMutation.isPending ? "Saving..." : editing ? "Update" : "Add"}

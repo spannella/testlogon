@@ -12,6 +12,7 @@ import {
   Settings,
   Menu,
   CheckCheck,
+  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -162,20 +163,17 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
     navigate("/login", { replace: true });
   };
 
-  const cycleTheme = () => {
-    const next: Record<Theme, Theme> = {
-      system: "light",
-      light: "dark",
-      dark: "system",
-    };
-    setTheme(next[theme]);
-  };
-
   const themeIcon = {
     system: <Monitor className="h-4 w-4" />,
     light: <Sun className="h-4 w-4" />,
     dark: <Moon className="h-4 w-4" />,
   }[theme];
+
+  const THEME_OPTIONS: { value: Theme; label: string; icon: React.ReactNode }[] = [
+    { value: "system", label: "System", icon: <Monitor className="h-4 w-4" /> },
+    { value: "light",  label: "Light",  icon: <Sun    className="h-4 w-4" /> },
+    { value: "dark",   label: "Dark",   icon: <Moon   className="h-4 w-4" /> },
+  ];
 
   const initials = getInitials(profileQuery.data?.profile, userId);
 
@@ -213,16 +211,35 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
 
         <div className="flex-1" />
 
-        {/* Theme toggle */}
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={cycleTheme}
-          aria-label={`Theme: ${theme}`}
-          className="focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          {themeIcon}
-        </Button>
+        {/* Theme picker */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`Theme: ${theme}`}
+              className="focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {themeIcon}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-36">
+            <DropdownMenuLabel className="text-xs text-muted-foreground font-normal pb-1">
+              Appearance
+            </DropdownMenuLabel>
+            {THEME_OPTIONS.map((opt) => (
+              <DropdownMenuItem
+                key={opt.value}
+                onClick={() => setTheme(opt.value)}
+                className="gap-2"
+              >
+                {opt.icon}
+                {opt.label}
+                {theme === opt.value && <Check className="ml-auto h-3.5 w-3.5" />}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         {/* Alert bell with popover */}
         <Popover open={alertsOpen} onOpenChange={setAlertsOpen}>

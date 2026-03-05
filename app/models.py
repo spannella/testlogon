@@ -1071,6 +1071,30 @@ class AddressPrimaryReq(BaseModel):
     address_id: str
 
 
+class AddressValidateReq(BaseModel):
+    line1: str = ""
+    line2: str = ""
+    city: str = ""
+    state: str = ""
+    postal_code: str = ""
+    country: str = "US"
+
+
+class ValidatedAddressOut(BaseModel):
+    line1: str
+    line2: str = ""
+    city: str
+    state: str
+    postal_code: str
+    country: str
+
+
+class AddressValidateResp(BaseModel):
+    valid: bool
+    dpv_match_code: str = ""  # "Y", "S", "D", "A"
+    candidates: List[ValidatedAddressOut] = []
+
+
 class LanguageIn(BaseModel):
     name: str
     level: str
