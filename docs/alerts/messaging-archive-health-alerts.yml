@@ -1,0 +1,29 @@
+groups:
+  - name: messaging-archive-health
+    rules:
+      - alert: MessagingArchiveSustainedWriteFailures
+        expr: |
+          (
+            sum(rate(messaging_archive_write_events_total{result="failure"}[5m]))
+            /
+            clamp_min(sum(rate(messaging_archive_write_events_total[5m])), 1e-9)
+          ) > 0.05
+        for: 15m
+        labels:
+          severity: page
+          service: messaging
+          component: compliance_archive
+        annotations:
+          summary: "Messaging archive write failure ratio above 5% for 15m"
+          description: "Archive ingest reliability degraded; investigate archive writer/storage path."
+
+      - alert: MessagingArchiveIntegrityChainMismatch
+        expr: sum(increase(messaging_archive_integrity_errors_total{reason=~"chain_.*|object_checksum_mismatch|manifest_missing|manifest_empty"}[5m])) > 0
+        for: 0m
+        labels:
+          severity: critical
+          service: messaging
+          component: compliance_archive
+        annotations:
+          summary: "Messaging archive integrity verification error detected"
+          description: "A chain/integrity mismatch was recorded. Treat as compliance incident until resolved."

@@ -81,6 +81,19 @@ class Settings:
     admin_scope_enforce_billing_support: bool = os.environ.get("ADMIN_SCOPE_ENFORCE_BILLING_SUPPORT", "1") not in ("0", "false", "False")
     admin_scope_enforce_content_moderation: bool = os.environ.get("ADMIN_SCOPE_ENFORCE_CONTENT_MODERATION", "1") not in ("0", "false", "False")
 
+    # Browser SSH terminal feature flag
+    browser_ssh_terminal_enabled: bool = os.environ.get("BROWSER_SSH_TERMINAL_ENABLED", "0") not in ("0", "false", "False")
+    browser_ssh_allowed_hosts: str = os.environ.get("BROWSER_SSH_ALLOWED_HOSTS", "")
+    browser_ssh_denied_hosts: str = os.environ.get("BROWSER_SSH_DENIED_HOSTS", "")
+    browser_ssh_allowed_ports: str = os.environ.get("BROWSER_SSH_ALLOWED_PORTS", "")
+    browser_ssh_denied_ports: str = os.environ.get("BROWSER_SSH_DENIED_PORTS", "")
+    browser_ssh_terminal_allowed_roles: str = os.environ.get("BROWSER_SSH_TERMINAL_ALLOWED_ROLES", "admin,root")
+    browser_ssh_idle_timeout_seconds: int = int(os.environ.get("BROWSER_SSH_IDLE_TIMEOUT_SECONDS", "900"))
+    browser_ssh_max_session_duration_seconds: int = int(os.environ.get("BROWSER_SSH_MAX_SESSION_DURATION_SECONDS", "3600"))
+    browser_ssh_max_sessions_per_user: int = int(os.environ.get("BROWSER_SSH_MAX_SESSIONS_PER_USER", "2"))
+    browser_ssh_connect_rate_limit_count: int = int(os.environ.get("BROWSER_SSH_CONNECT_RATE_LIMIT_COUNT", "10"))
+    browser_ssh_connect_rate_limit_window_seconds: int = int(os.environ.get("BROWSER_SSH_CONNECT_RATE_LIMIT_WINDOW_SECONDS", "60"))
+
     # MFA rate limiting
     mfa_send_min_interval_seconds: int = int(os.environ.get("MFA_SEND_MIN_INTERVAL_SECONDS", "30"))
     mfa_send_max_per_hour: int = int(os.environ.get("MFA_SEND_MAX_PER_HOUR", "20"))
@@ -270,6 +283,143 @@ class Settings:
     # Contacts
     contacts_table_name: str = os.environ.get("DDB_CONTACTS_TABLE", "Contacts")
 
+    # Messaging
+    message_visibility_overrides_table_name: str = os.environ.get(
+        "DDB_MESSAGE_VISIBILITY_OVERRIDES",
+        "MessageVisibilityOverrides",
+    )
+    conversation_pins_table_name: str = os.environ.get(
+        "DDB_CONVERSATION_PINS",
+        "ConversationPins",
+    )
+    message_reports_table_name: str = os.environ.get(
+        "DDB_MESSAGE_REPORTS",
+        "MessageReports",
+    )
+    message_report_context_table_name: str = os.environ.get(
+        "DDB_MESSAGE_REPORT_CONTEXT",
+        "MessageReportContext",
+    )
+    message_legal_holds_table_name: str = os.environ.get(
+        "DDB_MESSAGE_LEGAL_HOLDS",
+        "MessageLegalHolds",
+    )
+    messaging_hidden_timeline_filter_enabled: bool = os.environ.get(
+        "MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED",
+        "true",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_hide_controls_enabled: bool = os.environ.get(
+        "MESSAGING_HIDE_CONTROLS_ENABLED",
+        "true",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_pins_enabled: bool = os.environ.get(
+        "MESSAGING_PINS_ENABLED",
+        "true",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_reporting_enabled: bool = os.environ.get(
+        "MESSAGING_REPORTING_ENABLED",
+        "true",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_report_rate_limit_enabled: bool = os.environ.get(
+        "MESSAGING_REPORT_RATE_LIMIT_ENABLED",
+        "true",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_report_rate_limit_user_window_seconds: int = int(
+        os.environ.get("MESSAGING_REPORT_RATE_LIMIT_USER_WINDOW_SECONDS", "60")
+    )
+    messaging_report_rate_limit_user_max: int = int(
+        os.environ.get("MESSAGING_REPORT_RATE_LIMIT_USER_MAX", "5")
+    )
+    messaging_report_rate_limit_conversation_window_seconds: int = int(
+        os.environ.get("MESSAGING_REPORT_RATE_LIMIT_CONVERSATION_WINDOW_SECONDS", "60")
+    )
+    messaging_report_rate_limit_conversation_max: int = int(
+        os.environ.get("MESSAGING_REPORT_RATE_LIMIT_CONVERSATION_MAX", "20")
+    )
+    messaging_compliance_archive_enabled: bool = os.environ.get(
+        "MESSAGING_COMPLIANCE_ARCHIVE_ENABLED",
+        "false",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_compliance_archive_enforce_write_success: bool = os.environ.get(
+        "MESSAGING_COMPLIANCE_ARCHIVE_ENFORCE_WRITE_SUCCESS",
+        "false",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_compliance_archive_storage_mode: str = os.environ.get(
+        "MESSAGING_COMPLIANCE_ARCHIVE_STORAGE_MODE",
+        "filesystem",
+    )
+    messaging_compliance_archive_root_dir: str = os.environ.get(
+        "MESSAGING_COMPLIANCE_ARCHIVE_ROOT_DIR",
+        ".compliance_archive",
+    )
+    messaging_archive_retention_default_class: str = os.environ.get(
+        "MESSAGING_ARCHIVE_RETENTION_DEFAULT_CLASS",
+        "regulatory",
+    )
+    messaging_archive_retention_class_days_json: str = os.environ.get(
+        "MESSAGING_ARCHIVE_RETENTION_CLASS_DAYS_JSON",
+        '{"short":30,"standard":365,"regulatory":2555}',
+    )
+    messaging_archive_retention_event_class_overrides_json: str = os.environ.get(
+        "MESSAGING_ARCHIVE_RETENTION_EVENT_CLASS_OVERRIDES_JSON",
+        "{}",
+    )
+    messaging_archive_retention_tenant_overrides_json: str = os.environ.get(
+        "MESSAGING_ARCHIVE_RETENTION_TENANT_OVERRIDES_JSON",
+        "{}",
+    )
+    message_archive_chain_heads_table_name: str = os.environ.get(
+        "DDB_MESSAGE_ARCHIVE_CHAIN_HEADS",
+        "MessageArchiveChainHeads",
+    )
+    message_compliance_exports_table_name: str = os.environ.get(
+        "DDB_MESSAGE_COMPLIANCE_EXPORTS",
+        "MessageComplianceExports",
+    )
+    messaging_compliance_export_root_dir: str = os.environ.get(
+        "MESSAGING_COMPLIANCE_EXPORT_ROOT_DIR",
+        ".compliance_exports",
+    )
+    messaging_compliance_export_default_ttl_seconds: int = int(
+        os.environ.get("MESSAGING_COMPLIANCE_EXPORT_DEFAULT_TTL_SECONDS", str(7 * 24 * 3600))
+    )
+    messaging_compliance_export_manifest_signing_key: str = os.environ.get(
+        "MESSAGING_COMPLIANCE_EXPORT_MANIFEST_SIGNING_KEY",
+        "dev-export-signing-key",
+    )
+    messaging_compliance_export_manifest_signing_key_id: str = os.environ.get(
+        "MESSAGING_COMPLIANCE_EXPORT_MANIFEST_SIGNING_KEY_ID",
+        "dev-key-v1",
+    )
+    messaging_compliance_export_enabled: bool = os.environ.get(
+        "MESSAGING_COMPLIANCE_EXPORT_ENABLED",
+        "false",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_compliance_legal_hold_enabled: bool = os.environ.get(
+        "MESSAGING_COMPLIANCE_LEGAL_HOLD_ENABLED",
+        "false",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_supervisory_feed_enabled: bool = os.environ.get(
+        "MESSAGING_SUPERVISORY_FEED_ENABLED",
+        "false",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_supervisory_feed_mode: str = os.environ.get(
+        "MESSAGING_SUPERVISORY_FEED_MODE",
+        "log",
+    )
+    messaging_supervisory_feed_queue_url: str = os.environ.get(
+        "MESSAGING_SUPERVISORY_FEED_QUEUE_URL",
+        "",
+    )
+    messaging_supervisory_feed_file_path: str = os.environ.get(
+        "MESSAGING_SUPERVISORY_FEED_FILE_PATH",
+        ".supervisory_feed/events.jsonl",
+    )
+    messaging_supervisory_feed_rules_json: str = os.environ.get(
+        "MESSAGING_SUPERVISORY_FEED_RULES_JSON",
+        '{"report.":{"priority":"high","assignment_queue":"moderation"},"message.deleted":{"priority":"medium","assignment_queue":"supervision"},"message.revoked":{"priority":"medium","assignment_queue":"supervision"},"legal_hold.":{"priority":"high","assignment_queue":"compliance"}}',
+    )
+
     # Purchase history
     purchase_transactions_table_name: str = os.environ.get(
         "PURCHASE_TRANSACTIONS_TABLE_NAME",
@@ -433,6 +583,16 @@ class Settings:
     messaging_gallery_index_enabled: bool = os.environ.get("MESSAGING_GALLERY_INDEX_ENABLED", "false").lower() == "true"
     # Subscriptions
     subscriptions_table_name: str = os.environ.get("SUBSCRIPTIONS_TABLE_NAME", "subscriptions")
+    questionnaire_table_name: str = os.environ.get("QUESTIONNAIRE_TABLE_NAME", "questionnaires")
+    questionnaire_owner_index_name: str = os.environ.get("QUESTIONNAIRE_OWNER_INDEX_NAME", "owner-updated-index")
+    questionnaire_status_index_name: str = os.environ.get("QUESTIONNAIRE_STATUS_INDEX_NAME", "status-updated-index")
+    questionnaire_published_index_name: str = os.environ.get("QUESTIONNAIRE_PUBLISHED_INDEX_NAME", "published_slug-index")
+    questionnaire_response_status_index_name: str = os.environ.get("QUESTIONNAIRE_RESPONSE_STATUS_INDEX_NAME", "response_status-updated-index")
+    questionnaire_anon_submit_max_per_window: int = int(os.environ.get("QUESTIONNAIRE_ANON_SUBMIT_MAX_PER_WINDOW", "30"))
+    questionnaire_anon_submit_window_seconds: int = int(os.environ.get("QUESTIONNAIRE_ANON_SUBMIT_WINDOW_SECONDS", "300"))
+    questionnaire_captcha_required_anonymous: bool = os.environ.get("QUESTIONNAIRE_CAPTCHA_REQUIRED_ANONYMOUS", "false").lower() in ("1", "true", "yes", "on")
+    questionnaire_captcha_static_token: str = os.environ.get("QUESTIONNAIRE_CAPTCHA_STATIC_TOKEN", "")
+    questionnaire_encrypt_sensitive_answers: bool = os.environ.get("QUESTIONNAIRE_ENCRYPT_SENSITIVE_ANSWERS", "false").lower() in ("1", "true", "yes", "on")
 
 
 S = Settings()

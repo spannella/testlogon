@@ -1,0 +1,71 @@
+{
+  "title": "Messaging Archive Health",
+  "timezone": "browser",
+  "panels": [
+    {
+      "title": "Archive Ingest Success vs Failure",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(messaging_archive_write_events_total{result=\"success\"}[5m]))",
+          "legendFormat": "writes_success/s"
+        },
+        {
+          "expr": "sum(rate(messaging_archive_write_events_total{result=\"failure\"}[5m]))",
+          "legendFormat": "writes_failure/s"
+        }
+      ]
+    },
+    {
+      "title": "Archive Ingest Failure Ratio (5m)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "(sum(rate(messaging_archive_write_events_total{result=\"failure\"}[5m])) / clamp_min(sum(rate(messaging_archive_write_events_total[5m])), 1e-9))",
+          "legendFormat": "write_failure_ratio"
+        }
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 0.02, "color": "yellow"},
+        {"op": "gt", "value": 0.05, "color": "red"}
+      ]
+    },
+    {
+      "title": "Archive Ingest Latency p95",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(messaging_archive_write_latency_seconds_bucket[5m])) by (le, result))",
+          "legendFormat": "p95 {{result}}"
+        }
+      ]
+    },
+    {
+      "title": "Archive Integrity Errors",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(increase(messaging_archive_integrity_errors_total[5m])) by (reason)",
+          "legendFormat": "{{reason}}"
+        }
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 0, "color": "red"}
+      ]
+    },
+    {
+      "title": "Archive Export Outcomes",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(messaging_archive_export_outcomes_total{outcome=\"success\"}[10m]))",
+          "legendFormat": "exports_success/s"
+        },
+        {
+          "expr": "sum(rate(messaging_archive_export_outcomes_total{outcome=\"failure\"}[10m]))",
+          "legendFormat": "exports_failure/s"
+        }
+      ]
+    }
+  ]
+}

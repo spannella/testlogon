@@ -251,6 +251,37 @@ MESSAGING_GALLERY_CURSOR_PAGE_DEPTH = Histogram(
     ["type"],
     buckets=(0, 1, 2, 3, 5, 8, 13, 21, 34),
 )
+MESSAGING_MESSAGE_CONTROL_ACTIONS = Counter(
+    "messaging_message_control_actions_total",
+    "Messaging message-control actions by action/result",
+    ["action", "result"],
+)
+MESSAGING_REPORT_VALIDATION_ERRORS = Counter(
+    "messaging_report_validation_errors_total",
+    "Messaging report validation errors by reason",
+    ["reason"],
+)
+MESSAGING_ARCHIVE_WRITE_EVENTS = Counter(
+    "messaging_archive_write_events_total",
+    "Messaging compliance archive write outcomes by result/event type",
+    ["result", "event_type"],
+)
+MESSAGING_ARCHIVE_WRITE_LATENCY = Histogram(
+    "messaging_archive_write_latency_seconds",
+    "Messaging compliance archive write latency",
+    ["result"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
+)
+MESSAGING_ARCHIVE_INTEGRITY_ERRORS = Counter(
+    "messaging_archive_integrity_errors_total",
+    "Messaging compliance archive integrity verification failures",
+    ["reason"],
+)
+MESSAGING_ARCHIVE_EXPORT_OUTCOMES = Counter(
+    "messaging_archive_export_outcomes_total",
+    "Messaging compliance archive export outcomes",
+    ["outcome"],
+)
 USAGE_METERING_EVENTS = Counter(
     "usage_metering_events_total",
     "Usage metering event outcomes",
@@ -419,6 +450,33 @@ ENTITLEMENT_CHECKS = Counter(
     "Entitlement check outcomes by product family",
     ["product_family", "outcome", "reason"],
 )
+BROWSER_SSH_CONNECT_THROTTLED = Counter(
+    "browser_ssh_connect_throttled_total",
+    "Browser SSH connect attempts throttled by per-user rate limit",
+    ["reason"],
+)
+BROWSER_SSH_CONNECT_DENIED = Counter(
+    "browser_ssh_connect_denied_total",
+    "Browser SSH connect attempts denied by policy/auth/quota",
+    ["reason"],
+)
+BROWSER_SSH_ACTIVE_SESSIONS = Gauge(
+    "browser_ssh_active_sessions",
+    "Active Browser SSH sessions by user in this process",
+    ["user_sub"],
+)
+BROWSER_SSH_SESSION_LIFECYCLE = Counter(
+    "browser_ssh_session_lifecycle_total",
+    "Browser SSH session lifecycle events",
+    ["event", "outcome"],
+)
+BROWSER_SSH_SESSION_DURATION = Histogram(
+    "browser_ssh_session_duration_seconds",
+    "Browser SSH connected session duration",
+    ["outcome"],
+    buckets=(1, 5, 15, 30, 60, 120, 300, 600, 900, 1800, 3600),
+)
+
 ENTITLEMENT_CHECK_LATENCY = Histogram(
     "entitlement_check_latency_seconds",
     "Entitlement check latency by product family",
@@ -614,6 +672,31 @@ def record_entitlement_check(*, product_family: str, outcome: str, reason: str =
 def record_entitlement_check_latency(*, product_family: str, elapsed_seconds: float) -> None:
     ENTITLEMENT_CHECK_LATENCY.labels(
         product_family=(product_family or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_browser_ssh_connect_throttled(*, reason: str) -> None:
+    BROWSER_SSH_CONNECT_THROTTLED.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def record_browser_ssh_connect_denied(*, reason: str) -> None:
+    BROWSER_SSH_CONNECT_DENIED.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def set_browser_ssh_active_sessions(*, user_sub: str, count: int) -> None:
+    BROWSER_SSH_ACTIVE_SESSIONS.labels(user_sub=(user_sub or "unknown")).set(max(0, int(count)))
+
+
+def record_browser_ssh_session_lifecycle(*, event: str, outcome: str) -> None:
+    BROWSER_SSH_SESSION_LIFECYCLE.labels(
+        event=(event or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).inc()
+
+
+def record_browser_ssh_session_duration(*, outcome: str, elapsed_seconds: float) -> None:
+    BROWSER_SSH_SESSION_DURATION.labels(
+        outcome=(outcome or "unknown").lower(),
     ).observe(max(0.0, float(elapsed_seconds)))
 
 
@@ -845,6 +928,35 @@ def record_messaging_gallery_cursor_page_depth(*, gallery_type: str, depth: int)
     MESSAGING_GALLERY_CURSOR_PAGE_DEPTH.labels(type=(gallery_type or "unknown").lower()).observe(
         max(0.0, float(depth))
     )
+
+
+def record_messaging_message_control_action(*, action: str, result: str) -> None:
+    MESSAGING_MESSAGE_CONTROL_ACTIONS.labels(
+        action=(action or "unknown").lower(),
+        result=(result or "unknown").lower(),
+    ).inc()
+
+
+def record_messaging_report_validation_error(*, reason: str) -> None:
+    MESSAGING_REPORT_VALIDATION_ERRORS.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def record_messaging_archive_write(*, result: str, event_type: str, elapsed_seconds: float) -> None:
+    MESSAGING_ARCHIVE_WRITE_EVENTS.labels(
+        result=(result or "unknown").lower(),
+        event_type=(event_type or "unknown").lower(),
+    ).inc()
+    MESSAGING_ARCHIVE_WRITE_LATENCY.labels(
+        result=(result or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_messaging_archive_integrity_error(*, reason: str) -> None:
+    MESSAGING_ARCHIVE_INTEGRITY_ERRORS.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def record_messaging_archive_export_outcome(*, outcome: str) -> None:
+    MESSAGING_ARCHIVE_EXPORT_OUTCOMES.labels(outcome=(outcome or "unknown").lower()).inc()
 
 
 def record_project_count_delta(delta: int) -> None:

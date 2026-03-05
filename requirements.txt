@@ -14,3 +14,4 @@ PyJWT==2.8.0
 zipstream-new==1.1.8
 webauthn==1.11.1
 qrcode==7.4.2
+paramiko==3.4.1

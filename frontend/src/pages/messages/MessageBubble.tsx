@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye, EyeOff, CreditCard, Check, FileText, CalendarDays, CalendarCheck, Users } from "lucide-react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye, EyeOff, CreditCard, Check, FileText, CalendarDays, CalendarCheck, Users, Flag } from "lucide-react";
+import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
@@ -13,6 +13,14 @@ import {
   type MessageEncryptionEnvelope,
 } from "@/lib/messageEncryption";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -36,6 +44,8 @@ import {
   editMessage,
   markViewed,
   reactToMessage,
+  hideMessage,
+  reportMessage,
   sendMessageTip,
   unlockMessage,
   getMeetingPoll,
@@ -294,6 +304,9 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   const [unlockPaymentMethodId, setUnlockPaymentMethodId] = useState<string | null>(null);
   const [fileSharePreviewOpen, setFileSharePreviewOpen] = useState(false);
   const [filePreviewOpen, setFilePreviewOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportReason, setReportReason] = useState("");
+  const [reportStatement, setReportStatement] = useState("");
 
   const viewOnceTextRevealed = viewedOnceIds?.has(message.message_id) ?? false;
 
@@ -359,6 +372,56 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
       });
     },
     onError: () => toast.error("Failed to react"),
+  });
+
+  const hideMut = useMutation({
+    mutationFn: () => hideMessage(conversationId, message.message_id),
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: ["messages", conversationId] });
+      const snapshot = queryClient.getQueryData(["messages", conversationId]);
+
+      queryClient.setQueryData<InfiniteData<{ messages: Message[]; next_cursor?: string }>>(
+        ["messages", conversationId],
+        (old) => {
+          if (!old?.pages?.length) return old;
+          return {
+            ...old,
+            pages: old.pages.map((page) => ({
+              ...page,
+              messages: (page.messages ?? []).filter((m) => m.message_id !== message.message_id),
+            })),
+          };
+        },
+      );
+
+      return { snapshot };
+    },
+    onSuccess: () => {
+      toast.success("Message hidden");
+      void queryClient.invalidateQueries({ queryKey: ["hidden-messages", conversationId] });
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.snapshot) {
+        queryClient.setQueryData(["messages", conversationId], context.snapshot);
+      }
+      toast.error("Failed to hide message");
+    },
+  });
+
+  const reportStatementTrimmed = reportStatement.trim();
+  const reportCanSubmit = reportReason.length >= 2 && reportStatementTrimmed.length >= 5 && reportStatementTrimmed.length <= 2000;
+
+  const reportMut = useMutation({
+    mutationFn: () => reportMessage(conversationId, message.message_id, { reason_code: reportReason, statement: reportStatementTrimmed }),
+    onSuccess: () => {
+      toast.success("Report submitted");
+      setReportOpen(false);
+      setReportReason("");
+      setReportStatement("");
+    },
+    onError: () => {
+      toast.error("Could not submit report. Please try again.");
+    },
   });
 
   const unlockMut = useMutation({
@@ -563,7 +626,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             {/* More actions dropdown */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full bg-background shadow-sm">
+                <Button variant="ghost" size="icon" className="h-7 w-7 rounded-full bg-background shadow-sm" aria-label="Message actions">
                   <MoreHorizontal className="h-3.5 w-3.5" />
                 </Button>
               </DropdownMenuTrigger>
@@ -579,6 +642,14 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 {onReply && (
                   <DropdownMenuItem onClick={() => onReply(message)}>
                     <Reply className="mr-2 h-4 w-4" /> Reply
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem onClick={() => hideMut.mutate()} disabled={hideMut.isPending}>
+                  {hideMut.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <EyeOff className="mr-2 h-4 w-4" />} Hide for me
+                </DropdownMenuItem>
+                {!isOwn && (
+                  <DropdownMenuItem onClick={() => setReportOpen(true)}>
+                    <Flag className="mr-2 h-4 w-4" /> Report message
                   </DropdownMenuItem>
                 )}
                 {!isOwn && (
@@ -1394,6 +1465,74 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
         message={message}
         conversationId={conversationId}
       />
+
+      <Dialog
+        open={reportOpen}
+        onOpenChange={(open) => {
+          setReportOpen(open);
+          if (!open && !reportMut.isPending) {
+            setReportReason("");
+            setReportStatement("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Flag className="h-4 w-4" />
+              Report message
+            </DialogTitle>
+            <DialogDescription>
+              Share why this message should be reviewed. Recent conversation context will be included automatically.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label htmlFor={`report-reason-${message.message_id}`} className="text-sm font-medium">Reason</label>
+              <Select value={reportReason} onValueChange={setReportReason}>
+                <SelectTrigger id={`report-reason-${message.message_id}`} aria-label="Report reason">
+                  <SelectValue placeholder="Select a reason" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="harassment">Harassment or bullying</SelectItem>
+                  <SelectItem value="hate_speech">Hate speech</SelectItem>
+                  <SelectItem value="threat_or_violence">Threat or violence</SelectItem>
+                  <SelectItem value="sexual_content">Sexual content</SelectItem>
+                  <SelectItem value="spam">Spam or scam</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <label htmlFor={`report-statement-${message.message_id}`} className="text-sm font-medium">Statement</label>
+              <Textarea
+                id={`report-statement-${message.message_id}`}
+                placeholder="Describe what happened and why you are reporting this message."
+                value={reportStatement}
+                onChange={(e) => setReportStatement(e.target.value)}
+                minLength={5}
+                maxLength={2000}
+                rows={4}
+                aria-describedby={`report-statement-help-${message.message_id}`}
+              />
+              <p id={`report-statement-help-${message.message_id}`} className="text-xs text-muted-foreground">
+                Required (5–2000 characters). Context from nearby messages is included for reviewers.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReportOpen(false)} disabled={reportMut.isPending}>
+              Cancel
+            </Button>
+            <Button onClick={() => reportMut.mutate()} disabled={!reportCanSubmit || reportMut.isPending}>
+              {reportMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Submit report"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={tipStep !== null}
