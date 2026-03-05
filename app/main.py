@@ -61,6 +61,7 @@ from app.routers.commercial_checkout import router as commercial_checkout_router
 from app.routers.tickets import router as tickets_router
 from app.routers.ticket_spaces import router as ticket_spaces_router
 from app.routers.internal_devtools import router as internal_devtools_router
+from app.routers.vnc_sessions import router as vnc_sessions_router
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
@@ -212,6 +213,7 @@ def create_app() -> FastAPI:
     app.include_router(tickets_router)
     app.include_router(ticket_spaces_router)
     app.include_router(internal_devtools_router)
+    app.include_router(vnc_sessions_router)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)
 
