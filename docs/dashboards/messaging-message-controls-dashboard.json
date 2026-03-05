@@ -1,0 +1,68 @@
+{
+  "title": "Messaging Message Controls",
+  "timezone": "browser",
+  "panels": [
+    {
+      "title": "Message Control Actions (by action/result)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(messaging_message_control_actions_total[5m])) by (action, result)",
+          "legendFormat": "{{action}} {{result}}"
+        }
+      ]
+    },
+    {
+      "title": "Report Success Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(messaging_message_control_actions_total{action=\"report\",result=\"success\"}[5m]))",
+          "legendFormat": "report success/s"
+        }
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 2.0, "color": "yellow"},
+        {"op": "gt", "value": 5.0, "color": "red"}
+      ]
+    },
+    {
+      "title": "Report Rate-Limited",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(messaging_message_control_actions_total{action=\"report\",result=\"rate_limited\"}[10m]))",
+          "legendFormat": "rate_limited/s"
+        }
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 0.2, "color": "yellow"},
+        {"op": "gt", "value": 1.0, "color": "red"}
+      ]
+    },
+    {
+      "title": "Report Validation Errors (by reason)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(messaging_report_validation_errors_total[10m])) by (reason)",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
+      "title": "Message Controls API Error Ratio",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "(sum(rate(api_usage_requests_total{endpoint=~\"/messaging/conversations/.*/messages/.*/(hide|pin|report)\",status_class=~\"4xx|5xx\",http_status!=\"404\"}[10m])) / clamp_min(sum(rate(api_usage_requests_total{endpoint=~\"/messaging/conversations/.*/messages/.*/(hide|pin|report)\"}[10m])), 1))",
+          "legendFormat": "error ratio"
+        }
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 0.05, "color": "yellow"},
+        {"op": "gt", "value": 0.15, "color": "red"}
+      ]
+    }
+  ]
+}

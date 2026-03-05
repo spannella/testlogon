@@ -9,6 +9,7 @@ type RawConversation = Partial<Conversation> & {
   last_message_at?: number | string;
   active_agent_claimed_at?: number | string;
   assignment_version?: number | string;
+  latest_pinned_at?: number | string;
 };
 
 type RawMessage = Partial<Message> & {
@@ -143,5 +144,8 @@ export function adaptConversation(raw: RawConversation): Conversation {
     active_agent_user_id: raw.active_agent_user_id,
     active_agent_claimed_at: raw.active_agent_claimed_at != null ? toNum(raw.active_agent_claimed_at) : undefined,
     assignment_version: raw.assignment_version != null ? toNum(raw.assignment_version) : undefined,
+    latest_pinned_message_id: raw.latest_pinned_message_id,
+    latest_pinned_by_user_id: raw.latest_pinned_by_user_id,
+    latest_pinned_at: raw.latest_pinned_at != null ? toNum(raw.latest_pinned_at) : undefined,
   };
 }

@@ -584,6 +584,10 @@ export interface Conversation {
   active_agent_user_id?: string;
   active_agent_claimed_at?: number;
   assignment_version?: number;
+  // Latest active pin projection
+  latest_pinned_message_id?: string;
+  latest_pinned_by_user_id?: string;
+  latest_pinned_at?: number;
   // UI convenience fields (derived client-side)
   participants: Participant[];
   last_message?: Message;
@@ -970,6 +974,54 @@ export interface MessageViewer {
   user_id: string;
   last_viewed_at: number;
   view_count: number;
+}
+
+export interface MessageControlsErrorResp {
+  detail: string;
+  error_code?: string;
+}
+
+export type MessageControlAction = "hidden" | "visible" | "pinned" | "unpinned";
+
+export interface MessageControlActionResp {
+  ok: boolean;
+  conversation_id: string;
+  message_id: string;
+  action: MessageControlAction;
+  updated_at: number;
+}
+
+export interface HiddenMessagesResp {
+  items: Message[];
+  next_cursor?: string;
+}
+
+export interface ConversationPin {
+  conversation_id: string;
+  message_id: string;
+  pinned_by_user_id: string;
+  pinned_at: number;
+  is_active: boolean;
+}
+
+export interface ConversationPinsResp {
+  items: ConversationPin[];
+  next_cursor?: string;
+}
+
+export interface ReportMessageReq {
+  reason_code: string;
+  statement: string;
+}
+
+export interface ReportMessageResp {
+  ok: boolean;
+  report_id: string;
+  conversation_id: string;
+  message_id: string;
+  reason_code: string;
+  status: "submitted";
+  created_at: number;
 }
 
 
