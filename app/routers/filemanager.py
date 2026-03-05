@@ -4,7 +4,7 @@ import base64
 import json
 import uuid
 import time
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional, Literal
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile, Body, Request, HTTPException
 from pydantic import BaseModel, Field
@@ -23,6 +23,9 @@ from app.services.filemanager import (
     is_previewable,
     list_children,
     list_children_page,
+    list_mounted_directory,
+    download_mounted_file,
+    resolve_path_mount,
     list_shared_with,
     list_shared_with_me,
     move_node,
@@ -30,12 +33,14 @@ from app.services.filemanager import (
     rollback_move,
     norm_path,
     remove_file,
+    delete_mounted_file,
     remove_folder,
     search_prefix,
     share_node,
     unshare_node,
     split_parent_name,
     upload_file,
+    upload_mounted_file,
     upload_zip,
     upload_archive,
     get_node,
@@ -68,6 +73,13 @@ from app.services.purchase_history import record_receipt_download
 from app.services.file_bundle_entitlements import assert_file_bundle_access
 from app.services.internal_api_entitlements import enforce_internal_api_entitlement
 from app.services.sessions import require_ui_session
+from app.services.file_mounts import (
+    create_file_mount as create_file_mount_record,
+    delete_file_mount as delete_file_mount_record,
+    get_file_mount as get_file_mount_record,
+    list_file_mounts as list_file_mounts_records,
+    update_file_mount as update_file_mount_record,
+)
 
 router = APIRouter(prefix="/v1/fs", tags=["filemanager"])
 
@@ -85,6 +97,16 @@ def _enforce_filemanager_internal_entitlement(
         action=action,
         request_id=req_id,
     )
+
+
+def _require_s3_mounts_enabled() -> None:
+    if not bool(getattr(S, "filemgr_s3_mounts_enabled", False)):
+        raise HTTPException(status_code=404, detail="not found")
+
+
+def _require_s3_mounts_write_enabled() -> None:
+    if not bool(getattr(S, "filemgr_s3_mounts_write_enabled", False)):
+        raise HTTPException(status_code=403, detail={"code": "feature_disabled", "feature": "filemgr_s3_mounts_write"})
 
 
 def _encode_cursor(cursor: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -236,6 +258,116 @@ class FileCryptoTelemetryIn(BaseModel):
     remembered_password_used: bool = Field(default=False)
 
 
+class FileMountOut(BaseModel):
+    id: str
+    owner: str
+    provider: str
+    mount_path: str
+    bucket: str
+    prefix: Optional[str] = None
+    mode: str
+    auth_ref: str
+    status: str
+    created_at: str
+    updated_at: str
+    last_check_at: Optional[str] = None
+    last_error: Optional[str] = None
+
+
+class FileMountsListOut(BaseModel):
+    items: List[FileMountOut] = Field(default_factory=list)
+
+
+class FileMountCreateIn(BaseModel):
+    mount_path: str = Field(..., min_length=1, max_length=2048)
+    bucket: str = Field(..., min_length=3, max_length=255)
+    prefix: Optional[str] = Field(default=None, max_length=2048)
+    mode: Literal["read_only", "read_write"] = "read_only"
+    auth_ref: str = Field(..., min_length=1, max_length=256)
+    status: Literal["active", "degraded", "error", "disabled"] = "active"
+
+
+class FileMountUpdateIn(BaseModel):
+    mount_path: Optional[str] = Field(default=None, min_length=1, max_length=2048)
+    bucket: Optional[str] = Field(default=None, min_length=3, max_length=255)
+    prefix: Optional[str] = Field(default=None, max_length=2048)
+    mode: Optional[Literal["read_only", "read_write"]] = None
+    auth_ref: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    status: Optional[Literal["active", "degraded", "error", "disabled"]] = None
+
+
+class DeleteFileMountOut(BaseModel):
+    ok: bool
+    deleted: bool
+
+
+class ValidateFileMountOut(BaseModel):
+    ok: bool
+    mount_id: str
+    status: str
+
+
+@router.get("/mounts", response_model=FileMountsListOut)
+def list_file_mounts(user: str = Depends(_current_user)):
+    _require_s3_mounts_enabled()
+    items = [FileMountOut(**m.model_dump()) for m in list_file_mounts_records(user)]
+    return FileMountsListOut(items=items)
+
+
+@router.post("/mounts", response_model=FileMountOut)
+def create_file_mount(body: FileMountCreateIn, user: str = Depends(_current_user)):
+    _require_s3_mounts_enabled()
+    _require_s3_mounts_write_enabled()
+    out = create_file_mount_record(
+        user,
+        mount_path=body.mount_path,
+        bucket=body.bucket,
+        prefix=body.prefix,
+        mode=body.mode,
+        auth_ref=body.auth_ref,
+        status=body.status,
+    )
+    return FileMountOut(**out.model_dump())
+
+
+@router.get("/mounts/{mount_id}", response_model=FileMountOut)
+def get_file_mount(mount_id: str, user: str = Depends(_current_user)):
+    _require_s3_mounts_enabled()
+    out = get_file_mount_record(user, mount_id)
+    return FileMountOut(**out.model_dump())
+
+
+@router.patch("/mounts/{mount_id}", response_model=FileMountOut)
+def update_file_mount(mount_id: str, body: FileMountUpdateIn, user: str = Depends(_current_user)):
+    _require_s3_mounts_enabled()
+    _require_s3_mounts_write_enabled()
+    out = update_file_mount_record(
+        user,
+        mount_id,
+        mount_path=body.mount_path,
+        bucket=body.bucket,
+        prefix=body.prefix,
+        mode=body.mode,
+        auth_ref=body.auth_ref,
+        status=body.status,
+    )
+    return FileMountOut(**out.model_dump())
+
+
+@router.delete("/mounts/{mount_id}", response_model=DeleteFileMountOut)
+def delete_file_mount(mount_id: str, user: str = Depends(_current_user)):
+    _require_s3_mounts_enabled()
+    _require_s3_mounts_write_enabled()
+    return DeleteFileMountOut(**delete_file_mount_record(user, mount_id))
+
+
+@router.post("/mounts/{mount_id}/validate", response_model=ValidateFileMountOut)
+def validate_file_mount(mount_id: str, user: str = Depends(_current_user)):
+    _require_s3_mounts_enabled()
+    mount = get_file_mount_record(user, mount_id)
+    return ValidateFileMountOut(ok=True, mount_id=mount.id, status=mount.status)
+
+
 @router.get("/list")
 def list_files(
     path: str = Query("/", description="Folder path"),
@@ -255,6 +387,24 @@ def list_files(
     folder = norm_path(path, is_folder=True)
     cursor_payload = _decode_cursor(cursor)
     scan_forward = sort_dir == "asc"
+
+    mount = resolve_path_mount(user, folder, is_folder=True)
+    if mount:
+        if cursor_payload and cursor_payload.get("mode") not in {"mount", None}:
+            raise HTTPException(status_code=400, detail="invalid cursor")
+        mount_cursor = cursor_payload.get("token") if cursor_payload else None
+        listing = list_mounted_directory(user, folder, limit=limit, cursor=mount_cursor)
+        out = listing.get("items") or []
+        if sort_by == "updated":
+            out.sort(key=lambda x: (x["type"] != "folder", x.get("updated_at") or ""), reverse=not scan_forward)
+        elif sort_by == "size":
+            out.sort(key=lambda x: (x["type"] != "folder", x.get("size") or 0, (x.get("name") or "").lower()), reverse=not scan_forward)
+        elif sort_by == "name":
+            out.sort(key=lambda x: (x["type"] != "folder", (x.get("name") or "").lower()), reverse=not scan_forward)
+        next_token = listing.get("cursor")
+        next_payload = {"mode": "mount", "token": next_token} if next_token else None
+        return {"path": folder, "items": out, "cursor": _encode_cursor(next_payload)}
+
     if sort_by == "name":
         if cursor_payload and cursor_payload.get("mode") not in {"ddb", None}:
             raise HTTPException(status_code=400, detail="invalid cursor")
@@ -559,7 +709,13 @@ def upload_fs_file(
     )
     encrypted_flag = encrypted if isinstance(encrypted, bool) else False
     encryption_meta = _parse_encryption_meta(enc_meta) if encrypted_flag else None
-    result = upload_file(user, path, file, encryption_meta=encryption_meta)
+    mount = resolve_path_mount(user, norm_path(path, is_folder=False), is_folder=False)
+    if mount:
+        _require_s3_mounts_enabled()
+        _require_s3_mounts_write_enabled()
+        result = upload_mounted_file(user, path, file)
+    else:
+        result = upload_file(user, path, file, encryption_meta=encryption_meta)
     audit_event(
         "filemgr_file_uploaded",
         user,
@@ -576,6 +732,11 @@ def upload_fs_file(
 
 @router.post("/presign-upload", response_model=PresignUploadOut)
 def presign_fs_upload(inp: PresignUploadIn, user: str = Depends(_current_user)):
+    mount = resolve_path_mount(user, norm_path(inp.path, is_folder=False), is_folder=False)
+    if mount:
+        _require_s3_mounts_enabled()
+        _require_s3_mounts_write_enabled()
+        raise HTTPException(status_code=400, detail="mounted presign upload not supported")
     result = presign_upload(user, inp.path, content_type=inp.content_type)
     return PresignUploadOut(
         upload_url=result["upload_url"],
@@ -594,6 +755,11 @@ def complete_fs_upload(inp: CompleteUploadIn, req: Request = None, user: str = D
         action="upload_file",
         request_id=(req.headers.get("X-Request-Id") if req else inp.ticket_id),
     )
+    mount = resolve_path_mount(user, norm_path(inp.path, is_folder=False), is_folder=False)
+    if mount:
+        _require_s3_mounts_enabled()
+        _require_s3_mounts_write_enabled()
+        raise HTTPException(status_code=400, detail="mounted presign upload not supported")
     result = register_presigned_upload(
         user,
         inp.path,
@@ -623,7 +789,7 @@ def download_fs_file(path: str = Query(...), req: Request = None, user: str = De
         action="download_file",
         request_id=(req.headers.get("X-Request-Id") if req else None),
     )
-    result = download_file(user, path)
+    result = download_mounted_file(user, path) if resolve_path_mount(user, path, is_folder=False) else download_file(user, path)
     assert_file_bundle_access(user, result["node"])
     assert_download_allowed(user, requested_bytes=int(result["node"].get("size") or 0))
     node = result["node"]
@@ -675,7 +841,7 @@ def preview_fs_file(path: str = Query(...), req: Request = None, user: str = Dep
         request_id=(req.headers.get("X-Request-Id") if req else None),
     )
     started = time.perf_counter()
-    result = download_file(user, path)
+    result = download_mounted_file(user, path) if resolve_path_mount(user, path, is_folder=False) else download_file(user, path)
     assert_file_bundle_access(user, result["node"])
     node = result["node"]
     obj = result["object"]
@@ -788,6 +954,20 @@ def thumbnail_fs_file(path: str = Query(...), req: Request = None, user: str = D
     )
 
 
+
+
+@router.delete("")
+def remove_fs(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
+    raw = str(path or "").strip()
+    is_folder_path = raw.endswith("/")
+    normalized = norm_path(path, is_folder=True if is_folder_path else False)
+    if is_folder_path:
+        mount = resolve_path_mount(user, normalized, is_folder=True)
+        if mount:
+            raise HTTPException(status_code=400, detail="mounted folder delete not supported")
+        return remove_fs_folder(path=normalized, req=req, user=user)
+    return remove_fs_file(path=normalized, req=req, user=user)
+
 @router.delete("/file")
 def remove_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
     _enforce_filemanager_internal_entitlement(
@@ -795,7 +975,13 @@ def remove_fs_file(path: str = Query(...), req: Request = None, user: str = Depe
         action="delete_file",
         request_id=(req.headers.get("X-Request-Id") if req else None),
     )
-    remove_file(user, path)
+    mount = resolve_path_mount(user, norm_path(path, is_folder=False), is_folder=False)
+    if mount:
+        _require_s3_mounts_enabled()
+        _require_s3_mounts_write_enabled()
+        delete_mounted_file(user, path)
+    else:
+        remove_file(user, path)
     audit_event("filemgr_file_removed", user, req, outcome="success", path=path, **_file_audit_fields(file_path=norm_path(path, is_folder=False), owner=user))
     return {"ok": True}
 

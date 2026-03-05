@@ -199,6 +199,23 @@ FILEMGR_PREVIEW_ARTIFACT_BYTES = Counter(
     "File manager preview artifact bytes produced",
     ["artifact"],
 )
+
+FILEMGR_MOUNT_OPERATION_LATENCY = Histogram(
+    "filemgr_mount_operation_duration_seconds",
+    "Mounted file manager operation latency in seconds",
+    ["provider", "mode", "operation", "mount_id_hash"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+)
+FILEMGR_MOUNT_BYTES = Counter(
+    "filemgr_mount_transfer_bytes_total",
+    "Mounted file manager bytes transferred",
+    ["provider", "mode", "operation", "direction", "mount_id_hash"],
+)
+FILEMGR_MOUNT_ERRORS = Counter(
+    "filemgr_mount_errors_total",
+    "Mounted file manager errors by provider operation and aws code",
+    ["provider", "mode", "operation", "aws_error_code", "mount_id_hash"],
+)
 FILEMGR_PREVIEW_HOVER_PLAY_STARTS = Counter(
     "filemgr_preview_hover_play_starts_total",
     "Client hover/tap preview play starts",
@@ -708,6 +725,38 @@ def record_filemgr_bytes(direction: str, operation: str, nbytes: int) -> None:
         return
     FILEMGR_BYTES.labels(direction=direction, operation=operation).inc(float(nbytes))
 
+
+
+
+def record_filemgr_mount_operation_latency(*, provider: str, mode: str, operation: str, mount_id_hash: str, elapsed_seconds: float) -> None:
+    FILEMGR_MOUNT_OPERATION_LATENCY.labels(
+        provider=(provider or "unknown").lower(),
+        mode=(mode or "unknown").lower(),
+        operation=(operation or "unknown").lower(),
+        mount_id_hash=mount_id_hash or "unknown",
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_filemgr_mount_bytes(*, provider: str, mode: str, operation: str, direction: str, mount_id_hash: str, nbytes: int) -> None:
+    if nbytes <= 0:
+        return
+    FILEMGR_MOUNT_BYTES.labels(
+        provider=(provider or "unknown").lower(),
+        mode=(mode or "unknown").lower(),
+        operation=(operation or "unknown").lower(),
+        direction=(direction or "unknown").lower(),
+        mount_id_hash=mount_id_hash or "unknown",
+    ).inc(float(nbytes))
+
+
+def record_filemgr_mount_error(*, provider: str, mode: str, operation: str, aws_error_code: str, mount_id_hash: str) -> None:
+    FILEMGR_MOUNT_ERRORS.labels(
+        provider=(provider or "unknown").lower(),
+        mode=(mode or "unknown").lower(),
+        operation=(operation or "unknown").lower(),
+        aws_error_code=(aws_error_code or "unknown"),
+        mount_id_hash=mount_id_hash or "unknown",
+    ).inc()
 
 def record_filemgr_search_path(operation: str, path: str) -> None:
     FILEMGR_SEARCH_PATH.labels(operation=operation, path=path).inc()

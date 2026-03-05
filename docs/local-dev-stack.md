@@ -115,6 +115,15 @@ Before manual validation, run:
 scripts/test_mock_mode.sh
 ```
 
+### File manager S3 mount flags
+For controlled rollout, keep S3 mounts disabled by default in local and shared environments unless actively testing the feature:
+
+- `FILEMGR_S3_MOUNTS_ENABLED=false`
+- `FILEMGR_S3_MOUNTS_WRITE_ENABLED=false`
+- `FILEMGR_S3_MOUNTS_ALLOWED_BUCKET_PATTERNS=` (optional comma-separated allowlist)
+
+When `FILEMGR_S3_MOUNTS_ENABLED=false`, `/v1/fs/mounts/*` routes are intentionally unavailable.
+
 ### Core stack
 - [ ] UI loads at `/`
 - [ ] DynamoDB tables exist and seeded records are queryable
