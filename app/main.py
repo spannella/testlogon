@@ -61,6 +61,10 @@ from app.routers.commercial_checkout import router as commercial_checkout_router
 from app.routers.tickets import router as tickets_router
 from app.routers.ticket_spaces import router as ticket_spaces_router
 from app.routers.internal_devtools import router as internal_devtools_router
+from app.routers.browser_ssh_terminal import (
+    browser_ssh_terminal_enabled,
+    router as browser_ssh_terminal_router,
+)
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
@@ -141,6 +145,12 @@ def create_app() -> FastAPI:
     async def index():
         return FileResponse(static_dir / "index.html")
 
+    @app.get("/browser-ssh")
+    async def browser_ssh_route():
+        if not browser_ssh_terminal_enabled():
+            raise HTTPException(status_code=404, detail="Not found")
+        return FileResponse(static_dir / "index.html")
+
     app.add_middleware(CORSMiddleware, **_build_cors_options())
     app.middleware("http")(_api_usage_metering_middleware())
     if METRICS_ENABLED:
@@ -212,6 +222,7 @@ def create_app() -> FastAPI:
     app.include_router(tickets_router)
     app.include_router(ticket_spaces_router)
     app.include_router(internal_devtools_router)
+    app.include_router(browser_ssh_terminal_router)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)
 

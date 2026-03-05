@@ -419,6 +419,33 @@ ENTITLEMENT_CHECKS = Counter(
     "Entitlement check outcomes by product family",
     ["product_family", "outcome", "reason"],
 )
+BROWSER_SSH_CONNECT_THROTTLED = Counter(
+    "browser_ssh_connect_throttled_total",
+    "Browser SSH connect attempts throttled by per-user rate limit",
+    ["reason"],
+)
+BROWSER_SSH_CONNECT_DENIED = Counter(
+    "browser_ssh_connect_denied_total",
+    "Browser SSH connect attempts denied by policy/auth/quota",
+    ["reason"],
+)
+BROWSER_SSH_ACTIVE_SESSIONS = Gauge(
+    "browser_ssh_active_sessions",
+    "Active Browser SSH sessions by user in this process",
+    ["user_sub"],
+)
+BROWSER_SSH_SESSION_LIFECYCLE = Counter(
+    "browser_ssh_session_lifecycle_total",
+    "Browser SSH session lifecycle events",
+    ["event", "outcome"],
+)
+BROWSER_SSH_SESSION_DURATION = Histogram(
+    "browser_ssh_session_duration_seconds",
+    "Browser SSH connected session duration",
+    ["outcome"],
+    buckets=(1, 5, 15, 30, 60, 120, 300, 600, 900, 1800, 3600),
+)
+
 ENTITLEMENT_CHECK_LATENCY = Histogram(
     "entitlement_check_latency_seconds",
     "Entitlement check latency by product family",
@@ -614,6 +641,31 @@ def record_entitlement_check(*, product_family: str, outcome: str, reason: str =
 def record_entitlement_check_latency(*, product_family: str, elapsed_seconds: float) -> None:
     ENTITLEMENT_CHECK_LATENCY.labels(
         product_family=(product_family or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_browser_ssh_connect_throttled(*, reason: str) -> None:
+    BROWSER_SSH_CONNECT_THROTTLED.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def record_browser_ssh_connect_denied(*, reason: str) -> None:
+    BROWSER_SSH_CONNECT_DENIED.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def set_browser_ssh_active_sessions(*, user_sub: str, count: int) -> None:
+    BROWSER_SSH_ACTIVE_SESSIONS.labels(user_sub=(user_sub or "unknown")).set(max(0, int(count)))
+
+
+def record_browser_ssh_session_lifecycle(*, event: str, outcome: str) -> None:
+    BROWSER_SSH_SESSION_LIFECYCLE.labels(
+        event=(event or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).inc()
+
+
+def record_browser_ssh_session_duration(*, outcome: str, elapsed_seconds: float) -> None:
+    BROWSER_SSH_SESSION_DURATION.labels(
+        outcome=(outcome or "unknown").lower(),
     ).observe(max(0.0, float(elapsed_seconds)))
 
 

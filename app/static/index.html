@@ -6,6 +6,7 @@
   <title>Security Control Panel</title>
   <script src="https://js.stripe.com/v3/"></script>
   <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.5.0/css/xterm.min.css" />
   <link rel="preload" href="https://js.ccbill.com/v1.12.2/ccbill-advanced-widget.js" as="script" />
   <script src="https://js.ccbill.com/v1.12.2/ccbill-advanced-widget.js"></script>
 </head>
@@ -19,9 +20,59 @@
   <div class="toolbar">
     <button id="btnRefreshAll">Refresh</button>
     <button onclick="document.getElementById('billingSection').scrollIntoView({behavior:'smooth'});">Billing</button>
+    <button id="btnBrowserSshTerminal" class="hidden" onclick="document.getElementById('browserSshTerminalSection').scrollIntoView({behavior:'smooth'});">SSH Terminal</button>
     <button id="btnSetTokens">Set tokens</button>
     <button id="btnClearSession">Logout UI session</button>
     <button id="btnClearTokens">Clear tokens</button>
+  </div>
+</div>
+
+
+<div class="row hidden" id="browserSshTerminalSection">
+  <div class="card" style="width:100%">
+    <h3>Browser SSH Terminal (Scaffold)</h3>
+    <div class="muted">Feature-flagged SSH terminal scaffold. Full SSH bridge is not implemented in this milestone.</div>
+    <div class="row-inline" style="margin-top:10px;">
+      <input id="browserSshHost" placeholder="Host" style="flex:1;" />
+      <input id="browserSshPort" placeholder="Port" type="number" value="22" min="1" max="65535" style="max-width:120px;" />
+      <input id="browserSshUsername" placeholder="Username" style="flex:1;" />
+      <select id="browserSshAuthType" style="max-width:200px;">
+        <option value="password" selected>Password</option>
+        <option value="private_key">Private key</option>
+      </select>
+    </div>
+    <div class="row-inline" id="browserSshPasswordRow" style="margin-top:8px;">
+      <input id="browserSshPassword" type="password" placeholder="Password" style="flex:1;" />
+    </div>
+    <div class="row-inline hidden" id="browserSshPrivateKeyRow" style="margin-top:8px;">
+      <textarea id="browserSshPrivateKey" placeholder="Paste private key" style="width:100%;min-height:100px;"></textarea>
+      <input id="browserSshPrivateKeyFile" type="file" accept=".pem,.key,.ppk,.txt" />
+      <input id="browserSshPassphrase" type="password" placeholder="Passphrase (optional)" style="flex:1;" />
+    </div>
+    <div class="row-inline" style="margin-top:8px;">
+      <button id="browserSshConnectBtn" disabled>Connect</button>
+      <button id="browserSshDisconnectBtn" class="hidden">Disconnect</button>
+      <button id="browserSshCopyBtn" type="button">Copy</button>
+      <button id="browserSshPasteBtn" type="button">Paste</button>
+      <span class="muted" id="browserSshWsPath"></span>
+    </div>
+    <div class="row-inline" style="margin-top:8px;gap:8px;align-items:center;">
+      <span id="browserSshStateBadge" class="pill">disconnected</span>
+      <button id="browserSshRetryBtn" type="button" class="hidden">Reconnect</button>
+      <div class="muted" id="browserSshStatus"></div>
+    </div>
+    <div class="row-inline" style="margin-top:6px;align-items:center;gap:6px;">
+      <input id="browserSshReuseCreds" type="checkbox" />
+      <label for="browserSshReuseCreds" class="muted">Allow reconnect to reuse prior credentials (memory only)</label>
+    </div>
+    <div class="muted" id="browserSshSize" style="margin-top:4px;"></div>
+    <div id="browserSshTerminalViewport" style="margin-top:10px; border:1px solid #ddd; border-radius:10px; background:#111; height:360px; overflow:hidden; position:relative;">
+      <div id="browserSshTerminal" style="width:100%; height:100%;"></div>
+      <div id="browserSshContextMenu" class="hidden" style="position:absolute;z-index:20;background:#fff;border:1px solid #ccc;border-radius:8px;padding:4px;box-shadow:0 6px 18px rgba(0,0,0,0.2);">
+        <button id="browserSshContextCopy" type="button">Copy</button>
+        <button id="browserSshContextPaste" type="button">Paste</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1688,6 +1739,8 @@
 
 <div id="toastContainer" class="toast-container"></div>
 
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <script src="/static/main.js"></script>
 <script>
 let paypalLastSetupTokenPaypal = null;
