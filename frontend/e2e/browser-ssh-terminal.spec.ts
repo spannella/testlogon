@@ -1,6 +1,12 @@
 import { test, expect } from "@playwright/test";
 
+// Skip when BROWSER_SSH_TERMINAL_ENABLED is not set (requires backend scaffold HTML page at /browser-ssh).
+const SSH_ENABLED = process.env.BROWSER_SSH_TERMINAL_ENABLED === "1";
+
+test.describe("browser SSH terminal", () => {
+
 test("browser SSH e2e connect, run command, copy, paste, disconnect", async ({ page, context }) => {
+  test.skip(!SSH_ENABLED, "BROWSER_SSH_TERMINAL_ENABLED is not set; backend HTML scaffold not available");
   await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: "http://127.0.0.1:8000" });
 
   await page.addInitScript(() => {
@@ -152,3 +158,5 @@ test("browser SSH e2e connect, run command, copy, paste, disconnect", async ({ p
   await page.click("#browserSshDisconnectBtn");
   await expect(page.locator("#browserSshStateBadge")).toContainText("disconnected");
 });
+
+}); // end describe

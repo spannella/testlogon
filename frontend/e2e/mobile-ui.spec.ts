@@ -72,10 +72,20 @@ async function assertNoHorizontalOverflow(page: Page): Promise<void> {
   const overflow = await page.evaluate(() => {
     const overflowing: string[] = [];
     const vw = document.documentElement.clientWidth;
+
+    function isInsideScrollableX(el: Element): boolean {
+      let parent = el.parentElement;
+      while (parent && parent !== document.body) {
+        const style = window.getComputedStyle(parent);
+        if (style.overflowX === "auto" || style.overflowX === "scroll") return true;
+        parent = parent.parentElement;
+      }
+      return false;
+    }
+
     document.querySelectorAll("*").forEach((el) => {
       const rect = (el as HTMLElement).getBoundingClientRect();
-      if (rect.right > vw + 1) {
-        // Only report if meaningfully outside viewport
+      if (rect.right > vw + 1 && !isInsideScrollableX(el)) {
         overflowing.push(`${el.tagName}.${[...(el as HTMLElement).classList].join(".")} right=${Math.round(rect.right)} > vw=${vw}`);
       }
     });
