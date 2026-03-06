@@ -23,6 +23,9 @@ type CapabilityMode = {
     drag_drop_upload: boolean;
   };
   expectsUploadButton: boolean;
+  // When file_transfer is false the component renders vnc-transfer-unsupported (no drag-drop zone).
+  // When file_transfer is true the drag-drop zone is always rendered; drag_drop_upload controls its text.
+  expectsTransferUnsupported: boolean;
   expectsDragDropDisabledText: boolean;
 };
 
@@ -31,18 +34,21 @@ const CAPABILITY_MATRIX: CapabilityMode[] = [
     targetId: "caps-none",
     capabilities: { clipboard: false, file_transfer: false, drag_drop_upload: false },
     expectsUploadButton: false,
-    expectsDragDropDisabledText: true,
+    expectsTransferUnsupported: true,
+    expectsDragDropDisabledText: false,
   },
   {
     targetId: "caps-upload-only",
     capabilities: { clipboard: true, file_transfer: true, drag_drop_upload: false },
     expectsUploadButton: true,
+    expectsTransferUnsupported: false,
     expectsDragDropDisabledText: true,
   },
   {
     targetId: "caps-upload-dnd",
     capabilities: { clipboard: true, file_transfer: true, drag_drop_upload: true },
     expectsUploadButton: true,
+    expectsTransferUnsupported: false,
     expectsDragDropDisabledText: false,
   },
 ];
@@ -100,6 +106,17 @@ async function setupAuthenticatedState(page: Page): Promise<void> {
 }
 
 async function installApiMocks(page: Page): Promise<void> {
+  // Register catch-all FIRST so it has LOWEST priority (Playwright: last registered wins).
+  // Use the full localhost origin to avoid matching Vite module paths like /src/api/endpoints/vnc.ts
+  // — those also contain "/api/" and would get JSON instead of JS, breaking the app bundle.
+  await page.route("http://localhost:3000/api/**", async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({}),
+    });
+  });
+
   await page.route("**/api/vnc/session", async (route: Route) => {
     const method = route.request().method();
 
@@ -167,23 +184,47 @@ async function installApiMocks(page: Page): Promise<void> {
     });
   });
 
-  await page.route("**/api/**", async (route: Route) => {
-    await route.fulfill({
+
+  // Prevent AppShell 401 logout cascade: Header fires GET /ui/profile and GET /ui/alerts,
+  // Sidebar fires GET /messaging/conversations, auth fires POST /ui/session/refresh.
+  // Without these mocks, the fake localStorage token gets a 401 → refresh retry → logout → /login.
+  await page.route("**/ui/profile**", (route) =>
+    route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({}),
-    });
-  });
+      body: JSON.stringify({ id: "e2e-vnc-user", email: "vnc@test.local", role: "user" }),
+    }),
+  );
+  await page.route("**/ui/alerts**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ alerts: [], next_cursor: null, unread_count: 0 }),
+    }),
+  );
+  await page.route("**/messaging/conversations**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ conversations: [], next_cursor: null }),
+    }),
+  );
+  await page.route("**/ui/session/refresh**", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }),
+  );
 }
 
 test.describe("VNC-016: remote desktop e2e", () => {
   test.beforeEach(async ({ page }) => {
     await setupAuthenticatedState(page);
     await installApiMocks(page);
+    // Navigate in beforeEach so the lazy React chunk has time to load before each test.
+    // The full E2E suite runs under load; give the "Target ID" label up to 15s to appear.
+    await page.goto(VNC_PATH);
+    await expect(page.getByLabel("Target ID")).toBeVisible({ timeout: 15000 });
   });
 
   test("connect/disconnect critical path and ADR error-code mapping", async ({ page }) => {
-    await page.goto(VNC_PATH);
 
     await page.getByLabel("Target ID").fill("demo");
     await page.getByRole("button", { name: /connect viewer/i }).click();
@@ -198,7 +239,6 @@ test.describe("VNC-016: remote desktop e2e", () => {
   });
 
   test("clipboard supported vs unsupported behaviors", async ({ page }) => {
-    await page.goto(VNC_PATH);
 
     await page.getByLabel("Target ID").fill("caps-upload-only");
     await page.getByRole("button", { name: /connect viewer/i }).click();
@@ -219,7 +259,6 @@ test.describe("VNC-016: remote desktop e2e", () => {
   });
 
   test("capability matrix gates upload/drag-drop controls", async ({ page }) => {
-    await page.goto(VNC_PATH);
 
     for (const mode of CAPABILITY_MATRIX) {
       await page.getByRole("button", { name: /^disconnect$/i }).click().catch(() => {});
@@ -235,11 +274,17 @@ test.describe("VNC-016: remote desktop e2e", () => {
         await expect(uploadBtn).toHaveCount(0);
       }
 
-      const dragDropZone = page.getByTestId("vnc-drag-drop-zone");
-      if (mode.expectsDragDropDisabledText) {
-        await expect(dragDropZone).toContainText("disabled for this session");
+      if (mode.expectsTransferUnsupported) {
+        // file_transfer: false — component renders transfer-unsupported, no drag-drop zone
+        await expect(page.getByTestId("vnc-transfer-unsupported")).toBeVisible();
       } else {
-        await expect(dragDropZone).toContainText("Drag and drop files here");
+        // file_transfer: true — drag-drop zone is always rendered; text depends on drag_drop_upload
+        const dragDropZone = page.getByTestId("vnc-drag-drop-zone");
+        if (mode.expectsDragDropDisabledText) {
+          await expect(dragDropZone).toContainText("disabled for this session");
+        } else {
+          await expect(dragDropZone).toContainText("Drag and drop files here");
+        }
       }
     }
   });
