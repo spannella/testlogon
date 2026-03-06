@@ -445,6 +445,32 @@ export interface Address extends AddressIn {
   updated_at: number;
 }
 
+// ─── Address Validation ───────────────────────────────────────────
+
+export interface AddressValidateReq {
+  line1?: string;
+  line2?: string;
+  city?: string;
+  state?: string;
+  postal_code?: string;
+  country?: string;
+}
+
+export interface ValidatedAddressOut {
+  line1: string;
+  line2?: string;
+  city: string;
+  state: string;
+  postal_code: string;
+  country: string;
+}
+
+export interface AddressValidateResp {
+  valid: boolean;
+  dpv_match_code?: string; // "Y"=exact, "S"=street match, "D"=+4 not confirmed, "A"=ambiguous
+  candidates: ValidatedAddressOut[];
+}
+
 // ─── Account ─────────────────────────────────────────────────────
 
 export interface AccountState {

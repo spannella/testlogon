@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from boto3.dynamodb.conditions import Attr, Key
@@ -149,10 +150,10 @@ def upsert_packet_field(
         "packet_id": packet_id,
         "field_id": field_id,
         "page": int(page),
-        "x": float(x),
-        "y": float(y),
-        "width": float(width),
-        "height": float(height),
+        "x": Decimal(str(x)),
+        "y": Decimal(str(y)),
+        "width": Decimal(str(width)),
+        "height": Decimal(str(height)),
         "field_type": field_type.value,
         "required": bool(required),
         "updated_at": now,

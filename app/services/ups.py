@@ -71,6 +71,26 @@ def create_label(shipment: Dict[str, Any]) -> Dict[str, Any]:
     return _ups_post("label", shipment)
 
 
+def validate_address(req: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Call UPS Address Validation API (AV5).
+    Translates our simplified request into UPS XAVRequest format.
+    """
+    address_lines = [v for v in [req.get("line1", ""), req.get("line2", "")] if v]
+    payload = {
+        "XAVRequest": {
+            "AddressKeyFormat": {
+                "AddressLine": address_lines,
+                "PoliticalDivision2": req.get("city", ""),
+                "PoliticalDivision1": req.get("state", ""),
+                "PostcodePrimaryLow": req.get("postal_code", ""),
+                "CountryCode": req.get("country", "US"),
+            }
+        }
+    }
+    return _ups_post("api/addressvalidation/v1/1", payload)
+
+
 def verify_tracking_webhook_signature(raw_body: bytes, signature_header: str) -> bool:
     secret = (S.ups_webhook_secret or "").strip()
     if not secret:

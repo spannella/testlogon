@@ -1701,10 +1701,17 @@ test.describe("11. Tips and locked messages", () => {
   });
 
   test("UI: Bob clicks 'Unlock for' and the message content becomes visible", async () => {
+    // Ensure the conversation is still open and fully loaded before looking for the button.
+    // A background React Query refetch between tests can temporarily unmount messages.
+    await expect(
+      bobPage
+        .getByPlaceholder("Type a message...")
+        .or(bobPage.getByPlaceholder("Type an encrypted message...")),
+    ).toBeVisible({ timeout: 10000 });
     // Find the specific locked bubble by its unique description (text is still hidden).
     const lockedBubble = bobPage.locator("div.group").filter({ hasText: UI_LOCK_DESC }).last();
     const unlockBtn = lockedBubble.getByRole("button", { name: /unlock for/i });
-    await expect(unlockBtn).toBeVisible({ timeout: 5000 });
+    await expect(unlockBtn).toBeVisible({ timeout: 10000 });
     // Clicking "Unlock for" opens a dialog (not a direct mutation).
     await unlockBtn.click();
     const dialog = bobPage.getByRole("dialog");
@@ -1783,20 +1790,28 @@ test.describe("11. Tips and locked messages", () => {
       // Re-open the E2E Bob DM (it's at the top of the list as the most-recent).
       const dmRow = alicePage.getByRole("button").filter({ hasText: "E2E Bob" }).first();
       await expect(dmRow).toBeVisible({ timeout: 8000 });
+
+      // Register the messages response listener BEFORE clicking to avoid a race.
+      const msgsLoaded = alicePage.waitForResponse(
+        (res) => res.url().includes(`/conversations/${_dmConvoId}/messages`) && res.request().method() === "GET",
+        { timeout: 15000 },
+      );
       await dmRow.click();
       await expect(
         alicePage
           .getByPlaceholder("Type a message...")
           .or(alicePage.getByPlaceholder("Type an encrypted message...")),
       ).toBeVisible({ timeout: 5000 });
+      await msgsLoaded; // wait for messages query to complete
 
       // Bob's fresh message should now be visible at the bottom of the conversation.
       const bubble = alicePage.locator("div.group").filter({ hasText: freshText }).last();
+      await expect(bubble).toBeAttached({ timeout: 8000 });
       await bubble.scrollIntoViewIfNeeded();
       await bubble.hover();
 
-      // The MoreHorizontal dropdown trigger has no aria-label — target with :not()
-      const moreBtn = bubble.locator("button:not([aria-label])").first();
+      // PR 127 added aria-label="Message actions" to the MoreHorizontal trigger button.
+      const moreBtn = bubble.locator("button[aria-label='Message actions']");
       await expect(moreBtn).toBeVisible({ timeout: 3000 });
       await moreBtn.click();
 

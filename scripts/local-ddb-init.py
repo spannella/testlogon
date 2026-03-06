@@ -17,6 +17,8 @@ class TableDef:
     partition_key: str
     sort_key: Optional[str] = None
     gsi: List[Dict[str, str]] = field(default_factory=list)
+    # Override attribute types (default "S"). Use for numeric keys, e.g. {"created_at": "N"}
+    attr_types: Dict[str, str] = field(default_factory=dict)
 
 
 def _resolve_table_name(name: str, fallback: str) -> str:
@@ -315,6 +317,60 @@ def _table_defs() -> List[TableDef]:
         ),
         TableDef(os.getenv("DDB_CONVERSATION_ROUTING_EVENTS", "ConversationRoutingEvents"), "conversation_id", "event_id"),
         TableDef(os.getenv("DDB_CONTACTS_TABLE", "Contacts"), "owner_id", "contact_id"),
+        # Tickets (composite GSI keys: gsi1pk/gsi1sk=owner, gsi2pk/gsi2sk=status, gsi3pk/gsi3sk=assignee,
+        # gsi_space_pk/sk=space, gsi_space_status_pk/sk=space+status, gsi_space_assignee_pk/sk=space+assignee,
+        # gsi_member_pk/sk=member spaces)
+        TableDef(
+            _resolve_table_name(S.tickets_table_name, "tickets"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": S.tickets_owner_index_name, "partition_key": "gsi1pk", "sort_key": "gsi1sk"},
+                {"index_name": S.tickets_status_index_name, "partition_key": "gsi2pk", "sort_key": "gsi2sk"},
+                {"index_name": S.tickets_assignee_index_name, "partition_key": "gsi3pk", "sort_key": "gsi3sk"},
+                {"index_name": S.tickets_space_index_name, "partition_key": "gsi_space_pk", "sort_key": "gsi_space_sk"},
+                {"index_name": S.tickets_space_status_index_name, "partition_key": "gsi_space_status_pk", "sort_key": "gsi_space_status_sk"},
+                {"index_name": S.tickets_space_assignee_index_name, "partition_key": "gsi_space_assignee_pk", "sort_key": "gsi_space_assignee_sk"},
+                {"index_name": S.tickets_member_spaces_index_name, "partition_key": "gsi_member_pk", "sort_key": "gsi_member_sk"},
+            ],
+        ),
+        # Messaging extended tables (from PR 127 compliance/visibility features)
+        # ConversationPins: pk=(conversation_id, message_id), GSI ByConversationActivePinnedAt
+        TableDef(
+            _resolve_table_name(S.conversation_pins_table_name, "ConversationPins"),
+            "conversation_id", "message_id",
+            gsi=[{"index_name": "ByConversationActivePinnedAt", "partition_key": "conversation_active", "sort_key": "latest_pin_sort"}],
+        ),
+        # MessageVisibilityOverrides: pk=(conversation_id, message_user), GSI ByConversationUserUpdatedAt
+        TableDef(
+            _resolve_table_name(S.message_visibility_overrides_table_name, "MessageVisibilityOverrides"),
+            "conversation_id", "message_user",
+            gsi=[{"index_name": "ByConversationUserUpdatedAt", "partition_key": "conversation_user", "sort_key": "updated_at"}],
+            attr_types={"updated_at": "N"},
+        ),
+        # MessageReports: pk=report_id, GSIs ByConversationCreatedAt + ByReporterCreatedAt
+        TableDef(
+            _resolve_table_name(S.message_reports_table_name, "MessageReports"),
+            "report_id",
+            gsi=[
+                {"index_name": "ByConversationCreatedAt", "partition_key": "conversation_id", "sort_key": "created_at"},
+                {"index_name": "ByReporterCreatedAt", "partition_key": "reported_by_user_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # MessageReportContext: pk=(report_id, message_id)
+        TableDef(_resolve_table_name(S.message_report_context_table_name, "MessageReportContext"), "report_id", "message_id"),
+        # MessageLegalHolds: pk=hold_id, GSI ByConversationStatusCreatedAt
+        TableDef(
+            _resolve_table_name(S.message_legal_holds_table_name, "MessageLegalHolds"),
+            "hold_id",
+            gsi=[{"index_name": "ByConversationStatusCreatedAt", "partition_key": "conversation_status", "sort_key": "created_at"}],
+            attr_types={"created_at": "N"},
+        ),
+        # MessageArchiveChainHeads: pk=conversation_id
+        TableDef(_resolve_table_name(S.message_archive_chain_heads_table_name, "MessageArchiveChainHeads"), "conversation_id"),
+        # MessageComplianceExports: pk=export_id
+        TableDef(_resolve_table_name(S.message_compliance_exports_table_name, "MessageComplianceExports"), "export_id"),
     ]
 
 
@@ -326,6 +382,8 @@ def _attribute_definitions(table: TableDef) -> List[Dict[str, str]]:
         attrs[gsi["partition_key"]] = "S"
         if gsi.get("sort_key"):
             attrs[gsi["sort_key"]] = "S"
+    # Apply type overrides (e.g. numeric keys)
+    attrs.update(table.attr_types)
     return [{"AttributeName": k, "AttributeType": v} for k, v in attrs.items()]
 
 

@@ -1071,6 +1071,30 @@ class AddressPrimaryReq(BaseModel):
     address_id: str
 
 
+class AddressValidateReq(BaseModel):
+    line1: str = ""
+    line2: str = ""
+    city: str = ""
+    state: str = ""
+    postal_code: str = ""
+    country: str = "US"
+
+
+class ValidatedAddressOut(BaseModel):
+    line1: str
+    line2: str = ""
+    city: str
+    state: str
+    postal_code: str
+    country: str
+
+
+class AddressValidateResp(BaseModel):
+    valid: bool
+    dpv_match_code: str = ""  # "Y", "S", "D", "A"
+    candidates: List[ValidatedAddressOut] = []
+
+
 class LanguageIn(BaseModel):
     name: str
     level: str
@@ -1347,7 +1371,7 @@ class ProjectEventModel(BaseModel):
 
 class ProviderCredentialModel(BaseModel):
     owner: str = Field(min_length=1, max_length=256)
-    provider: Literal["github", "gitlab"]
+    provider: Literal["github", "gitlab", "s3"]
     org: Optional[str] = Field(default=None, max_length=256)
     token_ct_b64: str = Field(min_length=1)
     scopes: List[str] = Field(default_factory=list)
@@ -1381,6 +1405,77 @@ class ProviderCredentialModel(BaseModel):
     @field_validator("created_at", "updated_at")
     @classmethod
     def _validate_iso(cls, value: str) -> str:
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError("timestamp must include timezone")
+        return value
+
+
+class FileMountModel(BaseModel):
+    id: str = Field(min_length=1, max_length=128)
+    owner: str = Field(min_length=1, max_length=256)
+    provider: Literal["s3"] = "s3"
+    mount_path: str = Field(min_length=1, max_length=2048)
+    bucket: str = Field(min_length=3, max_length=255)
+    prefix: Optional[str] = Field(default=None, max_length=2048)
+    mode: Literal["read_only", "read_write"] = "read_only"
+    auth_ref: str = Field(min_length=1, max_length=256)
+    status: Literal["active", "degraded", "error", "disabled"] = "active"
+    created_at: str
+    updated_at: str
+    last_check_at: Optional[str] = None
+    last_error: Optional[str] = Field(default=None, max_length=1024)
+
+    @field_validator("id", "owner", "mount_path", "bucket", "auth_ref", "prefix", "last_error")
+    @classmethod
+    def _strip_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        return cleaned
+
+    @field_validator("mount_path")
+    @classmethod
+    def _validate_mount_path(cls, value: str) -> str:
+        cleaned = (value or "").strip()
+        if not cleaned.startswith("/"):
+            raise ValueError("mount_path must be absolute")
+        if cleaned == "/":
+            raise ValueError("mount_path cannot be root")
+        if "//" in cleaned or ".." in cleaned:
+            raise ValueError("invalid mount_path")
+        normalized = cleaned.rstrip("/") + "/"
+        if not re.fullmatch(r"/(?:[^/]+/)+", normalized):
+            raise ValueError("invalid mount_path")
+        return normalized
+
+    @field_validator("bucket")
+    @classmethod
+    def _validate_bucket(cls, value: str) -> str:
+        cleaned = (value or "").strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,253}[a-z0-9]", cleaned):
+            raise ValueError("invalid bucket")
+        return cleaned
+
+    @field_validator("prefix")
+    @classmethod
+    def _normalize_prefix(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip().strip("/")
+        if not cleaned:
+            return None
+        if ".." in cleaned:
+            raise ValueError("invalid prefix")
+        return cleaned
+
+    @field_validator("created_at", "updated_at", "last_check_at")
+    @classmethod
+    def _validate_optional_iso(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
         parsed = datetime.fromisoformat(value)
         if parsed.tzinfo is None:
             raise ValueError("timestamp must include timezone")

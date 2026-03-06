@@ -12,6 +12,7 @@ import subprocess
 import uuid
 import tempfile
 import time
+from collections import defaultdict, deque
 import tarfile
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -53,7 +54,34 @@ from app.services.usage_metering import (
 _s3 = s3_client()
 logger = logging.getLogger(__name__)
 
+_MOUNT_RATE_WINDOWS: Dict[str, deque] = defaultdict(deque)
+
+
+def _enforce_mount_rate_limit(*, owner: str, operation: str, limit_per_minute: int) -> None:
+    if limit_per_minute <= 0:
+        return
+    now = time.time()
+    key = f"{owner}:{operation}"
+    window = _MOUNT_RATE_WINDOWS[key]
+    while window and (now - window[0]) > 60.0:
+        window.popleft()
+    if len(window) >= limit_per_minute:
+        raise HTTPException(status_code=429, detail={"code": "mount_rate_limited", "message": f"mounted {operation} rate limit exceeded"})
+    window.append(now)
+
+
+def _get_upload_size(file: UploadFile) -> Optional[int]:
+    try:
+        cur = file.file.tell()
+        file.file.seek(0, 2)
+        end = file.file.tell()
+        file.file.seek(cur)
+        return max(0, int(end - cur))
+    except Exception:
+        return None
+
 ENCRYPTION_META_REQUIRED_KEYS = {
+
     "version",
     "alg",
     "kdf",
@@ -461,6 +489,210 @@ def list_children(owner: str, folder_path: str, *, include_deleted: bool = False
             break
     return items
 
+
+
+
+def resolve_path_mount(owner: str, path: str, *, is_folder: bool) -> Optional[Dict[str, Any]]:
+    """Return best matching mount metadata for a virtual path, if any."""
+    normalized = norm_path(path, is_folder=is_folder)
+    from app.services.file_mounts import list_file_mounts  # local import avoids module cycle
+
+    try:
+        mounts = list_file_mounts(owner)
+    except Exception:
+        return None
+    best = None
+    best_len = -1
+    for m in mounts:
+        root = str(m.mount_path or "").rstrip("/") + "/"
+        if normalized == root or normalized.startswith(root):
+            if len(root) > best_len:
+                best = m
+                best_len = len(root)
+    return best.model_dump() if best else None
+
+
+def _map_mounted_error(exc: HTTPException) -> HTTPException:
+    if exc.status_code == 404:
+        return HTTPException(404, "not found")
+    if exc.status_code == 403:
+        detail = exc.detail
+        if isinstance(detail, dict) and str(detail.get("code") or "").strip() == "mount_read_only":
+            return HTTPException(403, {"code": "mount_read_only", "message": "mount is read-only"})
+        return HTTPException(403, "access denied")
+    if exc.status_code in {400, 413, 429}:
+        return HTTPException(exc.status_code, exc.detail)
+    return HTTPException(502, "provider error")
+
+
+def list_mounted_directory(owner: str, folder_path: str, *, limit: int = 50, cursor: Optional[str] = None) -> Dict[str, Any]:
+    mount_data = resolve_path_mount(owner, folder_path, is_folder=True)
+    if not mount_data:
+        raise HTTPException(404, "mount not found")
+
+    from app.models import FileMountModel
+    from app.services.file_mounts_adapter import list_dir
+
+    mount = FileMountModel(**mount_data)
+    try:
+        listing = list_dir(mount, norm_path(folder_path, is_folder=True), limit=limit, cursor=cursor)
+    except HTTPException as exc:
+        raise _map_mounted_error(exc) from exc
+
+    items: List[Dict[str, Any]] = []
+    folder_norm = norm_path(folder_path, is_folder=True)
+    for it in listing.get("items", []):
+        name = str(it.get("name") or "").strip()
+        if not name:
+            continue
+        is_dir = it.get("type") == "folder"
+        path = folder_norm + name + ("/" if is_dir else "")
+        node = {
+            "path": path,
+            "type": "folder" if is_dir else "file",
+            "name": name,
+            "size": it.get("size"),
+            "updated_at": it.get("updated_at"),
+            "content_type": (it.get("content_type") or "application/octet-stream") if not is_dir else None,
+            "is_encrypted": False,
+        }
+        if is_dir:
+            row = {
+                "path": path,
+                "type": "folder",
+                "name": name,
+                "size": None,
+                "updated_at": it.get("updated_at"),
+                "content_type": None,
+                "enc_metadata": None,
+                "is_encrypted": False,
+                "enc_version": None,
+                "enc_alg": None,
+                "enc_kdf": None,
+                "enc_kdf_iterations": None,
+                "enc_salt_b64": None,
+                "enc_iv_b64": None,
+                "enc_orig_name": None,
+                "enc_orig_size": None,
+                "enc_orig_content_type": None,
+                "preview_kind": "none",
+                "preview_supported": False,
+                "preview_status": "unsupported",
+                "preview_reason": "folder",
+                "poster_url": None,
+                "hover_preview_url": None,
+                "waveform_url": None,
+            }
+        else:
+            row = {
+                "path": path,
+                "type": "file",
+                "name": name,
+                "size": it.get("size"),
+                "updated_at": it.get("updated_at"),
+                "content_type": node.get("content_type"),
+                **encryption_info_from_node(node),
+                **preview_capability_from_node(node),
+            }
+        items.append(row)
+
+    return {"path": folder_norm, "items": items, "cursor": listing.get("cursor")}
+
+
+def download_mounted_file(owner: str, path: str) -> Dict[str, Any]:
+    mount_data = resolve_path_mount(owner, path, is_folder=False)
+    if not mount_data:
+        raise HTTPException(404, "mount not found")
+
+    from app.models import FileMountModel
+    from app.services.file_mounts_adapter import read_file
+
+    mount = FileMountModel(**mount_data)
+    p = norm_path(path, is_folder=False)
+    _enforce_mount_rate_limit(
+        owner=owner,
+        operation="download",
+        limit_per_minute=int(getattr(S, "filemgr_s3_mounts_download_rate_per_minute", 0) or 0),
+    )
+    try:
+        result = read_file(mount, p)
+    except HTTPException as exc:
+        raise _map_mounted_error(exc) from exc
+    body = result.get("body")
+    if body is None:
+        raise HTTPException(502, "provider error")
+    _, name = split_parent_name(p)
+    content_length = int(result.get("content_length") or 0)
+    max_download = int(getattr(S, "filemgr_s3_mounts_max_download_bytes", 0) or 0)
+    if max_download > 0 and content_length > max_download:
+        raise HTTPException(status_code=413, detail={"code": "mount_download_too_large", "message": "mounted download exceeds configured size limit"})
+
+    node = {
+        "path": p,
+        "type": "file",
+        "name": name,
+        "size": content_length,
+        "content_type": result.get("content_type") or "application/octet-stream",
+        "is_encrypted": False,
+        "s3_bucket": result.get("bucket"),
+        "s3_key": result.get("key"),
+    }
+    return {"node": node, "object": {"Body": body}}
+
+
+
+def upload_mounted_file(
+    owner: str,
+    path: str,
+    file: UploadFile,
+) -> Dict[str, Any]:
+    mount_data = resolve_path_mount(owner, path, is_folder=False)
+    if not mount_data:
+        raise HTTPException(404, "mount not found")
+
+    from app.models import FileMountModel
+    from app.services.file_mounts_adapter import write_file
+
+    mount = FileMountModel(**mount_data)
+    p = norm_path(path, is_folder=False)
+    _enforce_mount_rate_limit(
+        owner=owner,
+        operation="upload",
+        limit_per_minute=int(getattr(S, "filemgr_s3_mounts_upload_rate_per_minute", 0) or 0),
+    )
+    upload_size = _get_upload_size(file)
+    max_upload = int(getattr(S, "filemgr_s3_mounts_max_upload_bytes", 0) or 0)
+    if max_upload > 0 and upload_size is not None and upload_size > max_upload:
+        raise HTTPException(status_code=413, detail={"code": "mount_upload_too_large", "message": "mounted upload exceeds configured size limit"})
+    try:
+        result = write_file(
+            mount,
+            p,
+            body=file.file,
+            content_type=file.content_type or "application/octet-stream",
+            metadata={"uploaded_by": owner},
+        )
+    except HTTPException as exc:
+        raise _map_mounted_error(exc) from exc
+
+    size = result.get("content_length")
+    return {"path": p, "size": int(size) if size is not None else None, "etag": result.get("etag")}
+
+
+def delete_mounted_file(owner: str, path: str) -> Dict[str, Any]:
+    mount_data = resolve_path_mount(owner, path, is_folder=False)
+    if not mount_data:
+        raise HTTPException(404, "mount not found")
+
+    from app.models import FileMountModel
+    from app.services.file_mounts_adapter import delete_file
+
+    mount = FileMountModel(**mount_data)
+    p = norm_path(path, is_folder=False)
+    try:
+        return delete_file(mount, p)
+    except HTTPException as exc:
+        raise _map_mounted_error(exc) from exc
 
 def is_ancestor_path(folder_path: str, maybe_child_path: str) -> bool:
     return maybe_child_path.startswith(folder_path)

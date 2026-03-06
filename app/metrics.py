@@ -199,6 +199,23 @@ FILEMGR_PREVIEW_ARTIFACT_BYTES = Counter(
     "File manager preview artifact bytes produced",
     ["artifact"],
 )
+
+FILEMGR_MOUNT_OPERATION_LATENCY = Histogram(
+    "filemgr_mount_operation_duration_seconds",
+    "Mounted file manager operation latency in seconds",
+    ["provider", "mode", "operation", "mount_id_hash"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+)
+FILEMGR_MOUNT_BYTES = Counter(
+    "filemgr_mount_transfer_bytes_total",
+    "Mounted file manager bytes transferred",
+    ["provider", "mode", "operation", "direction", "mount_id_hash"],
+)
+FILEMGR_MOUNT_ERRORS = Counter(
+    "filemgr_mount_errors_total",
+    "Mounted file manager errors by provider operation and aws code",
+    ["provider", "mode", "operation", "aws_error_code", "mount_id_hash"],
+)
 FILEMGR_PREVIEW_HOVER_PLAY_STARTS = Counter(
     "filemgr_preview_hover_play_starts_total",
     "Client hover/tap preview play starts",
@@ -482,6 +499,24 @@ ENTITLEMENT_CHECK_LATENCY = Histogram(
     "Entitlement check latency by product family",
     ["product_family"],
     buckets=(0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5),
+)
+
+
+VNC_SESSION_EVENTS = Counter(
+    "vnc_session_events_total",
+    "VNC session lifecycle events by action/outcome/target/error code",
+    ["action", "outcome", "target_id", "error_code"],
+)
+VNC_SESSION_DURATION = Histogram(
+    "vnc_session_duration_seconds",
+    "VNC session duration in seconds by target/outcome",
+    ["target_id", "outcome"],
+    buckets=(1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200),
+)
+VNC_BRIDGE_FAILURES = Counter(
+    "vnc_bridge_failures_total",
+    "VNC bridge failures by target and error code",
+    ["target_id", "error_code"],
 )
 
 _START_TIME = time.monotonic()
@@ -792,6 +827,38 @@ def record_filemgr_bytes(direction: str, operation: str, nbytes: int) -> None:
     FILEMGR_BYTES.labels(direction=direction, operation=operation).inc(float(nbytes))
 
 
+
+
+def record_filemgr_mount_operation_latency(*, provider: str, mode: str, operation: str, mount_id_hash: str, elapsed_seconds: float) -> None:
+    FILEMGR_MOUNT_OPERATION_LATENCY.labels(
+        provider=(provider or "unknown").lower(),
+        mode=(mode or "unknown").lower(),
+        operation=(operation or "unknown").lower(),
+        mount_id_hash=mount_id_hash or "unknown",
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_filemgr_mount_bytes(*, provider: str, mode: str, operation: str, direction: str, mount_id_hash: str, nbytes: int) -> None:
+    if nbytes <= 0:
+        return
+    FILEMGR_MOUNT_BYTES.labels(
+        provider=(provider or "unknown").lower(),
+        mode=(mode or "unknown").lower(),
+        operation=(operation or "unknown").lower(),
+        direction=(direction or "unknown").lower(),
+        mount_id_hash=mount_id_hash or "unknown",
+    ).inc(float(nbytes))
+
+
+def record_filemgr_mount_error(*, provider: str, mode: str, operation: str, aws_error_code: str, mount_id_hash: str) -> None:
+    FILEMGR_MOUNT_ERRORS.labels(
+        provider=(provider or "unknown").lower(),
+        mode=(mode or "unknown").lower(),
+        operation=(operation or "unknown").lower(),
+        aws_error_code=(aws_error_code or "unknown"),
+        mount_id_hash=mount_id_hash or "unknown",
+    ).inc()
+
 def record_filemgr_search_path(operation: str, path: str) -> None:
     FILEMGR_SEARCH_PATH.labels(operation=operation, path=path).inc()
 
@@ -991,6 +1058,29 @@ def record_provider_failure_streak(provider: str, streak: int) -> None:
 
 def record_provider_failure_alert(provider: str) -> None:
     PROVIDER_FAILURE_ALERTS.labels(provider=(provider or "unknown").lower()).inc()
+
+
+def record_vnc_session_event(*, action: str, outcome: str, target_id: str = "unknown", error_code: str = "none") -> None:
+    VNC_SESSION_EVENTS.labels(
+        action=(action or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+        target_id=(target_id or "unknown").lower(),
+        error_code=(error_code or "none").lower(),
+    ).inc()
+
+
+def record_vnc_session_duration(*, target_id: str, outcome: str, elapsed_seconds: float) -> None:
+    VNC_SESSION_DURATION.labels(
+        target_id=(target_id or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_vnc_bridge_failure(*, target_id: str, error_code: str) -> None:
+    VNC_BRIDGE_FAILURES.labels(
+        target_id=(target_id or "unknown").lower(),
+        error_code=(error_code or "unknown").lower(),
+    ).inc()
 
 def metrics_endpoint() -> Response:
     UPTIME_SECONDS.set(time.monotonic() - _START_TIME)

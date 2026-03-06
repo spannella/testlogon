@@ -1,5 +1,6 @@
 import { useState, useRef } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useOfflineStore } from "@/stores/offlineStore";
 import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,8 @@ const MAX_FILES = 5;
 
 export function CreatePost() {
   const queryClient = useQueryClient();
+  const addToQueue = useOfflineStore((s) => s.addToQueue);
+  const isOnline = useOfflineStore((s) => s.isOnline);
   const fileRef = useRef<HTMLInputElement>(null);
   const [body, setBody] = useState("");
   const [editorMode, setEditorMode] = useState<EditorMode>("plain");
@@ -62,6 +65,28 @@ export function CreatePost() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!body.trim() && imageUrls.length === 0 && pendingFiles.length === 0) return;
+
+    if (!isOnline) {
+      // Snapshot the full payload now — same shape as what mutation.mutationFn builds
+      const queuedPayload = {
+        ...buildContentPayload(body, editorMode, richDoc),
+        ...(imageUrls.length > 0 ? { image_urls: imageUrls } : {}),
+        ...(pendingFiles.length > 0 ? { file_paths: pendingFiles.map((f) => f.path) } : {}),
+        ...(unlockPriceCents ? { unlock_price_cents: unlockPriceCents } : {}),
+      };
+      addToQueue({ type: "create_post", payload: queuedPayload });
+      toast.info("You're offline — post queued and will publish when reconnected");
+      // Reset the form exactly as onSuccess would
+      setBody("");
+      setEditorMode("plain");
+      setRichDoc(null);
+      setImageUrls([]);
+      setPendingFiles([]);
+      setLockEnabled(false);
+      setLockPrice("");
+      return;
+    }
+
     mutation.mutate();
   };
 
@@ -249,8 +274,8 @@ export function CreatePost() {
             </div>
           )}
 
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center justify-between gap-y-1">
+            <div className="flex flex-wrap items-center gap-1">
               {/* Image attach from device */}
               <Button
                 type="button"

@@ -20,6 +20,26 @@ test.describe("Dev Tools Log UI smoke", () => {
       );
     });
 
+    // Mock AppShell API calls so the fake token doesn't trigger 401 → logout cascade.
+    // Header.tsx fires GET /ui/profile and Sidebar.tsx fires GET /messaging/conversations on mount.
+    await page.route("**/ui/profile**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ profile: { first_name: "Dev", last_name: "User", display_name: "Dev User" } }),
+      });
+    });
+    await page.route("**/messaging/conversations**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ conversations: [], next_cursor: null }),
+      });
+    });
+    await page.route("**/ui/session/refresh", async (route) => {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+    });
+
     await page.route("**/internal/dev-tools/email/messages**", async (route) => {
       await route.fulfill({
         status: 200,

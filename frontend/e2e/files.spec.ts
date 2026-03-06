@@ -163,8 +163,11 @@ test.describe("3. Create folder via UI", () => {
     await page.locator("#folder-name").fill(folderName);
     // Submit the dialog — scope to dialog to avoid matching "Create draft" from signature form
     await page.getByRole("dialog").getByRole("button", { name: "Create" }).click();
-    await page.waitForTimeout(2000);
-    // Folder should appear in the file list
+    await page.waitForTimeout(1000);
+    // Use the search input to find the folder — avoids pagination limits in the file list
+    const searchInput = page.locator("input[placeholder*='Search']");
+    await searchInput.fill(folderName);
+    await page.waitForTimeout(800);
     const folderEntry = page.locator(`text=${folderName}`);
     await expect(folderEntry).toBeVisible({ timeout: 8000 });
     await page.close();
@@ -216,6 +219,23 @@ test.describe("5. File operations API", () => {
     // Warm-up: first request registers the device (may return 401 "Re-auth required");
     // subsequent requests succeed once the device fingerprint is recorded.
     await page.request.get(`${API}/v1/fs/list`, { params: { path: "/" } }).catch(() => null);
+
+    // Clean up old test items from previous runs to prevent pagination issues.
+    // The list endpoint defaults to limit=50; accumulated e2e_ items push new ones past that.
+    const session = getSessions()[ALICE_ID];
+    const cleanupResp = await page.request.get(`${API}/v1/fs/list`, { params: { path: "/", limit: "200" } });
+    if (cleanupResp.ok()) {
+      const cleanupData = await cleanupResp.json();
+      for (const item of (cleanupData.items ?? []) as Array<{ name: string; path: string; type: string }>) {
+        if (/^(e2e_|test_)/.test(item.name)) {
+          const endpoint = item.type === "folder" ? "/v1/fs/folder" : "/v1/fs/file";
+          await page.request.delete(`${API}${endpoint}`, {
+            params: { path: item.path },
+            headers: { "x-csrf-token": session.csrf_token },
+          }).catch(() => {});
+        }
+      }
+    }
   });
 
   test.afterAll(async () => page.close());
@@ -234,11 +254,11 @@ test.describe("5. File operations API", () => {
     const resp = await fsPost(page, "/folder", { path: `/${TEST_FOLDER}` });
     expect(resp.ok()).toBe(true);
     const data = await resp.json();
-    expect(data.path ?? data.ok).toBeTruthy();
+    expect(data.path).toContain(TEST_FOLDER);
   });
 
   test("created folder appears in list", async () => {
-    const resp = await fsGet(page, "/list", { path: "/" });
+    const resp = await fsGet(page, "/list", { path: "/", limit: "200" });
     expect(resp.ok()).toBe(true);
     const data = await resp.json();
     const files: Array<{ name: string; type: string }> = data.items ?? data.files ?? data;
@@ -274,7 +294,7 @@ test.describe("5. File operations API", () => {
 
   test("uploaded file appears in list", async () => {
     await page.waitForTimeout(500);
-    const resp = await fsGet(page, "/list", { path: "/" });
+    const resp = await fsGet(page, "/list", { path: "/", limit: "200" });
     const data = await resp.json();
     const files: Array<{ name: string }> = data.items ?? data.files ?? data;
     const found = Array.isArray(files) && files.some((f) => f.name === TEST_FILE);
