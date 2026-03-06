@@ -2744,6 +2744,7 @@ async function refreshAll() {
       refreshAlerts(),
       refreshProfile(),
       refreshFileManager(),
+      refreshFileMgrMounts(),
       refreshFileMgrAudit(),
       refreshAddresses(),
       refreshShoppingCart(),
@@ -3886,7 +3887,7 @@ function renderNewsfeed(items) {
   const wrap = document.getElementById("newsfeedList");
   if (!wrap) return;
   wrap.innerHTML = "";
-  if (!items || items.length === 0) {
+  if (!displayItems || displayItems.length === 0) {
     wrap.innerHTML = '<div class="muted">No feed items.</div>';
     return;
   }
@@ -4008,7 +4009,7 @@ function renderComments(items) {
   const wrap = document.getElementById("newsfeedCommentsList");
   if (!wrap) return;
   wrap.innerHTML = "";
-  if (!items || items.length === 0) {
+  if (!displayItems || displayItems.length === 0) {
     wrap.innerHTML = '<div class="muted">No comments yet.</div>';
     return;
   }
@@ -5464,6 +5465,9 @@ const fileMgrState = {
   sharedPermission: "read",
   sharedRoot: null,
   sharedItems: [],
+  mounts: [],
+  mockBrowseByMount: {},
+  mockBrowseUiByMount: {},
 };
 
 function fileMgrStatus(msg) {
@@ -5486,9 +5490,541 @@ function fileMgrSharedStatus(msg) {
   if (el) el.textContent = msg || "";
 }
 
+
+function updateMountedPolicyHint(path = null) {
+  const el = document.getElementById("filemgrMountPolicyHint");
+  if (!el) return;
+  if (pathMountId(path || currentFileMgrPath())) {
+    el.textContent = "Mounted SFTP content cannot be shared with other users yet.";
+  } else {
+    el.textContent = "Mounted SFTP content cannot be shared yet.";
+  }
+}
+
+function fileMgrMountStatus(msg) {
+  const el = document.getElementById("filemgrMountStatus");
+  if (el) el.textContent = msg || "";
+}
+
+function parseApiErrorDetail(err) {
+  const raw = String(err || "");
+  const idx = raw.indexOf(":");
+  if (idx < 0) return { message: raw };
+  const detail = raw.slice(idx + 1).trim();
+  if (!detail) return { message: raw };
+  try {
+    return JSON.parse(detail);
+  } catch (_e) {
+    return { message: detail };
+  }
+}
+
+function mountTroubleshootingMessage(mount) {
+  const code = String((mount && mount.last_error_code) || "");
+  if (!code) return "";
+  const map = {
+    credential_not_found: "Credential was not found. Rotate credentials and test again.",
+    sftp_destination_not_allowed: "Destination violates outbound policy. Update host or allowlist policy.",
+    mount_disabled: "Mount is disabled. Re-enable the mount to continue.",
+    mount_revoked: "Mount was revoked. Rotate credentials and test before use.",
+    sftp_auth_failed: "Authentication failed. Verify username/password or private key.",
+    sftp_host_key_untrusted: "Host key verification failed. Validate host key policy/fingerprint.",
+    sftp_network_error: "Remote host unreachable. Check network path, firewall, and DNS resolution.",
+  };
+  return map[code] || String((mount && mount.last_error_message) || code);
+}
+
+function mountStatusPill(status) {
+  const normalized = String(status || "unknown").toLowerCase();
+  if (normalized === "healthy") return '<span class="pill ok">healthy</span>';
+  if (normalized === "disabled") return '<span class="pill bad">disabled</span>';
+  if (normalized === "degraded" || normalized === "unreachable") return `<span class="pill warn">${escapeHtml(normalized)}</span>`;
+  return `<span class="pill bad">${escapeHtml(normalized || "unknown")}</span>`;
+}
+
+function renderFileMgrMounts() {
+  const list = document.getElementById("filemgrMountList");
+  if (!list) return;
+  const mounts = fileMgrState.mounts || [];
+  if (!mounts.length) {
+    list.innerHTML = '<div class="muted">No mounts yet. Create one to browse remote SFTP content under <span class="mono">/mounts/{mount_id}/</span>.</div>';
+    return;
+  }
+  list.innerHTML = mounts.map((mount) => {
+    const modeLabel = mount.read_only ? "Read-only" : "Read-write";
+    const troubleshooting = mountTroubleshootingMessage(mount);
+    const testTs = mount.last_tested_at ? `Last tested ${fmtTs(mount.last_tested_at)}` : "Not tested yet";
+    return `
+      <div class="list-item" data-mount-id="${escapeHtml(mount.id || "")}">
+        <div class="grow">
+          <div class="row-inline" style="gap:8px;">
+            <b>${escapeHtml(mount.id || "")}</b>
+            ${mountStatusPill(mount.status)}
+            <span class="pill">${escapeHtml(modeLabel)}</span>
+          </div>
+          <div class="muted mono">${escapeHtml((mount.host || "") + ":" + String(mount.port || 22) + (mount.remote_root || "/"))}</div>
+          <div class="muted">${escapeHtml(testTs)}</div>
+          ${troubleshooting ? `<div class="err" style="margin-top:4px;">Troubleshooting: ${escapeHtml(troubleshooting)}</div>` : ""}
+        </div>
+        <div class="row-inline" style="flex-wrap:wrap; justify-content:flex-end;">
+          <button data-action="open">Open</button>
+          <button data-action="test">Test</button>
+          <button data-action="edit">Edit</button>
+          <button data-action="mock-files">Mock files</button>
+          <button data-action="delete" class="danger">Delete</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  list.querySelectorAll("[data-action='open']").forEach((btn) => {
+    btn.onclick = async (ev) => {
+      const row = ev.target.closest("[data-mount-id]");
+      const mountId = row ? row.getAttribute("data-mount-id") : "";
+      if (!mountId) return;
+      setFileMgrPath(`/mounts/${mountId}/`);
+      await refreshFileManager();
+    };
+  });
+  list.querySelectorAll("[data-action='test']").forEach((btn) => {
+    btn.onclick = async (ev) => {
+      const row = ev.target.closest("[data-mount-id]");
+      const mountId = row ? row.getAttribute("data-mount-id") : "";
+      if (!mountId) return;
+      try {
+        fileMgrMountStatus(`Testing mount ${mountId}...`);
+        await apiPost(`/v1/fs/mounts/${encodeURIComponent(mountId)}/test`, {});
+        await refreshFileMgrMounts();
+        fileMgrMountStatus(`Mount ${mountId} test completed.`);
+      } catch (e) {
+        const detail = parseApiErrorDetail(e);
+        fileMgrMountStatus(`Mount test failed: ${detail.message || String(e)}`);
+      }
+    };
+  });
+  list.querySelectorAll("[data-action='edit']").forEach((btn) => {
+    btn.onclick = (ev) => {
+      const row = ev.target.closest("[data-mount-id]");
+      const mountId = row ? row.getAttribute("data-mount-id") : "";
+      const mount = fileMgrState.mounts.find((it) => String(it.id) === String(mountId));
+      if (mount) openFileMgrMountModal({ mode: "edit", mount });
+    };
+  });
+  list.querySelectorAll("[data-action='mock-files']").forEach((btn) => {
+    btn.onclick = async (ev) => {
+      const row = ev.target.closest("[data-mount-id]");
+      const mountId = row ? row.getAttribute("data-mount-id") : "";
+      if (!mountId) return;
+      await openMockFilesModal(mountId, "/");
+    };
+  });
+  list.querySelectorAll("[data-action='delete']").forEach((btn) => {
+    btn.onclick = async (ev) => {
+      const row = ev.target.closest("[data-mount-id]");
+      const mountId = row ? row.getAttribute("data-mount-id") : "";
+      if (!mountId || !window.confirm(`Delete mount ${mountId}?`)) return;
+      try {
+        fileMgrMountStatus(`Deleting mount ${mountId}...`);
+        await apiDelete(`/v1/fs/mounts/${encodeURIComponent(mountId)}`);
+        await refreshFileMgrMounts();
+        fileMgrMountStatus(`Mount ${mountId} deleted.`);
+      } catch (e) {
+        const detail = parseApiErrorDetail(e);
+        fileMgrMountStatus(`Delete failed: ${detail.message || String(e)}`);
+      }
+    };
+  });
+}
+
+async function refreshFileMgrMounts() {
+  const response = await apiGet("/v1/fs/mounts");
+  fileMgrState.mounts = Array.isArray(response.items) ? response.items : [];
+  renderFileMgrMounts();
+}
+
+function openFileMgrMountModal({ mode, mount = null }) {
+  const isEdit = mode === "edit";
+  modalShow({
+    title: isEdit ? `Edit mount ${escapeHtml(mount.id || "")}` : "Create SFTP mount",
+    bodyHtml: `
+      <div class="muted">Use read-only for browse/download access. Use read-write only when users must upload, move, rename, or delete files.</div>
+      <input id="filemgrMountHost" placeholder="Host" value="${escapeHtml((mount && mount.host) || "")}" />
+      <input id="filemgrMountPort" placeholder="Port" value="${escapeHtml(String((mount && mount.port) || 22))}" />
+      <input id="filemgrMountCredentialRef" placeholder="Credential reference" value="${escapeHtml((mount && mount.auth_credential_ref) || "")}" />
+      <input id="filemgrMountRoot" placeholder="Remote root (e.g. /)" value="${escapeHtml((mount && mount.remote_root) || "/")}" />
+      <label class="muted"><input id="filemgrMountReadOnly" type="checkbox" ${(mount && mount.read_only) ? "checked" : ""}/> Read-only mount</label>
+      <div id="filemgrMountModalErr" class="err" style="margin-top:8px;"></div>
+    `,
+    actions: [
+      { text: "Cancel", onClick: modalClose },
+      {
+        text: isEdit ? "Save" : "Create",
+        onClick: async () => {
+          const host = readInput("filemgrMountHost").trim();
+          const port = Number(readInput("filemgrMountPort") || 22);
+          const auth_credential_ref = readInput("filemgrMountCredentialRef").trim();
+          const remote_root = readInput("filemgrMountRoot").trim() || "/";
+          const read_only = Boolean(document.getElementById("filemgrMountReadOnly")?.checked);
+          const errEl = document.getElementById("filemgrMountModalErr");
+          if (!host || !auth_credential_ref || !Number.isFinite(port) || port < 1 || port > 65535) {
+            if (errEl) errEl.textContent = "Host, valid port, and credential reference are required.";
+            return;
+          }
+          const payload = { host, port, auth_credential_ref, remote_root, read_only };
+          try {
+            if (isEdit) {
+              await apiPatch(`/v1/fs/mounts/${encodeURIComponent(mount.id)}`, payload);
+            } else {
+              await apiPost("/v1/fs/mounts/sftp", payload);
+            }
+            modalClose();
+            await refreshFileMgrMounts();
+            fileMgrMountStatus(isEdit ? "Mount updated." : "Mount created.");
+          } catch (e) {
+            const detail = parseApiErrorDetail(e);
+            if (errEl) errEl.textContent = detail.message || String(e);
+          }
+        },
+      },
+    ],
+  });
+}
+
+function normalizeMockBrowsePath(path) {
+  const raw = String(path || "/").trim() || "/";
+  const parts = [];
+  raw.split("/").forEach((part) => {
+    if (!part || part === ".") return;
+    if (part === "..") {
+      parts.pop();
+      return;
+    }
+    parts.push(part);
+  });
+  return `/${parts.join("/")}${raw.endsWith("/") && parts.length ? "/" : ""}` || "/";
+}
+
+function mockBrowseParentPath(path) {
+  const normalized = normalizeMockBrowsePath(path);
+  const parts = normalized.split("/").filter(Boolean);
+  if (!parts.length) return "/";
+  parts.pop();
+  return parts.length ? `/${parts.join("/")}/` : "/";
+}
+
+function mockBrowseBreadcrumbs(path) {
+  const normalized = normalizeMockBrowsePath(path);
+  const parts = normalized.split("/").filter(Boolean);
+  const crumbs = [{ label: "root", path: "/" }];
+  let cur = "";
+  parts.forEach((part) => {
+    cur += `/${part}`;
+    crumbs.push({ label: part, path: `${cur}/` });
+  });
+  return crumbs;
+}
+
+async function copyTextToClipboard(text, onOkMessage) {
+  const value = String(text || "");
+  if (!value) return;
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      fileMgrMountStatus(onOkMessage || "Copied.");
+      return;
+    }
+  } catch (_e) {}
+  const ta = document.createElement("textarea");
+  ta.value = value;
+  ta.setAttribute("readonly", "readonly");
+  ta.style.position = "absolute";
+  ta.style.left = "-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand("copy");
+    fileMgrMountStatus(onOkMessage || "Copied.");
+  } finally {
+    document.body.removeChild(ta);
+  }
+}
+
+function mockFileErrorHelp(detail = {}, mountId = "", path = "/") {
+  const code = String(detail.code || "");
+  const resolvedPath = String(detail.path || path || "/");
+  if (code === "sftp_mock_backend_disabled") {
+    return {
+      title: "Mock backend is disabled",
+      message: "Mock file browser is available only when FILEMGR_SFTP_BACKEND=mock.",
+      remediation: "Set FILEMGR_SFTP_BACKEND=mock and restart the API process, then retry the Mock files action.",
+      mountPath: `/mounts/${mountId}${resolvedPath.startsWith("/") ? resolvedPath : `/${resolvedPath}`}`,
+    };
+  }
+  if (code === "mock_path_not_found") {
+    return {
+      title: "Path not found in mock filesystem",
+      message: `The path ${resolvedPath} does not exist for this mount.`,
+      remediation: "Verify the path, navigate from root, or create the folder/file under FILEMGR_SFTP_MOCK_ROOT_DIR/{owner}/{mount_id}.",
+      mountPath: `/mounts/${mountId}${resolvedPath.startsWith("/") ? resolvedPath : `/${resolvedPath}`}`,
+    };
+  }
+  if (code === "mock_path_not_directory") {
+    return {
+      title: "Path is not a directory",
+      message: `The path ${resolvedPath} points to a file, not a folder.`,
+      remediation: "Use parent/up navigation and select a folder path before browsing.",
+      mountPath: `/mounts/${mountId}${resolvedPath.startsWith("/") ? resolvedPath : `/${resolvedPath}`}`,
+    };
+  }
+  return {
+    title: "Mock browser unavailable",
+    message: String(detail.message || "Unable to load mock files."),
+    remediation: "Check mount configuration and mock backend settings, then retry.",
+    mountPath: `/mounts/${mountId}${resolvedPath.startsWith("/") ? resolvedPath : `/${resolvedPath}`}`,
+  };
+}
+
+function filterAndSortMockItems(items, prefs) {
+  const query = String((prefs && prefs.query) || "").trim().toLowerCase();
+  const type = String((prefs && prefs.type) || "all");
+  const sortBy = String((prefs && prefs.sortBy) || "name");
+  const sortDir = String((prefs && prefs.sortDir) || "asc");
+  const out = (items || []).filter((it) => {
+    const itemType = String(it.type || "");
+    if (type !== "all" && itemType !== type) return false;
+    if (!query) return true;
+    const hay = `${it.name || ""} ${it.path || ""} ${itemType}`.toLowerCase();
+    return hay.includes(query);
+  });
+  out.sort((a, b) => {
+    let av;
+    let bv;
+    if (sortBy === "size") {
+      av = Number(a.size || 0);
+      bv = Number(b.size || 0);
+    } else if (sortBy === "mtime") {
+      av = Number(a.modified_at || 0);
+      bv = Number(b.modified_at || 0);
+    } else if (sortBy === "type") {
+      av = String(a.type || "");
+      bv = String(b.type || "");
+    } else {
+      av = String(a.name || "").toLowerCase();
+      bv = String(b.name || "").toLowerCase();
+    }
+    if (av < bv) return sortDir === "asc" ? -1 : 1;
+    if (av > bv) return sortDir === "asc" ? 1 : -1;
+    return 0;
+  });
+  return out;
+}
+
+function getMockBrowseUiPrefs(mountId) {
+  const key = String(mountId || "");
+  const existing = fileMgrState.mockBrowseUiByMount[key] || {};
+  return {
+    query: String(existing.query || ""),
+    type: String(existing.type || "all"),
+    sortBy: String(existing.sortBy || "name"),
+    sortDir: String(existing.sortDir || "asc"),
+  };
+}
+
+function setMockBrowseUiPrefs(mountId, patch) {
+  const key = String(mountId || "");
+  fileMgrState.mockBrowseUiByMount[key] = {
+    ...getMockBrowseUiPrefs(key),
+    ...(patch || {}),
+  };
+}
+
+async function openMockFilesModal(mountId, path = null) {
+  const remembered = fileMgrState.mockBrowseByMount[String(mountId || "")] || "/";
+  const target = normalizeMockBrowsePath(path || remembered || "/");
+  await renderMockFilesModal({ mountId, path: target });
+}
+
+async function renderMockFilesModal({ mountId, path, snapshot = null }) {
+  const normalizedPath = normalizeMockBrowsePath(path || "/");
+  const prefs = getMockBrowseUiPrefs(mountId);
+  if (!snapshot) {
+    fileMgrMountStatus(`Loading mock files for ${mountId}...`);
+  }
+  try {
+    const res = snapshot || await apiGet(`/v1/fs/mounts/${encodeURIComponent(mountId)}/mock-files?path=${encodeURIComponent(normalizedPath)}&limit=200`);
+    const rawItems = Array.isArray(res.items) ? res.items : [];
+    const items = filterAndSortMockItems(rawItems, prefs);
+    const crumbs = mockBrowseBreadcrumbs(res.path || normalizedPath);
+    const breadcrumbHtml = crumbs
+      .map((crumb, idx) => {
+        const isLast = idx === crumbs.length - 1;
+        return isLast
+          ? `<span class="mono">${escapeHtml(crumb.label)}</span>`
+          : `<button data-mock-breadcrumb-path="${escapeHtml(crumb.path)}">${escapeHtml(crumb.label)}</button>`;
+      })
+      .join(' <span class="muted">/</span> ');
+
+    const rows = items.length
+      ? items.map((it) => {
+          const type = String(it.type || "");
+          const isFolder = type === "folder";
+          const openBtn = isFolder ? `<button data-mock-folder-path="${escapeHtml(it.path || "/")}">Open</button>` : "";
+          const mtime = Number(it.modified_at || 0) > 0 ? ` • ${fmtTs(new Date(Number(it.modified_at || 0) * 1000).toISOString())}` : "";
+          return `<div class="list-item"><div class="grow"><div class="mono">${escapeHtml(it.path || "")}</div><div class="muted">${escapeHtml(type)}${type === "file" ? ` • ${fmtBytes(it.size || 0)}` : ""}${mtime}</div></div>${openBtn}</div>`;
+        }).join("")
+      : '<div class="muted">No files match the current filter in this mock folder.</div>';
+
+    const mountPath = `/mounts/${mountId}${String(res.path || normalizedPath).startsWith("/") ? (res.path || normalizedPath) : `/${res.path || normalizedPath}`}`;
+    const fsPath = String(res.filesystem_path || "");
+
+    modalShow({
+      title: `Mock remote files: ${escapeHtml(mountId)}`,
+      bodyHtml: `
+        <div class="row-inline" style="justify-content:space-between; gap:8px; flex-wrap:wrap;">
+          <div class="muted">Path: ${breadcrumbHtml}</div>
+          <div class="row-inline" style="gap:6px;">
+            <button id="filemgrMockUpBtn">Up</button>
+            <button id="filemgrMockRefreshBtn">Refresh</button>
+          </div>
+        </div>
+        <div class="row-inline" style="margin-top:8px; gap:6px; flex-wrap:wrap;">
+          <input id="filemgrMockFilterText" placeholder="Filter by name/path" value="${escapeHtml(prefs.query)}" style="min-width:220px;" />
+          <select id="filemgrMockFilterType">
+            <option value="all" ${prefs.type === "all" ? "selected" : ""}>All types</option>
+            <option value="folder" ${prefs.type === "folder" ? "selected" : ""}>Folders</option>
+            <option value="file" ${prefs.type === "file" ? "selected" : ""}>Files</option>
+          </select>
+          <select id="filemgrMockSortBy">
+            <option value="name" ${prefs.sortBy === "name" ? "selected" : ""}>Sort: name</option>
+            <option value="type" ${prefs.sortBy === "type" ? "selected" : ""}>Sort: type</option>
+            <option value="size" ${prefs.sortBy === "size" ? "selected" : ""}>Sort: size</option>
+            <option value="mtime" ${prefs.sortBy === "mtime" ? "selected" : ""}>Sort: modified</option>
+          </select>
+          <select id="filemgrMockSortDir">
+            <option value="asc" ${prefs.sortDir === "asc" ? "selected" : ""}>Ascending</option>
+            <option value="desc" ${prefs.sortDir === "desc" ? "selected" : ""}>Descending</option>
+          </select>
+        </div>
+        <div class="row-inline" style="margin-top:6px; gap:6px; flex-wrap:wrap;">
+          <button id="filemgrMockCopyMountPathBtn">Copy mount path</button>
+          ${fsPath ? '<button id="filemgrMockCopyFsPathBtn">Copy filesystem path</button>' : ''}
+          <span class="muted mono">${escapeHtml(mountPath)}</span>
+        </div>
+        ${fsPath ? `<div class="muted mono" style="margin-top:4px;">${escapeHtml(fsPath)}</div>` : ""}
+        <div class="list" style="margin-top:8px; max-height:320px; overflow:auto;">${rows}</div>
+      `,
+      actions: [{ text: "Close", onClick: modalClose }],
+    });
+
+    const applyUiPrefs = async () => {
+      const next = {
+        query: readInput("filemgrMockFilterText"),
+        type: readInput("filemgrMockFilterType") || "all",
+        sortBy: readInput("filemgrMockSortBy") || "name",
+        sortDir: readInput("filemgrMockSortDir") || "asc",
+      };
+      setMockBrowseUiPrefs(mountId, next);
+      await renderMockFilesModal({ mountId, path: res.path || normalizedPath, snapshot: res });
+    };
+
+    const upBtn = document.getElementById("filemgrMockUpBtn");
+    if (upBtn) upBtn.onclick = async () => renderMockFilesModal({ mountId, path: mockBrowseParentPath(res.path || normalizedPath) });
+    const refreshBtn = document.getElementById("filemgrMockRefreshBtn");
+    if (refreshBtn) refreshBtn.onclick = async () => renderMockFilesModal({ mountId, path: res.path || normalizedPath });
+    const filterText = document.getElementById("filemgrMockFilterText");
+    if (filterText) filterText.oninput = applyUiPrefs;
+    const filterType = document.getElementById("filemgrMockFilterType");
+    if (filterType) filterType.onchange = applyUiPrefs;
+    const sortBy = document.getElementById("filemgrMockSortBy");
+    if (sortBy) sortBy.onchange = applyUiPrefs;
+    const sortDir = document.getElementById("filemgrMockSortDir");
+    if (sortDir) sortDir.onchange = applyUiPrefs;
+
+    const copyMountBtn = document.getElementById("filemgrMockCopyMountPathBtn");
+    if (copyMountBtn) copyMountBtn.onclick = async () => copyTextToClipboard(mountPath, `Copied mount path ${mountPath}`);
+    const copyFsBtn = document.getElementById("filemgrMockCopyFsPathBtn");
+    if (copyFsBtn) copyFsBtn.onclick = async () => copyTextToClipboard(fsPath, `Copied filesystem path ${fsPath}`);
+
+    document.querySelectorAll("[data-mock-folder-path]").forEach((btn) => {
+      btn.onclick = async (ev) => {
+        const nextPath = ev.target.getAttribute("data-mock-folder-path") || "/";
+        await renderMockFilesModal({ mountId, path: nextPath });
+      };
+    });
+    document.querySelectorAll("[data-mock-breadcrumb-path]").forEach((btn) => {
+      btn.onclick = async (ev) => {
+        const nextPath = ev.target.getAttribute("data-mock-breadcrumb-path") || "/";
+        await renderMockFilesModal({ mountId, path: nextPath });
+      };
+    });
+
+    fileMgrState.mockBrowseByMount[String(mountId || "")] = normalizeMockBrowsePath(res.path || normalizedPath);
+    fileMgrMountStatus(`Loaded ${items.length} item(s) after filter from ${res.path || normalizedPath}.`);
+  } catch (e) {
+    const detail = parseApiErrorDetail(e);
+    const help = mockFileErrorHelp(detail || {}, mountId, normalizedPath);
+    fileMgrMountStatus(`${help.title}: ${help.message}`);
+    modalShow({
+      title: `Mock remote files: ${escapeHtml(mountId)}`,
+      bodyHtml: `
+        <div class="err"><b>${escapeHtml(help.title)}</b></div>
+        <div class="muted" style="margin-top:6px;">${escapeHtml(help.message)}</div>
+        <div class="muted" style="margin-top:6px;">${escapeHtml(help.remediation)}</div>
+        <div class="row-inline" style="margin-top:10px; gap:6px; flex-wrap:wrap;">
+          <button id="filemgrMockErrCopyMountPathBtn">Copy mount path</button>
+          <span class="mono">${escapeHtml(help.mountPath)}</span>
+        </div>
+      `,
+      actions: [{ text: "Close", onClick: modalClose }],
+    });
+    const errCopyBtn = document.getElementById("filemgrMockErrCopyMountPathBtn");
+    if (errCopyBtn) errCopyBtn.onclick = async () => copyTextToClipboard(help.mountPath, `Copied mount path ${help.mountPath}`);
+  }
+}
+
+
 function fileMgrCanWrite() {
   if (!fileMgrState.sharedMode) return true;
   return fileMgrState.sharedPermission === "write";
+}
+
+
+function pathMountId(path) {
+  const p = String(path || "").trim();
+  const m = p.match(/^\/mounts\/([^/]+)(?:\/|$)/);
+  return m ? m[1] : null;
+}
+
+function currentMountContext(path = null) {
+  const mountId = pathMountId(path || currentFileMgrPath());
+  if (!mountId) return null;
+  return (fileMgrState.mounts || []).find((m) => String(m.id) === String(mountId)) || null;
+}
+
+function mountBlocksWrites(path = null) {
+  const mount = currentMountContext(path);
+  if (!mount) return false;
+  if (String(mount.status || "").toLowerCase() === "disabled") return true;
+  return Boolean(mount.read_only);
+}
+
+function mountedWriteBlockedReason(path = null) {
+  const mount = currentMountContext(path);
+  if (!mount) return "";
+  if (String(mount.status || "").toLowerCase() === "disabled") {
+    return "This mount is disabled. Re-enable it before mutating files.";
+  }
+  if (mount.read_only) {
+    return "This mount is read-only. Upload, delete, move, and rename are not supported.";
+  }
+  return "";
+}
+
+function mountedUnsupportedActionMessage(action, path = null) {
+  const reason = mountedWriteBlockedReason(path);
+  if (!reason) return "";
+  if (["upload", "delete", "move", "rename", "mkdir"].includes(action)) return reason;
+  return "";
 }
 
 function fileMgrSharedQueryParams() {
@@ -5528,7 +6064,8 @@ function exitFileMgrSharedMode() {
 
 function updateFileMgrSharedUi() {
   const canWrite = fileMgrCanWrite();
-  const disableWhenShared = fileMgrState.sharedMode && !canWrite;
+  const mountWriteBlocked = Boolean(mountedWriteBlockedReason());
+  const disableWhenShared = (fileMgrState.sharedMode && !canWrite) || mountWriteBlocked;
   const controls = [
     "filemgrCreateFolderBtn",
     "filemgrUploadInput",
@@ -5558,6 +6095,9 @@ function updateFileMgrSharedUi() {
   });
   if (fileMgrState.sharedMode) {
     clearFileMgrSearch();
+  }
+  if (mountWriteBlocked) {
+    fileMgrStatus(mountedWriteBlockedReason());
   }
 }
 
@@ -5717,6 +6257,7 @@ function setFileMgrPath(path) {
   const input = document.getElementById("filemgrPath");
   if (input) input.value = fileMgrState.path;
   renderFileMgrBreadcrumb();
+  updateMountedPolicyHint(fileMgrState.path);
 }
 
 function renderFileMgrBreadcrumb() {
@@ -6630,6 +7171,13 @@ function renderFileMgrSearchResults() {
         const p = btn.getAttribute("data-path") || item.path;
         if (!p) return;
         try {
+          if (["rename", "rename-save", "delete"].includes(action)) {
+            const unsupported = mountedUnsupportedActionMessage(action, item.path);
+            if (unsupported) {
+              fileMgrStatus(unsupported);
+              return;
+            }
+          }
           if (action === "open") {
             if (item.type === "folder") {
               setFileMgrPath(p);
@@ -6718,17 +7266,68 @@ async function refreshFileMgrAudit() {
   fileMgrAuditStatus(`Loaded ${items.length} event(s).`);
 }
 
+
+function syntheticMountNavigatorRows(path) {
+  const normalized = normalizeFolderPath(path || "/");
+  if (fileMgrState.sharedMode) return null;
+  if (normalized === "/") {
+    const native = fileMgrState.items || [];
+    const hasExternal = native.some((it) => String(it.path || "") === "/mounts/");
+    if (hasExternal || !(fileMgrState.mounts || []).length) return null;
+    return [
+      {
+        __external_group: true,
+        path: "/mounts/",
+        type: "folder",
+        name: "External",
+        parent: "/",
+        updated_at: "",
+      },
+    ];
+  }
+  if (normalized === "/mounts/") {
+    const mounts = fileMgrState.mounts || [];
+    return mounts.map((m) => ({
+      __mounted_root: true,
+      mount_id: m.id,
+      path: `/mounts/${m.id}/`,
+      type: "folder",
+      name: `${m.id} (${m.host}:${m.port})`,
+      parent: "/mounts/",
+      updated_at: m.updated_at || "",
+      mount_status: m.status,
+      mount_read_only: Boolean(m.read_only),
+      mount_error: mountTroubleshootingMessage(m),
+    }));
+  }
+  return null;
+}
+
+function renderExternalGroupHeaderRow(tbody) {
+  const header = document.createElement("tr");
+  header.innerHTML = '<td colspan="6" class="muted"><b>External</b> · Mounted SFTP roots</td>';
+  tbody.appendChild(header);
+}
+
 function renderFileMgrList(items) {
   const tbody = document.querySelector("#filemgrTable tbody");
   if (!tbody) return;
   tbody.innerHTML = "";
-  (items || []).forEach((item) => {
+  const rows = syntheticMountNavigatorRows(currentFileMgrPath());
+  const displayItems = rows || (items || []);
+  if (currentFileMgrPath() === "/mounts/" && displayItems.length) {
+    renderExternalGroupHeaderRow(tbody);
+  }
+  displayItems.forEach((item) => {
     const row = document.createElement("tr");
     const isFolder = item.type === "folder";
     const isSelected = fileMgrState.selectedPaths.has(item.path);
     const isRenaming = fileMgrState.renamePath === item.path;
     const canWrite = fileMgrCanWrite();
-    const disableEdits = fileMgrState.sharedMode && !canWrite;
+    const isMountedRootRow = Boolean(item.__mounted_root);
+    const isExternalGroupRow = Boolean(item.__external_group);
+    const mountWriteBlocked = Boolean(mountedWriteBlockedReason(item.path));
+    const disableEdits = (fileMgrState.sharedMode && !canWrite) || mountWriteBlocked || isMountedRootRow || isExternalGroupRow;
     row.innerHTML = `
       <td><input type="checkbox" data-path="${escapeHtml(item.path || "")}" ${isSelected ? "checked" : ""} ${disableEdits ? "disabled" : ""} /></td>
       <td class="mono">
@@ -6745,7 +7344,7 @@ function renderFileMgrList(items) {
               ? '<button data-action="open">Open</button>'
               : `<button data-action="download">Download</button><button data-action="preview">Preview</button>${isEditableImageFile(item) && !disableEdits ? '<button data-action="edit-image">Edit image</button>' : ''}`
           }
-          <button data-action="details">Details</button>
+          ${isMountedRootRow ? "" : '<button data-action="details">Details</button>'}
           ${
             disableEdits
               ? ""
@@ -6754,6 +7353,7 @@ function renderFileMgrList(items) {
                 : '<button data-action="rename">Rename</button>')
           }
           ${disableEdits ? "" : '<button data-action="delete" class="danger">Delete</button>'}
+          ${mountWriteBlocked ? '<span class="muted">Write unsupported</span>' : ''}
         </div>
       </td>
     `;
@@ -6786,6 +7386,10 @@ function renderFileMgrList(items) {
             return;
           }
           if (action === "details") {
+            if (isMountedRootRow) {
+              fileMgrStatus("Mount root details are available in the SFTP mounts panel.");
+              return;
+            }
             await fileMgrDetails(item.path);
             return;
           }
@@ -6899,6 +7503,18 @@ async function refreshFileManager(options = {}) {
     } else {
       fileMgrState.cursor = null;
     }
+    if (!fileMgrState.sharedMode && normalizeFolderPath(path) === "/mounts/") {
+      setFileMgrPath("/mounts/");
+      fileMgrState.items = syntheticMountNavigatorRows("/mounts/") || [];
+      clearFileMgrSelection();
+      fileMgrState.cursor = null;
+      fileMgrState.hasMore = false;
+      renderFileMgrList(fileMgrState.items);
+      updateFileMgrPaginationControls();
+      updateFileMgrSharedUi();
+      fileMgrStatus(`Loaded ${fileMgrState.items.length} mount root(s).`);
+      return;
+    }
     const endpoint = fileMgrState.sharedMode ? "/v1/fs/shared-list" : "/v1/fs/list";
     const res = await apiGet(`${endpoint}?${params.toString()}`);
     setFileMgrPath(res.path || path);
@@ -6911,6 +7527,7 @@ async function refreshFileManager(options = {}) {
     fileMgrState.cursor = res.cursor || null;
     fileMgrState.hasMore = Boolean(fileMgrState.cursor);
     updateFileMgrPaginationControls();
+    updateFileMgrSharedUi();
     fileMgrStatus(`Loaded ${res.items ? res.items.length : 0} items.`);
   } catch (e) {
     fileMgrStatus(String(e));
@@ -6928,6 +7545,11 @@ async function createFileMgrFolder() {
     fileMgrStatus("Shared view is read-only.");
     return;
   }
+  const unsupported = mountedUnsupportedActionMessage("mkdir", currentFileMgrPath());
+  if (unsupported) {
+    fileMgrStatus(unsupported);
+    return;
+  }
   const endpoint = fileMgrState.sharedMode ? `/v1/fs/shared-folder?owner=${encodeURIComponent(fileMgrState.sharedOwner || "")}` : "/v1/fs/folder";
   await apiPost(endpoint, { path });
   nameInput.value = "";
@@ -6940,6 +7562,11 @@ async function uploadFileMgr() {
   await ensureUiSession();
   if (fileMgrState.sharedMode && !fileMgrCanWrite()) {
     fileMgrStatus("Shared view is read-only.");
+    return;
+  }
+  const unsupported = mountedUnsupportedActionMessage("upload", currentFileMgrPath());
+  if (unsupported) {
+    fileMgrStatus(unsupported);
     return;
   }
   const files = Array.from(input.files);
@@ -7060,6 +7687,10 @@ async function bulkDeleteFileMgr() {
     fileMgrStatus("Shared view is read-only.");
     return;
   }
+  if (items.some((item) => mountedUnsupportedActionMessage("delete", item.path))) {
+    fileMgrStatus("One or more selected paths are on a read-only or disabled mount.");
+    return;
+  }
   const ok = confirm(`Delete ${items.length} item(s)?`);
   if (!ok) return;
   await ensureUiSession();
@@ -7090,6 +7721,10 @@ async function bulkMoveFileMgr() {
   }
   if (fileMgrState.sharedMode && !fileMgrCanWrite()) {
     fileMgrStatus("Shared view is read-only.");
+    return;
+  }
+  if (items.some((item) => mountedUnsupportedActionMessage("move", item.path))) {
+    fileMgrStatus("One or more selected paths are on a read-only or disabled mount.");
     return;
   }
   const destInput = prompt("Move selected items to folder:", currentFileMgrPath());
@@ -7767,6 +8402,18 @@ document.getElementById("profileAuditRefreshBtn").onclick = async () => {
 };
 
 document.getElementById("filemgrRefreshBtn").onclick = refreshFileManager;
+document.getElementById("filemgrMountRefreshBtn").onclick = async () => {
+  try {
+    fileMgrMountStatus("Refreshing mounts...");
+    await refreshFileMgrMounts();
+    fileMgrMountStatus(`Loaded ${fileMgrState.mounts.length} mount(s).`);
+  } catch (e) {
+    fileMgrMountStatus(String(e));
+  }
+};
+document.getElementById("filemgrMountCreateBtn").onclick = () => {
+  openFileMgrMountModal({ mode: "create" });
+};
 document.getElementById("filemgrSharedRefreshBtn").onclick = async () => {
   try {
     await refreshSharedWithMe();

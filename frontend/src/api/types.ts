@@ -1130,6 +1130,38 @@ export interface UsageStorageResp {
   storage_bytes_current: number;
   top_files: UsageStorageFileItem[];
 }
+
+
+export interface SftpMountSummary {
+  id: string;
+  owner: string;
+  protocol?: "sftp" | "scp" | "ftp";
+  host: string;
+  port: number;
+  remote_root: string;
+  read_only: boolean;
+  status: string;
+}
+
+export interface MountMockFileItem {
+  name: string;
+  path: string;
+  type: "file" | "folder";
+  size: number;
+  modified_at: number;
+}
+
+export interface MountMockFilesResp {
+  mount_id: string;
+  owner: string;
+  backend: string;
+  path: string;
+  items: MountMockFileItem[];
+  limit: number;
+  cursor?: string | null;
+  filesystem_path?: string | null;
+}
+
 export interface SharedItem {
   owner: string;
   path: string;

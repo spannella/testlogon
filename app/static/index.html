@@ -631,6 +631,21 @@
   <div class="card" style="width:100%">
     <h3>File Manager</h3>
     <div class="muted">Browse folders, upload files, and manage downloads.</div>
+    <div class="section" style="margin-top:14px; border:1px solid #eee; border-radius:10px; padding:12px;">
+      <div class="row-inline" style="justify-content:space-between; align-items:center;">
+        <div>
+          <h4 style="margin:0;">SFTP mounts</h4>
+          <div class="muted">Create, test, edit, and remove SFTP mounts. Read-only mounts allow browsing/download only; read-write mounts allow upload, move, rename, and delete.</div>
+        </div>
+        <div class="row-inline">
+          <button id="filemgrMountCreateBtn" class="primary">Create mount</button>
+          <button id="filemgrMountRefreshBtn">Refresh mounts</button>
+        </div>
+      </div>
+      <div id="filemgrMountStatus" class="muted" style="margin-top:6px;"></div>
+      <div id="filemgrMountPolicyHint" class="muted" style="margin-top:4px;">Mounted SFTP content cannot be shared yet.</div>
+      <div id="filemgrMountList" class="list" style="margin-top:8px;"></div>
+    </div>
     <div id="filemgrSharedBanner" class="row-inline hidden" style="margin-top:8px; justify-content:space-between;">
       <div class="muted" id="filemgrSharedLabel"></div>
       <button id="filemgrExitSharedBtn">Exit shared view</button>

@@ -181,6 +181,43 @@ def record_download_usage(user: str, path: str, bytes_count: int, *, source: str
     _record_usage_event_safe(event)
 
 
+def record_upload_usage(user: str, path: str, bytes_count: int, *, source: str, request_id: Optional[str] = None) -> None:
+    if bytes_count <= 0:
+        return
+    p = norm_path(path, is_folder=False)
+    event = build_usage_event(
+        user_id=user,
+        event_type="upload",
+        bytes_count=bytes_count,
+        source=source,
+        resource_path=p,
+        request_id=request_id,
+        idempotency_key=f"upload|{source}|{user}|{p}|{request_id or ''}|{bytes_count}",
+    )
+    _record_usage_event_safe(event)
+
+
+def record_operation_usage(user: str, path: str, *, operation: str, backend: str, request_id: Optional[str] = None) -> None:
+    op = str(operation or "").strip().lower()
+    be = str(backend or "").strip().lower()
+    if op not in {"list", "read", "write", "delete", "move"}:
+        return
+    if be not in {"s3", "sftp"}:
+        return
+    p = norm_path(path, is_folder=None)
+    source = f"op_{op}_{be}"
+    event = build_usage_event(
+        user_id=user,
+        event_type="storage_delta",
+        bytes_count=0,
+        source=source,
+        resource_path=p,
+        request_id=request_id,
+        idempotency_key=f"operation|{source}|{user}|{p}|{request_id or ''}",
+    )
+    _record_usage_event_non_aggregating_safe(event)
+
+
 def record_storage_delta(
     user: str,
     path: str,
@@ -2298,6 +2335,12 @@ def _enforce_upload_and_storage_quotas(user: str, *, incoming_bytes: int, summar
             limit_bytes=storage_limit,
             used_bytes=storage_used,
         )
+
+
+def assert_upload_allowed(user: str, *, incoming_bytes: int = 0) -> None:
+    if incoming_bytes <= 0:
+        return
+    _enforce_upload_and_storage_quotas(user, incoming_bytes=int(incoming_bytes))
 
 
 def assert_download_allowed(user: str, *, requested_bytes: int = 0) -> None:
