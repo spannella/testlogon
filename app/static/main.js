@@ -350,6 +350,194 @@ function fmtBytes(value) {
   return `${scaled.toFixed(precision)} ${units[idx]}`;
 }
 
+
+
+/* ===================== VNC connection form ===================== */
+const VNC_FORM_STORAGE_KEY = "vnc_form_values";
+const vncUiState = { sessionId: null };
+
+const VNC_ERROR_MESSAGE_MAP = {
+  VNC_AUTH_UNAUTHORIZED: "You are not authorized to access this VNC target.",
+  VNC_TARGET_NOT_FOUND: "Target not found. Select a registered inventory target ID.",
+  VNC_TARGET_UNREACHABLE: "Target is currently unreachable from the bridge.",
+  VNC_BRIDGE_TIMEOUT: "Bridge timeout while connecting to the VNC target. Try again.",
+  VNC_TOKEN_EXPIRED: "Session bootstrap token expired. Start a new VNC session.",
+  VNC_TOKEN_INVALID: "Session token invalid. Start a new VNC session.",
+  VNC_SESSION_NOT_FOUND: "Session not found. Start a new session.",
+  VNC_SESSION_TERMINATED: "Session terminated by policy or timeout.",
+  VNC_RATE_LIMITED: "Too many VNC session requests. Please retry shortly.",
+  VNC_INTERNAL_ERROR: "Unexpected VNC bridge error. Retry and contact support if persistent.",
+};
+
+function parseApiErrorCode(err) {
+  const msg = String(err && err.message ? err.message : err || "");
+  const idx = msg.indexOf(":");
+  const payload = idx >= 0 ? msg.slice(idx + 1).trim() : "";
+  if (!payload) return null;
+  try {
+    const parsed = JSON.parse(payload);
+    return parsed?.detail?.error?.code || null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+function vncSetStatus(message, isError = false) {
+  const el = document.getElementById("vncFormStatus");
+  if (!el) return;
+  el.textContent = message || "";
+  el.classList.toggle("err", Boolean(isError));
+}
+
+function vncGetFormValues() {
+  return {
+    target_id: readInput("vncTargetId"),
+    host: readInput("vncHost"),
+    port: readInput("vncPort"),
+    display_label: readInput("vncDisplayLabel"),
+    auth_mode: document.getElementById("vncAuthMode")?.value || "session_token",
+  };
+}
+
+function vncPersistForm() {
+  const values = vncGetFormValues();
+  try {
+    localStorage.setItem(VNC_FORM_STORAGE_KEY, JSON.stringify(values));
+  } catch (_e) {}
+}
+
+function vncRestoreForm() {
+  try {
+    const raw = localStorage.getItem(VNC_FORM_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    setInputValue("vncTargetId", parsed.target_id || "");
+    setInputValue("vncHost", parsed.host || "");
+    setInputValue("vncPort", parsed.port || "");
+    setInputValue("vncDisplayLabel", parsed.display_label || "");
+    if (parsed.auth_mode && document.getElementById("vncAuthMode")) {
+      document.getElementById("vncAuthMode").value = parsed.auth_mode;
+    }
+  } catch (_e) {}
+}
+
+function vncSetFieldError(id, message) {
+  const input = document.getElementById(id);
+  const err = document.getElementById(`${id}Err`);
+  if (input) input.classList.toggle("invalid", Boolean(message));
+  if (err) {
+    err.classList.toggle("hidden", !message);
+    err.textContent = message || "";
+  }
+}
+
+function validateVncForm() {
+  const values = vncGetFormValues();
+  let valid = true;
+
+  if (!values.target_id) {
+    valid = false;
+    vncSetFieldError("vncTargetId", "Target ID is required.");
+  } else {
+    vncSetFieldError("vncTargetId", "");
+  }
+
+  if (values.host && !/^[a-zA-Z0-9._:-]+$/.test(values.host)) {
+    valid = false;
+    vncSetFieldError("vncHost", "Host contains invalid characters.");
+  } else {
+    vncSetFieldError("vncHost", "");
+  }
+
+  if (values.port) {
+    const num = Number(values.port);
+    if (!Number.isInteger(num) || num < 1 || num > 65535) {
+      valid = false;
+      vncSetFieldError("vncPort", "Port must be an integer between 1 and 65535.");
+    } else {
+      vncSetFieldError("vncPort", "");
+    }
+  } else {
+    vncSetFieldError("vncPort", "");
+  }
+
+  return { valid, values };
+}
+
+function renderVncSessionSummary(session) {
+  const el = document.getElementById("vncSessionSummary");
+  if (!el) return;
+  if (!session) {
+    el.textContent = "";
+    return;
+  }
+  const caps = session.capabilities || {};
+  const label = readInput("vncDisplayLabel");
+  el.innerHTML = [
+    `<div><b>Session:</b> <span class="mono">${escapeHtml(session.session_id || "")}</span></div>`,
+    `<div><b>Label:</b> ${escapeHtml(label || "(none)")}</div>`,
+    `<div><b>WebSocket URL:</b> <span class="mono break">${escapeHtml(session.ws_url || "")}</span></div>`,
+    `<div><b>Capabilities:</b> clipboard=${Boolean(caps.clipboard)} file_transfer=${Boolean(caps.file_transfer)} drag_drop_upload=${Boolean(caps.drag_drop_upload)}</div>`,
+  ].join("");
+}
+
+async function submitVncConnectionForm() {
+  const { valid, values } = validateVncForm();
+  if (!valid) {
+    vncSetStatus("Fix validation errors and try again.", true);
+    return;
+  }
+  vncPersistForm();
+  vncSetStatus("Creating VNC session...");
+
+  try {
+    await ensureUiSession();
+    const payload = await apiPost("/api/vnc/session", { target_id: values.target_id });
+    vncUiState.sessionId = payload.session_id;
+    renderVncSessionSummary(payload);
+    vncSetStatus("VNC session created. You can now open noVNC viewer.");
+  } catch (e) {
+    const code = parseApiErrorCode(e);
+    const mapped = code ? VNC_ERROR_MESSAGE_MAP[code] : null;
+    const fallback = String(e?.message || e || "Failed to create VNC session.");
+    vncSetStatus(mapped ? `${mapped} (${code})` : fallback, true);
+  }
+}
+
+async function disconnectVncSession() {
+  const sessionId = vncUiState.sessionId;
+  if (!sessionId) {
+    vncSetStatus("No active VNC session to disconnect.", true);
+    return;
+  }
+  try {
+    await ensureUiSession();
+    await apiDelete(`/api/vnc/session/${encodeURIComponent(sessionId)}`);
+    vncUiState.sessionId = null;
+    renderVncSessionSummary(null);
+    vncSetStatus("VNC session disconnected.");
+  } catch (e) {
+    const code = parseApiErrorCode(e);
+    const mapped = code ? VNC_ERROR_MESSAGE_MAP[code] : null;
+    vncSetStatus(mapped ? `${mapped} (${code})` : String(e?.message || e), true);
+  }
+}
+
+function initVncConnectionForm() {
+  if (!document.getElementById("remoteDesktopSection")) return;
+  vncRestoreForm();
+  ["vncTargetId", "vncHost", "vncPort", "vncDisplayLabel", "vncAuthMode"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("change", vncPersistForm);
+    el.addEventListener("input", () => {
+      if (["vncTargetId", "vncHost", "vncPort"].includes(id)) validateVncForm();
+    });
+  });
+  document.getElementById("vncConnectBtn").onclick = submitVncConnectionForm;
+  document.getElementById("vncDisconnectBtn").onclick = disconnectVncSession;
+}
+
 /* ===================== billing (CCBill) ===================== */
 const billingState = { config: null };
 
@@ -8592,6 +8780,7 @@ document.getElementById("accountReactivateBtn").onclick = () => {
 if (!window.__SKIP_BOOT__) {
   initBillingUi();
   initSignatureComposerUi();
+  initVncConnectionForm();
   renderPasswordRecovery();
   document.getElementById("billingRefreshBtn").onclick = refreshBillingAll;
   document.getElementById("paySettledBalanceBtn").onclick = payBillingSettledBalance;

@@ -76,6 +76,47 @@
   </div>
 </div>
 
+<div class="row" id="remoteDesktopSection">
+  <div class="card">
+    <h3>Remote Desktop (noVNC)</h3>
+    <div class="muted">Start a brokered VNC session by target ID. Host/port fields are optional operator context for inventory lookup; secrets are never persisted in browser storage.</div>
+    <div class="grid vnc-grid" style="margin-top:10px;">
+      <div>
+        <label for="vncTargetId" class="muted">Target ID</label>
+        <input id="vncTargetId" placeholder="demo" />
+        <div id="vncTargetIdErr" class="err muted hidden"></div>
+      </div>
+      <div>
+        <label for="vncDisplayLabel" class="muted">Display label (optional)</label>
+        <input id="vncDisplayLabel" placeholder="Prod support desktop" />
+      </div>
+      <div>
+        <label for="vncHost" class="muted">Host (optional)</label>
+        <input id="vncHost" placeholder="vnc-host.internal" />
+        <div id="vncHostErr" class="err muted hidden"></div>
+      </div>
+      <div>
+        <label for="vncPort" class="muted">Port (optional)</label>
+        <input id="vncPort" type="number" min="1" max="65535" placeholder="5900" />
+        <div id="vncPortErr" class="err muted hidden"></div>
+      </div>
+      <div>
+        <label for="vncAuthMode" class="muted">Auth input mode</label>
+        <select id="vncAuthMode">
+          <option value="session_token">Session token (recommended)</option>
+          <option value="password">Password (do not store)</option>
+        </select>
+      </div>
+    </div>
+    <div class="row-inline" style="margin-top:10px;">
+      <button id="vncConnectBtn" class="primary">Start VNC Session</button>
+      <button id="vncDisconnectBtn">Disconnect Session</button>
+      <span id="vncFormStatus" class="muted"></span>
+    </div>
+    <div id="vncSessionSummary" class="section muted"></div>
+  </div>
+</div>
+
 <div class="row" id="messagingSection">
   <div class="card">
     <h3>Messaging Console</h3>
