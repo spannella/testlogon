@@ -194,7 +194,12 @@ export async function api<T>(
   if (res.status === 401) {
     useImpersonationStore.getState().clear();
     if (!useAuthStore.getState().isAuthenticated) {
-      throw new ApiError(401, "Authentication required");
+      const body401 = await res.json().catch(() => null);
+      throw new ApiError(
+        401,
+        normalizeErrorDetail((body401 as Record<string, unknown>)?.detail, "Authentication required"),
+        body401,
+      );
     }
     if (!refreshPromise) {
       refreshPromise = refreshSession().finally(() => {

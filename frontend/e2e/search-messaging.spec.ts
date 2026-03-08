@@ -242,8 +242,11 @@ test.describe("38. User search UI — New DM dialog on /messages", () => {
     await page.getByPlaceholder(/search for a user/i).fill("bob");
     await searchResp;
 
+    // Scope to dialog to avoid strict-mode violation from 25+ sidebar DM
+    // buttons that also contain "E2E Bob" from accumulated test runs.
+    const dialog = page.getByRole("dialog");
     await expect(
-      page.locator("button").filter({ hasText: "E2E Bob" }),
+      dialog.locator("button").filter({ hasText: "E2E Bob" }).first(),
     ).toBeVisible({ timeout: 5000 });
   });
 
@@ -254,7 +257,8 @@ test.describe("38. User search UI — New DM dialog on /messages", () => {
         r.url().includes("/messaging/conversations") &&
         r.request().method() === "POST",
     );
-    await page.locator("button").filter({ hasText: "E2E Bob" }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.locator("button").filter({ hasText: "E2E Bob" }).first().click();
     await createResp;
     await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 5000 });
   });
