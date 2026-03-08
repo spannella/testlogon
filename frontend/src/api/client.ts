@@ -188,9 +188,14 @@ export async function api<T>(
     throw new ApiError(0, "Network error", err);
   }
 
-  // Handle 401 — try refreshing the session once
+  // Handle 401 — try refreshing the session once, but only if the user was
+  // authenticated in the first place. An unauthenticated 401 (e.g. wrong
+  // password on the login page) should propagate directly to the caller.
   if (res.status === 401) {
     useImpersonationStore.getState().clear();
+    if (!useAuthStore.getState().isAuthenticated) {
+      throw new ApiError(401, "Authentication required");
+    }
     if (!refreshPromise) {
       refreshPromise = refreshSession().finally(() => {
         refreshPromise = null;
