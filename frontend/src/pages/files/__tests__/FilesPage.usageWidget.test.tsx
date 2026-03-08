@@ -19,6 +19,8 @@ const fsPresignUpload = vi.fn();
 const completeUpload = vi.fn();
 const emitFileCryptoTelemetry = vi.fn();
 const getUsageSummary = vi.fn();
+const listSftpMounts = vi.fn();
+const listMountMockFiles = vi.fn();
 
 vi.mock("@/api/endpoints/files", () => ({
   listFiles: (...args: unknown[]) => listFiles(...args),
@@ -36,6 +38,8 @@ vi.mock("@/api/endpoints/files", () => ({
   completeUpload: (...args: unknown[]) => completeUpload(...args),
   emitFileCryptoTelemetry: (...args: unknown[]) => emitFileCryptoTelemetry(...args),
   getUsageSummary: (...args: unknown[]) => getUsageSummary(...args),
+  listSftpMounts: (...args: unknown[]) => listSftpMounts(...args),
+  listMountMockFiles: (...args: unknown[]) => listMountMockFiles(...args),
 }));
 
 vi.mock("../FileTable", () => ({ FileTable: () => <div data-testid="file-table" /> }));
@@ -51,6 +55,8 @@ describe("FilesPage usage widget and banners", () => {
     listFiles.mockResolvedValue({ path: "/", items: [] });
     searchFiles.mockResolvedValue({ results: [] });
     searchText.mockResolvedValue({ results: [] });
+    listSftpMounts.mockResolvedValue({ items: [] });
+    listMountMockFiles.mockResolvedValue({ mount_id: "", owner: "", backend: "mock", path: "/", items: [], limit: 200, cursor: null });
   });
 
   const renderPage = () => {
