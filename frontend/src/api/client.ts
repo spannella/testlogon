@@ -18,6 +18,11 @@ function getCookie(name: string): string | null {
   return match ? decodeURIComponent(match[1]!) : null;
 }
 
+/** Fired after every successful API response so the session expiry clock resets. */
+function notifyApiActivity(): void {
+  window.dispatchEvent(new Event("api-activity"));
+}
+
 function humanizeScope(scope: unknown): string {
   if (typeof scope !== "string" || !scope.trim()) return "required scope";
   if (scope === "auth_support") return "authentication support";
@@ -217,6 +222,7 @@ export async function api<T>(
       );
     }
 
+    notifyApiActivity();
     return retryRes.json() as Promise<T>;
   }
 
@@ -243,9 +249,11 @@ export async function api<T>(
 
   // 204 No Content
   if (res.status === 204) {
+    notifyApiActivity();
     return undefined as T;
   }
 
+  notifyApiActivity();
   return res.json() as Promise<T>;
 }
 

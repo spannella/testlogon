@@ -50,7 +50,7 @@ export function SessionExpiryWarning() {
   const { logout, accessToken } = useAuthStore();
   const navigate = useNavigate();
 
-  // Reset inactivity clock on any user interaction.
+  // Reset inactivity clock on any user interaction OR successful API call.
   React.useEffect(() => {
     const resetActivity = () => {
       lastActivityRef.current = Date.now();
@@ -62,6 +62,7 @@ export function SessionExpiryWarning() {
       "touchstart",
       "scroll",
       "click",
+      "api-activity",
     ] as const;
     for (const e of events) {
       window.addEventListener(e, resetActivity, { passive: true });
