@@ -176,7 +176,7 @@ def _log_message_control_action(*, actor_user_id: str, conversation_id: str, mes
 def _emit_archive_event_or_503(*, event_id: str, event_ts: int, conversation_id: str, message_id: str, actor_user_id: str, event_type: str, payload: dict) -> None:
     try:
         emit_messaging_archive_event(
-            event_id=event_id,
+            event_id=event_id[:128],
             event_ts=event_ts,
             tenant_id="default",
             conversation_id=conversation_id,

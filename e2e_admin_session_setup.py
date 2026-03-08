@@ -207,6 +207,7 @@ IDENTITIES = [
     ("bob",              "e2e_bob@test.local",        "user",  None),
     ("charlie_admin",    "e2e_charlie@test.local",    "admin", {"type": "general"}),
     ("charlie_scoped",   "e2e_charlie@test.local",    "admin", {"type": "scoped", "scopes": ["auth_support"]}),
+    ("compliance_admin", "e2e_charlie@test.local",    "admin", {"type": "scoped", "scopes": ["content_moderation"]}),
 ]
 
 results: dict = {}
