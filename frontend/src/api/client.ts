@@ -119,7 +119,7 @@ async function refreshSession(): Promise<void> {
     credentials: "include",
   });
   if (!res.ok) {
-    useAuthStore.getState().logout();
+    useAuthStore.getState().logout("session_expired");
     throw new ApiError(res.status, "Session refresh failed");
   }
 }
@@ -207,7 +207,7 @@ export async function api<T>(
 
     if (!retryRes.ok) {
       if (retryRes.status === 401) {
-        useAuthStore.getState().logout();
+        useAuthStore.getState().logout("session_expired");
       }
       const body = await retryRes.json().catch(() => null);
       throw new ApiError(

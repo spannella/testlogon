@@ -3,7 +3,7 @@ import { useNavigate, Link } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Loader2, Shield, Smartphone, Mail, KeyRound, ArrowLeft, Fingerprint, Send, HelpCircle, Eye, EyeOff } from "lucide-react";
+import { Loader2, Shield, Smartphone, Mail, KeyRound, ArrowLeft, Fingerprint, Send, HelpCircle, Eye, EyeOff, Timer } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -73,7 +73,7 @@ const MFA_METHODS: Record<MfaMethod, { label: string; icon: React.ReactNode; des
 
 export default function Login() {
   const navigate = useNavigate();
-  const { login, isAuthenticated } = useAuthStore();
+  const { login, isAuthenticated, logoutReason, clearLogoutReason } = useAuthStore();
 
   // Redirect if already authenticated
   React.useEffect(() => {
@@ -414,6 +414,26 @@ export default function Login() {
             Sign in to your account to continue
           </p>
         </div>
+
+        {logoutReason === "session_expired" && (
+          <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-300/60 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700/40 dark:bg-amber-950/40 dark:text-amber-300">
+            <Timer className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              <p className="font-medium">Your session has expired</p>
+              <p className="mt-0.5 text-amber-700 dark:text-amber-400">
+                You were automatically logged out due to inactivity. Please sign in again.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={clearLogoutReason}
+              className="ml-auto shrink-0 text-amber-600 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-200"
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         <Card className="shadow-xl">
           {step === "credentials" ? (

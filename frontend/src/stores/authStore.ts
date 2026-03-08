@@ -8,10 +8,13 @@ interface AuthState {
   accessToken: string | null;
   /** Whether the user is logged in */
   isAuthenticated: boolean;
+  /** Reason for the most recent logout (e.g. "session_expired") */
+  logoutReason: string | null;
 
   login: (userId: string, accessToken: string) => void;
   setAccessToken: (token: string) => void;
-  logout: () => void;
+  logout: (reason?: string) => void;
+  clearLogoutReason: () => void;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -20,15 +23,18 @@ export const useAuthStore = create<AuthState>()(
       userId: null,
       accessToken: null,
       isAuthenticated: false,
+      logoutReason: null,
 
       login: (userId, accessToken) =>
-        set({ userId, accessToken, isAuthenticated: true }),
+        set({ userId, accessToken, isAuthenticated: true, logoutReason: null }),
 
       setAccessToken: (accessToken) =>
         set({ accessToken }),
 
-      logout: () =>
-        set({ userId: null, accessToken: null, isAuthenticated: false }),
+      logout: (reason?: string) =>
+        set({ userId: null, accessToken: null, isAuthenticated: false, logoutReason: reason ?? null }),
+
+      clearLogoutReason: () => set({ logoutReason: null }),
     }),
     {
       name: "auth-store",
@@ -36,6 +42,7 @@ export const useAuthStore = create<AuthState>()(
         userId: state.userId,
         accessToken: state.accessToken,
         isAuthenticated: state.isAuthenticated,
+        logoutReason: state.logoutReason,
       }),
     },
   ),
