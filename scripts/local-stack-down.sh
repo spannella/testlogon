@@ -36,9 +36,11 @@ stop_pid "localstack"
 stop_pid "dynamodb-local"
 stop_pid "stripe-mock"
 stop_pid "mock-kms"
+stop_pid "keycloak"
 
 # Belt-and-suspenders: kill any orphaned DynamoDB Local or moto processes
 pkill -f "DynamoDBLocal.jar" 2>/dev/null || true
 pkill -f "moto_server"       2>/dev/null || true
+pkill -f "kc.sh start-dev"    2>/dev/null || true
 
 echo "Local stack stopped."

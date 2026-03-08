@@ -126,3 +126,142 @@ def test_metrics_dashboard_and_alerts_flow() -> None:
     db = dashboard.json()
     metrics_in_panels = {panel['metric'] for panel in db['panels']}
     assert {'validation_failures_total', 'deploy_success_rate', 'deploy_duration_avg_seconds'}.issubset(metrics_in_panels)
+
+import base64
+import hashlib
+import hmac
+import json
+from datetime import datetime, timedelta, timezone
+from urllib.parse import parse_qs, urlparse
+
+from app.services.auth import issue_root_session_token
+from app.services.secret_store import SqliteSecretStore
+
+
+ROOT = {'Authorization': f'Bearer {issue_root_session_token("root@example.com")}' }
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode().rstrip('=')
+
+
+def _make_id_token(
+    *,
+    secret: str,
+    issuer: str,
+    audience: str,
+    nonce: str,
+    exp: int,
+    groups: list[str] | None = None,
+) -> str:
+    header = {'alg': 'HS256', 'typ': 'JWT'}
+    payload = {
+        'iss': issuer,
+        'aud': audience,
+        'nonce': nonce,
+        'exp': exp,
+        'sub': 'metrics-sub-1',
+        'email': 'admin@example.com',
+        'tid': 'tenant-metrics',
+        'groups': groups or ['group-admins'],
+    }
+    h = _b64url(json.dumps(header, separators=(',', ':')).encode())
+    p = _b64url(json.dumps(payload, separators=(',', ':')).encode())
+    sig = _b64url(hmac.new(secret.encode(), f'{h}.{p}'.encode(), hashlib.sha256).digest())
+    return f'{h}.{p}.{sig}'
+
+
+def _provision_enabled_provider(provider_id: str = 'metrics-entra') -> None:
+    store = get_session_store()
+    store.migrate()
+    secret_store = SqliteSecretStore(db_path='/tmp/deployment_initializer_metrics_test.db')
+    secret_store.put_identity_provider_secret(
+        provider_id=provider_id,
+        secret_ref=f'secret://identity/{provider_id}',
+        secret_value='metrics-secret-value',
+        actor_email='root@example.com',
+    )
+    store.create_identity_provider(
+        provider_id=provider_id,
+        provider_type='oidc',
+        issuer='https://issuer.example.com',
+        metadata_url='https://issuer.example.com/.well-known/openid-configuration',
+        client_id='metrics-client-id',
+        secret_ref=f'secret://identity/{provider_id}',
+        created_by='root@example.com',
+        enabled=True,
+    )
+
+
+def test_admin_sso_metrics_alerts_and_dashboard_visibility() -> None:
+    _reset()
+    os.environ['ADMIN_SSO_DENIAL_ALERT_THRESHOLD'] = '1'
+    os.environ['ADMIN_SSO_DENIAL_ALERT_WINDOW_MINUTES'] = '30'
+    os.environ['ADMIN_SSO_CALLBACK_ERROR_ALERT_THRESHOLD'] = '1'
+    os.environ['ADMIN_SSO_CALLBACK_ERROR_ALERT_WINDOW_MINUTES'] = '30'
+
+    root_client = TestClient(app, headers=ROOT)
+    admin_client = TestClient(app, headers=ADMIN)
+
+    _provision_enabled_provider(provider_id='metrics-entra')
+
+    # produce config validation failure metric
+    secret_store = SqliteSecretStore(db_path='/tmp/deployment_initializer_metrics_test.db')
+    secret_store.put_identity_provider_secret(
+        provider_id='metrics-saml-invalid',
+        secret_ref='secret://identity/metrics-saml-invalid',
+        secret_value='metrics-secret-value-2',
+        actor_email='root@example.com',
+    )
+    create_invalid = root_client.post(
+        '/auth/admin/sso/providers',
+        json={
+            'provider_id': 'metrics-saml-invalid',
+            'provider_type': 'saml',
+            'issuer': 'https://saml.invalid.example.com',
+            'client_id': 'unused',
+            'secret_ref': 'secret://identity/metrics-saml-invalid',
+        },
+    )
+    assert create_invalid.status_code == 200
+    invalid_validate = root_client.post('/auth/admin/sso/providers/metrics-saml-invalid/validate')
+    assert invalid_validate.status_code == 400
+
+    # produce denial + callback error via failed callback auth
+    start = admin_client.get('/auth/admin/sso/start', params={'provider_id': 'metrics-entra'}, follow_redirects=False)
+    assert start.status_code == 302
+    state = parse_qs(urlparse(start.headers['location']).query)['state'][0]
+    nonce = parse_qs(urlparse(start.headers['location']).query)['nonce'][0]
+
+    denied_token = _make_id_token(
+        secret='metrics-secret-value',
+        issuer='https://issuer.example.com',
+        audience='metrics-client-id',
+        nonce=nonce,
+        exp=int((datetime.now(tz=timezone.utc) + timedelta(minutes=5)).timestamp()),
+        groups=['unmapped-group'],
+    )
+    denied = admin_client.get('/auth/admin/sso/callback', params={'state': state, 'id_token': denied_token})
+    assert denied.status_code == 403
+
+    metrics = admin_client.get('/ops/metrics')
+    assert metrics.status_code == 200
+    payload = metrics.json()
+    assert payload['admin_sso_login_failure_total'] >= 1
+    assert payload['admin_sso_login_denied_total'] >= 1
+    assert payload['admin_sso_callback_latency_avg_seconds'] >= 0
+    assert payload['admin_sso_config_validation_failures_total'] >= 1
+
+    alerts = admin_client.get('/ops/alerts')
+    assert alerts.status_code == 200
+    alert_codes = {item['code'] for item in alerts.json()['alerts']}
+    assert 'admin_sso_denial_spike' in alert_codes
+    assert 'admin_sso_callback_errors' in alert_codes
+
+    dashboard = admin_client.get('/ops/dashboard-template')
+    assert dashboard.status_code == 200
+    panel_metrics = {panel['metric'] for panel in dashboard.json()['panels']}
+    assert 'admin_sso_login_success_rate' in panel_metrics
+    assert 'admin_sso_login_denied_total' in panel_metrics
+    assert 'admin_sso_callback_latency_avg_seconds' in panel_metrics
+    assert 'admin_sso_config_validation_failures_total' in panel_metrics

@@ -15,6 +15,8 @@ fi
 RUN_DIR="${REPO_ROOT}/.local/run"
 TOOLS_DIR="${REPO_ROOT}/.local/tools"
 LOG_DIR="${REPO_ROOT}/.local/logs"
+DEV_ENABLE_KEYCLOAK="${DEV_ENABLE_KEYCLOAK:-0}"
+KEYCLOAK_BASE_URL="${KEYCLOAK_BASE_URL:-http://localhost:8081}"
 mkdir -p "${RUN_DIR}" "${TOOLS_DIR}" "${LOG_DIR}"
 
 probe() {
@@ -68,6 +70,53 @@ install_dynamodb_local() {
   echo "Installing DynamoDB Local..."
   curl -q -sSL https://s3.us-west-2.amazonaws.com/dynamodb-local/dynamodb_local_latest.tar.gz -o "${dest}/dynamodb_local_latest.tar.gz"
   tar -xzf "${dest}/dynamodb_local_latest.tar.gz" -C "$dest"
+}
+
+
+
+install_keycloak_host() {
+  local version="${KEYCLOAK_VERSION:-25.0.0}"
+  local install_dir="${TOOLS_DIR}/keycloak"
+  local marker_file="${install_dir}/.version"
+
+  if [[ -x "${install_dir}/bin/kc.sh" ]] && [[ -f "${marker_file}" ]] && [[ "$(cat "${marker_file}")" == "${version}" ]]; then
+    return 0
+  fi
+
+  rm -rf "${install_dir}"
+  mkdir -p "${install_dir}"
+
+  local tarball="keycloak-${version}.tar.gz"
+  local url="https://github.com/keycloak/keycloak/releases/download/${version}/${tarball}"
+  echo "Installing Keycloak ${version} (host mode)..."
+  curl -q -sSL "${url}" -o "${TOOLS_DIR}/${tarball}"
+  tar -xzf "${TOOLS_DIR}/${tarball}" -C "${install_dir}" --strip-components=1
+  echo "${version}" > "${marker_file}"
+  chmod +x "${install_dir}/bin/kc.sh"
+}
+
+start_keycloak_host() {
+  if [[ "${DEV_ENABLE_KEYCLOAK}" != "1" ]]; then
+    return 0
+  fi
+
+  command -v java >/dev/null 2>&1 || { echo "java is required for Keycloak host mode (install openjdk-17-jre-headless)." >&2; return 1; }
+  install_keycloak_host
+
+  export KEYCLOAK_ADMIN="${KEYCLOAK_ADMIN:-admin}"
+  export KEYCLOAK_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD:-admin}"
+  export KC_BOOTSTRAP_ADMIN_USERNAME="${KEYCLOAK_ADMIN}"
+  export KC_BOOTSTRAP_ADMIN_PASSWORD="${KEYCLOAK_ADMIN_PASSWORD}"
+
+  if ! is_up "${KEYCLOAK_BASE_URL}/realms/master/.well-known/openid-configuration"; then
+    start_with_pidfile "keycloak" "cd '${TOOLS_DIR}/keycloak' && KEYCLOAK_ADMIN='${KEYCLOAK_ADMIN}' KEYCLOAK_ADMIN_PASSWORD='${KEYCLOAK_ADMIN_PASSWORD}' KC_BOOTSTRAP_ADMIN_USERNAME='${KC_BOOTSTRAP_ADMIN_USERNAME}' KC_BOOTSTRAP_ADMIN_PASSWORD='${KC_BOOTSTRAP_ADMIN_PASSWORD}' ./bin/kc.sh start-dev --http-port=8081" "kc.sh start-dev --http-port=8081"
+  fi
+
+  wait_up "${KEYCLOAK_BASE_URL}/realms/master/.well-known/openid-configuration" "Keycloak master discovery" 90
+  PYTHONPATH="${REPO_ROOT}/deployment_initializer/backend:${PYTHONPATH:-}" \
+    python3 "${SCRIPT_DIR}/local-keycloak-init.py"
+  wait_up "${KEYCLOAK_BASE_URL}/realms/${KEYCLOAK_REALM:-local-ad}/.well-known/openid-configuration" "Keycloak realm discovery" 40
+  wait_up "${KEYCLOAK_BASE_URL}/realms/${KEYCLOAK_REALM:-local-ad}/protocol/openid-connect/certs" "Keycloak JWKS" 40
 }
 
 install_stripe_mock() {
@@ -150,6 +199,9 @@ else
   start_host_stack
 fi
 
+start_keycloak_host
+
+
 # Load .env.local so init scripts have the endpoint URLs and bucket names they need.
 # run_dev.sh may have already exported these, but source again for direct invocation.
 if [[ -f "${REPO_ROOT}/.env.local" ]]; then
@@ -169,3 +221,6 @@ echo "Local stack is starting."
 echo "DynamoDB Local: http://localhost:8001"
 echo "AWS mock (moto): http://localhost:4566"
 echo "Stripe mock:    http://localhost:12111"
+if [[ "${DEV_ENABLE_KEYCLOAK}" == "1" ]]; then
+  echo "Keycloak (host mode): ${KEYCLOAK_BASE_URL}"
+fi
