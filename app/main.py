@@ -67,6 +67,8 @@ from app.routers.browser_ssh_terminal import (
 )
 from app.routers.questionnaires import router as questionnaires_router
 from app.routers.vnc_sessions import router as vnc_sessions_router
+from app.routers.moderation import router as moderation_router, compat_router as moderation_compat_router
+from app.routers.admin_moderation import router as admin_moderation_router
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
@@ -196,6 +198,9 @@ def create_app() -> FastAPI:
     app.include_router(calendar_public_event_router)
     app.include_router(device_trust_router)
     app.include_router(newsfeed_router)
+    app.include_router(moderation_router)
+    app.include_router(moderation_compat_router)
+    app.include_router(admin_moderation_router)
     app.add_event_handler("startup", validate_startup_root_invariant)
     if _S.dev_mode:
         _dev_buckets = [b for b in [

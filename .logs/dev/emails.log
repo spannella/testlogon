@@ -1,0 +1,286 @@
+[2026-03-08T18:13:23Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 855550
+
+If you didn't request this, ignore.
+
+[2026-03-08T18:13:27Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 390207
+
+If you didn't request this, ignore.
+
+[2026-03-08T18:13:28Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 093332
+
+If you didn't request this, ignore.
+
+[2026-03-08T18:13:45Z] TO=e2e_alice@test.local PURPOSE=add-email
+  Subject: Your verification code (add-email)
+  Code: 835761
+  Body: Your verification code is: 835761
+
+If you did not request this, ignore this email.
+
+[2026-03-08T18:13:46Z] TO=e2e_alice@test.local PURPOSE=login
+  Subject: Your verification code (login)
+  Code: 321783
+  Body: Your verification code is: 321783
+
+If you did not request this, ignore this email.
+
+[2026-03-08T18:14:19Z] TO=e2e_mfa_totp_1772993659@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 083665
+  Body: Your verification code is: 083665
+
+If you did not request this, ignore this email.
+
+[2026-03-08T18:14:21Z] TO=e2e_mfa_sms_1772993661@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 471965
+  Body: Your verification code is: 471965
+
+If you did not request this, ignore this email.
+
+[2026-03-08T18:14:27Z] TO=e2e_new_1772993667456@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 890986
+  Body: Your verification code is: 890986
+
+If you did not request this, ignore this email.
+
+[2026-03-08T18:24:14Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 306667
+
+If you didn't request this, ignore.
+
+[2026-03-08T18:24:20Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 818950
+
+If you didn't request this, ignore.
+
+[2026-03-08T18:24:22Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 508907
+
+If you didn't request this, ignore.
+
+[2026-03-08T18:24:44Z] TO=e2e_alice@test.local PURPOSE=add-email
+  Subject: Your verification code (add-email)
+  Code: 510366
+  Body: Your verification code is: 510366
+
+If you did not request this, ignore this email.
+
+[2026-03-08T18:24:45Z] TO=e2e_alice@test.local PURPOSE=login
+  Subject: Your verification code (login)
+  Code: 868481
+  Body: Your verification code is: 868481
+
+If you did not request this, ignore this email.
+
+[2026-03-08T18:25:27Z] TO=e2e_mfa_totp_1772994327@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 959512
+  Body: Your verification code is: 959512
+
+If you did not request this, ignore this email.
+
+[2026-03-08T18:25:30Z] TO=e2e_mfa_sms_1772994330@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 191551
+  Body: Your verification code is: 191551
+
+If you did not request this, ignore this email.
+
+[2026-03-08T18:25:37Z] TO=e2e_new_1772994337577@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 707664
+  Body: Your verification code is: 707664
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:02:28Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 131578
+
+If you didn't request this, ignore.
+
+[2026-03-08T22:02:32Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 613653
+
+If you didn't request this, ignore.
+
+[2026-03-08T22:02:33Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 775392
+
+If you didn't request this, ignore.
+
+[2026-03-08T22:02:50Z] TO=e2e_alice@test.local PURPOSE=add-email
+  Subject: Your verification code (add-email)
+  Code: 278406
+  Body: Your verification code is: 278406
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:02:51Z] TO=e2e_alice@test.local PURPOSE=login
+  Subject: Your verification code (login)
+  Code: 579357
+  Body: Your verification code is: 579357
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:03:27Z] TO=e2e_mfa_totp_1773007407@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 995835
+  Body: Your verification code is: 995835
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:03:29Z] TO=e2e_mfa_sms_1773007409@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 688283
+  Body: Your verification code is: 688283
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:03:35Z] TO=e2e_new_1773007415261@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 029784
+  Body: Your verification code is: 029784
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:16:12Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 223247
+
+If you didn't request this, ignore.
+
+[2026-03-08T22:16:18Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 784708
+
+If you didn't request this, ignore.
+
+[2026-03-08T22:16:19Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 287991
+
+If you didn't request this, ignore.
+
+[2026-03-08T22:16:42Z] TO=e2e_alice@test.local PURPOSE=add-email
+  Subject: Your verification code (add-email)
+  Code: 553517
+  Body: Your verification code is: 553517
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:16:44Z] TO=e2e_alice@test.local PURPOSE=login
+  Subject: Your verification code (login)
+  Code: 190774
+  Body: Your verification code is: 190774
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:17:28Z] TO=e2e_mfa_totp_1773008248@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 134367
+  Body: Your verification code is: 134367
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:17:31Z] TO=e2e_mfa_sms_1773008251@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 716534
+  Body: Your verification code is: 716534
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:17:39Z] TO=e2e_new_1773008259401@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 395586
+  Body: Your verification code is: 395586
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:25:15Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 295722
+
+If you didn't request this, ignore.
+
+[2026-03-08T22:25:19Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 169024
+
+If you didn't request this, ignore.
+
+[2026-03-08T22:25:20Z] ALERT_EMAIL TO=alerts-e2e@example.com
+  Subject: Confirm alerts email
+  Body: Your confirmation code is: 544547
+
+If you didn't request this, ignore.
+
+[2026-03-08T22:25:38Z] TO=e2e_alice@test.local PURPOSE=add-email
+  Subject: Your verification code (add-email)
+  Code: 864474
+  Body: Your verification code is: 864474
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:25:39Z] TO=e2e_alice@test.local PURPOSE=login
+  Subject: Your verification code (login)
+  Code: 388688
+  Body: Your verification code is: 388688
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:26:15Z] TO=e2e_mfa_totp_1773008775@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 501876
+  Body: Your verification code is: 501876
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:26:18Z] TO=e2e_mfa_sms_1773008777@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 774182
+  Body: Your verification code is: 774182
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:26:44Z] TO=e2e_new_1773008804066@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 614973
+  Body: Your verification code is: 614973
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:44:18Z] TO=e2e_mfa_totp_1773009858@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 875774
+  Body: Your verification code is: 875774
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:44:20Z] TO=e2e_mfa_sms_1773009860@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 284154
+  Body: Your verification code is: 284154
+
+If you did not request this, ignore this email.
+
+[2026-03-08T22:44:26Z] TO=e2e_new_1773009866163@test.local PURPOSE=Registration
+  Subject: Your verification code (Registration)
+  Code: 764947
+  Body: Your verification code is: 764947
+
+If you did not request this, ignore this email.
+

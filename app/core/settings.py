@@ -300,6 +300,43 @@ class Settings:
         "DDB_MESSAGE_REPORT_CONTEXT",
         "MessageReportContext",
     )
+    content_reports_table_name: str = os.environ.get(
+        "DDB_CONTENT_REPORTS",
+        "ContentReports",
+    )
+    moderation_tickets_table_name: str = os.environ.get(
+        "DDB_MODERATION_TICKETS",
+        "ModerationTickets",
+    )
+    moderation_actions_table_name: str = os.environ.get(
+        "DDB_MODERATION_ACTIONS",
+        "ModerationActions",
+    )
+    moderation_audit_log_table_name: str = os.environ.get(
+        "DDB_MODERATION_AUDIT_LOG",
+        "ModerationAuditLog",
+    )
+    user_enforcement_history_table_name: str = os.environ.get(
+        "DDB_USER_ENFORCEMENT_HISTORY",
+        "UserEnforcementHistory",
+    )
+    moderation_dual_approval_permanent_ban_enabled: bool = os.environ.get(
+        "MODERATION_DUAL_APPROVAL_PERMANENT_BAN_ENABLED",
+        "false",
+    ).lower() in ("1", "true", "yes", "on")
+    moderation_kpi_lookback_hours: int = int(os.environ.get("MODERATION_KPI_LOOKBACK_HOURS", "24"))
+    moderation_kpi_surge_window_minutes: int = int(os.environ.get("MODERATION_KPI_SURGE_WINDOW_MINUTES", "15"))
+    moderation_alert_extortion_criminal_surge_threshold: int = int(
+        os.environ.get("MODERATION_ALERT_EXTORTION_CRIMINAL_SURGE_THRESHOLD", "10")
+    )
+    moderation_alert_sla_open_critical_threshold: int = int(
+        os.environ.get("MODERATION_ALERT_SLA_OPEN_CRITICAL_THRESHOLD", "20")
+    )
+    moderation_alert_sla_oldest_open_minutes_threshold: int = int(
+        os.environ.get("MODERATION_ALERT_SLA_OLDEST_OPEN_MINUTES_THRESHOLD", "120")
+    )
+    moderation_alert_sla_window_minutes: int = int(os.environ.get("MODERATION_ALERT_SLA_WINDOW_MINUTES", "30"))
+    moderation_oncall_user_subs: str = os.environ.get("MODERATION_ONCALL_USER_SUBS", "")
     message_legal_holds_table_name: str = os.environ.get(
         "DDB_MESSAGE_LEGAL_HOLDS",
         "MessageLegalHolds",

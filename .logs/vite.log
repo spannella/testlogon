@@ -1,0 +1,371 @@
+sleep: invalid time interval ‘nohup’
+sleep: invalid time interval ‘npx’
+sleep: invalid time interval ‘vite’
+Try 'sleep --help' for more information.
+
+  VITE v6.4.1  ready in 262 ms
+
+  ➜  Local:   http://localhost:3000/
+  ➜  Network: http://172.31.25.6:3000/
+error when starting dev server:
+Error: Port 3000 is already in use
+    at Server.onError (file:///home/ubuntu/testlogon/frontend/node_modules/vite/dist/node/chunks/dep-D4NMHUTW.js:25023:18)
+    at Server.emit (node:events:524:28)
+    at emitErrorNT (node:net:1944:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:82:21)
+error when starting dev server:
+Error: Port 3000 is already in use
+    at Server.onError (file:///home/ubuntu/testlogon/frontend/node_modules/vite/dist/node/chunks/dep-D4NMHUTW.js:25023:18)
+    at Server.emit (node:events:524:28)
+    at emitErrorNT (node:net:1944:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:82:21)
+error when starting dev server:
+Error: Port 3000 is already in use
+    at Server.onError (file:///home/ubuntu/testlogon/frontend/node_modules/vite/dist/node/chunks/dep-D4NMHUTW.js:25023:18)
+    at Server.emit (node:events:524:28)
+    at emitErrorNT (node:net:1944:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:82:21)
+4:17:54 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+4:22:40 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+4:29:07 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+4:29:18 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+4:37:32 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+4:52:06 AM [vite] (client) hmr update /src/globals.css, /src/components/layout/Sidebar.tsx, /src/pages/messages/ConversationList.tsx, /src/pages/messages/MessagesPage.tsx, /src/pages/messages/PresenceDot.tsx, /src/pages/messages/ConversationView.tsx, /src/pages/messages/UserSearch.tsx, /src/pages/messages/TypingIndicator.tsx, /src/pages/messages/MessageBubble.tsx, /src/pages/messages/ParticipantsPanel.tsx, /src/pages/messages/ScheduledMessages.tsx, /src/pages/messages/ReadReceipts.tsx, /src/pages/messages/ForwardDialog.tsx, /src/pages/messages/MessageDetailsSheet.tsx, /src/pages/messages/ConversationGallery.tsx
+4:55:52 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:00:24 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:03:14 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:07:41 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:09:16 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:10:42 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:10:45 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:12:49 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:15:57 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:33:36 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:33:45 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:33:54 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:34:00 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:34:20 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:34:36 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:46:36 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:46:42 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:51:55 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:52:12 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:55:15 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+5:55:25 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+6:09:14 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+6:09:36 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+6:27:13 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+6:27:20 AM [vite] (client) page reload e2e/calendar-messaging.spec.ts
+7:23:28 AM [vite] (client) page reload src/api/types.ts
+7:23:38 AM [vite] (client) hmr update /src/globals.css, /src/components/layout/Sidebar.tsx, /src/pages/messages/ConversationList.tsx, /src/pages/messages/MessagesPage.tsx, /src/pages/messages/PresenceDot.tsx, /src/pages/messages/ConversationView.tsx, /src/pages/messages/UserSearch.tsx, /src/pages/messages/TypingIndicator.tsx, /src/pages/messages/MessageBubble.tsx, /src/pages/messages/ParticipantsPanel.tsx, /src/pages/messages/ScheduledMessages.tsx, /src/pages/messages/ReadReceipts.tsx, /src/pages/messages/ForwardDialog.tsx, /src/pages/messages/MessageDetailsSheet.tsx, /src/pages/messages/ConversationGallery.tsx
+7:23:46 AM [vite] (client) hmr update /src/pages/messages/MessagesPage.tsx, /src/globals.css
+7:23:51 AM [vite] (client) hmr update /src/components/layout/Sidebar.tsx, /src/globals.css
+7:23:54 AM [vite] (client) hmr update /src/components/layout/Sidebar.tsx, /src/globals.css
+7:23:56 AM [vite] (client) hmr update /src/App.tsx, /src/globals.css
+7:23:58 AM [vite] (client) hmr update /src/App.tsx, /src/globals.css
+4:03:42 PM [vite] (client) page reload src/api/types.ts
+4:03:53 PM [vite] (client) hmr update /src/globals.css, /src/components/layout/Sidebar.tsx, /src/pages/messages/ConversationList.tsx, /src/pages/messages/MessagesPage.tsx, /src/pages/messages/PresenceDot.tsx, /src/pages/messages/ConversationView.tsx, /src/pages/messages/UserSearch.tsx, /src/pages/messages/TypingIndicator.tsx, /src/pages/messages/MessageBubble.tsx, /src/pages/messages/ParticipantsPanel.tsx, /src/pages/messages/ScheduledMessages.tsx, /src/pages/messages/ReadReceipts.tsx, /src/pages/messages/ForwardDialog.tsx, /src/pages/messages/MessageDetailsSheet.tsx, /src/pages/messages/ConversationGallery.tsx, /src/pages/Dashboard.tsx, /src/pages/contacts/ContactsPage.tsx
+4:04:02 PM [vite] (client) hmr update /src/globals.css, /src/components/layout/Sidebar.tsx, /src/pages/messages/ConversationList.tsx, /src/pages/messages/MessagesPage.tsx, /src/pages/messages/PresenceDot.tsx, /src/pages/messages/ConversationView.tsx, /src/pages/messages/UserSearch.tsx, /src/pages/messages/TypingIndicator.tsx, /src/pages/messages/MessageBubble.tsx, /src/pages/messages/ParticipantsPanel.tsx, /src/pages/messages/ScheduledMessages.tsx, /src/pages/messages/ReadReceipts.tsx, /src/pages/messages/ForwardDialog.tsx, /src/pages/messages/MessageDetailsSheet.tsx, /src/pages/messages/ConversationGallery.tsx, /src/pages/Dashboard.tsx, /src/pages/contacts/ContactsPage.tsx
+4:04:13 PM [vite] (client) hmr update /src/globals.css, /src/pages/messages/MessagesPage.tsx
+4:04:20 PM [vite] (client) hmr update /src/globals.css, /src/pages/messages/MessagesPage.tsx
+4:04:33 PM [vite] (client) hmr update /src/pages/messages/ConversationView.tsx, /src/globals.css
+4:04:39 PM [vite] (client) hmr update /src/pages/messages/ConversationView.tsx, /src/globals.css
+4:04:44 PM [vite] (client) hmr update /src/pages/messages/ConversationView.tsx, /src/globals.css
+4:04:58 PM [vite] (client) hmr update /src/pages/messages/ConversationView.tsx, /src/globals.css
+4:05:56 PM [vite] (client) hmr update /src/App.tsx, /src/globals.css
+4:05:59 PM [vite] (client) hmr update /src/App.tsx, /src/globals.css
+4:06:05 PM [vite] (client) hmr update /src/components/layout/Sidebar.tsx, /src/globals.css
+4:06:09 PM [vite] (client) hmr update /src/components/layout/Sidebar.tsx, /src/globals.css
+4:16:33 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+4:18:05 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+4:18:11 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+4:18:24 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+4:18:33 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+5:19:25 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+5:22:45 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+5:22:56 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+5:23:03 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+5:30:14 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+5:30:21 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+5:40:58 PM [vite] (client) hmr update /src/globals.css, /src/components/layout/Sidebar.tsx, /src/pages/messages/ConversationList.tsx, /src/pages/messages/MessagesPage.tsx, /src/pages/messages/PresenceDot.tsx, /src/pages/helpdesk/HelpdeskPage.tsx, /src/pages/messages/ConversationView.tsx, /src/pages/messages/UserSearch.tsx, /src/pages/messages/TypingIndicator.tsx, /src/pages/messages/MessageBubble.tsx, /src/pages/messages/ParticipantsPanel.tsx, /src/pages/messages/ScheduledMessages.tsx, /src/pages/messages/ReadReceipts.tsx, /src/pages/messages/ForwardDialog.tsx, /src/pages/messages/MessageDetailsSheet.tsx, /src/pages/messages/ConversationGallery.tsx, /src/pages/Dashboard.tsx, /src/pages/contacts/ContactsPage.tsx
+5:41:03 PM [vite] (client) hmr update /src/globals.css, /src/components/layout/Sidebar.tsx, /src/pages/messages/ConversationList.tsx, /src/pages/messages/MessagesPage.tsx, /src/pages/messages/PresenceDot.tsx, /src/pages/helpdesk/HelpdeskPage.tsx, /src/pages/messages/ConversationView.tsx, /src/pages/messages/UserSearch.tsx, /src/pages/messages/TypingIndicator.tsx, /src/pages/messages/MessageBubble.tsx, /src/pages/messages/ParticipantsPanel.tsx, /src/pages/messages/ScheduledMessages.tsx, /src/pages/messages/ReadReceipts.tsx, /src/pages/messages/ForwardDialog.tsx, /src/pages/messages/MessageDetailsSheet.tsx, /src/pages/messages/ConversationGallery.tsx, /src/pages/Dashboard.tsx, /src/pages/contacts/ContactsPage.tsx
+5:45:58 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+5:46:05 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+5:46:43 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+5:46:48 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+5:46:57 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+5:58:17 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+5:58:26 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+6:21:37 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+6:55:29 PM [vite] (client) page reload e2e/helpdesk.spec.ts
+7:07:33 PM [vite] (client) hmr update /src/pages/messages/ConversationView.tsx, /src/globals.css
+7:07:39 PM [vite] (client) hmr update /src/pages/messages/ConversationView.tsx, /src/globals.css
+7:07:43 PM [vite] (client) hmr update /src/pages/helpdesk/HelpdeskPage.tsx, /src/globals.css
+8:21:16 PM [vite] (client) page reload src/api/types.ts
+8:21:16 PM [vite] (client) hmr update /src/pages/files/FilesPage.tsx, /src/globals.css
+8:23:46 PM [vite] (client) hmr update /src/App.tsx, /src/globals.css
+8:23:46 PM [vite] (client) hmr update /src/components/layout/AppShell.tsx, /src/globals.css
+8:23:46 PM [vite] (client) hmr update /src/components/layout/MobileNav.tsx, /src/globals.css
+8:23:46 PM [vite] (client) hmr update /src/components/layout/Sidebar.tsx, /src/globals.css
+8:23:46 PM [vite] (client) page reload src/hooks/useMessagingStream.test.tsx
+8:23:46 PM [vite] (client) page reload src/lib/messageEncryption.test.ts
+8:23:46 PM [vite] (client) page reload src/pages/messages/ComposeBar.encryption.test.tsx
+8:26:19 PM [vite] (client) hmr update /src/App.tsx, /src/globals.css
+8:26:26 PM [vite] (client) page reload src/hooks/useMessagingStream.test.tsx
+8:26:33 PM [vite] (client) page reload src/lib/messageEncryption.test.ts
+8:26:37 PM [vite] (client) page reload src/pages/messages/ComposeBar.encryption.test.tsx
+✘ [ERROR] Could not resolve "chromium-bidi/lib/cjs/bidiMapper/BidiMapper"
+
+    node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:34:33:
+      34 │ ...= __toESM(require("chromium-bidi/lib/cjs/bidiMapper/BidiMapper"));
+         ╵                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  You can mark the path "chromium-bidi/lib/cjs/bidiMapper/BidiMapper" as external to exclude it from the bundle, which will remove this error and leave the unresolved path in the bundle. You can also surround this "require" call with a try/catch block to handle this failure at run-time instead of bundle-time.
+
+✘ [ERROR] Could not resolve "chromium-bidi/lib/cjs/cdp/CdpConnection"
+
+    node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:35:40:
+      35 │ ...ion = __toESM(require("chromium-bidi/lib/cjs/cdp/CdpConnection"));
+         ╵                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  You can mark the path "chromium-bidi/lib/cjs/cdp/CdpConnection" as external to exclude it from the bundle, which will remove this error and leave the unresolved path in the bundle. You can also surround this "require" call with a try/catch block to handle this failure at run-time instead of bundle-time.
+
+8:35:23 PM [vite] (client) error while updating dependencies:
+Error: Build failed with 2 errors:
+node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:34:33: ERROR: Could not resolve "chromium-bidi/lib/cjs/bidiMapper/BidiMapper"
+node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:35:40: ERROR: Could not resolve "chromium-bidi/lib/cjs/cdp/CdpConnection"
+    at failureErrorWithLog (/home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:1467:15)
+    at /home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:926:25
+    at /home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:1345:9
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+✘ [ERROR] Could not resolve "chromium-bidi/lib/cjs/bidiMapper/BidiMapper"
+
+    node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:34:33:
+      34 │ ...= __toESM(require("chromium-bidi/lib/cjs/bidiMapper/BidiMapper"));
+         ╵                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  You can mark the path "chromium-bidi/lib/cjs/bidiMapper/BidiMapper" as external to exclude it from the bundle, which will remove this error and leave the unresolved path in the bundle. You can also surround this "require" call with a try/catch block to handle this failure at run-time instead of bundle-time.
+
+✘ [ERROR] Could not resolve "chromium-bidi/lib/cjs/cdp/CdpConnection"
+
+    node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:35:40:
+      35 │ ...ion = __toESM(require("chromium-bidi/lib/cjs/cdp/CdpConnection"));
+         ╵                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  You can mark the path "chromium-bidi/lib/cjs/cdp/CdpConnection" as external to exclude it from the bundle, which will remove this error and leave the unresolved path in the bundle. You can also surround this "require" call with a try/catch block to handle this failure at run-time instead of bundle-time.
+
+8:35:26 PM [vite] (client) error while updating dependencies:
+Error: Build failed with 2 errors:
+node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:34:33: ERROR: Could not resolve "chromium-bidi/lib/cjs/bidiMapper/BidiMapper"
+node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:35:40: ERROR: Could not resolve "chromium-bidi/lib/cjs/cdp/CdpConnection"
+    at failureErrorWithLog (/home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:1467:15)
+    at /home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:926:25
+    at /home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:1345:9
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+✘ [ERROR] Could not resolve "chromium-bidi/lib/cjs/bidiMapper/BidiMapper"
+
+    node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:34:33:
+      34 │ ...= __toESM(require("chromium-bidi/lib/cjs/bidiMapper/BidiMapper"));
+         ╵                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  You can mark the path "chromium-bidi/lib/cjs/bidiMapper/BidiMapper" as external to exclude it from the bundle, which will remove this error and leave the unresolved path in the bundle. You can also surround this "require" call with a try/catch block to handle this failure at run-time instead of bundle-time.
+
+✘ [ERROR] Could not resolve "chromium-bidi/lib/cjs/cdp/CdpConnection"
+
+    node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:35:40:
+      35 │ ...ion = __toESM(require("chromium-bidi/lib/cjs/cdp/CdpConnection"));
+         ╵                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  You can mark the path "chromium-bidi/lib/cjs/cdp/CdpConnection" as external to exclude it from the bundle, which will remove this error and leave the unresolved path in the bundle. You can also surround this "require" call with a try/catch block to handle this failure at run-time instead of bundle-time.
+
+8:35:29 PM [vite] (client) error while updating dependencies:
+Error: Build failed with 2 errors:
+node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:34:33: ERROR: Could not resolve "chromium-bidi/lib/cjs/bidiMapper/BidiMapper"
+node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:35:40: ERROR: Could not resolve "chromium-bidi/lib/cjs/cdp/CdpConnection"
+    at failureErrorWithLog (/home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:1467:15)
+    at /home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:926:25
+    at /home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:1345:9
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+✘ [ERROR] Could not resolve "chromium-bidi/lib/cjs/bidiMapper/BidiMapper"
+
+    node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:34:33:
+      34 │ ...= __toESM(require("chromium-bidi/lib/cjs/bidiMapper/BidiMapper"));
+         ╵                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  You can mark the path "chromium-bidi/lib/cjs/bidiMapper/BidiMapper" as external to exclude it from the bundle, which will remove this error and leave the unresolved path in the bundle. You can also surround this "require" call with a try/catch block to handle this failure at run-time instead of bundle-time.
+
+✘ [ERROR] Could not resolve "chromium-bidi/lib/cjs/cdp/CdpConnection"
+
+    node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:35:40:
+      35 │ ...ion = __toESM(require("chromium-bidi/lib/cjs/cdp/CdpConnection"));
+         ╵                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  You can mark the path "chromium-bidi/lib/cjs/cdp/CdpConnection" as external to exclude it from the bundle, which will remove this error and leave the unresolved path in the bundle. You can also surround this "require" call with a try/catch block to handle this failure at run-time instead of bundle-time.
+
+8:35:33 PM [vite] (client) error while updating dependencies:
+Error: Build failed with 2 errors:
+node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:34:33: ERROR: Could not resolve "chromium-bidi/lib/cjs/bidiMapper/BidiMapper"
+node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:35:40: ERROR: Could not resolve "chromium-bidi/lib/cjs/cdp/CdpConnection"
+    at failureErrorWithLog (/home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:1467:15)
+    at /home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:926:25
+    at /home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:1345:9
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+✘ [ERROR] Could not resolve "chromium-bidi/lib/cjs/bidiMapper/BidiMapper"
+
+    node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:34:33:
+      34 │ ...= __toESM(require("chromium-bidi/lib/cjs/bidiMapper/BidiMapper"));
+         ╵                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  You can mark the path "chromium-bidi/lib/cjs/bidiMapper/BidiMapper" as external to exclude it from the bundle, which will remove this error and leave the unresolved path in the bundle. You can also surround this "require" call with a try/catch block to handle this failure at run-time instead of bundle-time.
+
+✘ [ERROR] Could not resolve "chromium-bidi/lib/cjs/cdp/CdpConnection"
+
+    node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:35:40:
+      35 │ ...ion = __toESM(require("chromium-bidi/lib/cjs/cdp/CdpConnection"));
+         ╵                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  You can mark the path "chromium-bidi/lib/cjs/cdp/CdpConnection" as external to exclude it from the bundle, which will remove this error and leave the unresolved path in the bundle. You can also surround this "require" call with a try/catch block to handle this failure at run-time instead of bundle-time.
+
+8:35:36 PM [vite] (client) error while updating dependencies:
+Error: Build failed with 2 errors:
+node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:34:33: ERROR: Could not resolve "chromium-bidi/lib/cjs/bidiMapper/BidiMapper"
+node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:35:40: ERROR: Could not resolve "chromium-bidi/lib/cjs/cdp/CdpConnection"
+    at failureErrorWithLog (/home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:1467:15)
+    at /home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:926:25
+    at /home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:1345:9
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+✘ [ERROR] Could not resolve "chromium-bidi/lib/cjs/bidiMapper/BidiMapper"
+
+    node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:34:33:
+      34 │ ...= __toESM(require("chromium-bidi/lib/cjs/bidiMapper/BidiMapper"));
+         ╵                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  You can mark the path "chromium-bidi/lib/cjs/bidiMapper/BidiMapper" as external to exclude it from the bundle, which will remove this error and leave the unresolved path in the bundle. You can also surround this "require" call with a try/catch block to handle this failure at run-time instead of bundle-time.
+
+✘ [ERROR] Could not resolve "chromium-bidi/lib/cjs/cdp/CdpConnection"
+
+    node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:35:40:
+      35 │ ...ion = __toESM(require("chromium-bidi/lib/cjs/cdp/CdpConnection"));
+         ╵                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+  You can mark the path "chromium-bidi/lib/cjs/cdp/CdpConnection" as external to exclude it from the bundle, which will remove this error and leave the unresolved path in the bundle. You can also surround this "require" call with a try/catch block to handle this failure at run-time instead of bundle-time.
+
+8:35:40 PM [vite] (client) error while updating dependencies:
+Error: Build failed with 2 errors:
+node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:34:33: ERROR: Could not resolve "chromium-bidi/lib/cjs/bidiMapper/BidiMapper"
+node_modules/playwright-core/lib/server/bidi/bidiOverCdp.js:35:40: ERROR: Could not resolve "chromium-bidi/lib/cjs/cdp/CdpConnection"
+    at failureErrorWithLog (/home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:1467:15)
+    at /home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:926:25
+    at /home/ubuntu/testlogon/frontend/node_modules/esbuild/lib/main.js:1345:9
+    at process.processTicksAndRejections (node:internal/process/task_queues:95:5)
+8:40:45 PM [vite] (client) page reload src/hooks/useMessagingStream.test.tsx
+8:40:46 PM [vite] (client) page reload src/hooks/useMessagingStream.test.tsx
+8:41:00 PM [vite] (client) page reload src/hooks/useMessagingStream.test.tsx
+8:41:00 PM [vite] (client) page reload src/pages/messages/ComposeBar.encryption.test.tsx
+8:41:00 PM [vite] (client) page reload src/lib/messageEncryption.test.ts
+8:41:32 PM [vite] (client) page reload src/hooks/useMessagingStream.test.tsx
+8:41:32 PM [vite] (client) page reload src/lib/messageEncryption.test.ts
+8:41:32 PM [vite] (client) page reload src/pages/messages/ComposeBar.encryption.test.tsx
+8:46:23 PM [vite] (client) page reload src/pages/messages/MessageBubble.encryption.test.tsx
+8:46:26 PM [vite] (client) page reload src/pages/messages/MessageBubble.encryption.test.tsx
+8:46:33 PM [vite] (client) page reload src/pages/messages/MessageBubble.once.test.tsx
+8:46:37 PM [vite] (client) page reload src/pages/messages/MessageBubble.once.test.tsx
+8:46:42 PM [vite] (client) page reload src/pages/messages/ComposeBar.encryption.test.tsx
+8:46:45 PM [vite] (client) page reload src/pages/messages/ComposeBar.encryption.test.tsx
+8:46:46 PM [vite] (client) page reload src/hooks/useMessagingStream.test.tsx
+8:46:49 PM [vite] (client) page reload src/pages/messages/ComposeBar.encryption.test.tsx
+8:46:51 PM [vite] (client) page reload src/pages/__tests__/Register.test.tsx
+8:46:53 PM [vite] (client) page reload src/pages/messages/ComposeBar.encryption.test.tsx
+8:47:07 PM [vite] (client) page reload src/pages/__tests__/Register.test.tsx
+8:47:11 PM [vite] (client) page reload src/pages/__tests__/Register.test.tsx
+8:47:13 PM [vite] (client) page reload src/pages/files/__tests__/FilesPage.encryptionDialog.test.tsx
+8:47:33 PM [vite] (client) page reload src/pages/messages/MessageBubble.once.test.tsx
+8:47:46 PM [vite] (client) page reload src/pages/messages/MessageBubble.once.test.tsx
+8:47:48 PM [vite] (client) page reload src/hooks/useMessagingStream.test.tsx
+8:47:53 PM [vite] (client) page reload src/pages/__tests__/Register.test.tsx
+8:48:12 PM [vite] (client) page reload src/pages/messages/MessageBubble.once.test.tsx
+8:48:15 PM [vite] (client) page reload src/pages/__tests__/Register.test.tsx
+8:48:48 PM [vite] (client) page reload src/pages/__tests__/Register.test.tsx
+8:49:05 PM [vite] (client) page reload src/pages/messages/MessageBubble.once.test.tsx
+8:49:42 PM [vite] (client) page reload src/pages/messages/ComposeBar.encryption.test.tsx
+8:49:58 PM [vite] (client) page reload src/pages/messages/ComposeBar.encryption.test.tsx
+8:54:49 PM [vite] vite.config.ts changed, restarting server...
+8:54:49 PM [vite] server restarted.
+12:53:27 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+12:53:31 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+12:53:48 AM [vite] (client) page reload e2e/auth.spec.ts
+12:54:06 AM [vite] (client) hmr update /src/pages/security/ApiKeys.tsx, /src/globals.css
+12:58:34 AM [vite] (client) page reload e2e/bug-fixes.spec.ts
+2:00:16 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+2:00:27 AM [vite] (client) page reload e2e/bug-fixes-2.spec.ts
+2:00:34 AM [vite] (client) page reload e2e/bug-fixes-2.spec.ts
+2:00:39 AM [vite] (client) page reload e2e/auth.spec.ts
+2:00:44 AM [vite] (client) page reload e2e/files.spec.ts
+2:01:04 AM [vite] (client) page reload e2e/messaging.spec.ts
+2:01:22 AM [vite] (client) page reload e2e/messaging.spec.ts
+2:06:29 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+2:09:00 AM [vite] (client) page reload e2e/messaging.spec.ts
+2:15:39 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+2:55:08 AM [vite] (client) hmr update /src/pages/security/ApiKeys.tsx, /src/globals.css
+2:55:26 AM [vite] (client) page reload e2e/api-keys.spec.ts
+2:55:39 AM [vite] (client) page reload e2e/bug-fixes-2.spec.ts
+2:55:48 AM [vite] (client) page reload e2e/messaging.spec.ts
+2:58:09 AM [vite] (client) page reload e2e/shop-cart-billing.spec.ts
+2:58:17 AM [vite] (client) page reload e2e/shop-cart-billing.spec.ts
+2:59:08 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+3:01:58 AM [vite] (client) page reload e2e/shop-cart-billing.spec.ts
+3:08:13 AM [vite] (client) page reload e2e/messaging.spec.ts
+3:31:13 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+3:31:18 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+3:31:32 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+3:33:30 AM [vite] (client) page reload e2e/bug-fixes-2.spec.ts
+3:34:06 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+3:41:34 AM [vite] (client) page reload e2e/bug-fixes-2.spec.ts
+3:43:13 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+3:49:15 AM [vite] (client) page reload e2e/bug-fixes-2.spec.ts
+3:49:21 AM [vite] (client) page reload e2e/bug-fixes-2.spec.ts
+3:49:42 AM [vite] (client) page reload e2e/bug-fixes-2.spec.ts
+3:57:55 AM [vite] (client) page reload e2e/bug-fixes-2.spec.ts
+4:01:22 AM [vite] (client) page reload e2e/bug-fixes-2.spec.ts
+4:01:38 AM [vite] (client) page reload e2e/bug-fixes-2.spec.ts
+4:04:43 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+4:05:28 AM [vite] (client) page reload e2e/bug-fixes.spec.ts
+4:06:49 AM [vite] (client) page reload e2e/bug-fixes.spec.ts
+4:07:08 AM [vite] (client) page reload e2e/bug-fixes.spec.ts
+4:07:24 AM [vite] (client) page reload e2e/bug-fixes.spec.ts
+4:09:15 AM [vite] (client) page reload e2e/bug-fixes.spec.ts
+4:09:27 AM [vite] (client) page reload e2e/bug-fixes.spec.ts
+4:09:40 AM [vite] (client) page reload e2e/bug-fixes.spec.ts
+4:09:49 AM [vite] (client) page reload e2e/bug-fixes.spec.ts
+4:10:29 AM [vite] (client) page reload e2e/bug-fixes.spec.ts
+4:10:36 AM [vite] (client) page reload e2e/bug-fixes.spec.ts
+4:12:15 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+4:12:30 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+4:13:06 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+4:13:12 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+4:21:53 AM [vite] (client) page reload e2e/messaging-features.spec.ts
+
+  VITE v6.4.1  ready in 258 ms
+
+  ➜  Local:   http://localhost:3000/
+  ➜  Network: http://172.31.25.6:3000/
+6:34:06 PM [vite] vite.config.ts changed, restarting server...
+6:34:06 PM [vite] server restarted.
+6:34:45 PM [vite] vite.config.ts changed, restarting server...
+6:34:45 PM [vite] server restarted.
+
+  VITE v6.4.1  ready in 248 ms
+
+  ➜  Local:   http://localhost:3000/
+  ➜  Network: http://172.31.25.6:3000/
+6:48:07 PM [vite] (client) page reload e2e/tickets.spec.ts
+6:48:26 PM [vite] (client) page reload e2e/tickets.spec.ts
+8:19:58 PM [vite] (client) page reload src/pages/alerts/AlertPrefs.tsx
+8:20:01 PM [vite] (client) page reload src/pages/alerts/AlertPrefs.tsx
+8:20:07 PM [vite] (client) page reload src/pages/alerts/AlertPrefs.tsx
+8:20:16 PM [vite] (client) page reload src/pages/alerts/AlertPrefs.tsx
+8:20:33 PM [vite] (client) page reload src/pages/alerts/AlertPrefs.tsx
+10:05:36 PM [vite] (client) page reload src/api/types.ts
+10:05:42 PM [vite] (client) hmr update /src/globals.css, /src/pages/messages/MessageBubble.tsx, /src/pages/messages/ComposeBar.tsx
+10:05:46 PM [vite] (client) hmr update /src/globals.css, /src/pages/messages/MessageBubble.tsx, /src/pages/messages/ComposeBar.tsx
+12:04:18 AM [vite] (client) page reload e2e/billing-wallet.spec.ts

@@ -24,6 +24,7 @@ import {
   PanelLeft,
   Bug,
   MonitorSmartphone,
+  Scale,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -31,7 +32,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Separator } from "@/components/ui/separator";
 import { useUiStore } from "@/stores/uiStore";
 import { useAuthStore } from "@/stores/authStore";
-import { canSeeRootRoleManagement } from "@/lib/adminCapabilities";
+import { canAccessModerationBoard, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 import { useQuery } from "@tanstack/react-query";
 import { getConversations } from "@/api/endpoints/messaging";
 import { isDevtoolsLogUiEnabled, isVncRemoteDesktopEnabled } from "@/lib/featureFlags";
@@ -92,6 +93,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
       { label: "Dev Tools Log UI", path: "/dev-tools/log-ui", icon: <Bug className="h-5 w-5" /> },
       { label: "Role Management", path: "/root/roles", icon: <UsersRound className="h-5 w-5" /> },
+      { label: "Moderation Board", path: "/admin/moderation", icon: <Scale className="h-5 w-5" /> },
     ],
   },
 ];
@@ -104,6 +106,7 @@ export default function Sidebar() {
   const location = useLocation();
   const accessToken = useAuthStore((s) => s.accessToken);
   const showRootRoleManagement = canSeeRootRoleManagement(accessToken);
+  const showModerationBoard = canAccessModerationBoard(accessToken);
 
   const { data: convoData } = useQuery({
     queryKey: ["conversations"],
@@ -151,6 +154,7 @@ export default function Sidebar() {
             if (item.path === "/root/roles") return showRootRoleManagement;
             if (item.path === "/dev-tools/log-ui") return isDevtoolsLogUiEnabled();
             if (item.path === "/remote-desktop") return isVncRemoteDesktopEnabled();
+            if (item.path === "/admin/moderation") return showModerationBoard;
             return true;
           });
           if (items.length === 0) return null;

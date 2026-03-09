@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Send, MoreHorizontal, Pencil, Trash2, X, Check, DollarSign } from "lucide-react";
+import { Send, MoreHorizontal, Pencil, Trash2, X, Check, DollarSign, Flag } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -12,13 +12,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { ReportContentModal, type ReportContentPayload } from "@/components/shared/ReportContentModal";
 import {
   getComments,
   createComment,
   editComment,
   deleteComment,
+  reportFeedContent,
 } from "@/api/endpoints/newsfeed";
 import { useAuthStore } from "@/stores/authStore";
+import { ApiError } from "@/api/client";
 import type { FeedComment } from "@/api/types";
 import { TipDialog } from "./TipDialog";
 import { MarkdownComposer, type EditorMode, type RichDoc, richDocToPlain, buildContentPayload } from "./MarkdownComposer";
@@ -171,6 +174,8 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
   const [editRichDoc, setEditRichDoc] = useState<RichDoc | null>((comment.body_rich as RichDoc | undefined) ?? null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [tipOpen, setTipOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportServerError, setReportServerError] = useState<string | null>(null);
 
   const editMut = useMutation({
     mutationFn: () => editComment(postId, comment.comment_id, buildContentPayload(editBody, editMode, editRichDoc)),
@@ -180,6 +185,31 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
       setEditing(false);
     },
     onError: (err: unknown) => toast.error(err instanceof Error ? err.message : "Failed to update comment"),
+  });
+
+
+  const reportMut = useMutation({
+    mutationFn: ({ topics, reason_text }: ReportContentPayload) => reportFeedContent({
+      content_type: "feed_comment",
+      content_id: comment.comment_id,
+      topics,
+      reason_text,
+      post_id: postId,
+      comment_id: comment.comment_id,
+    }),
+    onSuccess: () => {
+      toast.success("Report received");
+      setReportOpen(false);
+      setReportServerError(null);
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && typeof error.message === "string" && error.message.trim()) {
+        setReportServerError(error.message);
+      } else {
+        setReportServerError("Could not submit report. Please try again.");
+      }
+      toast.error("Could not submit report. Please try again.");
+    },
   });
 
   const deleteMut = useMutation({
@@ -302,28 +332,37 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
           )}
         </div>
 
-        {/* Actions menu — own comments only, when not editing */}
-        {isOwn && !editing && (
+        {/* Actions menu */}
+        {!editing && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-6 w-6 shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
+                aria-label="Comment actions"
               >
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={startEdit}>
-                <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
-                onClick={() => setDeleteOpen(true)}
-              >
-                <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete
-              </DropdownMenuItem>
+              {isOwn ? (
+                <>
+                  <DropdownMenuItem onClick={startEdit}>
+                    <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onClick={() => setDeleteOpen(true)}
+                  >
+                    <Trash2 className="mr-2 h-3.5 w-3.5" /> Delete
+                  </DropdownMenuItem>
+                </>
+              ) : (
+                <DropdownMenuItem onClick={() => setReportOpen(true)}>
+                  <Flag className="mr-2 h-3.5 w-3.5" /> Report comment
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
@@ -339,6 +378,26 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
         onConfirm={() => deleteMut.mutate()}
         loading={deleteMut.isPending}
       />
+
+      {!isOwn && (
+        <ReportContentModal
+          open={reportOpen}
+          onOpenChange={(open) => {
+            setReportOpen(open);
+            if (!open && !reportMut.isPending) {
+              setReportServerError(null);
+            }
+          }}
+          title="Report comment"
+          description="Share why this comment should be reviewed."
+          serverError={reportServerError}
+          isSubmitting={reportMut.isPending}
+          onSubmit={async (payload) => {
+            setReportServerError(null);
+            await reportMut.mutateAsync(payload);
+          }}
+        />
+      )}
 
       {!isOwn && (
         <TipDialog

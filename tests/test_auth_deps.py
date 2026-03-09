@@ -53,3 +53,16 @@ class TestAuthDeps(unittest.TestCase):
                 run_async(deps.get_authenticated_user_sub(req))
         self.assertEqual(ctx.exception.status_code, 401)
         self.assertIn("Authentication not configured", str(ctx.exception.detail))
+
+
+    def test_get_authenticated_user_sub_blocks_banned_user(self):
+        req = SimpleNamespace(headers={"authorization": "Bearer user-1"})
+        fake_settings = SimpleNamespace(
+            cognito_user_pool_id="",
+            cognito_app_client_id="",
+            dev_mode=True,
+        )
+        with patch.object(deps, "S", fake_settings), patch.object(deps, "is_user_currently_banned", return_value=True):
+            with self.assertRaises(HTTPException) as ctx:
+                run_async(deps.get_authenticated_user_sub(req))
+        self.assertEqual(ctx.exception.status_code, 403)
