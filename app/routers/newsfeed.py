@@ -1912,7 +1912,7 @@ def list_comments(
     items = [
         _comment_to_dict(it)
         for it in resp.get("Items", [])
-        if not it.get("moderation_removed") and not it.get("deleted")
+        if not it.get("moderation_removed")
     ]
     return {"items": items, "next_cursor": encode_cursor(resp.get("LastEvaluatedKey"))}
 
@@ -1991,7 +1991,7 @@ def delete_comment(post_id: str, comment_id: str, user_id: UserIdDep):
     key = {"pk": target["pk"], "sk": target["sk"]}
     ddb_update_item(
         key=key,
-        update_expr="SET deleted = :t, #body = :null, updated_at = :u",
+        update_expr="SET deleted = :t, #body = :null, body_plain = :null, body_markdown = :null, body_rich = :null, updated_at = :u",
         expr_names={"#body": "body"},
         expr_vals={":t": True, ":null": None, ":u": now_iso()},
     )

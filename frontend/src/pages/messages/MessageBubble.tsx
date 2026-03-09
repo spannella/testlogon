@@ -921,7 +921,6 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             ) : (
               <button
                 type="button"
-                aria-label="Open message image"
                 onClick={() => {
                   onViewOnce?.(message.message_id);
                   if (!message.message_id.startsWith("optimistic-")) {
