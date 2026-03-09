@@ -1,0 +1,29 @@
+name: Policy Matrix Tests
+
+on:
+  pull_request:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  policy-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          pip install pytest pytest-asyncio
+
+      - name: Run privileged policy matrix tests
+        run: |
+          pytest -q tests/test_policy_matrix.py tests/test_root_network.py tests/test_admin_roles.py tests/test_admin_impersonation.py tests/test_auth_policy.py
