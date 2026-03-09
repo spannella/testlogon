@@ -125,6 +125,73 @@ class TestFileManagerRoutes(unittest.TestCase):
             self.assertEqual(info["enc_metadata"]["version"], 1)
             self.assertEqual(info["enc_metadata"]["orig_name"], "a.txt")
 
+
+    def test_list_files_mount_dispatch(self):
+        original_enabled = filemanager.S.filemgr_s3_mounts_enabled
+        try:
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", True)
+            listing = {
+                "path": "/mounts/a/",
+                "items": [
+                    {
+                        "path": "/mounts/a/docs/",
+                        "type": "folder",
+                        "name": "docs",
+                        "size": None,
+                        "updated_at": None,
+                        "content_type": None,
+                        "enc_metadata": None,
+                        "is_encrypted": False,
+                        "enc_version": None,
+                        "enc_alg": None,
+                        "enc_kdf": None,
+                        "enc_kdf_iterations": None,
+                        "enc_salt_b64": None,
+                        "enc_iv_b64": None,
+                        "enc_orig_name": None,
+                        "enc_orig_size": None,
+                        "enc_orig_content_type": None,
+                        "preview_kind": "none",
+                        "preview_supported": False,
+                        "preview_status": "unsupported",
+                        "preview_reason": "folder",
+                        "poster_url": None,
+                        "hover_preview_url": None,
+                        "waveform_url": None,
+                    }
+                ],
+                "cursor": "next-token",
+            }
+            with (
+                patch.object(filemanager, "resolve_path_mount", return_value={"id": "m1"}),
+                patch.object(filemanager, "list_mounted_directory", return_value=listing) as list_mounted,
+            ):
+                resp = filemanager.list_files(path="/mounts/a", user="user")
+            self.assertEqual(resp["path"], "/mounts/a/")
+            self.assertEqual(len(resp["items"]), 1)
+            self.assertIsNotNone(resp["cursor"])
+            list_mounted.assert_called_once()
+        finally:
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
+
+    def test_download_file_mount_dispatch(self):
+        node = {"path": "/mounts/a/file.txt", "name": "file.txt", "content_type": "text/plain", "size": 5, "is_encrypted": False}
+        obj = {"Body": io.BytesIO(b"hello")}
+        with (
+            patch.object(filemanager, "resolve_path_mount", return_value={"id": "m1"}),
+            patch.object(filemanager, "download_mounted_file", return_value={"node": node, "object": obj}) as download_mounted,
+            patch.object(filemanager, "assert_file_bundle_access") as assert_bundle,
+            patch.object(filemanager, "assert_download_allowed") as assert_allowed,
+            patch.object(filemanager, "record_filemgr_encryption_event"),
+            patch.object(filemanager, "audit_event"),
+            patch.object(filemanager, "record_download_usage"),
+        ):
+            resp = filemanager.download_fs_file(path="/mounts/a/file.txt", user="user")
+        self.assertEqual(resp.media_type, "text/plain")
+        download_mounted.assert_called_once()
+        assert_bundle.assert_called_once()
+        assert_allowed.assert_called_once()
+
     def test_search_and_create(self):
         with patch.object(filemanager, "search_prefix", return_value=[{"path": "/a", "type": "file", "name": "a"}]):
             resp = filemanager.search_filenames(prefix="a", limit=10, user="user")
@@ -227,6 +294,28 @@ class TestFileManagerRoutes(unittest.TestCase):
             upload_file.assert_called_once()
             self.assertEqual(upload_file.call_args.kwargs["encryption_meta"], {"version": 1, "alg": "AES-256-GCM"})
             record_encryption_event.assert_called_once_with("upload", encrypted=True)
+
+
+    def test_upload_mount_dispatch(self):
+        upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"))
+        original_enabled = filemanager.S.filemgr_s3_mounts_enabled
+        original_write = filemanager.S.filemgr_s3_mounts_write_enabled
+        object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", True)
+        object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", True)
+        try:
+            with (
+                patch.object(filemanager, "resolve_path_mount", return_value={"id": "m1"}),
+                patch.object(filemanager, "upload_mounted_file", return_value={"path": "/mounts/a.txt", "size": 5}) as upload_mounted,
+                patch.object(filemanager, "upload_file") as upload_local,
+                patch.object(filemanager, "record_filemgr_encryption_event"),
+            ):
+                resp = filemanager.upload_fs_file(path="/mounts/a.txt", file=upload, user="user")
+            self.assertTrue(resp["ok"])
+            upload_mounted.assert_called_once_with("user", "/mounts/a.txt", upload)
+            upload_local.assert_not_called()
+        finally:
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", original_write)
 
     def test_upload_and_download(self):
         upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"))
@@ -468,6 +557,46 @@ class TestFileManagerRoutes(unittest.TestCase):
                 encryption_meta=None,
             )
 
+
+    def test_presign_upload_rejects_mounted_path(self):
+        original_enabled = filemanager.S.filemgr_s3_mounts_enabled
+        original_write = filemanager.S.filemgr_s3_mounts_write_enabled
+        object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", True)
+        object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", True)
+        try:
+            with (
+                patch.object(filemanager, "resolve_path_mount", return_value={"id": "m1"}),
+                patch.object(filemanager, "presign_upload") as presign_upload,
+            ):
+                with self.assertRaises(HTTPException) as ctx:
+                    filemanager.presign_fs_upload(filemanager.PresignUploadIn(path="/mounts/a.txt"), user="user")
+            self.assertEqual(ctx.exception.status_code, 400)
+            presign_upload.assert_not_called()
+        finally:
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", original_write)
+
+    def test_complete_upload_rejects_mounted_path(self):
+        original_enabled = filemanager.S.filemgr_s3_mounts_enabled
+        original_write = filemanager.S.filemgr_s3_mounts_write_enabled
+        object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", True)
+        object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", True)
+        try:
+            with (
+                patch.object(filemanager, "resolve_path_mount", return_value={"id": "m1"}),
+                patch.object(filemanager, "register_presigned_upload") as complete_upload,
+            ):
+                with self.assertRaises(HTTPException) as ctx:
+                    filemanager.complete_fs_upload(
+                        inp=filemanager.CompleteUploadIn(path="/mounts/a.txt", key="user/objects/abc", ticket_id="ticket-1"),
+                        user="user",
+                    )
+            self.assertEqual(ctx.exception.status_code, 400)
+            complete_upload.assert_not_called()
+        finally:
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", original_write)
+
     def test_complete_upload_bubbles_validation_errors(self):
         with patch.object(
             filemanager,
@@ -480,6 +609,46 @@ class TestFileManagerRoutes(unittest.TestCase):
                     user="user",
                 )
         self.assertEqual(ctx.exception.status_code, 403)
+
+
+
+    def test_delete_root_route_dispatch(self):
+        with (
+            patch.object(filemanager, "remove_fs_file", return_value={"ok": True}) as remove_file_route,
+            patch.object(filemanager, "remove_fs_folder", return_value={"ok": True, "deleted_count": 1}) as remove_folder_route,
+        ):
+            out_file = filemanager.remove_fs(path="/docs/a.txt", user="user")
+            out_folder = filemanager.remove_fs(path="/docs/", user="user")
+        self.assertTrue(out_file["ok"])
+        self.assertTrue(out_folder["ok"])
+        remove_file_route.assert_called_once()
+        remove_folder_route.assert_called_once()
+
+    def test_delete_root_route_blocks_mounted_folder(self):
+        with patch.object(filemanager, "resolve_path_mount", return_value={"id": "m1"}):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.remove_fs(path="/mounts/a/", user="user")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_delete_mount_dispatch(self):
+        original_enabled = filemanager.S.filemgr_s3_mounts_enabled
+        original_write = filemanager.S.filemgr_s3_mounts_write_enabled
+        object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", True)
+        object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", True)
+        try:
+            with (
+                patch.object(filemanager, "resolve_path_mount", return_value={"id": "m1"}),
+                patch.object(filemanager, "delete_mounted_file") as delete_mounted,
+                patch.object(filemanager, "remove_file") as remove_local,
+                patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            ):
+                resp = filemanager.remove_fs_file(path="/mounts/a.txt", user="user")
+            self.assertTrue(resp["ok"])
+            delete_mounted.assert_called_once_with("user", "/mounts/a.txt")
+            remove_local.assert_not_called()
+        finally:
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", original_write)
 
     def test_delete_and_move(self):
         with patch.object(filemanager, "remove_file") as remove_file, patch.object(
@@ -1059,3 +1228,121 @@ class TestFileManagerRoutes(unittest.TestCase):
             reconnect_required=True,
         )
         audit_event.assert_called_once()
+
+    def test_file_mount_routes_disabled_by_flag(self):
+        original_enabled = filemanager.S.filemgr_s3_mounts_enabled
+        try:
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", False)
+            with self.assertRaises(HTTPException) as exc:
+                filemanager.list_file_mounts(user="user")
+            self.assertEqual(exc.exception.status_code, 404)
+        finally:
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
+
+    def test_file_mount_list_enabled_uses_service(self):
+        original_enabled = filemanager.S.filemgr_s3_mounts_enabled
+        try:
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", True)
+            rows = [
+                {
+                    "id": "m1",
+                    "owner": "user",
+                    "provider": "s3",
+                    "mount_path": "/mounts/a/",
+                    "bucket": "acme-bucket",
+                    "prefix": None,
+                    "mode": "read_only",
+                    "auth_ref": "cred-1",
+                    "status": "active",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                    "last_check_at": None,
+                    "last_error": None,
+                }
+            ]
+            with patch.object(filemanager, "list_file_mounts_records", return_value=[SimpleNamespace(model_dump=lambda: r) for r in rows]):
+                resp = filemanager.list_file_mounts(user="user")
+            self.assertEqual(len(resp.items), 1)
+            self.assertEqual(resp.items[0].id, "m1")
+            self.assertEqual(resp.items[0].status, "active")
+
+            degraded = {**rows[0], "status": "degraded", "last_error": "s3 access denied", "last_check_at": "2026-01-02T00:00:00+00:00"}
+            with patch.object(filemanager, "list_file_mounts_records", return_value=[SimpleNamespace(model_dump=lambda: degraded)]):
+                degraded_resp = filemanager.list_file_mounts(user="user")
+            self.assertEqual(degraded_resp.items[0].status, "degraded")
+            self.assertEqual(degraded_resp.items[0].last_error, "s3 access denied")
+        finally:
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
+
+
+    def test_file_mount_crud_routes_enabled(self):
+        original_enabled = filemanager.S.filemgr_s3_mounts_enabled
+        original_write = filemanager.S.filemgr_s3_mounts_write_enabled
+        payload = {
+            "id": "m1",
+            "owner": "user",
+            "provider": "s3",
+            "mount_path": "/mounts/a/",
+            "bucket": "acme-bucket",
+            "prefix": None,
+            "mode": "read_only",
+            "auth_ref": "cred-1",
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+            "last_check_at": None,
+            "last_error": None,
+        }
+        try:
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", True)
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", True)
+            with (
+                patch.object(filemanager, "create_file_mount_record", return_value=SimpleNamespace(model_dump=lambda: payload)) as create_mount,
+                patch.object(filemanager, "get_file_mount_record", return_value=SimpleNamespace(model_dump=lambda: payload, id="m1", status="active")) as get_mount,
+                patch.object(filemanager, "update_file_mount_record", return_value=SimpleNamespace(model_dump=lambda: {**payload, "mode": "read_write"})) as update_mount,
+                patch.object(filemanager, "delete_file_mount_record", return_value={"ok": True, "deleted": True}) as delete_mount,
+            ):
+                created = filemanager.create_file_mount(filemanager.FileMountCreateIn(mount_path="/mounts/a", bucket="acme-bucket", mode="read_only", auth_ref="cred-1"), user="user")
+                fetched = filemanager.get_file_mount("m1", user="user")
+                updated = filemanager.update_file_mount("m1", filemanager.FileMountUpdateIn(mode="read_write"), user="user")
+                validated = filemanager.validate_file_mount("m1", user="user")
+                deleted = filemanager.delete_file_mount("m1", user="user")
+
+            self.assertEqual(created.id, "m1")
+            self.assertEqual(fetched.id, "m1")
+            self.assertEqual(updated.mode, "read_write")
+            self.assertTrue(validated.ok)
+            self.assertTrue(deleted.deleted)
+            create_mount.assert_called_once()
+            get_mount.assert_called()
+            update_mount.assert_called_once()
+            delete_mount.assert_called_once()
+        finally:
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", original_write)
+
+    def test_file_mount_create_requires_write_flag(self):
+        original_enabled = filemanager.S.filemgr_s3_mounts_enabled
+        original_write = filemanager.S.filemgr_s3_mounts_write_enabled
+        try:
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", True)
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", False)
+            with self.assertRaises(HTTPException) as exc:
+                filemanager.create_file_mount(filemanager.FileMountCreateIn(mount_path="/mounts/a", bucket="acme-bucket", mode="read_only", auth_ref="cred-1"), user="user")
+            self.assertEqual(exc.exception.status_code, 403)
+            self.assertEqual(exc.exception.detail.get("feature"), "filemgr_s3_mounts_write")
+        finally:
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
+            object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", original_write)
+
+
+
+    def test_openapi_includes_mount_paths(self):
+        from app.main import create_app
+
+        app = create_app()
+        schema = app.openapi()
+        paths = schema.get("paths", {})
+        self.assertIn("/v1/fs/mounts", paths)
+        self.assertIn("/v1/fs/mounts/{mount_id}", paths)
+        self.assertIn("/v1/fs/mounts/{mount_id}/validate", paths)

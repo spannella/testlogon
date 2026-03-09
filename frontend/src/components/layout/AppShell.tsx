@@ -7,12 +7,19 @@ import ImpersonationBanner from "@/components/shared/ImpersonationBanner";
 import { PageTransition } from "@/components/shared/PageTransition";
 import { OfflineBanner } from "@/components/shared/OfflineBanner";
 import { SessionExpiryWarning } from "@/components/shared/SessionExpiryWarning";
+import { useOfflineQueue } from "@/hooks/useOfflineQueue";
 import {
   Sheet,
   SheetContent,
   SheetTitle,
 } from "@/components/ui/sheet";
 import { VisuallyHidden } from "@radix-ui/react-visually-hidden";
+
+/** Mounts the offline queue flush side-effect — renders nothing. */
+function OfflineQueueFlusher() {
+  useOfflineQueue();
+  return null;
+}
 
 export default function AppShell() {
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
@@ -43,6 +50,7 @@ export default function AppShell() {
       {/* Main area */}
       <div className="flex flex-1 flex-col overflow-hidden">
         <OfflineBanner />
+        <OfflineQueueFlusher />
         <Header onMobileMenuToggle={() => setMobileMenuOpen(true)} />
         <ImpersonationBanner />
         <SessionExpiryWarning />
@@ -73,6 +81,7 @@ import {
   ClipboardList,
   Repeat,
   FolderOpen,
+  FilePen,
   CalendarDays,
   User,
   Shield,
@@ -80,11 +89,12 @@ import {
   Bell,
   LifeBuoy,
   UsersRound,
+  Scale,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
 import { useAuthStore } from "@/stores/authStore";
-import { canSeeRootRoleManagement } from "@/lib/adminCapabilities";
+import { canAccessModerationBoard, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 
 const MOBILE_NAV_GROUPS = [
   {
@@ -110,6 +120,7 @@ const MOBILE_NAV_GROUPS = [
     items: [
       { label: "Files", path: "/files", icon: FolderOpen },
       { label: "Calendar", path: "/calendar", icon: CalendarDays },
+      { label: "Signing", path: "/signing", icon: FilePen },
     ],
   },
   {
@@ -122,6 +133,7 @@ const MOBILE_NAV_GROUPS = [
   { label: "Ticket Spaces", path: "/tickets/spaces", icon: LifeBuoy },
       { label: "Settings", path: "/settings", icon: Settings },
       { label: "Role Mgmt", path: "/root/roles", icon: UsersRound },
+      { label: "Moderation Board", path: "/admin/moderation", icon: Scale },
     ],
   },
 ];
@@ -130,6 +142,7 @@ function MobileSidebar({ onNavigate }: { onNavigate: () => void }) {
   const location = useLocation();
   const accessToken = useAuthStore((s) => s.accessToken);
   const showRootRoleManagement = canSeeRootRoleManagement(accessToken);
+  const showModerationBoard = canAccessModerationBoard(accessToken);
 
   const isActive = (path: string) => {
     if (path === "/") return location.pathname === "/";
@@ -151,7 +164,11 @@ function MobileSidebar({ onNavigate }: { onNavigate: () => void }) {
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-2 py-3">
         {MOBILE_NAV_GROUPS.map((group, gi) => {
-          const items = group.items.filter((item) => item.path !== "/root/roles" || showRootRoleManagement);
+          const items = group.items.filter((item) => {
+            if (item.path === "/root/roles") return showRootRoleManagement;
+            if (item.path === "/admin/moderation") return showModerationBoard;
+            return true;
+          });
           if (items.length === 0) return null;
           return (
           <div key={group.title}>

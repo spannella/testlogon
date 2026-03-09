@@ -1,5 +1,5 @@
 import { api } from "@/api/client";
-import type { FileListResp, FileEntry, ShareFileReq, SharedItem, OkResp, FileEncryptionMetadata, UsageSummaryResp, UsageDailyResp, UsageStorageResp } from "@/api/types";
+import type { FileListResp, FileEntry, ShareFileReq, SharedItem, OkResp, FileEncryptionMetadata, UsageSummaryResp, UsageDailyResp, UsageStorageResp, SftpMountSummary, MountMockFilesResp } from "@/api/types";
 
 export const listFiles = (
   path = "/",
@@ -203,3 +203,19 @@ export const emitFilePreviewTelemetry = (body: {
   path?: string;
   reason?: "playback_error" | "autoplay_blocked" | "unsupported_capability" | "unknown";
 }) => api.post<{ ok: boolean }>("/v1/fs/client-telemetry", body);
+
+
+export const listSftpMounts = () =>
+  api.get<{ items: SftpMountSummary[] }>("/v1/fs/mounts");
+
+export const listMountMockFiles = (
+  mountId: string,
+  opts?: { path?: string; limit?: number; cursor?: string },
+) => {
+  const params: Record<string, string> = {
+    path: opts?.path ?? "/",
+    limit: String(opts?.limit ?? 200),
+  };
+  if (opts?.cursor) params["cursor"] = opts.cursor;
+  return api.get<MountMockFilesResp>(`/v1/fs/mounts/${encodeURIComponent(mountId)}/mock-files`, params);
+};

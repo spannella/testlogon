@@ -1,15 +1,43 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
+import json
 from typing import Any, Dict, List, Optional
 
+import boto3
 import requests
+from botocore.config import Config
+from botocore.exceptions import BotoCoreError, ClientError, EndpointConnectionError
 from fastapi import HTTPException
 
 from app.core.crypto import kms_decrypt, kms_encrypt
 from app.core.settings import S
 from app.core.tables import T
 from app.models import ProviderCredentialModel
+
+logger = logging.getLogger(__name__)
+
+
+def _redacted_credential_log_payload(
+    *,
+    provider: str,
+    org: Optional[str],
+    has_token: bool,
+    has_access_key_id: bool,
+    has_secret_access_key: bool,
+    has_session_token: bool,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    return {
+        "provider": (provider or "").strip().lower(),
+        "org": org,
+        "has_token": bool(has_token),
+        "has_access_key_id": bool(has_access_key_id),
+        "has_secret_access_key": bool(has_secret_access_key),
+        "has_session_token": bool(has_session_token),
+        "metadata_keys": sorted(list((metadata or {}).keys())),
+    }
 
 
 def now_iso() -> str:
@@ -148,23 +176,175 @@ def _validate_google_drive_token(token: str) -> Dict[str, Any]:
     return {"scopes": [], "metadata": {}}
 
 
+def _normalize_s3_endpoint_url(value: Optional[str]) -> Optional[str]:
+    candidate = (value or "").strip().rstrip("/")
+    if not candidate:
+        return None
+    if not candidate.startswith("http://") and not candidate.startswith("https://"):
+        raise HTTPException(status_code=400, detail="s3 endpoint_url must start with http:// or https://")
+    return candidate
+
+
+def _map_s3_client_error(exc: ClientError) -> HTTPException:
+    err = (exc.response or {}).get("Error", {})
+    code = str(err.get("Code") or "").strip()
+    msg = str(err.get("Message") or "").strip() or "s3 credential validation failed"
+
+    if code in {"InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken", "InvalidToken", "AuthFailure"}:
+        return HTTPException(status_code=401, detail=f"s3 credentials invalid: {msg}")
+    if code in {"AccessDenied", "AllAccessDisabled"}:
+        return HTTPException(status_code=403, detail=f"s3 access denied: {msg}")
+    if code in {"NoSuchBucket", "NotFound", "404"}:
+        return HTTPException(status_code=400, detail=f"s3 bucket not found: {msg}")
+    if code in {"PermanentRedirect", "AuthorizationHeaderMalformed"}:
+        return HTTPException(status_code=400, detail=f"s3 region/endpoint mismatch: {msg}")
+    return HTTPException(status_code=502, detail=f"s3 validation error ({code or 'unknown'}): {msg}")
+
+
+def _probe_s3_credentials(
+    *,
+    access_key_id: str,
+    secret_access_key: str,
+    session_token: Optional[str],
+    region: Optional[str],
+    endpoint_url: Optional[str],
+    path_style: bool,
+    validation_bucket: str,
+) -> None:
+    cfg = Config(s3={"addressing_style": "path" if path_style else "auto"})
+    client = boto3.client(
+        "s3",
+        region_name=region or S.aws_region,
+        endpoint_url=endpoint_url,
+        aws_access_key_id=access_key_id,
+        aws_secret_access_key=secret_access_key,
+        aws_session_token=session_token,
+        config=cfg,
+    )
+    try:
+        client.head_bucket(Bucket=validation_bucket)
+        client.list_objects_v2(Bucket=validation_bucket, MaxKeys=1)
+    except ClientError as exc:
+        raise _map_s3_client_error(exc) from exc
+    except EndpointConnectionError as exc:
+        raise HTTPException(status_code=502, detail="s3 endpoint unreachable during credential validation") from exc
+    except BotoCoreError as exc:
+        raise HTTPException(status_code=502, detail="s3 credential validation failed due to transport error") from exc
+
+
+def _validate_s3_credentials_payload(
+    *,
+    token: Optional[str],
+    access_key_id: Optional[str],
+    secret_access_key: Optional[str],
+    session_token: Optional[str],
+    region: Optional[str],
+    endpoint_url: Optional[str],
+    path_style: Optional[bool],
+    auth_mode: Optional[str],
+    validation_bucket: Optional[str],
+) -> Dict[str, Any]:
+    resolved_access_key_id = (access_key_id or "").strip()
+    resolved_secret_access_key = (secret_access_key or "").strip()
+    if not resolved_access_key_id or not resolved_secret_access_key:
+        parsed_from_token: Dict[str, Any] = {}
+        raw_token = (token or "").strip()
+        if raw_token:
+            try:
+                parsed = json.loads(raw_token)
+                if isinstance(parsed, dict):
+                    parsed_from_token = parsed
+            except ValueError:
+                parsed_from_token = {}
+        resolved_access_key_id = resolved_access_key_id or str(parsed_from_token.get("access_key_id") or "").strip()
+        resolved_secret_access_key = resolved_secret_access_key or str(parsed_from_token.get("secret_access_key") or "").strip()
+        if not session_token:
+            session_token = str(parsed_from_token.get("session_token") or "").strip() or None
+
+    if not resolved_access_key_id:
+        raise HTTPException(status_code=400, detail="s3 access_key_id is required")
+    if not resolved_secret_access_key:
+        raise HTTPException(status_code=400, detail="s3 secret_access_key is required")
+
+    resolved_region = (region or "").strip() or None
+    resolved_endpoint_url = _normalize_s3_endpoint_url(endpoint_url)
+    resolved_auth_mode = (auth_mode or "").strip().lower() or ("session_token" if session_token else "access_key")
+    if resolved_auth_mode not in {"access_key", "session_token"}:
+        raise HTTPException(status_code=400, detail="s3 auth_mode must be one of: access_key, session_token")
+
+    resolved_session_token = (session_token or "").strip() or None
+    if resolved_auth_mode == "session_token" and not resolved_session_token:
+        raise HTTPException(status_code=400, detail="s3 session_token is required when auth_mode=session_token")
+
+    bucket = (validation_bucket or "").strip()
+    if not bucket:
+        raise HTTPException(status_code=400, detail="s3 validation_bucket is required")
+
+    _probe_s3_credentials(
+        access_key_id=resolved_access_key_id,
+        secret_access_key=resolved_secret_access_key,
+        session_token=resolved_session_token,
+        region=resolved_region,
+        endpoint_url=resolved_endpoint_url,
+        path_style=bool(path_style) if path_style is not None else False,
+        validation_bucket=bucket,
+    )
+
+    return {
+        "scopes": [],
+        "metadata": {
+            "region": resolved_region,
+            "endpoint_url": resolved_endpoint_url,
+            "path_style": bool(path_style) if path_style is not None else False,
+            "auth_mode": resolved_auth_mode,
+        },
+        "secret_payload": {
+            "access_key_id": resolved_access_key_id,
+            "secret_access_key": resolved_secret_access_key,
+            "session_token": resolved_session_token,
+        },
+    }
+
+
 def validate_provider_token(
     provider: str,
-    token: str,
+    token: Optional[str],
     required_scopes: Optional[List[str]] = None,
     *,
     api_base_url: Optional[str] = None,
+    access_key_id: Optional[str] = None,
+    secret_access_key: Optional[str] = None,
+    session_token: Optional[str] = None,
+    region: Optional[str] = None,
+    endpoint_url: Optional[str] = None,
+    path_style: Optional[bool] = None,
+    auth_mode: Optional[str] = None,
+    validation_bucket: Optional[str] = None,
 ) -> Dict[str, Any]:
     normalized_provider = (provider or "").strip().lower()
-    if not token or not token.strip():
-        raise HTTPException(status_code=400, detail="token is required")
 
     if normalized_provider == "github":
+        if not token or not token.strip():
+            raise HTTPException(status_code=400, detail="token is required")
         result = _validate_github_token(token.strip(), api_base_url=api_base_url)
     elif normalized_provider == "gitlab":
+        if not token or not token.strip():
+            raise HTTPException(status_code=400, detail="token is required")
         result = _validate_gitlab_token(token.strip(), api_base_url=api_base_url)
     elif normalized_provider == "google_drive":
         result = _validate_google_drive_token(token.strip())
+    elif normalized_provider == "s3":
+        result = _validate_s3_credentials_payload(
+            token=token,
+            access_key_id=access_key_id,
+            secret_access_key=secret_access_key,
+            session_token=session_token,
+            region=region,
+            endpoint_url=endpoint_url,
+            path_style=path_style,
+            auth_mode=auth_mode,
+            validation_bucket=validation_bucket,
+        )
     else:
         raise HTTPException(status_code=400, detail="unsupported provider")
 
@@ -183,23 +363,43 @@ def validate_provider_token(
 def upsert_provider_credential(
     owner: str,
     provider: str,
-    token: str,
+    token: Optional[str],
     *,
     org: Optional[str] = None,
     required_scopes: Optional[List[str]] = None,
     api_base_url: Optional[str] = None,
     metadata_override: Optional[Dict[str, Any]] = None,
     scopes_override: Optional[List[str]] = None,
+    access_key_id: Optional[str] = None,
+    secret_access_key: Optional[str] = None,
+    session_token: Optional[str] = None,
+    region: Optional[str] = None,
+    endpoint_url: Optional[str] = None,
+    path_style: Optional[bool] = None,
+    auth_mode: Optional[str] = None,
+    validation_bucket: Optional[str] = None,
 ) -> ProviderCredentialModel:
     validated = validate_provider_token(
         provider,
         token,
         required_scopes=required_scopes,
         api_base_url=api_base_url,
+        access_key_id=access_key_id,
+        secret_access_key=secret_access_key,
+        session_token=session_token,
+        region=region,
+        endpoint_url=endpoint_url,
+        path_style=path_style,
+        auth_mode=auth_mode,
+        validation_bucket=validation_bucket,
     )
 
+    token_to_encrypt = (token or "").strip()
+    if (provider or "").strip().lower() == "s3":
+        token_to_encrypt = json.dumps(validated.get("secret_payload") or {}, separators=(",", ":"))
+
     try:
-        token_ct_b64 = kms_encrypt(token.strip())
+        token_ct_b64 = kms_encrypt(token_to_encrypt)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail="credential encryption is not configured") from exc
 
@@ -222,6 +422,18 @@ def upsert_provider_credential(
         updated_at=ts,
     )
     T.projects.put_item(Item=_credential_to_item(model))
+    logger.info(
+        "provider credential upserted",
+        extra=_redacted_credential_log_payload(
+            provider=model.provider,
+            org=model.org,
+            has_token=bool((token or "").strip()),
+            has_access_key_id=bool((access_key_id or "").strip()),
+            has_secret_access_key=bool((secret_access_key or "").strip()),
+            has_session_token=bool((session_token or "").strip()),
+            metadata=model.metadata,
+        ),
+    )
     return model
 
 
@@ -311,13 +523,24 @@ def get_provider_auth_context(
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail="credential decryption is not configured") from exc
 
-    return {
+    out = {
         "token": token,
         "provider": cred.provider,
         "org": cred.org,
         "scopes": list(cred.scopes or []),
         "metadata": dict(cred.metadata or {}),
     }
+    if (cred.provider or "").lower() == "s3":
+        try:
+            payload = json.loads(token)
+        except ValueError:
+            payload = {}
+        if isinstance(payload, dict):
+            out["access_key_id"] = str(payload.get("access_key_id") or "")
+            out["secret_access_key"] = str(payload.get("secret_access_key") or "")
+            out["session_token"] = str(payload.get("session_token") or "") or None
+            out["token"] = out["secret_access_key"]
+    return out
 
 
 
@@ -397,8 +620,16 @@ def delete_provider_credential(owner: str, provider: str, *, org: Optional[str] 
     resp = T.projects.get_item(Key=key, ConsistentRead=True)
     item = resp.get("Item")
     if not item:
+        logger.info(
+            "provider credential delete no-op",
+            extra={"provider": (provider or "").strip().lower(), "org": org, "deleted": False},
+        )
         return {"ok": True, "deleted": False}
     if item.get("entity_type") != "provider_credential" or item.get("owner") != owner:
         raise HTTPException(status_code=404, detail="provider credential not found")
     T.projects.delete_item(Key=key)
+    logger.info(
+        "provider credential deleted",
+        extra={"provider": str(item.get("provider") or "").strip().lower(), "org": item.get("org"), "deleted": True},
+    )
     return {"ok": True, "deleted": True}

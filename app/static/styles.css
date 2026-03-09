@@ -99,3 +99,7 @@ a.btnlink.primary { background:#111; color:#fff; border-color:#111; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+
+.vnc-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+input.invalid, select.invalid { border-color:#d14343; background:#fff6f6; }

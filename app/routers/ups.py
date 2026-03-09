@@ -13,7 +13,8 @@ from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 from app.services.sessions import require_ui_session
-from app.services.ups import create_label, quote, verify_tracking_webhook_signature
+from app.models import AddressValidateReq, AddressValidateResp, ValidatedAddressOut
+from app.services.ups import create_label, quote, validate_address, verify_tracking_webhook_signature
 
 router = APIRouter(tags=["ups", "mock"])
 
@@ -36,6 +37,55 @@ def ups_quote(body: Dict[str, Any], ctx=Depends(require_ui_session)) -> Dict[str
 def ups_label(body: Dict[str, Any], ctx=Depends(require_ui_session)) -> Dict[str, Any]:
     _ = ctx["user_sub"]
     return create_label(body)
+
+
+def _build_mock_validation_response(body: dict) -> AddressValidateResp:
+    line1 = (body.get("line1") or "").strip()
+    if not line1 or "INVALID" in line1.upper():
+        return AddressValidateResp(valid=False, dpv_match_code="", candidates=[])
+    candidate = ValidatedAddressOut(
+        line1=line1.upper(),
+        line2=(body.get("line2") or "").upper(),
+        city=(body.get("city") or "").upper(),
+        state=(body.get("state") or "").upper(),
+        postal_code=body.get("postal_code") or "",
+        country=(body.get("country") or "US").upper(),
+    )
+    return AddressValidateResp(valid=True, dpv_match_code="Y", candidates=[candidate])
+
+
+@router.post("/api/ups/address-validate")
+def ups_address_validate(body: AddressValidateReq, ctx=Depends(require_ui_session)) -> AddressValidateResp:
+    _ = ctx["user_sub"]
+    if S.dev_mode:
+        return _build_mock_validation_response(body.model_dump())
+    raw = validate_address(body.model_dump())
+    xav = raw.get("XAVResponse", {})
+    candidates_raw = xav.get("Candidate", [])
+    if isinstance(candidates_raw, dict):
+        candidates_raw = [candidates_raw]
+    candidates = []
+    for c in candidates_raw:
+        af = c.get("AddressKeyFormat", {})
+        lines = af.get("AddressLine", [])
+        if isinstance(lines, str):
+            lines = [lines]
+        candidates.append(ValidatedAddressOut(
+            line1=lines[0] if lines else "",
+            line2=lines[1] if len(lines) > 1 else "",
+            city=af.get("PoliticalDivision2", ""),
+            state=af.get("PoliticalDivision1", ""),
+            postal_code=af.get("PostcodePrimaryLow", ""),
+            country=af.get("CountryCode", "US"),
+        ))
+    valid_indicator = xav.get("ValidAddressIndicator")
+    amb_indicator = xav.get("AmbiguousAddressIndicator")
+    dpv_code = "Y" if valid_indicator is not None else ("A" if amb_indicator is not None else "")
+    return AddressValidateResp(
+        valid=valid_indicator is not None,
+        dpv_match_code=dpv_code,
+        candidates=candidates,
+    )
 
 
 @router.post("/api/ups/tracking/webhook")
@@ -108,6 +158,14 @@ async def mock_ups_label(req: Request) -> Dict[str, Any]:
         "service": body.get("service", "ground"),
         "status": "created",
     }
+
+
+@router.post("/mock/ups/address-validate")
+async def mock_ups_address_validate(req: Request) -> AddressValidateResp:
+    if not _mock_enabled():
+        raise HTTPException(404, "Not found")
+    body = await req.json()
+    return _build_mock_validation_response(body)
 
 
 @router.post("/emit/ups-tracking-webhook")

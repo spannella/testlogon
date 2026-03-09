@@ -54,3 +54,13 @@ export function canAccessGeneralAdminControls(token: string | null): boolean {
 export function canSeeRootRoleManagement(token: string | null): boolean {
   return getRoleFromAccessToken(token) === "root";
 }
+
+
+export function canAccessModerationBoard(token: string | null): boolean {
+  const role = getRoleFromAccessToken(token);
+  if (role === "root") return true;
+  if (role !== "admin") return false;
+  const profile = getAdminProfileFromAccessToken(token);
+  if (!profile) return false;
+  return profile.type === "general" || profile.scopes.includes("content_moderation");
+}

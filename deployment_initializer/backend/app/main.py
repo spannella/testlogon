@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 
+from app.routers.admin_sso import router as admin_sso_router
 from app.routers.config_schema import router as config_schema_router
 from app.routers.ops import router as ops_router
 from app.routers.sessions import router as sessions_router
@@ -12,6 +13,7 @@ class HealthResponse(BaseModel):
 
 app = FastAPI(title='Deployment Initializer API', version='0.1.0')
 app.include_router(sessions_router)
+app.include_router(admin_sso_router)
 app.include_router(config_schema_router)
 app.include_router(ops_router)
 

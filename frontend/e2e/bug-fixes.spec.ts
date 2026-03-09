@@ -798,7 +798,10 @@ test.describe("7. Locked message — unlock button opens dialog (not direct muta
     await expect(dlg.getByRole("button", { name: /pay.*unlock/i })).toBeVisible();
 
     // Close the dialog so subsequent tests start clean.
-    await dlg.getByRole("button", { name: "Cancel" }).click();
+    // Use evaluate().click() to bypass viewport checks — the dialog may extend
+    // below the viewport when many payment methods have accumulated from prior runs.
+    await dlg.getByRole("button", { name: "Cancel" })
+      .evaluate((el) => (el as HTMLButtonElement).click());
     await expect(dlg).not.toBeVisible({ timeout: 3000 });
   });
 

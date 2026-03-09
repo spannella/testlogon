@@ -176,7 +176,7 @@ def _log_message_control_action(*, actor_user_id: str, conversation_id: str, mes
 def _emit_archive_event_or_503(*, event_id: str, event_ts: int, conversation_id: str, message_id: str, actor_user_id: str, event_type: str, payload: dict) -> None:
     try:
         emit_messaging_archive_event(
-            event_id=event_id,
+            event_id=event_id[:128],
             event_ts=event_ts,
             tenant_id="default",
             conversation_id=conversation_id,
@@ -1964,6 +1964,8 @@ def _filter_message_visible(message_item: dict, user_id: str) -> bool:
     deleted_for = set(message_item.get("deleted_for", []))
     if message_item.get("revoked_at"):
         return False
+    if message_item.get("moderation_hidden") or message_item.get("moderation_removed_at"):
+        return False
     # Scheduled messages are only visible to the sender until delivered
     if message_item.get("status") == "scheduled" and message_item.get("sender_id") != user_id:
         return False
@@ -2810,8 +2812,12 @@ def _conversation_out_from_items(*, conversation_id: str, convo: dict, participa
         last_read_at=int(participant.get("last_read_at", 0) or 0),
         unread_count=int(participant.get("unread_count", 0) or 0),
     )
+    raw_routing_mode = str(convo.get("routing_mode") or "")
+    if raw_routing_mode == "helpdesk_bridge":
+        # Always expose routing_mode to all participants so the UI can identify
+        # the conversation as a helpdesk chat (e.g. customer "Your Support Chats" view).
+        out.routing_mode = raw_routing_mode
     if _is_helpdesk_agent_viewer(convo, viewer_user_id):
-        out.routing_mode = str(convo.get("routing_mode") or "")
         out.routing_group_id = str(convo.get("routing_group_id") or "")
         out.routing_state = str(convo.get("routing_state") or "")
         out.active_agent_user_id = str(convo.get("active_agent_user_id") or "")

@@ -19,6 +19,7 @@ import {
   claimHelpdeskConversation,
 } from "@/api/endpoints/messaging";
 import { useAuthStore } from "@/stores/authStore";
+import { useOfflineStore } from "@/stores/offlineStore";
 import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq } from "@/api/types";
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
@@ -49,6 +50,8 @@ interface ConversationViewProps {
 export function ConversationView({ conversation, onBack, onClaimSuccess }: ConversationViewProps) {
   const userId = useAuthStore((s) => s.userId);
   const queryClient = useQueryClient();
+  const addToQueue = useOfflineStore((s) => s.addToQueue);
+  const isOnline = useOfflineStore((s) => s.isOnline);
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const [hasAutoScrolled, setHasAutoScrolled] = React.useState(false);
 
@@ -588,10 +591,19 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
       {/* Compose */}
       <ComposeBar
         onSendText={(payload) => {
-          sendText.mutate({
+          const fullPayload = {
             ...payload,
             reply_to_message_id: replyingTo?.message_id,
-          });
+          };
+          // Only queue non-scheduled messages — scheduled messages need server-side
+          // delivery at the chosen time and should not be silently deferred.
+          if (!isOnline && !fullPayload.send_at) {
+            addToQueue({ type: "send_message", payload: { conversationId: convoId, req: fullPayload } });
+            toast.info("You're offline — message queued and will send when reconnected");
+            setReplyingTo(null);
+            return;
+          }
+          sendText.mutate(fullPayload);
           setReplyingTo(null);
         }}
         onSendImage={(file, options) => sendImage.mutate({

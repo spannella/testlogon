@@ -39,7 +39,7 @@ from app.services.alerts import (
     sse_unsubscribe,
 )
 from app.services.mfa import gen_numeric_code
-from app.services.rate_limit import can_send_verification
+from app.services.rate_limit import can_send_alert_channel, can_send_verification
 from app.services.sessions import create_action_challenge, load_challenge_or_401, require_ui_session, revoke_challenge
 
 router = APIRouter(prefix="/ui", tags=["alerts"])
@@ -329,7 +329,7 @@ async def alert_sms_remove(req: Request, body: AlertSmsRemoveReq, ctx: Dict[str,
 async def alert_email_add_begin(req: Request, body: AlertEmailBeginReq, ctx: Dict[str, str] = Depends(require_ui_session)):
     user_sub = ctx["user_sub"]
     email = normalize_email(body.email)
-    if not can_send_verification(user_sub, "email"):
+    if not can_send_alert_channel(user_sub, "email"):
         raise HTTPException(429, "Too many verification emails; try again later")
     code = gen_numeric_code(6)
     code_hash = sha256_str(code)

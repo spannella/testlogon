@@ -4,7 +4,7 @@ import base64
 import json
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.services.alerts import audit_event
@@ -28,6 +28,7 @@ from app.services.provider_credentials import (
 )
 from app.services.provider_oauth import build_google_oauth_start, complete_google_oauth_callback
 from app.services.sessions import require_ui_session
+from app.services.alerts import audit_event
 
 router = APIRouter(prefix="/v1/projects", tags=["projects"])
 
@@ -123,10 +124,20 @@ class ProjectEventListOut(BaseModel):
 
 
 class ProviderCredentialUpsertIn(BaseModel):
-    token: str = Field(..., min_length=1, max_length=8192)
+    token: Optional[str] = Field(default=None, min_length=1, max_length=8192)
     org: Optional[str] = Field(default=None, max_length=256)
     api_base_url: Optional[str] = Field(default=None, max_length=2048)
     required_scopes: List[str] = Field(default_factory=list)
+
+    # S3-specific credential payload (secret fields are encrypted at rest).
+    access_key_id: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    secret_access_key: Optional[str] = Field(default=None, min_length=1, max_length=4096)
+    session_token: Optional[str] = Field(default=None, min_length=1, max_length=8192)
+    region: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    endpoint_url: Optional[str] = Field(default=None, max_length=2048)
+    path_style: Optional[bool] = Field(default=None)
+    auth_mode: Optional[str] = Field(default=None, pattern="^(access_key|session_token)$")
+    validation_bucket: Optional[str] = Field(default=None, min_length=3, max_length=255)
 
 
 class ProviderCredentialOut(BaseModel):
@@ -301,7 +312,7 @@ def list_project_events_route(
 
 
 @router.put("/providers/{provider}/credentials", response_model=ProviderCredentialOut)
-def upsert_provider_credential_route(provider: str, body: ProviderCredentialUpsertIn, user: str = Depends(_current_user)):
+def upsert_provider_credential_route(provider: str, body: ProviderCredentialUpsertIn, req: Request, user: str = Depends(_current_user)):
     out = upsert_provider_credential(
         user,
         provider,
@@ -309,6 +320,24 @@ def upsert_provider_credential_route(provider: str, body: ProviderCredentialUpse
         org=body.org,
         required_scopes=body.required_scopes,
         api_base_url=body.api_base_url,
+        access_key_id=body.access_key_id,
+        secret_access_key=body.secret_access_key,
+        session_token=body.session_token,
+        region=body.region,
+        endpoint_url=body.endpoint_url,
+        path_style=body.path_style,
+        auth_mode=body.auth_mode,
+        validation_bucket=body.validation_bucket,
+    )
+    audit_event(
+        "project_provider_credential_upsert",
+        user,
+        req,
+        outcome="success",
+        provider=out.provider,
+        org=out.org,
+        metadata_keys=sorted(list((out.metadata or {}).keys())),
+        updated_at=out.updated_at,
     )
     return ProviderCredentialOut(
         provider=out.provider,
@@ -334,14 +363,15 @@ def get_provider_credential_route(provider: str, org: Optional[str] = Query(defa
 
 
 @router.delete("/providers/{provider}/credentials", response_model=DeleteProviderCredentialOut)
-def delete_provider_credential_route(provider: str, org: Optional[str] = Query(default=None), user: str = Depends(_current_user)):
+def delete_provider_credential_route(provider: str, org: Optional[str] = Query(default=None), req: Request = None, user: str = Depends(_current_user)):
     result = delete_provider_credential(user, provider, org=org)
     audit_event(
         "provider_oauth_disconnect",
         user,
-        None,
+        req,
         outcome="success",
         provider=(provider or "").strip().lower(),
+        org=org,
         deleted=bool(result.get("deleted")),
     )
     return DeleteProviderCredentialOut(**result)

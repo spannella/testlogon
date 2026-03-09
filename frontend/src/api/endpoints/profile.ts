@@ -1,5 +1,5 @@
 import { api } from "@/api/client";
-import type { Profile, Address, AddressIn } from "@/api/types";
+import type { Profile, Address, AddressIn, AddressValidateReq, AddressValidateResp } from "@/api/types";
 
 // ─── Profile ─────────────────────────────────────────────────────
 
@@ -43,3 +43,6 @@ export const searchAddresses = (query: string) =>
 
 export const setPrimaryAddress = (addressId: string) =>
   api.put<Address>("/ui/addresses/primary", { address_id: addressId });
+
+export const validateAddress = (body: AddressValidateReq) =>
+  api.post<AddressValidateResp>("/api/ups/address-validate", body);

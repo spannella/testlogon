@@ -15,6 +15,7 @@ class AdminScope(str, Enum):
     AUTH_SUPPORT = "auth_support"
     BILLING_SUPPORT = "billing_support"
     CONTENT_MODERATION = "content_moderation"
+    CONTENT_MODERATION_SENIOR = "content_moderation_senior"
 
 
 class AdminProfileType(str, Enum):
@@ -26,6 +27,7 @@ CANONICAL_ADMIN_SCOPES: tuple[AdminScope, ...] = (
     AdminScope.AUTH_SUPPORT,
     AdminScope.BILLING_SUPPORT,
     AdminScope.CONTENT_MODERATION,
+    AdminScope.CONTENT_MODERATION_SENIOR,
 )
 
 

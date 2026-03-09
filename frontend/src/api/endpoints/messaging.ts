@@ -687,7 +687,12 @@ export async function claimHelpdeskConversation(conversationId: string): Promise
 export async function getHelpdeskQueue(groupId: string, state?: string): Promise<Conversation[]> {
   const params: Record<string, string> = { group_id: groupId };
   if (state) params.state = state;
-  const res = await api.get<Conversation[]>("/messaging/helpdesk/queue", params);
+  // silent403: non-agents get 403 which is expected — don't show an error toast
+  const res = await api<Conversation[]>("/messaging/helpdesk/queue", {
+    method: "GET",
+    params,
+    silent403: true,
+  });
   return (Array.isArray(res) ? res : []).map(adaptConversation);
 }
 

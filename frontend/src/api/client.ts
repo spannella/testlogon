@@ -18,6 +18,11 @@ function getCookie(name: string): string | null {
   return match ? decodeURIComponent(match[1]!) : null;
 }
 
+/** Fired after every successful API response so the session expiry clock resets. */
+function notifyApiActivity(): void {
+  window.dispatchEvent(new Event("api-activity"));
+}
+
 function humanizeScope(scope: unknown): string {
   if (typeof scope !== "string" || !scope.trim()) return "required scope";
   if (scope === "auth_support") return "authentication support";
@@ -119,7 +124,7 @@ async function refreshSession(): Promise<void> {
     credentials: "include",
   });
   if (!res.ok) {
-    useAuthStore.getState().logout();
+    useAuthStore.getState().logout("session_expired");
     throw new ApiError(res.status, "Session refresh failed");
   }
 }
@@ -134,9 +139,9 @@ async function refreshSession(): Promise<void> {
  */
 export async function api<T>(
   path: string,
-  options: RequestInit & { params?: Record<string, string> } = {},
+  options: RequestInit & { params?: Record<string, string>; silent403?: boolean } = {},
 ): Promise<T> {
-  const { params, ...init } = options;
+  const { params, silent403, ...init } = options;
 
   // Build URL with query params
   let url = withApiBase(path);
@@ -183,9 +188,19 @@ export async function api<T>(
     throw new ApiError(0, "Network error", err);
   }
 
-  // Handle 401 — try refreshing the session once
+  // Handle 401 — try refreshing the session once, but only if the user was
+  // authenticated in the first place. An unauthenticated 401 (e.g. wrong
+  // password on the login page) should propagate directly to the caller.
   if (res.status === 401) {
     useImpersonationStore.getState().clear();
+    if (!useAuthStore.getState().isAuthenticated) {
+      const body401 = await res.json().catch(() => null);
+      throw new ApiError(
+        401,
+        normalizeErrorDetail((body401 as Record<string, unknown>)?.detail, "Authentication required"),
+        body401,
+      );
+    }
     if (!refreshPromise) {
       refreshPromise = refreshSession().finally(() => {
         refreshPromise = null;
@@ -207,7 +222,7 @@ export async function api<T>(
 
     if (!retryRes.ok) {
       if (retryRes.status === 401) {
-        useAuthStore.getState().logout();
+        useAuthStore.getState().logout("session_expired");
       }
       const body = await retryRes.json().catch(() => null);
       throw new ApiError(
@@ -217,6 +232,7 @@ export async function api<T>(
       );
     }
 
+    notifyApiActivity();
     return retryRes.json() as Promise<T>;
   }
 
@@ -227,7 +243,7 @@ export async function api<T>(
       (body as Record<string, unknown>)?.detail,
       "Permission denied",
     );
-    toast.error(detail);
+    if (!silent403) toast.error(detail);
     throw new ApiError(403, detail, body);
   }
 
@@ -243,9 +259,11 @@ export async function api<T>(
 
   // 204 No Content
   if (res.status === 204) {
+    notifyApiActivity();
     return undefined as T;
   }
 
+  notifyApiActivity();
   return res.json() as Promise<T>;
 }
 

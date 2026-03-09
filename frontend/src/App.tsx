@@ -5,7 +5,7 @@ import { Loader2 } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/layout/AppShell";
 import { ErrorPage } from "@/components/shared/ErrorPage";
-import { isDevtoolsLogUiEnabled } from "@/lib/featureFlags";
+import { isDevtoolsLogUiEnabled, isVncRemoteDesktopEnabled } from "@/lib/featureFlags";
 
 // ─── Lazy-loaded pages (code-split per route) ───────────────────
 const Login = lazy(() => import("@/pages/Login"));
@@ -32,13 +32,16 @@ const SettingsPage = lazy(() => import("@/pages/settings/SettingsPage"));
 const PurchasesPage = lazy(() => import("@/pages/purchases/PurchasesPage"));
 const SubscriptionsPage = lazy(() => import("@/pages/subscriptions/SubscriptionsPage"));
 const RootRoleManagementPage = lazy(() => import("@/pages/admin/RootRoleManagementPage"));
+const ModerationBoardPage = lazy(() => import("@/pages/admin/ModerationBoardPage"));
 const PublicEventPage = lazy(() => import("@/pages/calendar/PublicEventPage"));
 const ContactsPage = lazy(() => import("@/pages/contacts/ContactsPage"));
 const HelpdeskPage = lazy(() => import("@/pages/helpdesk/HelpdeskPage"));
 const TicketsPage = lazy(() => import("@/pages/tickets/TicketsPage"));
 const TicketSpacesPage = lazy(() => import("@/pages/tickets/TicketSpacesPage"));
 const TicketSpaceDetailPage = lazy(() => import("@/pages/tickets/TicketSpaceDetailPage"));
+const RemoteDesktopPage = lazy(() => import("@/pages/remote/RemoteDesktopPage"));
 const DevToolsLogUiPage = lazy(() => import("@/pages/devtools/DevToolsLogUiPage"));
+const SigningPage = lazy(() => import("@/pages/signing/SigningPage"));
 const QuestionnaireBuilderPage = lazy(() => import("@/pages/questionnaires/QuestionnaireBuilderPage"));
 const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/QuestionnaireRespondentPage"));
 
@@ -52,6 +55,7 @@ function PageSpinner() {
 
 export default function App() {
   const showDevtoolsLogUi = isDevtoolsLogUiEnabled();
+  const showVncRemoteDesktop = isVncRemoteDesktopEnabled();
 
   return (
     <Suspense fallback={<PageSpinner />}>
@@ -71,6 +75,7 @@ export default function App() {
           <Route path="contacts" element={<ContactsPage />} />
           <Route path="helpdesk" element={<HelpdeskPage />} />
           <Route path="files" element={<FilesPage />} />
+          <Route path="signing" element={<SigningPage />} />
           <Route path="projects" element={<ProjectsPage />} />
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
@@ -86,6 +91,7 @@ export default function App() {
           <Route path="tickets" element={<TicketsPage />} />
           <Route path="tickets/spaces" element={<TicketSpacesPage />} />
           <Route path="tickets/spaces/:spaceId" element={<TicketSpaceDetailPage />} />
+          {showVncRemoteDesktop && <Route path="remote-desktop" element={<RemoteDesktopPage />} />}
           <Route path="security" element={<SecurityPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />
@@ -93,6 +99,7 @@ export default function App() {
           <Route path="purchases/:txnId" element={<PurchasesPage />} />
           <Route path="subscriptions" element={<SubscriptionsPage />} />
           <Route path="root/roles" element={<RootRoleManagementPage />} />
+          <Route path="admin/moderation" element={<ModerationBoardPage />} />
           {showDevtoolsLogUi && <Route path="dev-tools/log-ui" element={<DevToolsLogUiPage />} />}
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>

@@ -249,7 +249,7 @@ class TicketStore:
             "gsi_space_assignee_pk": _space_assignee_index_pk(space_id, "unassigned") if space_id else None,
             "gsi_space_assignee_sk": _updated_index_sk(ts, ticket_id) if space_id else None,
         }
-        self._table.put_item(Item=header)
+        self._table.put_item(Item={k: v for k, v in header.items() if v is not None})
         self._table.put_item(Item={
             "pk": _ticket_pk(ticket_id),
             "sk": _msg_sk(ts, message_id),
@@ -496,20 +496,42 @@ class TicketStore:
             "#gsi_space_assignee_pk": "gsi_space_assignee_pk",
             "#gsi_space_assignee_sk": "gsi_space_assignee_sk",
         }
-        expr_values = {":expected_version": expected_version, ":next_version": expected_version + 1, **values}
-        updates = ", ".join([
-            "#status = :status", "#assigned_admin_sub = :assigned_admin_sub", "#assigned_to_sub = :assigned_to_sub", "#assigned_by = :assigned_by", "#assigned_at = :assigned_at", "#updated_at = :updated_at",
+        all_values = {":expected_version": expected_version, ":next_version": expected_version + 1, **values}
+        # Core attributes always SET (may be None for non-assigned tickets — DynamoDB NULL is valid for non-key attrs)
+        set_parts = [
+            "#status = :status", "#assigned_admin_sub = :assigned_admin_sub", "#assigned_to_sub = :assigned_to_sub",
+            "#assigned_by = :assigned_by", "#assigned_at = :assigned_at", "#updated_at = :updated_at",
             "#last_message_at = :last_message_at", "#last_message_by_role = :last_message_by_role",
             "#version = :next_version", "#gsi2pk = :gsi2pk", "#gsi2sk = :gsi2sk",
             "#gsi3pk = :gsi3pk", "#gsi3sk = :gsi3sk", "#gsi1sk = :gsi1sk",
-            "#gsi_space_pk = :gsi_space_pk", "#gsi_space_sk = :gsi_space_sk",
-            "#gsi_space_status_pk = :gsi_space_status_pk", "#gsi_space_status_sk = :gsi_space_status_sk",
-            "#gsi_space_assignee_pk = :gsi_space_assignee_pk", "#gsi_space_assignee_sk = :gsi_space_assignee_sk",
-        ])
+        ]
+        # Space GSI key attributes: SET if non-None (space ticket), REMOVE if None (non-space ticket).
+        # DynamoDB does not allow NULL values for GSI hash/range keys.
+        _space_gsi = [
+            ("#gsi_space_pk", ":gsi_space_pk"),
+            ("#gsi_space_sk", ":gsi_space_sk"),
+            ("#gsi_space_status_pk", ":gsi_space_status_pk"),
+            ("#gsi_space_status_sk", ":gsi_space_status_sk"),
+            ("#gsi_space_assignee_pk", ":gsi_space_assignee_pk"),
+            ("#gsi_space_assignee_sk", ":gsi_space_assignee_sk"),
+        ]
+        remove_parts = []
+        space_gsi_placeholders: set[str] = set()
+        for alias, placeholder in _space_gsi:
+            if all_values.get(placeholder) is not None:
+                set_parts.append(f"{alias} = {placeholder}")
+            else:
+                remove_parts.append(alias)
+                space_gsi_placeholders.add(placeholder)
+        update_expr = f"SET {', '.join(set_parts)}"
+        if remove_parts:
+            update_expr += f" REMOVE {', '.join(remove_parts)}"
+        # Only omit None values for space GSI keys (those use REMOVE, not SET)
+        expr_values = {k: v for k, v in all_values.items() if k not in space_gsi_placeholders}
         try:
             self._table.update_item(
                 Key=_meta_item_key(ticket_id),
-                UpdateExpression=f"SET {updates}",
+                UpdateExpression=update_expr,
                 ConditionExpression="#version = :expected_version",
                 ExpressionAttributeNames=names,
                 ExpressionAttributeValues=expr_values,

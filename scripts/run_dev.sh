@@ -15,6 +15,8 @@ DEV_DDB_BOOTSTRAP="${DEV_DDB_BOOTSTRAP:-1}"
 DEV_DDB_SEED="${DEV_DDB_SEED:-0}"
 DEV_FORCE_DDB_BOOTSTRAP="${DEV_FORCE_DDB_BOOTSTRAP:-0}"
 clean_mode=1
+DEV_ENABLE_KEYCLOAK="${DEV_ENABLE_KEYCLOAK:-0}"
+KEYCLOAK_BASE_URL="${KEYCLOAK_BASE_URL:-http://localhost:8081}"
 
 usage() {
   cat <<'USAGE'
@@ -178,6 +180,7 @@ mock_component_ready() {
     "kms") probe_http "http://localhost:7999/health" ;;
     "ccbill") probe_http "http://localhost:8000/openapi.json" ;;
     "ups") probe_http "http://localhost:8000/openapi.json" ;;
+    "keycloak") probe_http "${KEYCLOAK_BASE_URL}/realms/${KEYCLOAK_REALM:-local-ad}/.well-known/openid-configuration" && probe_http "${KEYCLOAK_BASE_URL}/realms/${KEYCLOAK_REALM:-local-ad}/protocol/openid-connect/certs" ;;
     *) return 1 ;;
   esac
 }
@@ -189,6 +192,11 @@ all_mock_components_ready() {
       return 1
     fi
   done
+
+  if [[ "${DEV_ENABLE_KEYCLOAK}" == "1" ]] && ! mock_component_ready "keycloak"; then
+    return 1
+  fi
+
   return 0
 }
 
@@ -343,6 +351,9 @@ if [[ "$backend_mode" == "mock" ]]; then
   print_mock_component_status "Local CCBill mock" "ccbill"
   print_mock_component_status "Local Twilio mock" "twilio"
   print_mock_component_status "Local UPS mock" "ups"
+  if [[ "${DEV_ENABLE_KEYCLOAK}" == "1" ]]; then
+    print_mock_component_status "Local Keycloak (host mode)" "keycloak"
+  fi
 fi
 
 if [[ -f "frontend/package.json" ]]; then

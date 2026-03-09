@@ -10,6 +10,7 @@ os.environ['DEPLOYMENT_SESSIONS_DB_PATH'] = '/tmp/deployment_initializer_auth_te
 
 from app.db.session_store import get_session_store
 from app.main import app
+from app.services.auth import get_authenticated_principal, issue_root_session_token
 
 
 ADMIN_HEADERS = {'X-SSO-Email': 'admin@example.com', 'X-SSO-Role': 'admin'}
@@ -94,3 +95,33 @@ def test_deploy_requires_operator_or_admin_role() -> None:
     denied = viewer.post(f'/sessions/{session_id}/deploy')
     assert denied.status_code == 403
     assert denied.json()['detail'] == 'forbidden_insufficient_role'
+
+
+def test_enforce_sso_blocks_non_ad_sso_admin_but_allows_ad_sso() -> None:
+    os.environ['ADMIN_SSO_ENFORCE_FOR_ADMINS'] = 'true'
+    try:
+        with_admin_header = _client(headers={'X-SSO-Email': 'admin@example.com', 'X-SSO-Role': 'admin'})
+        blocked = with_admin_header.get('/ops/metrics')
+        assert blocked.status_code == 403
+        assert blocked.json()['detail'] == 'forbidden_admin_sso_required'
+
+        ad_sso_token_client = _client(headers={'Authorization': 'Bearer sso:admin@example.com:admin:ad_sso'})
+        allowed = ad_sso_token_client.get('/ops/metrics')
+        assert allowed.status_code == 200
+    finally:
+        os.environ['ADMIN_SSO_ENFORCE_FOR_ADMINS'] = 'false'
+
+
+def test_root_local_login_allowed_even_when_sso_enforced() -> None:
+    os.environ['ADMIN_SSO_ENFORCE_FOR_ADMINS'] = 'true'
+    try:
+        token = issue_root_session_token('root@example.com')
+        root_client = _client(headers={'Authorization': f'Bearer {token}'})
+        response = root_client.get('/ops/metrics')
+        assert response.status_code == 200
+
+        principal = get_authenticated_principal(authorization=f'Bearer {token}')
+        assert principal.role == 'root'
+        assert principal.provider == 'local_root'
+    finally:
+        os.environ['ADMIN_SSO_ENFORCE_FOR_ADMINS'] = 'false'

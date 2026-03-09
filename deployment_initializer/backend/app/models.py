@@ -222,3 +222,140 @@ class SessionEvent(BaseModel):
 class SessionEventsResponse(BaseModel):
     session_id: str
     events: list[SessionEvent]
+
+
+class IdentityProvider(BaseModel):
+    provider_id: str
+    provider_type: str
+    issuer: str
+    metadata_url: str | None = None
+    client_id: str
+    secret_ref: str
+    enabled: bool = False
+    created_by: str
+    updated_by: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class IdentityProviderRoleMapping(BaseModel):
+    mapping_id: int
+    provider_id: str
+    external_group_or_claim: str
+    internal_role: str
+    priority: int
+    created_at: datetime
+
+
+class ExternalIdentity(BaseModel):
+    identity_id: int
+    user_id: str
+    provider_id: str
+    external_subject: str
+    external_tenant: str
+    last_login_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminSSONormalizedIdentity(BaseModel):
+    sub: str
+    email: str | None = None
+    groups: list[str] = Field(default_factory=list)
+    tenant_id: str
+
+
+class AdminSSOCallbackResponse(BaseModel):
+    provider_id: str
+    auth_method: str = 'ad_sso'
+    identity: AdminSSONormalizedIdentity
+    session_token: str
+    session_role: str
+    linked_user_id: str
+    linked_external_identity_id: int
+
+
+class AdminSSORoleMappingSimulationResponse(BaseModel):
+    provider_id: str
+    groups: list[str]
+    resolved_role: str | None = None
+    mapping_id: int | None = None
+    reason_code: str
+
+
+class IdentityProviderConfigUpsertRequest(BaseModel):
+    provider_id: str
+    provider_type: str
+    issuer: str
+    metadata_url: str | None = None
+    client_id: str
+    secret_ref: str
+
+
+class IdentityProviderConfigUpdateRequest(BaseModel):
+    provider_type: str | None = None
+    issuer: str | None = None
+    metadata_url: str | None = None
+    client_id: str | None = None
+    secret_ref: str | None = None
+
+
+class IdentityProviderConfigResponse(BaseModel):
+    provider: IdentityProvider
+    config_status: str
+
+
+class IdentityProviderConfigListResponse(BaseModel):
+    providers: list[IdentityProviderConfigResponse]
+
+
+class DevDirectoryUser(BaseModel):
+    user_id: str
+    username: str
+    email: str | None = None
+    enabled: bool = True
+    groups: list[str] = Field(default_factory=list)
+
+
+class DevDirectoryUsersResponse(BaseModel):
+    users: list[DevDirectoryUser]
+
+
+class DevDirectoryGroupsResponse(BaseModel):
+    groups: list[str]
+
+
+class DevDirectoryUserCreateRequest(BaseModel):
+    username: str
+    email: str | None = None
+    password: str
+    groups: list[str] = Field(default_factory=list)
+
+
+class DevDirectoryUserUpdateRequest(BaseModel):
+    email: str | None = None
+    enabled: bool | None = None
+
+
+class DevDirectoryUserGroupRequest(BaseModel):
+    group_name: str
+
+
+class DevDirectoryActivityEvent(BaseModel):
+    event_id: int
+    event_type: str = 'callback'
+    auth_method: str
+    outcome: str
+    actor_email: str | None = None
+    provider_id: str | None = None
+    external_subject: str | None = None
+    external_tenant: str | None = None
+    mapped_role: str | None = None
+    failure_reason: str | None = None
+    troubleshooting_category: str | None = None
+    troubleshooting_hint: str | None = None
+    created_at: str
+
+
+class DevDirectoryActivityResponse(BaseModel):
+    events: list[DevDirectoryActivityEvent]

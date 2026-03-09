@@ -300,6 +300,43 @@ class Settings:
         "DDB_MESSAGE_REPORT_CONTEXT",
         "MessageReportContext",
     )
+    content_reports_table_name: str = os.environ.get(
+        "DDB_CONTENT_REPORTS",
+        "ContentReports",
+    )
+    moderation_tickets_table_name: str = os.environ.get(
+        "DDB_MODERATION_TICKETS",
+        "ModerationTickets",
+    )
+    moderation_actions_table_name: str = os.environ.get(
+        "DDB_MODERATION_ACTIONS",
+        "ModerationActions",
+    )
+    moderation_audit_log_table_name: str = os.environ.get(
+        "DDB_MODERATION_AUDIT_LOG",
+        "ModerationAuditLog",
+    )
+    user_enforcement_history_table_name: str = os.environ.get(
+        "DDB_USER_ENFORCEMENT_HISTORY",
+        "UserEnforcementHistory",
+    )
+    moderation_dual_approval_permanent_ban_enabled: bool = os.environ.get(
+        "MODERATION_DUAL_APPROVAL_PERMANENT_BAN_ENABLED",
+        "false",
+    ).lower() in ("1", "true", "yes", "on")
+    moderation_kpi_lookback_hours: int = int(os.environ.get("MODERATION_KPI_LOOKBACK_HOURS", "24"))
+    moderation_kpi_surge_window_minutes: int = int(os.environ.get("MODERATION_KPI_SURGE_WINDOW_MINUTES", "15"))
+    moderation_alert_extortion_criminal_surge_threshold: int = int(
+        os.environ.get("MODERATION_ALERT_EXTORTION_CRIMINAL_SURGE_THRESHOLD", "10")
+    )
+    moderation_alert_sla_open_critical_threshold: int = int(
+        os.environ.get("MODERATION_ALERT_SLA_OPEN_CRITICAL_THRESHOLD", "20")
+    )
+    moderation_alert_sla_oldest_open_minutes_threshold: int = int(
+        os.environ.get("MODERATION_ALERT_SLA_OLDEST_OPEN_MINUTES_THRESHOLD", "120")
+    )
+    moderation_alert_sla_window_minutes: int = int(os.environ.get("MODERATION_ALERT_SLA_WINDOW_MINUTES", "30"))
+    moderation_oncall_user_subs: str = os.environ.get("MODERATION_ONCALL_USER_SUBS", "")
     message_legal_holds_table_name: str = os.environ.get(
         "DDB_MESSAGE_LEGAL_HOLDS",
         "MessageLegalHolds",
@@ -474,6 +511,13 @@ class Settings:
     filemgr_purge_interval_seconds: int = int(os.environ.get("FILEMGR_PURGE_INTERVAL_SECONDS", "900"))
     filemgr_admin_content_access_tier: str = os.environ.get("FILEMGR_ADMIN_CONTENT_ACCESS_TIER", "none")
     filemgr_purge_index_name: str = os.environ.get("FILEMGR_PURGE_INDEX_NAME", "GSI_PURGE")
+    filemgr_s3_mounts_enabled: bool = os.environ.get("FILEMGR_S3_MOUNTS_ENABLED", "false").lower() == "true"
+    filemgr_s3_mounts_write_enabled: bool = os.environ.get("FILEMGR_S3_MOUNTS_WRITE_ENABLED", "false").lower() == "true"
+    filemgr_s3_mounts_allowed_bucket_patterns: str = os.environ.get("FILEMGR_S3_MOUNTS_ALLOWED_BUCKET_PATTERNS", "")
+    filemgr_s3_mounts_max_upload_bytes: int = int(os.environ.get("FILEMGR_S3_MOUNTS_MAX_UPLOAD_BYTES", "0"))
+    filemgr_s3_mounts_max_download_bytes: int = int(os.environ.get("FILEMGR_S3_MOUNTS_MAX_DOWNLOAD_BYTES", "0"))
+    filemgr_s3_mounts_upload_rate_per_minute: int = int(os.environ.get("FILEMGR_S3_MOUNTS_UPLOAD_RATE_PER_MINUTE", "0"))
+    filemgr_s3_mounts_download_rate_per_minute: int = int(os.environ.get("FILEMGR_S3_MOUNTS_DOWNLOAD_RATE_PER_MINUTE", "0"))
     projects_reconcile_enabled: bool = os.environ.get("PROJECTS_RECONCILE_ENABLED", "false").lower() == "true"
     projects_reconcile_interval_seconds: int = int(os.environ.get("PROJECTS_RECONCILE_INTERVAL_SECONDS", "900"))
     projects_reconcile_scan_limit: int = int(os.environ.get("PROJECTS_RECONCILE_SCAN_LIMIT", "200"))
@@ -542,6 +586,32 @@ class Settings:
     filemgr_usage_snapshot_retention_days: int = int(os.environ.get("FILEMGR_USAGE_SNAPSHOT_RETENTION_DAYS", "2555"))
     filemgr_usage_billing_record_retention_days: int = int(os.environ.get("FILEMGR_USAGE_BILLING_RECORD_RETENTION_DAYS", "2555"))
     filemgr_admin_users: str = os.environ.get("FILEMGR_ADMIN_USERS", "")
+    filemgr_sftp_mounts_enabled: bool = os.environ.get("FILEMGR_SFTP_MOUNTS_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    filemgr_sftp_mounts_write_enabled: bool = os.environ.get("FILEMGR_SFTP_MOUNTS_WRITE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    filemgr_sftp_mounts_share_enabled: bool = os.environ.get("FILEMGR_SFTP_MOUNTS_SHARE_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    filemgr_sftp_credentials_table_name: str = os.environ.get("FILEMGR_SFTP_CREDENTIALS_TABLE_NAME", "")
+    filemgr_sftp_credentials_kms_key_id: str = os.environ.get("FILEMGR_SFTP_CREDENTIALS_KMS_KEY_ID", "")
+    filemgr_sftp_mounts_table_name: str = os.environ.get("FILEMGR_SFTP_MOUNTS_TABLE_NAME", "")
+    filemgr_sftp_mounts_owner_index_name: str = os.environ.get("FILEMGR_SFTP_MOUNTS_OWNER_INDEX_NAME", "GSI1")
+    filemgr_sftp_mounts_lookup_index_name: str = os.environ.get("FILEMGR_SFTP_MOUNTS_LOOKUP_INDEX_NAME", "GSI2")
+    filemgr_sftp_connect_timeout_seconds: int = int(os.environ.get("FILEMGR_SFTP_CONNECT_TIMEOUT_SECONDS", "10"))
+    filemgr_sftp_pool_max_connections: int = int(os.environ.get("FILEMGR_SFTP_POOL_MAX_CONNECTIONS", "64"))
+    filemgr_sftp_host_key_policy: str = os.environ.get("FILEMGR_SFTP_HOST_KEY_POLICY", "strict")
+    filemgr_sftp_operation_timeout_seconds: int = int(os.environ.get("FILEMGR_SFTP_OPERATION_TIMEOUT_SECONDS", "20"))
+    filemgr_sftp_retry_max_attempts: int = int(os.environ.get("FILEMGR_SFTP_RETRY_MAX_ATTEMPTS", "2"))
+    filemgr_sftp_retry_backoff_ms: int = int(os.environ.get("FILEMGR_SFTP_RETRY_BACKOFF_MS", "100"))
+    filemgr_sftp_circuit_failure_threshold: int = int(os.environ.get("FILEMGR_SFTP_CIRCUIT_FAILURE_THRESHOLD", "5"))
+    filemgr_sftp_circuit_open_seconds: int = int(os.environ.get("FILEMGR_SFTP_CIRCUIT_OPEN_SECONDS", "30"))
+    filemgr_sftp_health_refresh_enabled: bool = os.environ.get("FILEMGR_SFTP_HEALTH_REFRESH_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    filemgr_sftp_health_refresh_interval_seconds: int = int(os.environ.get("FILEMGR_SFTP_HEALTH_REFRESH_INTERVAL_SECONDS", "300"))
+    filemgr_sftp_health_refresh_limit: int = int(os.environ.get("FILEMGR_SFTP_HEALTH_REFRESH_LIMIT", "20"))
+    filemgr_sftp_destination_policy_mode: str = os.environ.get("FILEMGR_SFTP_DESTINATION_POLICY_MODE", "allow_all")
+    filemgr_sftp_allowed_destinations: str = os.environ.get("FILEMGR_SFTP_ALLOWED_DESTINATIONS", "")
+    filemgr_sftp_backend: str = os.environ.get("FILEMGR_SFTP_BACKEND", "paramiko")
+    filemgr_sftp_mock_root_dir: str = os.environ.get("FILEMGR_SFTP_MOCK_ROOT_DIR", "/tmp/filemgr-sftp-mock")
+    filemgr_sftp_mock_scan_max_entries: int = int(os.environ.get("FILEMGR_SFTP_MOCK_SCAN_MAX_ENTRIES", "5000"))
+    filemgr_sftp_mock_path_max_depth: int = int(os.environ.get("FILEMGR_SFTP_MOCK_PATH_MAX_DEPTH", "32"))
+    filemgr_sftp_mock_rate_limit_per_minute: int = int(os.environ.get("FILEMGR_SFTP_MOCK_RATE_LIMIT_PER_MINUTE", "120"))
 
     # API usage metering policy
     api_usage_billable_status_classes: str = os.environ.get("API_USAGE_BILLABLE_STATUS_CLASSES", "2xx")

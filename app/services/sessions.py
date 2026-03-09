@@ -19,6 +19,7 @@ from app.core.tables import T
 from app.core.time import now_ts
 from app.metrics import record_session_created, record_session_revoked
 from app.services.device_trust import ensure_device_cookie, record_device_login
+from app.services.moderation_policy_engine import is_user_currently_banned
 from app.services.ttl import with_ttl
 
 @dataclass(frozen=True)
@@ -290,6 +291,8 @@ async def require_ui_session(
     if not resolved_user_sub:
         raise HTTPException(401, "Missing user")
     role: Role = normalize_role(getattr(auth_user, "role", None))
+    if role not in {Role.ADMIN, Role.ROOT} and is_user_currently_banned(resolved_user_sub):
+        raise HTTPException(403, "account is banned")
     session_id = None
     cookies = getattr(request, "cookies", {}) or {}
     headers = getattr(request, "headers", {}) or {}

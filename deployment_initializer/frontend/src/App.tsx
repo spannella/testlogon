@@ -120,8 +120,60 @@ type SessionEventsResponse = {
   events: SessionTimelineEvent[];
 };
 
+type IdentityProviderConfigResponse = {
+  provider: {
+    provider_id: string;
+    provider_type: string;
+    issuer: string;
+    metadata_url: string | null;
+    client_id: string;
+    secret_ref: string;
+    enabled: boolean;
+  };
+  config_status: 'draft' | 'validated' | 'active' | string;
+};
+
+type IdentityProviderRoleMapping = {
+  mapping_id: number;
+  provider_id: string;
+  external_group_or_claim: string;
+  internal_role: string;
+  priority: number;
+};
+
+type DevDirectoryUser = {
+  user_id: string;
+  username: string;
+  email: string | null;
+  enabled: boolean;
+  groups: string[];
+};
+
+type DevDirectoryUsersResponse = { users: DevDirectoryUser[] };
+type DevDirectoryGroupsResponse = { groups: string[] };
+type DevDirectoryActivityEvent = {
+  event_id: number;
+  event_type: string;
+  auth_method: string;
+  outcome: string;
+  actor_email: string | null;
+  provider_id: string | null;
+  external_subject: string | null;
+  external_tenant: string | null;
+  mapped_role: string | null;
+  failure_reason: string | null;
+  troubleshooting_category: string | null;
+  troubleshooting_hint: string | null;
+  created_at: string;
+};
+
+type DevDirectoryActivityResponse = {
+  events: DevDirectoryActivityEvent[];
+};
+
 const DRAFT_STORAGE_KEY = 'deployment_initializer.required_input_form.v1';
 const SESSION_STORAGE_KEY = 'deployment_initializer.session_id.v1';
+const ACTOR_ROLE_STORAGE_KEY = 'deployment_initializer.actor_role.v1';
 
 const defaultModules: ModuleConfigMeta[] = [
   { id: 'enable_helpdesk', configKey: 'helpdesk', title: 'Helpdesk', helpText: 'Ticket routing and assignment options.' },
@@ -361,6 +413,28 @@ export function App() {
   const [timelineEvents, setTimelineEvents] = useState<SessionTimelineEvent[]>([]);
   const [timelineMessage, setTimelineMessage] = useState('No event activity yet.');
   const [lastGeneratedPayload, setLastGeneratedPayload] = useState<ReturnType<typeof toSessionPayload> | null>(null);
+  const [actorRole, setActorRole] = useState<'root' | 'admin' | 'operator' | 'viewer'>('admin');
+  const [idpConfigs, setIdpConfigs] = useState<IdentityProviderConfigResponse[]>([]);
+  const [idpForm, setIdpForm] = useState({
+    provider_id: '',
+    provider_type: 'oidc',
+    issuer: '',
+    metadata_url: '',
+    client_id: '',
+    secret_ref: '',
+  });
+  const [idpMappings, setIdpMappings] = useState<IdentityProviderRoleMapping[]>([]);
+  const [mappingForm, setMappingForm] = useState({ external_group_or_claim: '', internal_role: 'admin', priority: 10 });
+  const [selectedProviderId, setSelectedProviderId] = useState('');
+  const [idpMessage, setIdpMessage] = useState('Load providers to manage Identity & SSO settings.');
+  const [devDirectoryUsers, setDevDirectoryUsers] = useState<DevDirectoryUser[]>([]);
+  const [devDirectoryGroups, setDevDirectoryGroups] = useState<string[]>([]);
+  const [devDirectoryMessage, setDevDirectoryMessage] = useState('Load directory data to inspect local AD users/groups.');
+  const [devDirectoryActivity, setDevDirectoryActivity] = useState<DevDirectoryActivityEvent[]>([]);
+  const [activityFilters, setActivityFilters] = useState({ actor_email: '', provider_id: '', outcome: '', since_minutes: '60' });
+  const [selectedActivityEventId, setSelectedActivityEventId] = useState<number | null>(null);
+  const [devUserForm, setDevUserForm] = useState({ username: '', email: '', password: 'DevUser123!', groups: 'group-admins' });
+  const [selectedDevUser, setSelectedDevUser] = useState('');
   const saveTimerRef = useRef<number | undefined>(undefined);
 
   const modules = useMemo(() => modulesFromSchema(schemaMeta), [schemaMeta]);
@@ -431,6 +505,32 @@ export function App() {
       })
       .finally(() => setIsHydrating(false));
   }, []);
+
+  useEffect(() => {
+    const persistedRole = window.localStorage.getItem(ACTOR_ROLE_STORAGE_KEY);
+    if (persistedRole === 'root' || persistedRole === 'admin' || persistedRole === 'operator' || persistedRole === 'viewer') {
+      setActorRole(persistedRole);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(ACTOR_ROLE_STORAGE_KEY, actorRole);
+  }, [actorRole]);
+
+  useEffect(() => {
+    if (actorRole !== 'root' || !selectedProviderId) {
+      setIdpMappings([]);
+      return;
+    }
+    const headers = actorRole === 'root' ? { Authorization: 'Bearer root:root@example.com:root' } : { 'X-SSO-Email': 'admin@example.com', 'X-SSO-Role': actorRole };
+    fetch(`/auth/admin/sso/providers/${selectedProviderId}/role-mappings`, { headers })
+      .then(async (response) => {
+        if (!response.ok) return [] as IdentityProviderRoleMapping[];
+        return (await response.json()) as IdentityProviderRoleMapping[];
+      })
+      .then((rows) => setIdpMappings(rows))
+      .catch(() => setIdpMappings([]));
+  }, [selectedProviderId, actorRole]);
 
   useEffect(() => {
     if (!isHydrating) {
@@ -679,12 +779,231 @@ export function App() {
     </label>
   );
 
+  const selectedActivityEvent = devDirectoryActivity.find((item) => item.event_id === selectedActivityEventId) ?? null;
+
   const formErrorCount = Object.keys(errors).length;
+  const isRootActor = actorRole === 'root';
+  const rootHeaders = isRootActor ? { Authorization: 'Bearer root:root@example.com:root' } : { 'X-SSO-Email': 'admin@example.com', 'X-SSO-Role': actorRole };
+
+  const loadIdpConfigs = async () => {
+    const response = await fetch('/auth/admin/sso/providers', { headers: rootHeaders });
+    if (!response.ok) {
+      setIdpMessage('Unable to load provider settings. Root role is required.');
+      return;
+    }
+    const payload = (await response.json()) as { providers: IdentityProviderConfigResponse[] };
+    setIdpConfigs(payload.providers);
+    const nextSelected = payload.providers[0]?.provider.provider_id ?? '';
+    setSelectedProviderId(nextSelected);
+    setIdpMessage(`Loaded ${payload.providers.length} provider configuration(s).`);
+
+    if (nextSelected) {
+      const mappingsResponse = await fetch(`/auth/admin/sso/providers/${nextSelected}/role-mappings`, { headers: rootHeaders });
+      if (mappingsResponse.ok) {
+        setIdpMappings((await mappingsResponse.json()) as IdentityProviderRoleMapping[]);
+      }
+    }
+  };
+
+  const saveProviderConfig = async () => {
+    const response = await fetch('/auth/admin/sso/providers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...rootHeaders },
+      body: JSON.stringify({
+        ...idpForm,
+        metadata_url: idpForm.metadata_url || null,
+      }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      setIdpMessage(`Save failed: ${error.detail ?? 'unknown_error'}`);
+      return;
+    }
+    setIdpMessage('Provider saved in draft status.');
+    await loadIdpConfigs();
+  };
+
+  const runProviderAction = async (action: 'test-config' | 'validate' | 'activate' | 'deactivate') => {
+    if (!selectedProviderId) return;
+    const response = await fetch(`/auth/admin/sso/providers/${selectedProviderId}/${action}`, {
+      method: 'POST',
+      headers: rootHeaders,
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      setIdpMessage(`${action} failed: ${error.detail ?? 'unknown_error'}`);
+      return;
+    }
+    setIdpMessage(`${action} completed for ${selectedProviderId}.`);
+    await loadIdpConfigs();
+  };
+
+  const addRoleMapping = async () => {
+    if (!selectedProviderId) return;
+    const response = await fetch(`/auth/admin/sso/providers/${selectedProviderId}/role-mappings?external_group_or_claim=${encodeURIComponent(mappingForm.external_group_or_claim)}&internal_role=${encodeURIComponent(mappingForm.internal_role)}&priority=${mappingForm.priority}`, {
+      method: 'POST',
+      headers: rootHeaders,
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      setIdpMessage(`Add mapping failed: ${error.detail ?? 'unknown_error'}`);
+      return;
+    }
+    setIdpMessage('Role mapping added.');
+    await loadIdpConfigs();
+  };
+
+  const rollbackSso = async () => {
+    const response = await fetch('/auth/admin/sso/rollback', { method: 'POST', headers: rootHeaders });
+    if (!response.ok) {
+      const error = await response.json();
+      setIdpMessage(`Rollback failed: ${error.detail ?? 'unknown_error'}`);
+      return;
+    }
+    setIdpMessage('Rollback complete: SSO disabled and local-only admin login restored.');
+    await loadIdpConfigs();
+  };
+
+  const isSeededDevUser = (username: string) => ['admin@example.com', 'ops@example.com'].includes(username);
+
+  const loadDevDirectoryData = async () => {
+    const params = new URLSearchParams({ limit: '50' });
+    if (activityFilters.actor_email.trim()) params.set('actor_email', activityFilters.actor_email.trim());
+    if (activityFilters.provider_id.trim()) params.set('provider_id', activityFilters.provider_id.trim());
+    if (activityFilters.outcome.trim()) params.set('outcome', activityFilters.outcome.trim());
+    if (activityFilters.since_minutes.trim()) params.set('since_minutes', activityFilters.since_minutes.trim());
+
+    const [usersResp, groupsResp, activityResp] = await Promise.all([
+      fetch('/auth/admin/sso/dev-directory/users', { headers: rootHeaders }),
+      fetch('/auth/admin/sso/dev-directory/groups', { headers: rootHeaders }),
+      fetch(`/auth/admin/sso/dev-directory/activity?${params.toString()}`, { headers: rootHeaders }),
+    ]);
+
+    if (!usersResp.ok || !groupsResp.ok || !activityResp.ok) {
+      setDevDirectoryMessage('Unable to load dev directory data. Root role and local Keycloak mode are required.');
+      return;
+    }
+
+    const usersPayload = (await usersResp.json()) as DevDirectoryUsersResponse;
+    const groupsPayload = (await groupsResp.json()) as DevDirectoryGroupsResponse;
+    const activityPayload = (await activityResp.json()) as DevDirectoryActivityResponse;
+
+    setDevDirectoryUsers(usersPayload.users);
+    setDevDirectoryGroups(groupsPayload.groups);
+    setDevDirectoryActivity(activityPayload.events);
+    setSelectedActivityEventId((prev) => prev ?? activityPayload.events[0]?.event_id ?? null);
+    setSelectedDevUser((prev) => prev || usersPayload.users[0]?.username || '');
+    setDevDirectoryMessage(`Loaded ${usersPayload.users.length} user(s), ${groupsPayload.groups.length} group(s), ${activityPayload.events.length} activity event(s).`);
+  };
+
+  const createDevDirectoryUser = async () => {
+    const groups = devUserForm.groups.split(',').map((g) => g.trim()).filter(Boolean);
+    const response = await fetch('/auth/admin/sso/dev-directory/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...rootHeaders },
+      body: JSON.stringify({
+        username: devUserForm.username,
+        email: devUserForm.email || null,
+        password: devUserForm.password,
+        groups,
+      }),
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      setDevDirectoryMessage(`Create user failed: ${error.detail ?? 'unknown_error'}`);
+      return;
+    }
+
+    setDevDirectoryMessage(`Created/updated user ${devUserForm.username}.`);
+    setDevUserForm((prev) => ({ ...prev, username: '', email: '' }));
+    await loadDevDirectoryData();
+  };
+
+  const setDevDirectoryUserEnabled = async (username: string, enabled: boolean) => {
+    const response = await fetch(`/auth/admin/sso/dev-directory/users/${encodeURIComponent(username)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...rootHeaders },
+      body: JSON.stringify({ enabled }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      setDevDirectoryMessage(`Update user failed: ${error.detail ?? 'unknown_error'}`);
+      return;
+    }
+    setDevDirectoryMessage(`${enabled ? 'Enabled' : 'Disabled'} ${username}.`);
+    await loadDevDirectoryData();
+  };
+
+  const addSelectedUserToGroup = async (groupName: string) => {
+    if (!selectedDevUser) return;
+    const response = await fetch(`/auth/admin/sso/dev-directory/users/${encodeURIComponent(selectedDevUser)}/groups`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...rootHeaders },
+      body: JSON.stringify({ group_name: groupName }),
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      setDevDirectoryMessage(`Add group failed: ${error.detail ?? 'unknown_error'}`);
+      return;
+    }
+    setDevDirectoryMessage(`Added ${selectedDevUser} to ${groupName}.`);
+    await loadDevDirectoryData();
+  };
+
+  const removeUserFromGroup = async (username: string, groupName: string) => {
+    if (!username) return;
+    const response = await fetch(`/auth/admin/sso/dev-directory/users/${encodeURIComponent(username)}/groups/${encodeURIComponent(groupName)}`, {
+      method: 'DELETE',
+      headers: rootHeaders,
+    });
+    if (!response.ok) {
+      const error = await response.json();
+      setDevDirectoryMessage(`Remove group failed: ${error.detail ?? 'unknown_error'}`);
+      return;
+    }
+    setDevDirectoryMessage(`Removed ${username} from ${groupName}.`);
+    await loadDevDirectoryData();
+  };
+
+  const quickSeedPersona = async (persona: 'admin' | 'ops' | 'denied') => {
+    const seedUser =
+      persona === 'admin'
+        ? { username: 'seed-admin@example.com', email: 'seed-admin@example.com', groups: ['group-admins'] }
+        : persona === 'ops'
+          ? { username: 'seed-ops@example.com', email: 'seed-ops@example.com', groups: ['group-ops'] }
+          : { username: 'seed-denied@example.com', email: 'seed-denied@example.com', groups: [] as string[] };
+
+    const createResp = await fetch('/auth/admin/sso/dev-directory/users', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...rootHeaders },
+      body: JSON.stringify({ ...seedUser, password: 'DevUser123!' }),
+    });
+    if (!createResp.ok) {
+      setDevDirectoryMessage(`Quick seed failed for ${persona}.`);
+      return;
+    }
+
+    setDevDirectoryMessage(`Quick seeded ${persona} persona (${seedUser.username}).`);
+    await loadDevDirectoryData();
+  };
 
   return (
     <main style={{ fontFamily: 'Inter, Arial, sans-serif', margin: '2rem', maxWidth: 980 }}>
       <h1>Deployment Initializer UI</h1>
       <p>Required-input + optional-feature form with inline validation and backend session autosave.</p>
+
+      <section style={{ marginBottom: '1rem', border: '1px solid #d5dce3', borderRadius: 8, padding: '0.75rem 1rem', background: '#f8fafc' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <strong>Acting Role (UI permission simulation)</strong>
+          <select aria-label='Acting Role' value={actorRole} onChange={(event) => setActorRole(event.target.value as 'root' | 'admin' | 'operator' | 'viewer')}>
+            <option value='root'>root</option>
+            <option value='admin'>admin</option>
+            <option value='operator'>operator</option>
+            <option value='viewer'>viewer</option>
+          </select>
+        </label>
+      </section>
 
       <section style={{ padding: '0.75rem 1rem', borderRadius: 8, background: saveState === 'error' ? '#fdecea' : '#f5f9ff', border: '1px solid #dbe5f0', marginBottom: '1rem' }}>
         <strong>Autosave status:</strong> {isHydrating ? 'Restoring session...' : saveMessage || 'Waiting for input.'}
@@ -840,6 +1159,232 @@ export function App() {
         <h2>Deployment Options (Required)</h2>
         {renderField('VPC ID', 'deployment_options.vpc_id', draft.deployment_options.vpc_id, (v) => updateTextField('deployment_options.vpc_id', v))}
       </form>
+
+      <section style={{ marginTop: '2rem', border: '1px solid #d5dce3', borderRadius: 10, padding: '1rem' }}>
+        <h2>Identity & SSO (Root Admin)</h2>
+        <p style={{ marginTop: 0, color: '#4b5563' }}>
+          Configure provider protocol settings, role mappings, and lifecycle actions (save, test, validate, activate, rollback).
+        </p>
+
+        {!isRootActor ? (
+          <div style={{ padding: '0.75rem', borderRadius: 8, border: '1px solid #f2b8b5', background: '#fff4f4', color: '#b42318' }}>
+            Root role required. Non-root users cannot access or mutate Identity & SSO settings.
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+              <button type='button' onClick={loadIdpConfigs}>Load Providers</button>
+              <button type='button' onClick={saveProviderConfig}>Save Provider (Draft)</button>
+              <button type='button' onClick={() => runProviderAction('test-config')} disabled={!selectedProviderId}>Test Config</button>
+              <button type='button' onClick={() => runProviderAction('validate')} disabled={!selectedProviderId}>Validate</button>
+              <button type='button' onClick={() => runProviderAction('activate')} disabled={!selectedProviderId}>Activate</button>
+              <button type='button' onClick={() => runProviderAction('deactivate')} disabled={!selectedProviderId}>Deactivate</button>
+              <button type='button' onClick={rollbackSso}>Rollback (Disable SSO)</button>
+            </div>
+
+            <div style={{ marginBottom: '0.75rem', fontSize: '0.9rem' }}>{idpMessage}</div>
+
+            {renderField('Provider ID', 'idp.provider_id', idpForm.provider_id, (v) => setIdpForm((prev) => ({ ...prev, provider_id: v })))}
+            {renderField('Protocol (oidc|saml)', 'idp.provider_type', idpForm.provider_type, (v) => setIdpForm((prev) => ({ ...prev, provider_type: v })))}
+            {renderField('Issuer', 'idp.issuer', idpForm.issuer, (v) => setIdpForm((prev) => ({ ...prev, issuer: v })))}
+            {renderField('Metadata URL (required for SAML)', 'idp.metadata_url', idpForm.metadata_url, (v) => setIdpForm((prev) => ({ ...prev, metadata_url: v })))}
+            {renderField('Client ID', 'idp.client_id', idpForm.client_id, (v) => setIdpForm((prev) => ({ ...prev, client_id: v })))}
+            {renderField('Secret Ref', 'idp.secret_ref', idpForm.secret_ref, (v) => setIdpForm((prev) => ({ ...prev, secret_ref: v })))}
+
+            <label style={{ display: 'block', marginBottom: '0.9rem' }}>
+              <span style={{ fontWeight: 600 }}>Selected Provider</span>
+              <select aria-label='Selected Provider' value={selectedProviderId} onChange={(event) => setSelectedProviderId(event.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: 6, border: '1px solid #cfd8dc', marginTop: '0.25rem' }}>
+                <option value=''>-- select provider --</option>
+                {idpConfigs.map((entry) => (
+                  <option key={entry.provider.provider_id} value={entry.provider.provider_id}>
+                    {entry.provider.provider_id} ({entry.provider.provider_type}, {entry.config_status})
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <h3>Role Mappings</h3>
+            {renderField('External Group/Claim', 'idp.mapping.group', mappingForm.external_group_or_claim, (v) => setMappingForm((prev) => ({ ...prev, external_group_or_claim: v })))}
+            {renderField('Internal Role', 'idp.mapping.role', mappingForm.internal_role, (v) => setMappingForm((prev) => ({ ...prev, internal_role: v })))}
+            <label style={{ display: 'block', marginBottom: '0.9rem' }}>
+              <span style={{ fontWeight: 600 }}>Priority</span>
+              <input aria-label='Mapping Priority' type='number' value={mappingForm.priority} onChange={(event) => setMappingForm((prev) => ({ ...prev, priority: Number(event.target.value) || 0 }))} style={{ width: '100%', padding: '0.5rem', borderRadius: 6, border: '1px solid #cfd8dc', marginTop: '0.25rem' }} />
+            </label>
+            <button type='button' onClick={addRoleMapping} disabled={!selectedProviderId || !mappingForm.external_group_or_claim.trim()}>Add Mapping</button>
+
+            {idpMappings.length > 0 && (
+              <ul>
+                {idpMappings.map((mapping) => (
+                  <li key={mapping.mapping_id}>
+                    #{mapping.priority} {mapping.external_group_or_claim} → {mapping.internal_role}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </>
+        )}
+      </section>
+
+      <section data-testid='dev-directory-panel' style={{ marginTop: '1rem', border: '1px solid #d5dce3', borderRadius: 10, padding: '1rem' }}>
+        <h2>Dev Directory (Local AD/Keycloak)</h2>
+        <p style={{ marginTop: 0, color: '#4b5563' }}>
+          Inspect local directory users/groups, provision test users, and manage group assignments for AD login testing.
+        </p>
+
+        {!isRootActor ? (
+          <div style={{ color: '#7f1d1d', background: '#fff7ed', padding: '0.6rem', borderRadius: 8 }}>
+            Root role required. Non-root users cannot inspect or mutate Dev Directory settings.
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+              <button data-testid='dev-directory-load' type='button' onClick={loadDevDirectoryData}>Load Directory Data</button>
+              <button data-testid='dev-directory-seed-admin' type='button' onClick={() => quickSeedPersona('admin')}>Quick Seed Admin Persona</button>
+              <button data-testid='dev-directory-seed-ops' type='button' onClick={() => quickSeedPersona('ops')}>Quick Seed Ops Persona</button>
+              <button data-testid='dev-directory-seed-denied' type='button' onClick={() => quickSeedPersona('denied')}>Quick Seed Denied Persona</button>
+            </div>
+
+            <div style={{ marginBottom: '0.75rem', fontSize: '0.9rem' }}>{devDirectoryMessage}</div>
+
+            <h3>Create / Update Dev User</h3>
+            {renderField('Dev Username', 'dev.user.username', devUserForm.username, (v) => setDevUserForm((prev) => ({ ...prev, username: v })))}
+            {renderField('Dev Email', 'dev.user.email', devUserForm.email, (v) => setDevUserForm((prev) => ({ ...prev, email: v })), 'email')}
+            {renderField('Dev Password', 'dev.user.password', devUserForm.password, (v) => setDevUserForm((prev) => ({ ...prev, password: v })))}
+            {renderField('Initial Groups (comma-separated)', 'dev.user.groups', devUserForm.groups, (v) => setDevUserForm((prev) => ({ ...prev, groups: v })))}
+            <button type='button' onClick={createDevDirectoryUser} disabled={!devUserForm.username.trim() || !devUserForm.password.trim()}>
+              Create / Sync User
+            </button>
+
+            <h3 style={{ marginTop: '1rem' }}>Directory Users</h3>
+            <label style={{ display: 'block', marginBottom: '0.9rem' }}>
+              <span style={{ fontWeight: 600 }}>Selected Dev User</span>
+              <select aria-label='Selected Dev User' value={selectedDevUser} onChange={(event) => setSelectedDevUser(event.target.value)} style={{ width: '100%', padding: '0.5rem', borderRadius: 6, border: '1px solid #cfd8dc', marginTop: '0.25rem' }}>
+                <option value=''>-- select user --</option>
+                {devDirectoryUsers.map((user) => (
+                  <option key={user.user_id} value={user.username}>
+                    {user.username}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.75rem' }}>
+              <button type='button' disabled={!selectedDevUser} onClick={() => setDevDirectoryUserEnabled(selectedDevUser, true)}>Enable User</button>
+              <button type='button' disabled={!selectedDevUser} onClick={() => setDevDirectoryUserEnabled(selectedDevUser, false)}>Disable User</button>
+              <button type='button' disabled={!selectedDevUser} onClick={() => addSelectedUserToGroup('group-admins')}>Add group-admins</button>
+              <button type='button' disabled={!selectedDevUser} onClick={() => addSelectedUserToGroup('group-ops')}>Add group-ops</button>
+            </div>
+
+            {devDirectoryUsers.length > 0 && (
+              <ul aria-label='Dev Directory Users'>
+                {devDirectoryUsers.map((user) => (
+                  <li key={user.user_id}>
+                    <strong>{user.username}</strong> {isSeededDevUser(user.username) ? '(seeded)' : '(custom)'} · status: {user.enabled ? 'active' : 'disabled'} · groups: {user.groups.join(', ') || 'none'}
+                    {user.groups.map((group) => (
+                      <button key={`${user.user_id}-${group}`} type='button' style={{ marginLeft: '0.5rem' }} onClick={() => {
+                        setSelectedDevUser(user.username);
+                        void removeUserFromGroup(user.username, group);
+                      }}>
+                        remove {group}
+                      </button>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {devDirectoryGroups.length > 0 && (
+              <p style={{ fontSize: '0.9rem' }}>
+                Available Groups: {devDirectoryGroups.join(', ')}
+              </p>
+            )}
+
+            <h3 style={{ marginTop: '1rem' }}>AD Activity Explorer</h3>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.5rem', marginBottom: '0.75rem' }}>
+              <label>
+                <span style={{ fontWeight: 600 }}>Actor Email</span>
+                <input
+                  aria-label='Activity Filter Actor Email'
+                  value={activityFilters.actor_email}
+                  onChange={(event) => setActivityFilters((prev) => ({ ...prev, actor_email: event.target.value }))}
+                  style={{ width: '100%', padding: '0.45rem', borderRadius: 6, border: '1px solid #cfd8dc' }}
+                />
+              </label>
+              <label>
+                <span style={{ fontWeight: 600 }}>Provider ID</span>
+                <input
+                  aria-label='Activity Filter Provider ID'
+                  value={activityFilters.provider_id}
+                  onChange={(event) => setActivityFilters((prev) => ({ ...prev, provider_id: event.target.value }))}
+                  style={{ width: '100%', padding: '0.45rem', borderRadius: 6, border: '1px solid #cfd8dc' }}
+                />
+              </label>
+              <label>
+                <span style={{ fontWeight: 600 }}>Outcome</span>
+                <select
+                  aria-label='Activity Filter Outcome'
+                  value={activityFilters.outcome}
+                  onChange={(event) => setActivityFilters((prev) => ({ ...prev, outcome: event.target.value }))}
+                  style={{ width: '100%', padding: '0.45rem', borderRadius: 6, border: '1px solid #cfd8dc' }}
+                >
+                  <option value=''>all</option>
+                  <option value='success'>success</option>
+                  <option value='failure'>failure</option>
+                  <option value='denied'>denied</option>
+                </select>
+              </label>
+              <label>
+                <span style={{ fontWeight: 600 }}>Since Minutes</span>
+                <input
+                  aria-label='Activity Filter Since Minutes'
+                  type='number'
+                  min={1}
+                  value={activityFilters.since_minutes}
+                  onChange={(event) => setActivityFilters((prev) => ({ ...prev, since_minutes: event.target.value }))}
+                  style={{ width: '100%', padding: '0.45rem', borderRadius: 6, border: '1px solid #cfd8dc' }}
+                />
+              </label>
+            </div>
+            <button data-testid='dev-directory-activity-apply-filters' type='button' onClick={loadDevDirectoryData}>Apply Activity Filters</button>
+
+            {devDirectoryActivity.length > 0 && (
+              <>
+                <ul aria-label='AD Activity Timeline'>
+                  {devDirectoryActivity.slice(0, 20).map((event) => (
+                    <li key={event.event_id}>
+                      <button
+                        type='button'
+                        onClick={() => setSelectedActivityEventId(event.event_id)}
+                        style={{ marginRight: '0.5rem' }}
+                      >
+                        View
+                      </button>
+                      #{event.event_id} [{event.outcome}] {event.actor_email ?? event.external_subject ?? 'unknown'}
+                      {event.failure_reason ? ` - ${event.failure_reason}` : ''}
+                    </li>
+                  ))}
+                </ul>
+
+                {selectedActivityEvent && (
+                  <details open>
+                    <summary>Activity Event Details #{selectedActivityEvent.event_id}</summary>
+                    <div style={{ fontSize: '0.92rem', lineHeight: 1.5 }}>
+                      <div><strong>Type:</strong> {selectedActivityEvent.event_type}</div>
+                      <div><strong>Outcome:</strong> {selectedActivityEvent.outcome}</div>
+                      <div><strong>Actor:</strong> {selectedActivityEvent.actor_email ?? 'n/a'}</div>
+                      <div><strong>Provider:</strong> {selectedActivityEvent.provider_id ?? 'n/a'}</div>
+                      <div><strong>Failure Reason:</strong> {selectedActivityEvent.failure_reason ?? 'n/a'}</div>
+                      <div><strong>Troubleshooting Category:</strong> {selectedActivityEvent.troubleshooting_category ?? 'n/a'}</div>
+                      <div><strong>Troubleshooting Hint:</strong> {selectedActivityEvent.troubleshooting_hint ?? 'n/a'}</div>
+                      <div><strong>Timestamp:</strong> {selectedActivityEvent.created_at}</div>
+                    </div>
+                  </details>
+                )}
+              </>
+            )}
+          </>
+        )}
+      </section>
 
       <section style={{ marginTop: '2rem', border: '1px solid #d5dce3', borderRadius: 10, padding: '1rem' }}>
         <h2>Review & Deploy</h2>

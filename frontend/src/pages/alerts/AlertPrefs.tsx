@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, X } from "lucide-react";
+import { Mail, Phone, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,12 @@ import {
   setToastPrefs,
   getWebhookPrefs,
   setWebhookPrefs,
+  alertEmailBegin,
+  alertEmailConfirm,
+  alertEmailRemove,
+  alertSmsBegin,
+  alertSmsConfirm,
+  alertSmsRemove,
 } from "@/api/endpoints/alerts";
 
 // ─── Channel config ──────────────────────────────────────────────
@@ -34,6 +40,16 @@ const CHANNELS = [
 export function AlertPrefs() {
   const queryClient = useQueryClient();
   const [newWebhookUrl, setNewWebhookUrl] = React.useState("");
+
+  // Email address management state
+  const [emailInput, setEmailInput] = React.useState("");
+  const [emailPending, setEmailPending] = React.useState<{ challengeId: string; sentTo: string } | null>(null);
+  const [emailCode, setEmailCode] = React.useState("");
+
+  // SMS number management state
+  const [phoneInput, setPhoneInput] = React.useState("");
+  const [smsPending, setSmsPending] = React.useState<{ challengeId: string; sentTo: string } | null>(null);
+  const [smsCode, setSmsCode] = React.useState("");
 
   // Fetch all event types
   const typesQuery = useQuery({
@@ -90,6 +106,60 @@ export function AlertPrefs() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["alert-prefs", "webhook"] });
       toast.success("Webhook preferences updated");
+    },
+  });
+
+  // Email address mutations
+  const emailBeginMut = useMutation({
+    mutationFn: (email: string) => alertEmailBegin(email),
+    onSuccess: (d) => {
+      setEmailPending({ challengeId: d.challenge_id, sentTo: d.sent_to });
+      setEmailInput("");
+    },
+    onError: () => toast.error("Failed to send verification email"),
+  });
+  const emailConfirmMut = useMutation({
+    mutationFn: ({ id, code }: { id: string; code: string }) => alertEmailConfirm(id, code),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alert-prefs", "email"] });
+      setEmailPending(null);
+      setEmailCode("");
+      toast.success("Email address added");
+    },
+    onError: () => toast.error("Invalid or expired code"),
+  });
+  const emailRemoveMut = useMutation({
+    mutationFn: (email: string) => alertEmailRemove(email),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alert-prefs", "email"] });
+      toast.success("Email address removed");
+    },
+  });
+
+  // SMS number mutations
+  const smsBeginMut = useMutation({
+    mutationFn: (phone: string) => alertSmsBegin(phone),
+    onSuccess: (d) => {
+      setSmsPending({ challengeId: d.challenge_id, sentTo: d.sent_to });
+      setPhoneInput("");
+    },
+    onError: () => toast.error("Failed to send verification SMS"),
+  });
+  const smsConfirmMut = useMutation({
+    mutationFn: ({ id, code }: { id: string; code: string }) => alertSmsConfirm(id, code),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alert-prefs", "sms"] });
+      setSmsPending(null);
+      setSmsCode("");
+      toast.success("Phone number added");
+    },
+    onError: () => toast.error("Invalid or expired code"),
+  });
+  const smsRemoveMut = useMutation({
+    mutationFn: (phone: string) => alertSmsRemove(phone),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["alert-prefs", "sms"] });
+      toast.success("Phone number removed");
     },
   });
 
@@ -163,8 +233,155 @@ export function AlertPrefs() {
     );
   }
 
+  const configuredEmails = emailPrefs.data?.emails ?? [];
+  const configuredSmsNumbers = smsPrefs.data?.sms_numbers ?? [];
+
   return (
     <div className="space-y-6">
+      {/* Alert Email Addresses */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Mail className="h-4 w-4" />
+            Alert Email Addresses
+          </CardTitle>
+          <CardDescription>Verified emails that receive alert notifications</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {configuredEmails.map((addr) => (
+            <div key={addr} className="flex items-center gap-2 rounded-lg border px-3 py-2">
+              <span className="flex-1 text-sm font-mono">{addr}</span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 shrink-0 text-destructive"
+                onClick={() => emailRemoveMut.mutate(addr)}
+                disabled={emailRemoveMut.isPending}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))}
+
+          {!emailPending ? (
+            <div className="flex gap-2">
+              <Input
+                type="email"
+                placeholder="you@example.com"
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && emailInput.trim() && emailBeginMut.mutate(emailInput.trim())}
+              />
+              <Button
+                onClick={() => emailBeginMut.mutate(emailInput.trim())}
+                disabled={!emailInput.trim() || emailBeginMut.isPending}
+              >
+                <Plus className="mr-1 h-3.5 w-3.5" />
+                Add
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-2 rounded-lg border p-3">
+              <p className="text-sm text-muted-foreground">
+                Enter the 6-digit code sent to <strong>{emailPending.sentTo}</strong>
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  maxLength={6}
+                  placeholder="000000"
+                  value={emailCode}
+                  onChange={(e) => setEmailCode(e.target.value)}
+                />
+                <Button
+                  onClick={() => emailConfirmMut.mutate({ id: emailPending.challengeId, code: emailCode })}
+                  disabled={emailCode.length < 6 || emailConfirmMut.isPending}
+                >
+                  Verify
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => { setEmailPending(null); setEmailCode(""); }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Alert SMS Numbers */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Phone className="h-4 w-4" />
+            Alert SMS Numbers
+          </CardTitle>
+          <CardDescription>Verified phone numbers that receive alert notifications</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {configuredSmsNumbers.map((num) => (
+            <div key={num} className="flex items-center gap-2 rounded-lg border px-3 py-2">
+              <span className="flex-1 text-sm font-mono">{num}</span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 shrink-0 text-destructive"
+                onClick={() => smsRemoveMut.mutate(num)}
+                disabled={smsRemoveMut.isPending}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))}
+
+          {!smsPending ? (
+            <div className="flex gap-2">
+              <Input
+                type="tel"
+                placeholder="+1 555 000 0000"
+                value={phoneInput}
+                onChange={(e) => setPhoneInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && phoneInput.trim() && smsBeginMut.mutate(phoneInput.trim())}
+              />
+              <Button
+                onClick={() => smsBeginMut.mutate(phoneInput.trim())}
+                disabled={!phoneInput.trim() || smsBeginMut.isPending}
+              >
+                <Plus className="mr-1 h-3.5 w-3.5" />
+                Add
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-2 rounded-lg border p-3">
+              <p className="text-sm text-muted-foreground">
+                Enter the 6-digit code sent to <strong>{smsPending.sentTo}</strong>
+              </p>
+              <div className="flex gap-2">
+                <Input
+                  maxLength={6}
+                  placeholder="000000"
+                  value={smsCode}
+                  onChange={(e) => setSmsCode(e.target.value)}
+                />
+                <Button
+                  onClick={() => smsConfirmMut.mutate({ id: smsPending.challengeId, code: smsCode })}
+                  disabled={smsCode.length < 6 || smsConfirmMut.isPending}
+                >
+                  Verify
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => { setSmsPending(null); setSmsCode(""); }}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Channel toggles grid */}
       <Card>
         <CardHeader>

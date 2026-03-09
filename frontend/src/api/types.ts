@@ -445,6 +445,32 @@ export interface Address extends AddressIn {
   updated_at: number;
 }
 
+// ─── Address Validation ───────────────────────────────────────────
+
+export interface AddressValidateReq {
+  line1?: string;
+  line2?: string;
+  city?: string;
+  state?: string;
+  postal_code?: string;
+  country?: string;
+}
+
+export interface ValidatedAddressOut {
+  line1: string;
+  line2?: string;
+  city: string;
+  state: string;
+  postal_code: string;
+  country: string;
+}
+
+export interface AddressValidateResp {
+  valid: boolean;
+  dpv_match_code?: string; // "Y"=exact, "S"=street match, "D"=+4 not confirmed, "A"=ambiguous
+  candidates: ValidatedAddressOut[];
+}
+
 // ─── Account ─────────────────────────────────────────────────────
 
 export interface AccountState {
@@ -1182,6 +1208,38 @@ export interface UsageStorageResp {
   storage_bytes_current: number;
   top_files: UsageStorageFileItem[];
 }
+
+
+export interface SftpMountSummary {
+  id: string;
+  owner: string;
+  protocol?: "sftp" | "scp" | "ftp";
+  host: string;
+  port: number;
+  remote_root: string;
+  read_only: boolean;
+  status: string;
+}
+
+export interface MountMockFileItem {
+  name: string;
+  path: string;
+  type: "file" | "folder";
+  size: number;
+  modified_at: number;
+}
+
+export interface MountMockFilesResp {
+  mount_id: string;
+  owner: string;
+  backend: string;
+  path: string;
+  items: MountMockFileItem[];
+  limit: number;
+  cursor?: string | null;
+  filesystem_path?: string | null;
+}
+
 export interface SharedItem {
   owner: string;
   path: string;

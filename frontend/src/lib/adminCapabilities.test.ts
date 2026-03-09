@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   canAccessGeneralAdminControls,
+  canAccessModerationBoard,
   canSeeRootRoleManagement,
   getAdminProfileFromAccessToken,
   getRoleFromAccessToken,
@@ -50,3 +51,16 @@ describe("adminCapabilities", () => {
     expect(canSeeRootRoleManagement(tokenFor({ role: "user" }))).toBe(false);
   });
 });
+
+
+  it("gates moderation board visibility", () => {
+    expect(canAccessModerationBoard(tokenFor({ role: "root" }))).toBe(true);
+    expect(canAccessModerationBoard(tokenFor({ role: "admin" }))).toBe(true);
+    expect(
+      canAccessModerationBoard(tokenFor({ role: "admin", admin_profile: { type: "scoped", scopes: ["content_moderation"] } })),
+    ).toBe(true);
+    expect(
+      canAccessModerationBoard(tokenFor({ role: "admin", admin_profile: { type: "scoped", scopes: ["billing_support"] } })),
+    ).toBe(false);
+    expect(canAccessModerationBoard(tokenFor({ role: "user" }))).toBe(false);
+  });

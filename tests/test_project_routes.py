@@ -210,8 +210,11 @@ class TestProjectRoutes(unittest.TestCase):
             created_at="2026-01-01T00:00:00+00:00",
             updated_at="2026-01-01T00:00:00+00:00",
         )
-        with patch.object(projects, "upsert_provider_credential", return_value=stored) as upsert_provider_credential:
-            out = projects.upsert_provider_credential_route("github", body, user="user-1")
+        with (
+            patch.object(projects, "upsert_provider_credential", return_value=stored) as upsert_provider_credential,
+            patch.object(projects, "audit_event") as audit_event,
+        ):
+            out = projects.upsert_provider_credential_route("github", body, req=None, user="user-1")
         upsert_provider_credential.assert_called_once_with(
             "user-1",
             "github",
@@ -219,9 +222,72 @@ class TestProjectRoutes(unittest.TestCase):
             org=None,
             required_scopes=["repo"],
             api_base_url="https://ghe.local/api/v3",
+            access_key_id=None,
+            secret_access_key=None,
+            session_token=None,
+            region=None,
+            endpoint_url=None,
+            path_style=None,
+            auth_mode=None,
+            validation_bucket=None,
         )
         self.assertEqual(out.provider, "github")
         self.assertEqual(out.scopes, ["repo"])
+        audit_event.assert_called_once()
+        _, audit_kwargs = audit_event.call_args
+        self.assertEqual(audit_kwargs["outcome"], "success")
+        self.assertIn("provider", audit_kwargs)
+        self.assertIn("updated_at", audit_kwargs)
+
+
+    def test_upsert_provider_credential_route_s3_payload(self):
+        body = projects.ProviderCredentialUpsertIn(
+            access_key_id="AKIA123",
+            secret_access_key="super-secret",
+            session_token="sts-token",
+            region="us-east-1",
+            endpoint_url="https://s3.us-east-1.amazonaws.com",
+            path_style=True,
+            auth_mode="session_token",
+            validation_bucket="acme-bucket",
+        )
+        stored = SimpleNamespace(
+            provider="s3",
+            org=None,
+            scopes=[],
+            metadata={"region": "us-east-1", "endpoint_url": "https://s3.us-east-1.amazonaws.com", "path_style": True, "auth_mode": "session_token"},
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        )
+        with (
+            patch.object(projects, "upsert_provider_credential", return_value=stored) as upsert_provider_credential,
+            patch.object(projects, "audit_event") as audit_event,
+        ):
+            out = projects.upsert_provider_credential_route("s3", body, req=None, user="user-1")
+
+        upsert_provider_credential.assert_called_once_with(
+            "user-1",
+            "s3",
+            None,
+            org=None,
+            required_scopes=[],
+            api_base_url=None,
+            access_key_id="AKIA123",
+            secret_access_key="super-secret",
+            session_token="sts-token",
+            region="us-east-1",
+            endpoint_url="https://s3.us-east-1.amazonaws.com",
+            path_style=True,
+            auth_mode="session_token",
+            validation_bucket="acme-bucket",
+        )
+        self.assertEqual(out.provider, "s3")
+        self.assertNotIn("secret", str(out.metadata).lower())
+        audit_event.assert_called_once()
+        _, audit_kwargs = audit_event.call_args
+        self.assertEqual(audit_kwargs["outcome"], "success")
+        self.assertEqual(audit_kwargs["provider"], "s3")
+        self.assertIn("updated_at", audit_kwargs)
 
     def test_upsert_provider_credential_route_google_drive(self):
         body = projects.ProviderCredentialUpsertIn(
@@ -296,7 +362,7 @@ class TestProjectRoutes(unittest.TestCase):
             patch.object(projects, "delete_provider_credential", return_value={"ok": True, "deleted": True}) as delete_provider_credential,
             patch.object(projects, "audit_event") as audit_event,
         ):
-            out = projects.delete_provider_credential_route("github", org=None, user="user-1")
+            out = projects.delete_provider_credential_route("github", org=None, req=None, user="user-1")
         delete_provider_credential.assert_called_once_with("user-1", "github", org=None)
         audit_event.assert_called_once_with(
             "provider_oauth_disconnect",
@@ -308,6 +374,11 @@ class TestProjectRoutes(unittest.TestCase):
         )
         self.assertTrue(out.ok)
         self.assertTrue(out.deleted)
+        audit_event.assert_called_once()
+        _, audit_kwargs = audit_event.call_args
+        self.assertEqual(audit_kwargs["outcome"], "success")
+        self.assertEqual(audit_kwargs["provider"], "github")
+        self.assertIn("deleted", audit_kwargs)
 
 
     def test_openapi_includes_project_crud_paths(self):

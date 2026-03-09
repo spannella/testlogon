@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import uuid
 import time
-from typing import Annotated, Any, Dict, List, Optional
+import threading
+from typing import Annotated, Any, Dict, List, Optional, Literal
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile, Body, Request, HTTPException
 from pydantic import BaseModel, Field
@@ -26,6 +28,9 @@ from app.services.filemanager import (
     list_children,
     list_children_dispatched,
     list_children_page,
+    list_mounted_directory,
+    download_mounted_file,
+    resolve_path_mount,
     list_shared_with,
     list_shared_with_me,
     move_node,
@@ -35,6 +40,7 @@ from app.services.filemanager import (
     norm_path,
     remove_file,
     remove_file_dispatched,
+    delete_mounted_file,
     remove_folder,
     remove_folder_dispatched,
     search_prefix,
@@ -43,6 +49,7 @@ from app.services.filemanager import (
     split_parent_name,
     upload_file,
     upload_file_dispatched,
+    upload_mounted_file,
     upload_zip,
     upload_archive,
     get_node,
@@ -57,6 +64,9 @@ from app.services.filemanager import (
     preview_capability_from_node,
     record_download_usage,
     resolve_path_dispatch,
+    record_upload_usage,
+    record_operation_usage,
+    assert_upload_allowed,
     get_usage_summary,
     get_usage_daily,
     get_usage_storage,
@@ -89,8 +99,38 @@ from app.services.mounts_store import (
     set_mount_status,
     update_mount,
 )
+from app.services.file_mounts import (
+    create_file_mount as create_file_mount_record,
+    delete_file_mount as delete_file_mount_record,
+    get_file_mount as get_file_mount_record,
+    list_file_mounts as list_file_mounts_records,
+    update_file_mount as update_file_mount_record,
+)
+from app.services.sftp_mounts import (
+    create_sftp_mount,
+    delete_sftp_mount,
+    get_sftp_mount,
+    list_sftp_mounts as list_sftp_mount_records,
+    update_sftp_mount,
+)
+from app.services.sftp_credentials import (
+    delete_sftp_credential,
+    get_sftp_credential,
+    upsert_sftp_credential,
+)
+from app.services.sftp_client import (
+    SftpConnectionConfig,
+    acquire_sftp_session,
+    release_sftp_session,
+)
+from app.services.filemanager_storage import resolve_storage_provider
 
 router = APIRouter(prefix="/v1/fs", tags=["filemanager"])
+
+_SFTP_HEALTH_REFRESH_LOCK = threading.Lock()
+_SFTP_HEALTH_REFRESH_LAST_RUN_TS = 0.0
+_SFTP_MOCK_INSPECT_RATE_LOCK = threading.Lock()
+_SFTP_MOCK_INSPECT_RATE: Dict[str, List[float]] = {}
 
 
 def _enforce_filemanager_internal_entitlement(
@@ -106,6 +146,16 @@ def _enforce_filemanager_internal_entitlement(
         action=action,
         request_id=req_id,
     )
+
+
+def _require_s3_mounts_enabled() -> None:
+    if not bool(getattr(S, "filemgr_s3_mounts_enabled", False)):
+        raise HTTPException(status_code=404, detail="not found")
+
+
+def _require_s3_mounts_write_enabled() -> None:
+    if not bool(getattr(S, "filemgr_s3_mounts_write_enabled", False)):
+        raise HTTPException(status_code=403, detail={"code": "feature_disabled", "feature": "filemgr_s3_mounts_write"})
 
 
 def _encode_cursor(cursor: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -209,6 +259,41 @@ def _admin_can_read_content(ctx: Dict[str, Any]) -> bool:
     return False
 
 
+def _is_admin_or_root_ctx(ctx: Optional[Dict[str, Any]]) -> bool:
+    role = normalize_role((ctx or {}).get("role"))
+    return role in {Role.ADMIN, Role.ROOT}
+
+
+def _resolve_mount_owner(*, ctx: Dict[str, Any], owner: Optional[str]) -> str:
+    current_user = str((ctx or {}).get("user_sub") or "").strip()
+    requested_owner = str(owner).strip() if isinstance(owner, str) else ""
+    if not requested_owner or requested_owner == current_user:
+        return current_user
+    if not _is_admin_or_root_ctx(ctx):
+        raise HTTPException(status_code=403, detail={"code": "mount_forbidden_owner", "message": "cannot access mounts for another owner"})
+    return requested_owner
+
+
+def _mount_to_api(mount: Any) -> Dict[str, Any]:
+    return {
+        "id": str(mount.id),
+        "owner": str(mount.owner),
+        "protocol": str(getattr(mount, "protocol", "sftp") or "sftp"),
+        "host": str(mount.host),
+        "port": int(mount.port),
+        "auth_credential_ref": str(mount.auth_credential_ref),
+        "remote_root": str(mount.remote_root),
+        "read_only": bool(mount.read_only),
+        "status": str(mount.status),
+        "created_at": mount.created_at,
+        "updated_at": mount.updated_at,
+        "last_tested_at": mount.last_tested_at,
+        "last_status_change_at": mount.last_status_change_at,
+        "last_error_code": mount.last_error_code,
+        "last_error_message": mount.last_error_message,
+    }
+
+
 def _file_audit_fields(
     *,
     ctx: Optional[Dict[str, Any]] = None,
@@ -246,6 +331,237 @@ def _parse_encryption_meta(raw: Optional[str]) -> Optional[Dict[str, Any]]:
     if not isinstance(obj, dict):
         raise HTTPException(status_code=400, detail="invalid encryption metadata")
     return obj
+
+
+def _looks_like_sftp_mount_path(path: Optional[str]) -> bool:
+    if not isinstance(path, str):
+        return False
+    p = path.strip()
+    if not p:
+        return False
+    if not p.startswith("/"):
+        p = "/" + p
+    return p == "/mounts" or p == "/mounts/" or p.startswith("/mounts/")
+
+
+def _raise_sftp_mount_flag_error(code: str, message: str) -> None:
+    raise HTTPException(status_code=403, detail={"code": code, "message": message})
+
+
+def _enforce_sftp_mount_flags_for_path(path: Optional[str], *, operation: str) -> None:
+    if not _looks_like_sftp_mount_path(path):
+        return
+    if not bool(getattr(S, "filemgr_sftp_mounts_enabled", False)):
+        _raise_sftp_mount_flag_error("sftp_mounts_disabled", "sftp mounts are not enabled")
+    if operation == "write" and not bool(getattr(S, "filemgr_sftp_mounts_write_enabled", False)):
+        _raise_sftp_mount_flag_error("sftp_mount_writes_disabled", "sftp mount write operations are disabled")
+    if operation == "share" and not bool(getattr(S, "filemgr_sftp_mounts_share_enabled", False)):
+        _raise_sftp_mount_flag_error("sftp_mount_shares_disabled", "sftp mount sharing is disabled")
+
+
+def _enforce_sftp_mount_flags_for_paths(paths: List[str], *, operation: str) -> None:
+    for p in paths:
+        _enforce_sftp_mount_flags_for_path(p, operation=operation)
+
+
+def _extract_mount_id_from_path(path: Optional[str]) -> Optional[str]:
+    if not _looks_like_sftp_mount_path(path):
+        return None
+    p = str(path or "").strip()
+    if not p.startswith("/"):
+        p = "/" + p
+    parts = [seg for seg in p.split("/") if seg]
+    if len(parts) < 2 or parts[0] != "mounts":
+        raise HTTPException(status_code=400, detail={"code": "invalid_mount_path", "message": "invalid mount path"})
+    mount_id = str(parts[1] or "").strip()
+    if not mount_id:
+        raise HTTPException(status_code=400, detail={"code": "invalid_mount_path", "message": "invalid mount id"})
+    return mount_id
+
+
+def _enforce_sftp_mount_status_for_path(path: Optional[str], *, owner: str, operation: str) -> None:
+    if operation not in {"read", "write", "share"}:
+        return
+    mount_id = _extract_mount_id_from_path(path)
+    if not mount_id:
+        return
+    mount = get_sftp_mount(owner=owner, mount_id=mount_id)
+    if str(mount.status or "").lower() == "disabled":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "mount_disabled",
+                "message": "sftp mount is disabled or revoked",
+                "mount_id": mount_id,
+            },
+        )
+
+
+def _enforce_sftp_mount_status_for_paths(paths: List[str], *, owner: str, operation: str) -> None:
+    for p in paths:
+        _enforce_sftp_mount_status_for_path(p, owner=owner, operation=operation)
+
+
+
+
+def _enforce_sftp_mount_share_policy(path: Optional[str]) -> None:
+    if not _looks_like_sftp_mount_path(path):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "code": "sftp_mount_share_not_allowed",
+            "message": "sharing mounted sftp paths is not currently supported",
+        },
+    )
+def _storage_audit_fields_for_path(path: Optional[str]) -> Dict[str, Any]:
+    mount_id = _extract_mount_id_from_path(path)
+    if mount_id:
+        return {"storage_backend": "sftp", "mount_id": mount_id}
+    return {"storage_backend": "s3"}
+
+
+
+
+def _emit_sftp_mount_audit(
+    event: str,
+    *,
+    actor_sub: str,
+    req: Optional[Request] = None,
+    owner: str,
+    mount_id: Optional[str] = None,
+    path: Optional[str] = None,
+    outcome: str = "success",
+    **extra: Any,
+) -> None:
+    details: Dict[str, Any] = {
+        "owner": owner,
+        "storage_backend": "sftp",
+    }
+    if mount_id:
+        details["mount_id"] = mount_id
+    if path:
+        details["path"] = path
+    details.update(extra)
+    audit_event(event, actor_sub, req, outcome=outcome, **details)
+def _storage_audit_fields_for_move(src: Optional[str], dst: Optional[str]) -> Dict[str, Any]:
+    src_mount_id = _extract_mount_id_from_path(src)
+    dst_mount_id = _extract_mount_id_from_path(dst)
+    if src_mount_id or dst_mount_id:
+        out: Dict[str, Any] = {"storage_backend": "sftp"}
+        if src_mount_id:
+            out["src_mount_id"] = src_mount_id
+        if dst_mount_id:
+            out["dst_mount_id"] = dst_mount_id
+        if src_mount_id and src_mount_id == dst_mount_id:
+            out["mount_id"] = src_mount_id
+        return out
+    return {"storage_backend": "s3"}
+
+def _enforce_mock_inspection_rate_limit(*, actor_sub: str, owner: str, mount_id: str) -> None:
+    per_minute = max(1, int(getattr(S, "filemgr_sftp_mock_rate_limit_per_minute", 120) or 120))
+    now = time.time()
+    window_start = now - 60.0
+    key = f"{actor_sub}|{owner}|{mount_id}"
+    with _SFTP_MOCK_INSPECT_RATE_LOCK:
+        seq = [ts for ts in _SFTP_MOCK_INSPECT_RATE.get(key, []) if ts >= window_start]
+        if len(seq) >= per_minute:
+            _SFTP_MOCK_INSPECT_RATE[key] = seq
+            raise _mock_files_error(429, "sftp_mock_rate_limited", "mock inspection rate limit exceeded")
+        seq.append(now)
+        _SFTP_MOCK_INSPECT_RATE[key] = seq
+
+
+def _mock_files_error(status_code: int, code: str, message: str, *, path: Optional[str] = None) -> HTTPException:
+    detail: Dict[str, Any] = {"code": code, "message": message}
+    if path is not None:
+        detail["path"] = path
+    return HTTPException(status_code=status_code, detail=detail)
+
+
+def _list_mock_sftp_dir(
+    *,
+    owner: str,
+    mount_id: str,
+    sub_path: str,
+    limit: int = 200,
+    cursor: Optional[str] = None,
+    actor_sub: Optional[str] = None,
+) -> Dict[str, Any]:
+    backend = str(getattr(S, "filemgr_sftp_backend", "paramiko") or "paramiko").strip().lower()
+    rel = (sub_path or "/").strip() or "/"
+    if backend != "mock":
+        raise _mock_files_error(409, "sftp_mock_backend_disabled", "mock backend is disabled", path=rel)
+
+    if actor_sub:
+        _enforce_mock_inspection_rate_limit(actor_sub=actor_sub, owner=owner, mount_id=mount_id)
+
+    if not isinstance(limit, int) or limit < 1 or limit > 1000:
+        raise _mock_files_error(400, "mock_path_invalid_limit", "limit must be between 1 and 1000", path=rel)
+
+    cursor_payload = _decode_cursor(cursor)
+    if cursor_payload and cursor_payload.get("mode") not in {"offset", None}:
+        raise _mock_files_error(400, "mock_path_invalid_cursor", "invalid cursor", path=rel)
+    offset = int((cursor_payload or {}).get("offset", 0) or 0)
+    if offset < 0:
+        raise _mock_files_error(400, "mock_path_invalid_cursor", "invalid cursor", path=rel)
+
+    depth_max = max(1, int(getattr(S, "filemgr_sftp_mock_path_max_depth", 32) or 32))
+    rel_parts = [p for p in rel.split("/") if p and p not in {"."}]
+    if any(p == ".." for p in rel_parts) or len(rel_parts) > depth_max:
+        raise _mock_files_error(400, "mock_path_invalid", "invalid mock path", path=rel)
+
+    root = str(getattr(S, "filemgr_sftp_mock_root_dir", "/tmp/filemgr-sftp-mock") or "/tmp/filemgr-sftp-mock")
+    mount_root = os.path.abspath(os.path.join(root, owner, mount_id))
+    rel_clean = rel.lstrip("/")
+    target = os.path.abspath(os.path.join(mount_root, rel_clean))
+    if not target.startswith(mount_root):
+        raise _mock_files_error(400, "mock_path_invalid", "invalid mock path", path=rel)
+    if not os.path.exists(target):
+        raise _mock_files_error(404, "mock_path_not_found", "mock path not found", path=rel)
+    if not os.path.isdir(target):
+        raise _mock_files_error(400, "mock_path_not_directory", "mock path must be a directory", path=rel)
+
+    scan_cap = max(1, int(getattr(S, "filemgr_sftp_mock_scan_max_entries", 5000) or 5000))
+    entries: List[os.DirEntry] = []
+    with os.scandir(target) as it:
+        for idx, ent in enumerate(it, start=1):
+            if idx > scan_cap:
+                raise _mock_files_error(413, "mock_path_scan_limit_exceeded", "mock directory scan limit exceeded", path=rel)
+            entries.append(ent)
+
+    entries.sort(key=lambda ent: str(ent.name).lower())
+    items: List[Dict[str, Any]] = []
+    for ent in entries:
+        full = ent.path
+        st = ent.stat()
+        rel_item = os.path.relpath(full, mount_root).replace("\\", "/")
+        rel_item = "/" + rel_item.lstrip("/")
+        is_dir = ent.is_dir()
+        if is_dir:
+            rel_item = rel_item.rstrip("/") + "/"
+        items.append({
+            "name": ent.name,
+            "path": rel_item,
+            "type": "folder" if is_dir else "file",
+            "size": int(st.st_size) if ent.is_file() else 0,
+            "modified_at": int(st.st_mtime),
+        })
+
+    paged = items[offset: offset + limit]
+    next_payload = None
+    if offset + len(paged) < len(items):
+        next_payload = {"mode": "offset", "offset": offset + len(paged)}
+
+    return {
+        "backend": backend,
+        "root": mount_root,
+        "filesystem_path": target,
+        "path": "/" + rel_clean if rel_clean else "/",
+        "items": paged,
+        "limit": limit,
+        "cursor": _encode_cursor(next_payload),
+    }
 
 
 class PresignUploadIn(BaseModel):
@@ -336,6 +652,149 @@ class MountReconcileListOut(BaseModel):
     items: List[MountReconcileOut] = Field(default_factory=list)
 
 
+class FileMountOut(BaseModel):
+    id: str
+    owner: str
+    provider: str
+    mount_path: str
+    bucket: str
+    prefix: Optional[str] = None
+    mode: str
+    auth_ref: str
+    status: str
+    created_at: str
+    updated_at: str
+    last_check_at: Optional[str] = None
+    last_error: Optional[str] = None
+
+
+class FileMountsListOut(BaseModel):
+    items: List[FileMountOut] = Field(default_factory=list)
+
+
+class FileMountCreateIn(BaseModel):
+    mount_path: str = Field(..., min_length=1, max_length=2048)
+    bucket: str = Field(..., min_length=3, max_length=255)
+    prefix: Optional[str] = Field(default=None, max_length=2048)
+    mode: Literal["read_only", "read_write"] = "read_only"
+    auth_ref: str = Field(..., min_length=1, max_length=256)
+    status: Literal["active", "degraded", "error", "disabled"] = "active"
+
+
+class FileMountUpdateIn(BaseModel):
+    mount_path: Optional[str] = Field(default=None, min_length=1, max_length=2048)
+    bucket: Optional[str] = Field(default=None, min_length=3, max_length=255)
+    prefix: Optional[str] = Field(default=None, max_length=2048)
+    mode: Optional[Literal["read_only", "read_write"]] = None
+    auth_ref: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    status: Optional[Literal["active", "degraded", "error", "disabled"]] = None
+
+
+class DeleteFileMountOut(BaseModel):
+    ok: bool
+    deleted: bool
+
+
+class ValidateFileMountOut(BaseModel):
+    ok: bool
+    mount_id: str
+    status: str
+
+
+@router.get("/mounts", response_model=FileMountsListOut)
+def list_file_mounts(user: str = Depends(_current_user)):
+    _require_s3_mounts_enabled()
+    items = [FileMountOut(**m.model_dump()) for m in list_file_mounts_records(user)]
+    return FileMountsListOut(items=items)
+
+
+@router.post("/mounts", response_model=FileMountOut)
+def create_file_mount(body: FileMountCreateIn, user: str = Depends(_current_user)):
+    _require_s3_mounts_enabled()
+    _require_s3_mounts_write_enabled()
+    out = create_file_mount_record(
+        user,
+        mount_path=body.mount_path,
+        bucket=body.bucket,
+        prefix=body.prefix,
+        mode=body.mode,
+        auth_ref=body.auth_ref,
+        status=body.status,
+    )
+    return FileMountOut(**out.model_dump())
+
+
+@router.get("/mounts/{mount_id}", response_model=FileMountOut)
+def get_file_mount(mount_id: str, user: str = Depends(_current_user)):
+    _require_s3_mounts_enabled()
+    out = get_file_mount_record(user, mount_id)
+    return FileMountOut(**out.model_dump())
+
+
+@router.patch("/mounts/{mount_id}", response_model=FileMountOut)
+def update_file_mount(mount_id: str, body: FileMountUpdateIn, user: str = Depends(_current_user)):
+    _require_s3_mounts_enabled()
+    _require_s3_mounts_write_enabled()
+    out = update_file_mount_record(
+        user,
+        mount_id,
+        mount_path=body.mount_path,
+        bucket=body.bucket,
+        prefix=body.prefix,
+        mode=body.mode,
+        auth_ref=body.auth_ref,
+        status=body.status,
+    )
+    return FileMountOut(**out.model_dump())
+
+
+@router.delete("/mounts/{mount_id}", response_model=DeleteFileMountOut)
+def delete_file_mount(mount_id: str, user: str = Depends(_current_user)):
+    _require_s3_mounts_enabled()
+    _require_s3_mounts_write_enabled()
+    return DeleteFileMountOut(**delete_file_mount_record(user, mount_id))
+
+
+@router.post("/mounts/{mount_id}/validate", response_model=ValidateFileMountOut)
+def validate_file_mount(mount_id: str, user: str = Depends(_current_user)):
+    _require_s3_mounts_enabled()
+    mount = get_file_mount_record(user, mount_id)
+    return ValidateFileMountOut(ok=True, mount_id=mount.id, status=mount.status)
+
+
+class CreateSftpMountIn(BaseModel):
+    protocol: str = Field(default="sftp", pattern="^(sftp|scp|ftp)$")
+    host: str = Field(..., min_length=1)
+    port: int = Field(default=22, ge=1, le=65535)
+    auth_credential_ref: str = Field(..., min_length=1)
+    remote_root: str = Field(..., min_length=1)
+    read_only: bool = Field(default=False)
+
+
+class UpdateSftpMountIn(BaseModel):
+    protocol: Optional[str] = Field(default=None, pattern="^(sftp|scp|ftp)$")
+    host: Optional[str] = None
+    port: Optional[int] = Field(default=None, ge=1, le=65535)
+    auth_credential_ref: Optional[str] = None
+    remote_root: Optional[str] = None
+    read_only: Optional[bool] = None
+    status: Optional[str] = Field(default=None, pattern="^(healthy|degraded|auth_failed|unreachable|disabled)$")
+
+
+class RotateSftpMountCredentialIn(BaseModel):
+    auth_mode: str = Field(..., pattern="^(password|private_key)$")
+    username: str = Field(..., min_length=1)
+    password: Optional[str] = None
+    private_key: Optional[str] = None
+    private_key_passphrase: Optional[str] = None
+    auth_credential_ref: Optional[str] = None
+
+
+class RevokeSftpMountIn(BaseModel):
+    revoke_credential: bool = Field(default=True)
+    disable_mount: bool = Field(default=True)
+
+
 @router.get("/list")
 def list_files(
     path: str = Query("/", description="Folder path"),
@@ -352,8 +811,51 @@ def list_files(
         sort_by = "name"
     if not isinstance(sort_dir, str):
         sort_dir = "asc"
+    _enforce_sftp_mount_flags_for_path(path, operation="read")
+    _enforce_sftp_mount_status_for_path(path, owner=user, operation="read")
     folder = norm_path(path, is_folder=True)
     cursor_payload = _decode_cursor(cursor)
+    resolved_provider = resolve_storage_provider(user, folder)
+    if resolved_provider.backend == "sftp":
+        if cursor_payload and cursor_payload.get("mode") not in {"offset", None}:
+            raise HTTPException(status_code=400, detail="invalid cursor")
+        items = resolved_provider.provider.list_dir(user, folder)
+        out = []
+        for it in items:
+            if it.get("parent") == folder:
+                out.append({
+                    "path": it.get("path"),
+                    "type": it.get("type"),
+                    "name": it.get("name"),
+                    "size": it.get("size"),
+                    "updated_at": it.get("updated_at"),
+                    "content_type": it.get("content_type"),
+                    **encryption_info_from_node(it),
+                    **preview_capability_from_node(it),
+                })
+        scan_forward = sort_dir == "asc"
+        if sort_by == "updated":
+            out.sort(key=lambda x: (x["type"] != "folder", x.get("updated_at") or ""), reverse=not scan_forward)
+        elif sort_by == "size":
+            out.sort(key=lambda x: (x["type"] != "folder", x.get("size") or 0, (x.get("name") or "").lower()), reverse=not scan_forward)
+        else:
+            out.sort(key=lambda x: (x["type"] != "folder", (x.get("name") or "").lower()), reverse=not scan_forward)
+        offset = 0
+        if cursor_payload:
+            offset = int(cursor_payload.get("offset", 0) or 0)
+        paged = out[offset:offset + limit]
+        next_offset = offset + limit
+        next_payload = {"mode": "offset", "offset": next_offset} if next_offset < len(out) else None
+        record_operation_usage(user, folder, operation="list", backend="sftp")
+        _emit_sftp_mount_audit(
+            "filemgr_sftp_data_listed",
+            actor_sub=user,
+            owner=user,
+            mount_id=_extract_mount_id_from_path(folder),
+            path=folder,
+            item_count=len(paged),
+        )
+        return {"path": folder, "items": paged, "cursor": _encode_cursor(next_payload)}
     scan_forward = sort_dir == "asc"
     dispatch = resolve_path_dispatch(user, folder)
     if dispatch["kind"] == "mount":
@@ -361,26 +863,45 @@ def list_files(
             raise HTTPException(status_code=400, detail="invalid cursor")
         items = list_children_dispatched(user, folder)
         next_cursor = None
-    elif sort_by == "name":
-        if cursor_payload and cursor_payload.get("mode") not in {"ddb", None}:
-            raise HTTPException(status_code=400, detail="invalid cursor")
-        cursor_key = cursor_payload.get("key") if cursor_payload else None
-        try:
-            items, next_cursor = list_children_page(
-                user,
-                folder,
-                limit=limit,
-                cursor=cursor_key,
-                scan_forward=scan_forward,
-            )
-        except HTTPException:
+    else:
+        mount = resolve_path_mount(user, folder, is_folder=True)
+        if mount:
+            if cursor_payload and cursor_payload.get("mode") not in {"mount", None}:
+                raise HTTPException(status_code=400, detail="invalid cursor")
+            mount_cursor = cursor_payload.get("token") if cursor_payload else None
+            listing = list_mounted_directory(user, folder, limit=limit, cursor=mount_cursor)
+            out = listing.get("items") or []
+            if sort_by == "updated":
+                out.sort(key=lambda x: (x["type"] != "folder", x.get("updated_at") or ""), reverse=not scan_forward)
+            elif sort_by == "size":
+                out.sort(key=lambda x: (x["type"] != "folder", x.get("size") or 0, (x.get("name") or "").lower()), reverse=not scan_forward)
+            elif sort_by == "name":
+                out.sort(key=lambda x: (x["type"] != "folder", (x.get("name") or "").lower()), reverse=not scan_forward)
+            next_token = listing.get("cursor")
+            next_payload = {"mode": "mount", "token": next_token} if next_token else None
+            return {"path": folder, "items": out, "cursor": _encode_cursor(next_payload)}
+
+    if dispatch["kind"] != "mount":
+        if sort_by == "name":
+            if cursor_payload and cursor_payload.get("mode") not in {"ddb", None}:
+                raise HTTPException(status_code=400, detail="invalid cursor")
+            cursor_key = cursor_payload.get("key") if cursor_payload else None
+            try:
+                items, next_cursor = list_children_page(
+                    user,
+                    folder,
+                    limit=limit,
+                    cursor=cursor_key,
+                    scan_forward=scan_forward,
+                )
+            except HTTPException:
+                items = list_children(user, folder)
+                next_cursor = None
+        else:
+            if cursor_payload and cursor_payload.get("mode") != "offset":
+                raise HTTPException(status_code=400, detail="invalid cursor")
             items = list_children(user, folder)
             next_cursor = None
-    else:
-        if cursor_payload and cursor_payload.get("mode") != "offset":
-            raise HTTPException(status_code=400, detail="invalid cursor")
-        items = list_children(user, folder)
-        next_cursor = None
     out = []
     for it in items:
         if it.get("parent") == folder:
@@ -419,8 +940,22 @@ def list_files(
 
 @router.get("/info")
 def file_info(path: str = Query(...), user: str = Depends(_current_user)):
+    _enforce_sftp_mount_flags_for_path(path, operation="read")
+    _enforce_sftp_mount_status_for_path(path, owner=user, operation="read")
     p = norm_path(path, is_folder=None)
-    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+    resolved_provider = resolve_storage_provider(user, p)
+    if resolved_provider.backend == "sftp":
+        it = resolved_provider.provider.stat(user, p)
+        record_operation_usage(user, p, operation="read", backend="sftp")
+        _emit_sftp_mount_audit(
+            "filemgr_sftp_data_read",
+            actor_sub=user,
+            owner=user,
+            mount_id=_extract_mount_id_from_path(p),
+            path=p,
+            node_type=str(it.get("type") or "unknown"),
+        )
+    elif bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
         it = get_node_dispatched(user, p if p.endswith("/") else p)
     else:
         it = get_node(user, p if p.endswith("/") else p)
@@ -645,14 +1180,401 @@ def admin_file_audit(
     return {"items": page, "cursor": next_cursor}
 
 
+def _probe_sftp_mount_health(*, owner: str, mount_id: str, actor_sub: str) -> Dict[str, Any]:
+    mount = get_sftp_mount(owner=owner, mount_id=mount_id)
+    previous_status = str(mount.status or "")
+    next_status = "healthy"
+    err_code = None
+    err_message = None
+    ok = True
+    try:
+        cred = get_sftp_credential(owner=owner, mount_id=str(mount.auth_credential_ref), include_secret=True, actor_sub=actor_sub)
+        secret = cred.get("secret") or {}
+        session = acquire_sftp_session(
+            SftpConnectionConfig(
+                owner=owner,
+                mount_id=str(mount.id),
+                host=str(mount.host),
+                port=int(mount.port),
+                username=str(cred.get("username") or ""),
+                auth_mode=str(cred.get("auth_mode") or ""),
+                password=secret.get("password"),
+                private_key=secret.get("private_key"),
+                private_key_passphrase=secret.get("private_key_passphrase"),
+                expected_host_key=None,
+            )
+        )
+        release_sftp_session(session)
+    except HTTPException as exc:
+        ok = False
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        if exc.status_code == 404:
+            next_status = "auth_failed"
+            err_code = "credential_not_found"
+            err_message = "credential reference for mount could not be resolved"
+        elif str(detail.get("code") or "").startswith("auth_"):
+            next_status = "auth_failed"
+            err_code = str(detail.get("code") or "auth_failed")
+            err_message = str(detail.get("message") or "sftp authentication failed")
+        elif str(detail.get("code") or "").startswith("host_key"):
+            next_status = "auth_failed"
+            err_code = str(detail.get("code") or "host_key_verification_failed")
+            err_message = str(detail.get("message") or "sftp host key verification failed")
+        elif str(detail.get("code") or "") in {"network_timeout", "network_unreachable", "connection_failed", "pool_exhausted"}:
+            next_status = "unreachable"
+            err_code = str(detail.get("code") or "connection_test_failed")
+            err_message = str(detail.get("message") or "sftp endpoint is currently unreachable")
+        else:
+            next_status = "degraded"
+            err_code = str(detail.get("code") or "connection_test_failed")
+            err_message = str(detail.get("message") or "unable to access credential for mount test")
+
+    updated = update_sftp_mount(
+        owner=owner,
+        mount_id=mount_id,
+        status=next_status,
+        last_tested_at=str(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())),
+        last_error_code=err_code,
+        last_error_message=err_message,
+    )
+    return {
+        "ok": ok,
+        "mount": updated,
+        "previous_status": previous_status,
+        "status_changed": previous_status != str(updated.status or ""),
+    }
+
+
+def _maybe_refresh_mount_health_for_owner(*, owner: str, actor_sub: str, req: Optional[Request] = None) -> None:
+    global _SFTP_HEALTH_REFRESH_LAST_RUN_TS
+    if not bool(getattr(S, "filemgr_sftp_health_refresh_enabled", False)):
+        return
+    interval_seconds = max(5, int(getattr(S, "filemgr_sftp_health_refresh_interval_seconds", 300) or 300))
+    limit = max(1, int(getattr(S, "filemgr_sftp_health_refresh_limit", 20) or 20))
+    now = time.time()
+    with _SFTP_HEALTH_REFRESH_LOCK:
+        if now - _SFTP_HEALTH_REFRESH_LAST_RUN_TS < interval_seconds:
+            return
+        _SFTP_HEALTH_REFRESH_LAST_RUN_TS = now
+
+    mounts = list_sftp_mount_records(owner=owner, limit=limit)
+    for mount in mounts:
+        if str(getattr(mount, "status", "")).lower() == "disabled":
+            continue
+        try:
+            probe = _probe_sftp_mount_health(owner=owner, mount_id=str(mount.id), actor_sub=actor_sub)
+            audit_event(
+                "filemgr_sftp_mount_health_refresh",
+                actor_sub,
+                req,
+                outcome=("success" if probe["ok"] else "failure"),
+                owner=owner,
+                mount_id=str(mount.id),
+                previous_status=probe["previous_status"],
+                status=str(probe["mount"].status),
+                status_changed=bool(probe["status_changed"]),
+                last_error_code=probe["mount"].last_error_code,
+            )
+        except HTTPException as exc:
+            audit_event(
+                "filemgr_sftp_mount_health_refresh",
+                actor_sub,
+                req,
+                outcome="failure",
+                owner=owner,
+                mount_id=str(mount.id),
+                status="unknown",
+                status_changed=False,
+                last_error_code=(exc.detail.get("code") if isinstance(exc.detail, dict) else None),
+            )
+
+
+@router.post("/mounts/sftp")
+def create_sftp_mount_endpoint(
+    inp: CreateSftpMountIn,
+    owner: Optional[str] = Query(default=None, description="Optional owner (admin/root only)"),
+    req: Request = None,
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+):
+    resolved_owner = _resolve_mount_owner(ctx=ctx, owner=owner)
+    mount = create_sftp_mount(
+        owner=resolved_owner,
+        host=inp.host,
+        port=inp.port,
+        auth_credential_ref=inp.auth_credential_ref,
+        remote_root=inp.remote_root,
+        read_only=inp.read_only,
+        protocol=inp.protocol,
+    )
+    audit_event(
+        "filemgr_sftp_mount_created",
+        str(ctx.get("user_sub") or resolved_owner),
+        req,
+        outcome="success",
+        owner=resolved_owner,
+        mount_id=str(mount.id),
+    )
+    return {"ok": True, "mount": _mount_to_api(mount)}
+
+
+@router.get("/mounts")
+def list_sftp_mounts_endpoint(
+    owner: Optional[str] = Query(default=None, description="Optional owner (admin/root only)"),
+    limit: int = Query(100, ge=1, le=500),
+    req: Request = None,
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+):
+    resolved_owner = _resolve_mount_owner(ctx=ctx, owner=owner)
+    if not isinstance(limit, int):
+        limit = 100
+    _maybe_refresh_mount_health_for_owner(owner=resolved_owner, actor_sub=str(ctx.get("user_sub") or resolved_owner), req=req)
+    items = list_sftp_mount_records(owner=resolved_owner, limit=limit)
+    audit_event(
+        "filemgr_sftp_mount_listed",
+        str(ctx.get("user_sub") or resolved_owner),
+        req,
+        outcome="success",
+        owner=resolved_owner,
+        count=len(items),
+    )
+    return {"items": [_mount_to_api(m) for m in items]}
+
+
+@router.get("/mounts/{mount_id}/mock-files")
+def list_sftp_mount_mock_files_endpoint(
+    mount_id: str,
+    path: str = Query("/"),
+    limit: int = Query(200, ge=1, le=1000),
+    cursor: Optional[str] = Query(default=None),
+    owner: Optional[str] = Query(default=None),
+    req: Request = None,
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+):
+    actor_sub = str(ctx.get("user_sub") or "")
+    resolved_owner = _resolve_mount_owner(ctx=ctx, owner=owner)
+    owner_scope = "self" if resolved_owner == actor_sub else "admin_scoped"
+    _ = get_sftp_mount(owner=resolved_owner, mount_id=mount_id)
+    try:
+        listing = _list_mock_sftp_dir(
+            owner=resolved_owner,
+            mount_id=mount_id,
+            sub_path=path,
+            limit=limit,
+            cursor=cursor,
+            actor_sub=actor_sub,
+        )
+    except HTTPException as exc:
+        audit_event(
+            "filemgr_sftp_mock_inspection",
+            actor_sub or resolved_owner,
+            req,
+            outcome="failure",
+            owner=resolved_owner,
+            mount_id=mount_id,
+            path=path,
+            owner_scope=owner_scope,
+            code=(exc.detail.get("code") if isinstance(exc.detail, dict) else None),
+        )
+        raise
+
+    audit_event(
+        "filemgr_sftp_mock_inspection",
+        actor_sub or resolved_owner,
+        req,
+        outcome="success",
+        owner=resolved_owner,
+        mount_id=mount_id,
+        path=listing.get("path") or path,
+        owner_scope=owner_scope,
+        item_count=len(listing.get("items") or []),
+        has_more=bool(listing.get("cursor")),
+    )
+    return {
+        "mount_id": mount_id,
+        "owner": resolved_owner,
+        "backend": listing["backend"],
+        "path": listing["path"],
+        "items": listing["items"],
+        "limit": listing["limit"],
+        "cursor": listing["cursor"],
+        "filesystem_path": listing.get("filesystem_path"),
+    }
+
+
+@router.patch("/mounts/{mount_id}")
+def update_sftp_mount_endpoint(
+    mount_id: str,
+    inp: UpdateSftpMountIn,
+    owner: Optional[str] = Query(default=None, description="Optional owner (admin/root only)"),
+    req: Request = None,
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+):
+    resolved_owner = _resolve_mount_owner(ctx=ctx, owner=owner)
+    mount = update_sftp_mount(
+        owner=resolved_owner,
+        mount_id=mount_id,
+        host=inp.host,
+        port=inp.port,
+        auth_credential_ref=inp.auth_credential_ref,
+        remote_root=inp.remote_root,
+        read_only=inp.read_only,
+        status=inp.status,
+        protocol=inp.protocol,
+    )
+    audit_event(
+        "filemgr_sftp_mount_updated",
+        str(ctx.get("user_sub") or resolved_owner),
+        req,
+        outcome="success",
+        owner=resolved_owner,
+        mount_id=mount_id,
+    )
+    return {"ok": True, "mount": _mount_to_api(mount)}
+
+
+@router.delete("/mounts/{mount_id}")
+def delete_sftp_mount_endpoint(
+    mount_id: str,
+    owner: Optional[str] = Query(default=None, description="Optional owner (admin/root only)"),
+    req: Request = None,
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+):
+    resolved_owner = _resolve_mount_owner(ctx=ctx, owner=owner)
+    delete_sftp_mount(owner=resolved_owner, mount_id=mount_id)
+    audit_event(
+        "filemgr_sftp_mount_deleted",
+        str(ctx.get("user_sub") or resolved_owner),
+        req,
+        outcome="success",
+        owner=resolved_owner,
+        mount_id=mount_id,
+    )
+    return {"ok": True, "mount_id": mount_id}
+
+
+@router.post("/mounts/{mount_id}/test")
+def test_sftp_mount_endpoint(
+    mount_id: str,
+    owner: Optional[str] = Query(default=None, description="Optional owner (admin/root only)"),
+    req: Request = None,
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+):
+    resolved_owner = _resolve_mount_owner(ctx=ctx, owner=owner)
+    actor_sub = str(ctx.get("user_sub") or resolved_owner)
+    probe = _probe_sftp_mount_health(owner=resolved_owner, mount_id=mount_id, actor_sub=actor_sub)
+    updated = probe["mount"]
+    audit_event(
+        "filemgr_sftp_mount_tested",
+        actor_sub,
+        req,
+        outcome=("success" if probe["ok"] else "failure"),
+        owner=resolved_owner,
+        mount_id=mount_id,
+        previous_status=probe["previous_status"],
+        status=updated.status,
+        status_changed=bool(probe["status_changed"]),
+        last_error_code=updated.last_error_code,
+    )
+    return {"ok": bool(probe["ok"]), "mount": _mount_to_api(updated)}
+
+
+@router.post("/mounts/{mount_id}/rotate-credential")
+def rotate_sftp_mount_credential_endpoint(
+    mount_id: str,
+    inp: RotateSftpMountCredentialIn,
+    owner: Optional[str] = Query(default=None, description="Optional owner (admin/root only)"),
+    req: Request = None,
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+):
+    resolved_owner = _resolve_mount_owner(ctx=ctx, owner=owner)
+    mount = get_sftp_mount(owner=resolved_owner, mount_id=mount_id)
+    credential_ref = str(inp.auth_credential_ref or mount.auth_credential_ref or "").strip()
+    if not credential_ref:
+        raise HTTPException(status_code=400, detail={"code": "invalid_auth_credential_ref", "message": "auth credential reference is required"})
+
+    upsert_sftp_credential(
+        owner=resolved_owner,
+        mount_id=credential_ref,
+        auth_mode=inp.auth_mode,
+        username=inp.username,
+        password=inp.password,
+        private_key=inp.private_key,
+        private_key_passphrase=inp.private_key_passphrase,
+        actor_sub=str(ctx.get("user_sub") or resolved_owner),
+    )
+
+    updated_mount = mount
+    if credential_ref != str(mount.auth_credential_ref):
+        updated_mount = update_sftp_mount(owner=resolved_owner, mount_id=mount_id, auth_credential_ref=credential_ref)
+
+    audit_event(
+        "filemgr_sftp_mount_credential_rotated",
+        str(ctx.get("user_sub") or resolved_owner),
+        req,
+        outcome="success",
+        owner=resolved_owner,
+        mount_id=mount_id,
+        auth_credential_ref=credential_ref,
+    )
+    return {"ok": True, "mount": _mount_to_api(updated_mount), "auth_credential_ref": credential_ref}
+
+
+@router.post("/mounts/{mount_id}/revoke")
+def revoke_sftp_mount_endpoint(
+    mount_id: str,
+    inp: RevokeSftpMountIn,
+    owner: Optional[str] = Query(default=None, description="Optional owner (admin/root only)"),
+    req: Request = None,
+    ctx: Dict[str, Any] = Depends(require_ui_session),
+):
+    resolved_owner = _resolve_mount_owner(ctx=ctx, owner=owner)
+    mount = get_sftp_mount(owner=resolved_owner, mount_id=mount_id)
+
+    credential_revoked = False
+    if inp.revoke_credential:
+        try:
+            delete_sftp_credential(owner=resolved_owner, mount_id=str(mount.auth_credential_ref), actor_sub=str(ctx.get("user_sub") or resolved_owner))
+            credential_revoked = True
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+
+    next_status = "disabled" if inp.disable_mount else mount.status
+    updated_mount = update_sftp_mount(
+        owner=resolved_owner,
+        mount_id=mount_id,
+        status=next_status,
+        last_error_code=("mount_revoked" if inp.disable_mount else mount.last_error_code),
+        last_error_message=("mount revoked by owner/admin" if inp.disable_mount else mount.last_error_message),
+    )
+
+    audit_event(
+        "filemgr_sftp_mount_revoked",
+        str(ctx.get("user_sub") or resolved_owner),
+        req,
+        outcome="success",
+        owner=resolved_owner,
+        mount_id=mount_id,
+        mount_disabled=bool(inp.disable_mount),
+        credential_revoked=credential_revoked,
+    )
+    return {"ok": True, "mount": _mount_to_api(updated_mount), "credential_revoked": credential_revoked}
+
+
 @router.post("/folder")
 def create_folder(path: str = Body(..., embed=True), req: Request = None, user: str = Depends(_current_user)):
-    _enforce_mount_write_paths(user, path, action="create_folder")
-    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+    _enforce_sftp_mount_flags_for_path(path, operation="write")
+    _enforce_sftp_mount_status_for_path(path, owner=user, operation="write")
+    resolved_provider = resolve_storage_provider(user, path)
+    if resolved_provider.backend == "sftp":
+        out = resolved_provider.provider.mkdir(user, path)
+        folder = out.get("path") or norm_path(path, is_folder=True)
+    elif bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        _enforce_mount_write_paths(user, path, action="create_folder")
         folder = create_empty_folder_dispatched(user, path)
     else:
         folder = create_empty_folder(user, path)
-    audit_event("filemgr_folder_created", user, req, outcome="success", path=folder)
+    audit_event("filemgr_folder_created", user, req, outcome="success", path=folder, **_storage_audit_fields_for_path(path))
     return {"ok": True, "path": folder}
 
 
@@ -671,14 +1593,47 @@ def upload_fs_file(
         action="upload_file",
         request_id=(req.headers.get("X-Request-Id") if req else None),
     )
-    _enforce_mount_write_paths(user, path, action="upload_file")
+    _enforce_sftp_mount_flags_for_path(path, operation="write")
+    _enforce_sftp_mount_status_for_path(path, owner=user, operation="write")
     encrypted_flag = encrypted if isinstance(encrypted, bool) else False
     encryption_meta = _parse_encryption_meta(enc_meta) if encrypted_flag else None
     overwrite_flag = overwrite if isinstance(overwrite, bool) else False
-    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+    resolved_provider = resolve_storage_provider(user, path)
+    if resolved_provider.backend == "sftp":
+        if encrypted_flag or encryption_meta:
+            raise HTTPException(status_code=400, detail={"code": "encryption_not_supported_for_mount", "message": "encryption metadata is not supported for sftp mounted uploads"})
+        payload = file.file.read()
+        assert_upload_allowed(user, incoming_bytes=len(payload))
+        result = resolved_provider.provider.write_stream(
+            user,
+            path,
+            payload,
+            content_type=file.content_type,
+            overwrite=True,
+        )
+        request_id = req.headers.get("X-Request-Id") if req else None
+        record_upload_usage(user, path, len(payload), source="upload_sftp", request_id=request_id)
+        record_operation_usage(user, path, operation="write", backend="sftp", request_id=request_id)
+        _emit_sftp_mount_audit(
+            "filemgr_sftp_data_written",
+            actor_sub=user,
+            req=req,
+            owner=user,
+            mount_id=_extract_mount_id_from_path(path),
+            path=path,
+            bytes_written=len(payload),
+        )
+    elif bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        _enforce_mount_write_paths(user, path, action="upload_file")
         result = upload_file_dispatched(user, path, file, overwrite=overwrite_flag, encryption_meta=encryption_meta)
     else:
-        result = upload_file(user, path, file, encryption_meta=encryption_meta)
+        mount = resolve_path_mount(user, norm_path(path, is_folder=False), is_folder=False)
+        if mount:
+            _require_s3_mounts_enabled()
+            _require_s3_mounts_write_enabled()
+            result = upload_mounted_file(user, path, file)
+        else:
+            result = upload_file(user, path, file, encryption_meta=encryption_meta)
     audit_event(
         "filemgr_file_uploaded",
         user,
@@ -688,6 +1643,7 @@ def upload_fs_file(
         size=result.get("size"),
         content_type=file.content_type,
         encrypted_upload=encrypted_flag,
+        **_storage_audit_fields_for_path(path),
     )
     record_filemgr_encryption_event("upload", encrypted=encrypted_flag)
     return {"ok": True, **result}
@@ -695,6 +1651,13 @@ def upload_fs_file(
 
 @router.post("/presign-upload", response_model=PresignUploadOut)
 def presign_fs_upload(inp: PresignUploadIn, user: str = Depends(_current_user)):
+    _enforce_sftp_mount_flags_for_path(inp.path, operation="write")
+    _enforce_sftp_mount_status_for_path(inp.path, owner=user, operation="write")
+    mount = resolve_path_mount(user, norm_path(inp.path, is_folder=False), is_folder=False)
+    if mount:
+        _require_s3_mounts_enabled()
+        _require_s3_mounts_write_enabled()
+        raise HTTPException(status_code=400, detail="mounted presign upload not supported")
     _enforce_mount_write_paths(user, inp.path, action="presign_upload")
     result = presign_upload(user, inp.path, content_type=inp.content_type)
     return PresignUploadOut(
@@ -715,6 +1678,13 @@ def complete_fs_upload(inp: CompleteUploadIn, req: Request = None, user: str = D
         action="upload_file",
         request_id=(req.headers.get("X-Request-Id") if req else inp.ticket_id),
     )
+    _enforce_sftp_mount_flags_for_path(inp.path, operation="write")
+    _enforce_sftp_mount_status_for_path(inp.path, owner=user, operation="write")
+    mount = resolve_path_mount(user, norm_path(inp.path, is_folder=False), is_folder=False)
+    if mount:
+        _require_s3_mounts_enabled()
+        _require_s3_mounts_write_enabled()
+        raise HTTPException(status_code=400, detail="mounted presign upload not supported")
     result = register_presigned_upload(
         user,
         inp.path,
@@ -744,11 +1714,30 @@ def download_fs_file(path: str = Query(...), req: Request = None, user: str = De
         action="download_file",
         request_id=(req.headers.get("X-Request-Id") if req else None),
     )
-    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+    _enforce_sftp_mount_flags_for_path(path, operation="read")
+    _enforce_sftp_mount_status_for_path(path, owner=user, operation="read")
+    resolved_provider = resolve_storage_provider(user, path)
+    if resolved_provider.backend == "sftp":
+        result = resolved_provider.provider.read_stream(user, path)
+        record_operation_usage(user, path, operation="read", backend="sftp")
+        _emit_sftp_mount_audit(
+            "filemgr_sftp_data_read",
+            actor_sub=user,
+            req=req,
+            owner=user,
+            mount_id=_extract_mount_id_from_path(path),
+            path=path,
+            bytes_requested=int(result.get("node", {}).get("size") or 0),
+        )
+    elif bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
         result = download_file_dispatched(user, path)
+        assert_file_bundle_access(user, result["node"])
+    elif resolve_path_mount(user, path, is_folder=False):
+        result = download_mounted_file(user, path)
+        assert_file_bundle_access(user, result["node"])
     else:
         result = download_file(user, path)
-    assert_file_bundle_access(user, result["node"])
+        assert_file_bundle_access(user, result["node"])
     assert_download_allowed(user, requested_bytes=int(result["node"].get("size") or 0))
     node = result["node"]
     obj = result["object"]
@@ -779,7 +1768,7 @@ def download_fs_file(path: str = Query(...), req: Request = None, user: str = De
             sent += len(chunk)
             yield chunk
         request_id = req.headers.get("X-Request-Id") if req else None
-        record_download_usage(user, path, sent, source="download", request_id=request_id)
+        record_download_usage(user, path, sent, source=("download_sftp" if resolved_provider.backend == "sftp" else "download_s3"), request_id=request_id)
 
     return StreamingResponse(
         gen(),
@@ -799,7 +1788,7 @@ def preview_fs_file(path: str = Query(...), req: Request = None, user: str = Dep
         request_id=(req.headers.get("X-Request-Id") if req else None),
     )
     started = time.perf_counter()
-    result = download_file(user, path)
+    result = download_mounted_file(user, path) if resolve_path_mount(user, path, is_folder=False) else download_file(user, path)
     assert_file_bundle_access(user, result["node"])
     node = result["node"]
     obj = result["object"]
@@ -912,6 +1901,20 @@ def thumbnail_fs_file(path: str = Query(...), req: Request = None, user: str = D
     )
 
 
+
+
+@router.delete("")
+def remove_fs(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
+    raw = str(path or "").strip()
+    is_folder_path = raw.endswith("/")
+    normalized = norm_path(path, is_folder=True if is_folder_path else False)
+    if is_folder_path:
+        mount = resolve_path_mount(user, normalized, is_folder=True)
+        if mount:
+            raise HTTPException(status_code=400, detail="mounted folder delete not supported")
+        return remove_fs_folder(path=normalized, req=req, user=user)
+    return remove_fs_file(path=normalized, req=req, user=user)
+
 @router.delete("/file")
 def remove_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
     _enforce_filemanager_internal_entitlement(
@@ -919,24 +1922,54 @@ def remove_fs_file(path: str = Query(...), req: Request = None, user: str = Depe
         action="delete_file",
         request_id=(req.headers.get("X-Request-Id") if req else None),
     )
-    _enforce_mount_write_paths(user, path, action="delete_file")
-    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+    _enforce_sftp_mount_flags_for_path(path, operation="write")
+    _enforce_sftp_mount_status_for_path(path, owner=user, operation="write")
+    resolved_provider = resolve_storage_provider(user, path)
+    if resolved_provider.backend == "sftp":
+        resolved_provider.provider.delete(user, path)
+        request_id = req.headers.get("X-Request-Id") if req else None
+        record_operation_usage(user, path, operation="delete", backend="sftp", request_id=request_id)
+        _emit_sftp_mount_audit(
+            "filemgr_sftp_data_deleted",
+            actor_sub=user,
+            req=req,
+            owner=user,
+            mount_id=_extract_mount_id_from_path(path),
+            path=path,
+            node_type="file",
+        )
+    elif bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        _enforce_mount_write_paths(user, path, action="delete_file")
         remove_file_dispatched(user, path)
     else:
-        remove_file(user, path)
-    audit_event("filemgr_file_removed", user, req, outcome="success", path=path, **_file_audit_fields(file_path=norm_path(path, is_folder=False), owner=user))
+        mount = resolve_path_mount(user, norm_path(path, is_folder=False), is_folder=False)
+        if mount:
+            _require_s3_mounts_enabled()
+            _require_s3_mounts_write_enabled()
+            delete_mounted_file(user, path)
+        else:
+            remove_file(user, path)
+    audit_event("filemgr_file_removed", user, req, outcome="success", path=path, **_file_audit_fields(file_path=norm_path(path, is_folder=False), owner=user), **_storage_audit_fields_for_path(path))
     return {"ok": True}
 
 
 @router.delete("/folder")
 def remove_fs_folder(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
-    _enforce_filemanager_internal_entitlement(
-        user=user,
-        action="delete_folder",
-        request_id=(req.headers.get("X-Request-Id") if req else None),
-    )
-    _enforce_mount_write_paths(user, path, action="delete_folder")
-    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+    _enforce_sftp_mount_flags_for_path(path, operation="write")
+    _enforce_sftp_mount_status_for_path(path, owner=user, operation="write")
+    resolved_provider = resolve_storage_provider(user, path)
+    if resolved_provider.backend == "sftp":
+        out = resolved_provider.provider.delete(user, path)
+        deleted_count = int(out.get("deleted_count") or 0)
+        request_id = req.headers.get("X-Request-Id") if req else None
+        record_operation_usage(user, path, operation="delete", backend="sftp", request_id=request_id)
+    elif bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        _enforce_filemanager_internal_entitlement(
+            user=user,
+            action="delete_folder",
+            request_id=(req.headers.get("X-Request-Id") if req else None),
+        )
+        _enforce_mount_write_paths(user, path, action="delete_folder")
         deleted_count = remove_folder_dispatched(user, path)
     else:
         deleted_count = remove_folder(user, path)
@@ -949,6 +1982,7 @@ def remove_fs_folder(path: str = Query(...), req: Request = None, user: str = De
         path=path,
         deleted_count=deleted_count,
         **_file_audit_fields(file_path=norm_path(path, is_folder=True), owner=user, correlation_id=correlation_id),
+        **_storage_audit_fields_for_path(path),
     )
     return {"ok": True, "deleted_count": deleted_count}
 
@@ -960,8 +1994,33 @@ def move_fs_node(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
-    _enforce_mount_write_paths(user, src, dst, action="move_node")
-    result = _move_node_for_owner(user, src, dst)
+    _enforce_sftp_mount_flags_for_path(src, operation="write")
+    _enforce_sftp_mount_flags_for_path(dst, operation="write")
+    _enforce_sftp_mount_status_for_path(src, owner=user, operation="write")
+    _enforce_sftp_mount_status_for_path(dst, owner=user, operation="write")
+    src_provider = resolve_storage_provider(user, src)
+    dst_provider = resolve_storage_provider(user, dst)
+    if src_provider.backend != dst_provider.backend:
+        raise HTTPException(status_code=400, detail={"code": "cross_backend_move_not_supported", "message": "moving between native and mounted paths is not supported"})
+    if src_provider.backend == "sftp":
+        result = src_provider.provider.move(user, src, dst, overwrite=False)
+        request_id = req.headers.get("X-Request-Id") if req else None
+        record_operation_usage(user, src, operation="move", backend="sftp", request_id=request_id)
+        _emit_sftp_mount_audit(
+            "filemgr_sftp_data_moved",
+            actor_sub=user,
+            req=req,
+            owner=user,
+            mount_id=_extract_mount_id_from_path(src),
+            path=src,
+            src=src,
+            dst=dst,
+        )
+    elif bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        _enforce_mount_write_paths(user, src, dst, action="move_node")
+        result = _move_node_for_owner(user, src, dst)
+    else:
+        result = move_node(user, src, dst)
     audit_event(
         "filemgr_node_moved",
         user,
@@ -971,6 +2030,7 @@ def move_fs_node(
         dst=result.get("dst"),
         node_type=result.get("type"),
         **_file_audit_fields(file_path=str(result.get("src") or norm_path(src, is_folder=None)), owner=user),
+        **_storage_audit_fields_for_move(src, dst),
     )
     return {"ok": True, **result}
 
@@ -1012,10 +2072,30 @@ def rename_file(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
-    _enforce_mount_write_paths(user, path, action="rename_file")
+    _enforce_sftp_mount_flags_for_path(path, operation="write")
+    _enforce_sftp_mount_status_for_path(path, owner=user, operation="write")
     parent, _ = split_parent_name(norm_path(path, is_folder=False))
     dst = parent + new_name
-    result = _move_node_for_owner(user, path, dst)
+    resolved_provider = resolve_storage_provider(user, path)
+    if resolved_provider.backend == "sftp":
+        result = resolved_provider.provider.move(user, path, dst, overwrite=False)
+        request_id = req.headers.get("X-Request-Id") if req else None
+        record_operation_usage(user, path, operation="move", backend="sftp", request_id=request_id)
+        _emit_sftp_mount_audit(
+            "filemgr_sftp_data_moved",
+            actor_sub=user,
+            req=req,
+            owner=user,
+            mount_id=_extract_mount_id_from_path(path),
+            path=path,
+            src=path,
+            dst=dst,
+        )
+    elif bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        _enforce_mount_write_paths(user, path, action="rename_file")
+        result = _move_node_for_owner(user, path, dst)
+    else:
+        result = move_node(user, path, dst)
     audit_event(
         "filemgr_file_renamed",
         user,
@@ -1038,7 +2118,26 @@ def rename_folder(
     folder = norm_path(path, is_folder=True)
     parent, _ = split_parent_name(folder)
     dst = parent + new_name + "/"
-    result = _move_node_for_owner(user, folder, dst)
+    resolved_provider = resolve_storage_provider(user, folder)
+    if resolved_provider.backend == "sftp":
+        result = resolved_provider.provider.move(user, folder, dst, overwrite=False)
+        request_id = req.headers.get("X-Request-Id") if req else None
+        record_operation_usage(user, folder, operation="move", backend="sftp", request_id=request_id)
+        _emit_sftp_mount_audit(
+            "filemgr_sftp_data_moved",
+            actor_sub=user,
+            req=req,
+            owner=user,
+            mount_id=_extract_mount_id_from_path(folder),
+            path=folder,
+            src=folder,
+            dst=dst,
+        )
+    elif bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        _enforce_mount_write_paths(user, folder, action="rename_folder")
+        result = _move_node_for_owner(user, folder, dst)
+    else:
+        result = move_node(user, folder, dst)
     audit_event(
         "filemgr_folder_renamed",
         user,
@@ -1052,6 +2151,8 @@ def rename_folder(
 
 @router.post("/download-zip")
 def download_multiple_as_zip(paths: List[str] = Body(...), req: Request = None, user: str = Depends(_current_user)):
+    _enforce_sftp_mount_flags_for_paths(paths, operation="read")
+    _enforce_sftp_mount_status_for_paths(paths, owner=user, operation="read")
     result = download_zip(user, paths)
     assert_download_allowed(user, requested_bytes=0)
     if isinstance(result, tuple):
@@ -1092,6 +2193,8 @@ def upload_zip_and_extract(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    _enforce_sftp_mount_flags_for_path(dest_folder, operation="write")
+    _enforce_sftp_mount_status_for_path(dest_folder, owner=user, operation="write")
     _enforce_mount_write_paths(user, dest_folder, action="upload_zip")
     created = upload_zip(user, dest_folder, zip_file)
     audit_event(
@@ -1112,6 +2215,8 @@ def upload_archive_and_extract(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    _enforce_sftp_mount_flags_for_path(dest_folder, operation="write")
+    _enforce_sftp_mount_status_for_path(dest_folder, owner=user, operation="write")
     _enforce_mount_write_paths(user, dest_folder, action="upload_archive")
     created = upload_archive(user, dest_folder, archive_file)
     audit_event(
@@ -1136,6 +2241,9 @@ def share_fs_node(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    _enforce_sftp_mount_flags_for_path(path, operation="share")
+    _enforce_sftp_mount_status_for_path(path, owner=user, operation="share")
+    _enforce_sftp_mount_share_policy(path)
     _enforce_mount_write_paths(user, path, action="share_node")
     share_node(
         user,
@@ -1167,6 +2275,9 @@ def unshare_fs_node(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    _enforce_sftp_mount_flags_for_path(path, operation="share")
+    _enforce_sftp_mount_status_for_path(path, owner=user, operation="share")
+    _enforce_sftp_mount_share_policy(path)
     _enforce_mount_write_paths(user, path, action="unshare_node")
     unshare_node(user, path, to_user)
     audit_event(
@@ -1183,6 +2294,9 @@ def unshare_fs_node(
 
 @router.get("/shared-with")
 def list_shared(path: str = Query(...), user: str = Depends(_current_user)):
+    _enforce_sftp_mount_flags_for_path(path, operation="share")
+    _enforce_sftp_mount_status_for_path(path, owner=user, operation="share")
+    _enforce_sftp_mount_share_policy(path)
     return {"path": norm_path(path, is_folder=None), "shared_with": list_shared_with(user, path)}
 
 

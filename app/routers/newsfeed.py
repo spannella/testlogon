@@ -1690,6 +1690,8 @@ def view_feed(
         post = post_by_id.get(post_id)
         if not post:
             continue
+        if post.get("moderation_removed") or post.get("moderation_removed_at"):
+            continue
 
         if is_hidden(user_id, post_id):
             continue
@@ -1907,7 +1909,11 @@ def list_comments(
         Limit=limit,
         ExclusiveStartKey=eks if eks else None,
     )
-    items = [_comment_to_dict(it) for it in resp.get("Items", [])]
+    items = [
+        _comment_to_dict(it)
+        for it in resp.get("Items", [])
+        if not it.get("moderation_removed") and not it.get("deleted")
+    ]
     return {"items": items, "next_cursor": encode_cursor(resp.get("LastEvaluatedKey"))}
 
 

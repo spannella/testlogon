@@ -9,6 +9,7 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
+    dedupe: ["react", "react-dom"],
   },
   server: {
     host: "0.0.0.0",   // listen on all interfaces so the EC2 server is reachable
@@ -25,7 +26,18 @@ export default defineConfig({
       "/api": "http://localhost:8000",
       "/v1": "http://localhost:8000",
       "/messaging": "http://localhost:8000",
-      "/feed": "http://localhost:8000",
+      "/feed": {
+        target: "http://localhost:8000",
+        bypass: (req) => {
+          // Browser page navigations to /feed → serve the SPA (index.html).
+          // XHR/fetch API calls → proxy to backend.
+          const accept = req.headers["accept"] ?? "";
+          if (typeof accept === "string" && accept.includes("text/html")) {
+            return "/index.html";
+          }
+          return null;
+        },
+      },
       "/posts": "http://localhost:8000",
       "/social": "http://localhost:8000",
       "/uploads": "http://localhost:8000",
@@ -33,6 +45,29 @@ export default defineConfig({
       "/notifications": "http://localhost:8000",
       "/mock": "http://localhost:8000",
       "/calendar/public": "http://localhost:8000",
+      "/internal": "http://localhost:8000",
+      "/tickets": {
+        target: "http://localhost:8000",
+        bypass: (req) => {
+          // Let browser page navigations fall through to the SPA (index.html).
+          // Only proxy JSON / XHR API calls to the backend.
+          const accept = req.headers["accept"] ?? "";
+          if (typeof accept === "string" && accept.includes("text/html")) {
+            return "/index.html";
+          }
+          return null; // proxy to backend
+        },
+      },
+      "/ticket-spaces": {
+        target: "http://localhost:8000",
+        bypass: (req) => {
+          const accept = req.headers["accept"] ?? "";
+          if (typeof accept === "string" && accept.includes("text/html")) {
+            return "/index.html";
+          }
+          return null;
+        },
+      },
     },
   },
   build: {

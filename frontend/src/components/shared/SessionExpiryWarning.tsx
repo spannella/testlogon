@@ -26,14 +26,31 @@ function formatCountdown(ms: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+/** Parse the `exp` claim (UTC epoch seconds) from a JWT, or null if unparseable. */
+function getJwtExpMs(token: string | null): number | null {
+  if (!token) return null;
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+    const encoded = parts[1];
+    if (!encoded) return null;
+    const payload = JSON.parse(atob(encoded.replace(/-/g, "+").replace(/_/g, "/"))) as Record<string, unknown>;
+    if (typeof payload.exp !== "number") return null;
+    return payload.exp * 1000;
+  } catch {
+    return null;
+  }
+}
+
 export function SessionExpiryWarning() {
   const lastActivityRef = React.useRef<number>(Date.now());
   const [remainingMs, setRemainingMs] = React.useState<number>(INACTIVITY_MS);
   const [extending, setExtending] = React.useState(false);
-  const { logout } = useAuthStore();
+  const hasLoggedOutRef = React.useRef(false);
+  const { logout, accessToken } = useAuthStore();
   const navigate = useNavigate();
 
-  // Reset inactivity clock on any user interaction.
+  // Reset inactivity clock on any user interaction OR successful API call.
   React.useEffect(() => {
     const resetActivity = () => {
       lastActivityRef.current = Date.now();
@@ -45,6 +62,7 @@ export function SessionExpiryWarning() {
       "touchstart",
       "scroll",
       "click",
+      "api-activity",
     ] as const;
     for (const e of events) {
       window.addEventListener(e, resetActivity, { passive: true });
@@ -56,17 +74,33 @@ export function SessionExpiryWarning() {
     };
   }, []);
 
-  // Tick every second to keep the countdown accurate in the warning zone;
-  // once per 30 s otherwise to avoid unnecessary renders.
+  // Tick every second. Compute the effective remaining time as the minimum of
+  // inactivity-based remaining time and JWT expiry remaining time.
   React.useEffect(() => {
+    hasLoggedOutRef.current = false;
     const update = () => {
-      const idleMs = Date.now() - lastActivityRef.current;
-      setRemainingMs(Math.max(0, INACTIVITY_MS - idleMs));
+      const now = Date.now();
+      const idleMs = now - lastActivityRef.current;
+      const inactivityRemaining = Math.max(0, INACTIVITY_MS - idleMs);
+
+      const jwtExpMs = getJwtExpMs(accessToken);
+      const jwtRemaining = jwtExpMs != null ? Math.max(0, jwtExpMs - now) : Infinity;
+
+      const effective = Math.min(inactivityRemaining, jwtRemaining);
+      setRemainingMs(effective);
+
+      // Force logout when timer hits 0
+      if (effective === 0 && !hasLoggedOutRef.current) {
+        hasLoggedOutRef.current = true;
+        void apiLogout().catch(() => {});
+        logout("session_expired");
+        navigate("/login", { replace: true });
+      }
     };
     update();
     const id = setInterval(update, 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [accessToken, logout, navigate]);
 
   const handleStayLoggedIn = async () => {
     setExtending(true);
@@ -78,7 +112,7 @@ export function SessionExpiryWarning() {
     } catch {
       // Refresh failed — force logout cleanly.
       await apiLogout().catch(() => {});
-      logout();
+      logout("session_expired");
       navigate("/login", { replace: true });
     } finally {
       setExtending(false);
@@ -105,8 +139,8 @@ export function SessionExpiryWarning() {
             <Timer className="h-4 w-4 shrink-0" />
             <span>
               Session expires in{" "}
-              <strong className="tabular-nums">{formatCountdown(remainingMs)}</strong> due to
-              inactivity
+              <strong className="tabular-nums">{formatCountdown(remainingMs)}</strong> — click{" "}
+              <em>Stay logged in</em> to extend
             </span>
           </div>
           <Button
@@ -134,11 +168,12 @@ export function SessionExpiryWarning() {
               Session expiring soon
             </DialogTitle>
             <DialogDescription>
-              You will be logged out in{" "}
+              You will be automatically logged out in{" "}
               <strong className="tabular-nums text-foreground">
                 {formatCountdown(remainingMs)}
-              </strong>{" "}
-              due to inactivity. Click <em>Stay logged in</em> to continue your session.
+              </strong>
+              . Click <em>Stay logged in</em> to continue your session, or{" "}
+              <em>Log out</em> to end it now.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 sm:gap-0">
