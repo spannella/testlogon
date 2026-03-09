@@ -208,6 +208,33 @@ FILEMGR_PREVIEW_HOVER_PLAY_FAILURES = Counter(
     "Client hover/tap preview play failures",
     ["reason"],
 )
+
+FILEMGR_MOUNT_UPLOAD_METHOD = Counter(
+    "filemgr_mount_upload_method_total",
+    "Mounted provider upload method usage and outcome",
+    ["provider", "method", "outcome"],
+)
+FILEMGR_MOUNT_OPERATION_LATENCY = Histogram(
+    "filemgr_mount_operation_duration_seconds",
+    "Mounted file-manager operation latency in seconds",
+    ["provider", "operation"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+)
+FILEMGR_MOUNT_BYTES = Counter(
+    "filemgr_mount_transfer_bytes_total",
+    "Mounted file-manager transfer bytes",
+    ["provider", "direction", "operation"],
+)
+FILEMGR_MOUNT_API_ERRORS = Counter(
+    "filemgr_mount_api_errors_total",
+    "Mounted provider API errors",
+    ["provider", "operation", "status_code", "reason"],
+)
+FILEMGR_MOUNT_REFRESH_ATTEMPTS = Counter(
+    "filemgr_mount_refresh_attempts_total",
+    "Mounted provider OAuth refresh attempts",
+    ["provider", "outcome", "reason"],
+)
 FILEMGR_PREVIEW_QUEUE_DEPTH = Gauge(
     "filemgr_preview_queue_depth",
     "Approximate in-flight preview jobs in this worker process",
@@ -995,3 +1022,41 @@ def record_provider_failure_alert(provider: str) -> None:
 def metrics_endpoint() -> Response:
     UPTIME_SECONDS.set(time.monotonic() - _START_TIME)
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+def record_filemgr_mount_upload_method(provider: str, method: str, outcome: str) -> None:
+    FILEMGR_MOUNT_UPLOAD_METHOD.labels(provider=provider, method=method, outcome=outcome).inc()
+
+
+def record_filemgr_mount_operation_latency(provider: str, operation: str, elapsed_seconds: float) -> None:
+    FILEMGR_MOUNT_OPERATION_LATENCY.labels(
+        provider=(provider or "unknown").lower(),
+        operation=(operation or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_filemgr_mount_bytes(provider: str, direction: str, operation: str, nbytes: int) -> None:
+    if int(nbytes or 0) <= 0:
+        return
+    FILEMGR_MOUNT_BYTES.labels(
+        provider=(provider or "unknown").lower(),
+        direction=(direction or "unknown").lower(),
+        operation=(operation or "unknown").lower(),
+    ).inc(float(nbytes))
+
+
+def record_filemgr_mount_api_error(provider: str, operation: str, status_code: int | str, reason: str) -> None:
+    FILEMGR_MOUNT_API_ERRORS.labels(
+        provider=(provider or "unknown").lower(),
+        operation=(operation or "unknown").lower(),
+        status_code=str(status_code or "unknown"),
+        reason=(reason or "unknown").lower()[:64],
+    ).inc()
+
+
+def record_filemgr_mount_refresh_attempt(provider: str, outcome: str, reason: str = "none") -> None:
+    FILEMGR_MOUNT_REFRESH_ATTEMPTS.labels(
+        provider=(provider or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+        reason=(reason or "none").lower()[:64],
+    ).inc()

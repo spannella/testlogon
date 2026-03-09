@@ -41,6 +41,9 @@ from app.metrics import (
     record_filemgr_preview_job_duration,
     record_filemgr_preview_artifact_bytes,
     record_filemgr_preview_queue_depth_delta,
+    record_filemgr_mount_api_error,
+    record_filemgr_mount_bytes,
+    record_filemgr_mount_operation_latency,
 )
 from app.services.usage_metering import (
     build_usage_event,
@@ -460,6 +463,187 @@ def list_children(owner: str, folder_path: str, *, include_deleted: bool = False
         if not cursor:
             break
     return items
+
+
+def _mount_match_for_path(owner: str, path: str) -> Optional[Dict[str, Any]]:
+    if not bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        return None
+
+    from app.services.mounts_store import list_mounts
+
+    normalized = norm_path(path, is_folder=None)
+    normalized_folder = norm_path(path, is_folder=True)
+    mounts = list_mounts(owner)
+    matches = []
+    for mount in mounts:
+        if str(getattr(mount, "status", "active") or "active").strip().lower() != "active":
+            continue
+        mount_path = norm_path(mount.mount_path, is_folder=True)
+        mount_root_file = mount_path[:-1] if mount_path != "/" else "/"
+        if normalized == mount_root_file or normalized == mount_path or normalized.startswith(mount_path) or normalized_folder.startswith(mount_path):
+            matches.append(mount)
+
+    if not matches:
+        return None
+
+    matches.sort(key=lambda m: (-len(norm_path(m.mount_path, is_folder=True)), m.mount_id))
+    selected = matches[0]
+    selected_mount_path = norm_path(selected.mount_path, is_folder=True)
+    if normalized == selected_mount_path[:-1] or normalized == selected_mount_path:
+        relative_parts: List[str] = []
+    else:
+        suffix = normalized[len(selected_mount_path):] if normalized.startswith(selected_mount_path) else normalized_folder[len(selected_mount_path):]
+        relative_parts = [part for part in suffix.split("/") if part]
+
+    return {
+        "mount": selected,
+        "mount_path": selected_mount_path,
+        "relative_parts": relative_parts,
+        "requested_path": normalized,
+    }
+
+
+def resolve_path_dispatch(owner: str, path: str) -> Dict[str, Any]:
+    normalized = norm_path(path, is_folder=None)
+    mount_match = _mount_match_for_path(owner, normalized)
+    if not mount_match:
+        return {"kind": "local", "path": normalized}
+
+    from app.services.file_providers import default_provider_registry
+
+    mount = mount_match["mount"]
+    relative_parts: List[str] = mount_match["relative_parts"]
+    registry = default_provider_registry()
+    provider = registry.get(owner, mount.provider)
+
+    current_ref = provider.resolve(mount.provider_root_ref)
+    for part in relative_parts:
+        children = provider.list_children(current_ref)
+        matched_ref = None
+        for child_ref in children:
+            child_meta = provider.get_metadata(child_ref)
+            if str(child_meta.get("name") or "") == part:
+                matched_ref = provider.resolve(child_ref)
+                break
+        if not matched_ref:
+            raise HTTPException(status_code=404, detail="mounted path not found")
+        current_ref = matched_ref
+
+    return {
+        "kind": "mount",
+        "path": normalized,
+        "mount": mount,
+        "mount_path": mount_match["mount_path"],
+        "relative_parts": relative_parts,
+        "provider": provider,
+        "provider_ref": current_ref,
+    }
+
+
+
+
+def assert_mount_write_allowed(owner: str, path: str, *, action: str = "write") -> None:
+    dispatch = resolve_path_dispatch(owner, path)
+    if dispatch.get("kind") != "mount":
+        return
+
+    mount = dispatch.get("mount")
+    mode = str(getattr(mount, "mode", "read_only") or "read_only").strip().lower()
+    if mode == "read_write":
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "code": "mount_read_only",
+            "message": "write operation is not allowed for read-only mount",
+            "action": action,
+            "path": norm_path(path, is_folder=None),
+            "mount_id": getattr(mount, "mount_id", None),
+            "mount_path": getattr(mount, "mount_path", None),
+            "mode": mode,
+        },
+    )
+
+def _mounted_node_from_metadata(*, requested_path: str, parent_path: str, metadata: Dict[str, Any], provider: str, provider_ref: str) -> Dict[str, Any]:
+    item_type = str(metadata.get("type") or "")
+    normalized_type = "folder" if item_type in {"dir", "folder"} else "file"
+    path_out = norm_path(requested_path, is_folder=(normalized_type == "folder"))
+    return {
+        "path": path_out,
+        "type": normalized_type,
+        "name": metadata.get("name") or split_parent_name(path_out)[1],
+        "parent": norm_path(parent_path, is_folder=True),
+        "updated_at": metadata.get("modified_time") or metadata.get("updated_at"),
+        "size": metadata.get("size"),
+        "content_type": metadata.get("mime_type") or metadata.get("content_type"),
+        "is_encrypted": False,
+        "provider": provider,
+        "provider_ref": provider_ref,
+    }
+
+
+def get_node_dispatched(owner: str, path: str) -> Dict[str, Any]:
+    started = time.perf_counter()
+    dispatch = resolve_path_dispatch(owner, path)
+    if dispatch["kind"] == "local":
+        return get_node(owner, dispatch["path"])
+
+    provider_name = str(getattr(dispatch.get("mount"), "provider", "unknown") or "unknown")
+    try:
+        provider = dispatch["provider"]
+        metadata = provider.get_metadata(dispatch["provider_ref"])
+        parent_path = dispatch["mount_path"] if not dispatch["relative_parts"] else ("/" + "/".join(norm_path(dispatch["path"], is_folder=None).strip("/").split("/")[:-1]) + "/")
+        return _mounted_node_from_metadata(
+            requested_path=dispatch["path"],
+            parent_path=parent_path,
+            metadata=metadata,
+            provider=dispatch["mount"].provider,
+            provider_ref=dispatch["provider_ref"],
+        )
+    except HTTPException as exc:
+        record_filemgr_mount_api_error(provider_name, "info", exc.status_code, "http_exception")
+        raise
+    finally:
+        record_filemgr_mount_operation_latency(provider_name, "info", time.perf_counter() - started)
+
+
+def list_children_dispatched(owner: str, folder_path: str, *, include_deleted: bool = False) -> List[Dict[str, Any]]:
+    started = time.perf_counter()
+    dispatch = resolve_path_dispatch(owner, folder_path)
+    if dispatch["kind"] == "local":
+        return list_children(owner, norm_path(folder_path, is_folder=True), include_deleted=include_deleted)
+
+    provider_name = str(getattr(dispatch.get("mount"), "provider", "unknown") or "unknown")
+    try:
+        provider = dispatch["provider"]
+        folder_meta = provider.get_metadata(dispatch["provider_ref"])
+        folder_type = str(folder_meta.get("type") or "")
+        if folder_type not in {"dir", "folder"}:
+            raise HTTPException(status_code=400, detail="not a folder")
+
+        folder_norm = norm_path(folder_path, is_folder=True)
+        out: List[Dict[str, Any]] = []
+        for child_ref in provider.list_children(dispatch["provider_ref"]):
+            child_meta = provider.get_metadata(child_ref)
+            child_name = str(child_meta.get("name") or "").strip()
+            if not child_name:
+                continue
+            requested_path = f"{folder_norm}{child_name}"
+            node = _mounted_node_from_metadata(
+                requested_path=requested_path,
+                parent_path=folder_norm,
+                metadata=child_meta,
+                provider=dispatch["mount"].provider,
+                provider_ref=provider.resolve(child_ref),
+            )
+            out.append(node)
+        return out
+    except HTTPException as exc:
+        record_filemgr_mount_api_error(provider_name, "list", exc.status_code, "http_exception")
+        raise
+    finally:
+        record_filemgr_mount_operation_latency(provider_name, "list", time.perf_counter() - started)
 
 
 def is_ancestor_path(folder_path: str, maybe_child_path: str) -> bool:
@@ -1443,6 +1627,161 @@ def search_text(user: str, query: str, *, limit: int = 50) -> List[Dict[str, Any
     return result
 
 
+
+
+def _mount_parent_dispatch_for_write(owner: str, path: str, *, is_folder: bool) -> Dict[str, Any]:
+    normalized = norm_path(path, is_folder=is_folder)
+    parent, name = split_parent_name(normalized)
+    if not name:
+        raise HTTPException(400, "invalid path")
+    parent_dispatch = resolve_path_dispatch(owner, parent)
+    return {"normalized": normalized, "parent": parent, "name": name, "parent_dispatch": parent_dispatch}
+
+
+def create_empty_folder_dispatched(owner: str, path: str) -> str:
+    started = time.perf_counter()
+    dispatch = resolve_path_dispatch(owner, path)
+    if dispatch["kind"] == "local":
+        return create_empty_folder(owner, path)
+
+    ctx = _mount_parent_dispatch_for_write(owner, path, is_folder=True)
+    parent_dispatch = ctx["parent_dispatch"]
+    if parent_dispatch["kind"] != "mount":
+        raise HTTPException(400, "cannot create mounted folder in local parent")
+
+    provider_name = str(getattr(parent_dispatch.get("mount"), "provider", "unknown") or "unknown")
+    try:
+        provider = parent_dispatch["provider"]
+        parent_meta = provider.get_metadata(parent_dispatch["provider_ref"])
+        if str(parent_meta.get("type") or "") not in {"dir", "folder"}:
+            raise HTTPException(400, "parent is not a folder")
+
+        provider.create_folder(parent_dispatch["provider_ref"], ctx["name"])
+        return norm_path(path, is_folder=True)
+    except HTTPException as exc:
+        record_filemgr_mount_api_error(provider_name, "mkdir", exc.status_code, "http_exception")
+        raise
+    finally:
+        record_filemgr_mount_operation_latency(provider_name, "mkdir", time.perf_counter() - started)
+
+
+def upload_file_dispatched(
+    owner: str,
+    path: str,
+    file: UploadFile,
+    *,
+    overwrite: bool = False,
+    encryption_meta: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    started = time.perf_counter()
+    dispatch = resolve_path_dispatch(owner, path)
+    if dispatch["kind"] == "local":
+        if overwrite:
+            try:
+                existing = get_node(owner, norm_path(path, is_folder=False))
+            except HTTPException as exc:
+                if exc.status_code != 404:
+                    raise
+            else:
+                if existing.get("type") != "file":
+                    raise HTTPException(409, "already exists")
+                remove_file(owner, path)
+        return upload_file(owner, path, file, encryption_meta=encryption_meta)
+
+    if encryption_meta is not None:
+        raise HTTPException(400, "encryption not supported for mounted provider upload")
+
+    ctx = _mount_parent_dispatch_for_write(owner, path, is_folder=False)
+    parent_dispatch = ctx["parent_dispatch"]
+    if parent_dispatch["kind"] != "mount":
+        raise HTTPException(400, "cannot upload mounted file in local parent")
+
+    provider_name = str(getattr(parent_dispatch.get("mount"), "provider", "unknown") or "unknown")
+    try:
+        provider = parent_dispatch["provider"]
+        parent_meta = provider.get_metadata(parent_dispatch["provider_ref"])
+        if str(parent_meta.get("type") or "") not in {"dir", "folder"}:
+            raise HTTPException(400, "parent is not a folder")
+
+        uploaded = provider.upload_file(
+            parent_dispatch["provider_ref"],
+            ctx["name"],
+            file_obj=file.file,
+            content_type=file.content_type,
+            overwrite=overwrite,
+        )
+        record_filemgr_mount_bytes(provider_name, "in", "upload", int(uploaded.get("size") or 0))
+        return {
+            "path": norm_path(path, is_folder=False),
+            "size": uploaded.get("size"),
+            "content_type": uploaded.get("content_type") or (file.content_type or "application/octet-stream"),
+        }
+    except HTTPException as exc:
+        record_filemgr_mount_api_error(provider_name, "upload", exc.status_code, "http_exception")
+        raise
+    finally:
+        record_filemgr_mount_operation_latency(provider_name, "upload", time.perf_counter() - started)
+
+
+def remove_file_dispatched(owner: str, path: str) -> None:
+    started = time.perf_counter()
+    dispatch = resolve_path_dispatch(owner, path)
+    if dispatch["kind"] == "local":
+        remove_file(owner, path)
+        return
+    provider_name = str(getattr(dispatch.get("mount"), "provider", "unknown") or "unknown")
+    try:
+        provider = dispatch["provider"]
+        meta = provider.get_metadata(dispatch["provider_ref"])
+        if str(meta.get("type") or "") in {"dir", "folder"}:
+            raise HTTPException(400, "not a file")
+        provider.delete_item(dispatch["provider_ref"])
+    except HTTPException as exc:
+        record_filemgr_mount_api_error(provider_name, "delete_file", exc.status_code, "http_exception")
+        raise
+    finally:
+        record_filemgr_mount_operation_latency(provider_name, "delete_file", time.perf_counter() - started)
+
+
+def _delete_mount_tree(provider: Any, ref: str) -> int:
+    meta = provider.get_metadata(ref)
+    node_type = str(meta.get("type") or "")
+    if node_type in {"dir", "folder"}:
+        total = 1
+        for child in provider.list_children(ref):
+            total += _delete_mount_tree(provider, child)
+        provider.delete_item(ref)
+        return total
+    provider.delete_item(ref)
+    return 1
+
+
+def remove_folder_dispatched(owner: str, path: str) -> int:
+    started = time.perf_counter()
+    folder = norm_path(path, is_folder=True)
+    if folder == "/":
+        raise HTTPException(400, "cannot delete root")
+
+    dispatch = resolve_path_dispatch(owner, folder)
+    if dispatch["kind"] == "local":
+        return remove_folder(owner, folder)
+
+    if folder == dispatch.get("mount_path"):
+        raise HTTPException(409, "cannot delete mounted root")
+
+    provider_name = str(getattr(dispatch.get("mount"), "provider", "unknown") or "unknown")
+    try:
+        provider = dispatch["provider"]
+        meta = provider.get_metadata(dispatch["provider_ref"])
+        if str(meta.get("type") or "") not in {"dir", "folder"}:
+            raise HTTPException(400, "not a folder")
+        return _delete_mount_tree(provider, dispatch["provider_ref"])
+    except HTTPException as exc:
+        record_filemgr_mount_api_error(provider_name, "delete_folder", exc.status_code, "http_exception")
+        raise
+    finally:
+        record_filemgr_mount_operation_latency(provider_name, "delete_folder", time.perf_counter() - started)
+
 def create_empty_folder(user: str, path: str) -> str:
     folder = norm_path(path, is_folder=True)
     if folder == "/":
@@ -1885,6 +2224,90 @@ def upload_catalog_image(
     _put_token_entries(owner, item)
     return {"path": path, "size": size}
 
+
+
+
+class _RequestsStreamBody:
+    def __init__(self, response: Any):
+        self._response = response
+        self._iter = response.iter_content(chunk_size=1024 * 1024)
+        self._buffer = bytearray()
+        self._closed = False
+
+    def read(self, n: int = -1) -> bytes:
+        if self._closed:
+            return b""
+        if n is None or n < 0:
+            chunks = [bytes(self._buffer)]
+            self._buffer.clear()
+            for chunk in self._iter:
+                if chunk:
+                    chunks.append(chunk)
+            self.close()
+            return b"".join(chunks)
+
+        while len(self._buffer) < n:
+            try:
+                chunk = next(self._iter)
+            except StopIteration:
+                break
+            if chunk:
+                self._buffer.extend(chunk)
+
+        if not self._buffer:
+            self.close()
+            return b""
+
+        out = bytes(self._buffer[:n])
+        del self._buffer[:n]
+        return out
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._response.close()
+        except Exception:
+            pass
+
+
+def download_file_dispatched(user: str, path: str) -> Dict[str, Any]:
+    started = time.perf_counter()
+    dispatch = resolve_path_dispatch(user, path)
+    if dispatch["kind"] == "local":
+        return download_file(user, path)
+
+    provider_name = str(getattr(dispatch.get("mount"), "provider", "unknown") or "unknown")
+    try:
+        provider = dispatch["provider"]
+        if not hasattr(provider, "stream_file"):
+            raise HTTPException(status_code=400, detail="provider does not support file downloads")
+
+        metadata = provider.get_metadata(dispatch["provider_ref"])
+        if str(metadata.get("type") or "") in {"dir", "folder"}:
+            raise HTTPException(400, "not a file")
+
+        parent_path = dispatch["mount_path"] if not dispatch["relative_parts"] else ("/" + "/".join(norm_path(dispatch["path"], is_folder=None).strip("/").split("/")[:-1]) + "/")
+        node = _mounted_node_from_metadata(
+            requested_path=dispatch["path"],
+            parent_path=parent_path,
+            metadata=metadata,
+            provider=dispatch["mount"].provider,
+            provider_ref=dispatch["provider_ref"],
+        )
+
+        response = provider.stream_file(dispatch["provider_ref"])
+        record_filemgr_mount_bytes(provider_name, "out", "download", int(node.get("size") or 0))
+        return {
+            "node": node,
+            "object": {"Body": _RequestsStreamBody(response)},
+        }
+    except HTTPException as exc:
+        record_filemgr_mount_api_error(provider_name, "download", exc.status_code, "http_exception")
+        raise
+    finally:
+        record_filemgr_mount_operation_latency(provider_name, "download", time.perf_counter() - started)
 
 def download_file(user: str, path: str) -> Dict[str, Any]:
     started = time.perf_counter()
@@ -2672,6 +3095,67 @@ def resume_move(user: str, move_id: str) -> Dict[str, Any]:
 def rollback_move(user: str, move_id: str) -> Dict[str, Any]:
     return _execute_checkpoint_move(user, move_id, reverse=True)
 
+
+
+
+def _provider_find_child_by_name(provider: Any, parent_ref: str, name: str) -> Optional[str]:
+    for child_ref in provider.list_children(parent_ref):
+        meta = provider.get_metadata(child_ref)
+        if str(meta.get("name") or "") == name:
+            return provider.resolve(child_ref)
+    return None
+
+
+def move_node_dispatched(owner: str, src: str, dst: str) -> Dict[str, Any]:
+    started = time.perf_counter()
+    src_norm = norm_path(src, is_folder=None)
+    src_dispatch = resolve_path_dispatch(owner, src_norm)
+    if src_dispatch["kind"] == "local":
+        return move_node(owner, src, dst)
+
+    src_meta = src_dispatch["provider"].get_metadata(src_dispatch["provider_ref"])
+    is_folder = str(src_meta.get("type") or "") in {"dir", "folder"}
+    dst_norm = norm_path(dst, is_folder=is_folder)
+
+    dst_dispatch = resolve_path_dispatch(owner, dst_norm)
+    if dst_dispatch["kind"] != "mount":
+        raise HTTPException(status_code=409, detail={"code": "mount_move_unsupported", "reason": "cross_mount_or_provider", "message": "moving between mounted and local paths is not supported"})
+
+    src_mount = src_dispatch.get("mount")
+    dst_mount = dst_dispatch.get("mount")
+    if getattr(src_mount, "mount_id", None) != getattr(dst_mount, "mount_id", None) or str(getattr(src_mount, "provider", "")) != str(getattr(dst_mount, "provider", "")):
+        raise HTTPException(status_code=409, detail={"code": "mount_move_unsupported", "reason": "cross_mount_or_provider", "message": "cross-mount or cross-provider move is not supported"})
+
+    src_mount_path = norm_path(getattr(src_mount, "mount_path", "/"), is_folder=True)
+    if src_norm == src_mount_path or src_norm == src_mount_path[:-1]:
+        raise HTTPException(status_code=409, detail={"code": "mount_move_unsupported", "reason": "mount_root", "message": "cannot move mounted root"})
+
+    provider = src_dispatch["provider"]
+    dst_parent_path, dst_name = split_parent_name(dst_norm)
+    parent_dispatch = resolve_path_dispatch(owner, dst_parent_path)
+    if parent_dispatch.get("kind") != "mount" or getattr(parent_dispatch.get("mount"), "mount_id", None) != getattr(src_mount, "mount_id", None):
+        raise HTTPException(status_code=409, detail={"code": "mount_move_unsupported", "reason": "cross_mount_or_provider", "message": "destination parent must be in same mount"})
+
+    parent_meta = provider.get_metadata(parent_dispatch["provider_ref"])
+    if str(parent_meta.get("type") or "") not in {"dir", "folder"}:
+        raise HTTPException(400, "parent is not a folder")
+
+    existing = _provider_find_child_by_name(provider, parent_dispatch["provider_ref"], dst_name)
+    if existing and provider.resolve(existing) != provider.resolve(src_dispatch["provider_ref"]):
+        raise HTTPException(409, "destination exists")
+
+    if is_folder and dst_norm.startswith(src_norm.rstrip("/") + "/"):
+        raise HTTPException(400, "cannot move folder into itself")
+
+    provider_name = str(getattr(src_mount, "provider", "unknown") or "unknown")
+    try:
+        provider.move_item(src_dispatch["provider_ref"], new_parent_ref=parent_dispatch["provider_ref"], new_name=dst_name)
+        return {"type": "folder" if is_folder else "file", "src": src_norm, "dst": dst_norm}
+    except HTTPException as exc:
+        record_filemgr_mount_api_error(provider_name, "move", exc.status_code, "http_exception")
+        raise
+    finally:
+        record_filemgr_mount_operation_latency(provider_name, "move", time.perf_counter() - started)
 
 def move_node(user: str, src: str, dst: str) -> Dict[str, Any]:
     started = time.perf_counter()

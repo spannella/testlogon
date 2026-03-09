@@ -223,6 +223,59 @@ class TestProjectRoutes(unittest.TestCase):
         self.assertEqual(out.provider, "github")
         self.assertEqual(out.scopes, ["repo"])
 
+    def test_upsert_provider_credential_route_google_drive(self):
+        body = projects.ProviderCredentialUpsertIn(
+            token="drive-token",
+        )
+        stored = SimpleNamespace(
+            provider="google_drive",
+            org=None,
+            scopes=[],
+            metadata={},
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+        )
+        with patch.object(projects, "upsert_provider_credential", return_value=stored) as upsert_provider_credential:
+            out = projects.upsert_provider_credential_route("google_drive", body, user="user-1")
+        upsert_provider_credential.assert_called_once_with(
+            "user-1",
+            "google_drive",
+            "drive-token",
+            org=None,
+            required_scopes=[],
+            api_base_url=None,
+        )
+        self.assertEqual(out.provider, "google_drive")
+
+    def test_complete_google_drive_oauth_callback_route(self):
+        body = projects.ProviderOAuthCallbackIn(code="auth-code", state="opaque-state")
+        stored = {
+            "provider": "google_drive",
+            "org": None,
+            "scopes": ["https://www.googleapis.com/auth/drive.file"],
+            "metadata": {"expires_at": "2026-01-01T00:10:00+00:00"},
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        }
+        with patch.object(projects, "complete_google_oauth_callback", return_value=stored) as complete_google_oauth_callback:
+            out = projects.complete_google_drive_oauth_callback_route(body, user="user-1")
+        complete_google_oauth_callback.assert_called_once_with("user-1", code="auth-code", state="opaque-state")
+        self.assertEqual(out.provider, "google_drive")
+        self.assertIn("expires_at", out.metadata)
+
+    def test_start_google_drive_oauth_route(self):
+        payload = {
+            "provider": "google_drive",
+            "authorization_url": "https://accounts.google.com/o/oauth2/v2/auth?state=abc",
+            "state": "abc",
+            "expires_at": "2026-01-01T00:10:00+00:00",
+        }
+        with patch.object(projects, "build_google_oauth_start", return_value=payload) as build_google_oauth_start:
+            out = projects.start_google_drive_oauth_route(user="user-1")
+        build_google_oauth_start.assert_called_once_with("user-1")
+        self.assertEqual(out.provider, "google_drive")
+        self.assertIn("accounts.google.com", out.authorization_url)
+
     def test_get_provider_credential_route(self):
         stored = SimpleNamespace(
             provider="gitlab",
@@ -239,9 +292,20 @@ class TestProjectRoutes(unittest.TestCase):
         self.assertEqual(out.org, "org-1")
 
     def test_delete_provider_credential_route(self):
-        with patch.object(projects, "delete_provider_credential", return_value={"ok": True, "deleted": True}) as delete_provider_credential:
+        with (
+            patch.object(projects, "delete_provider_credential", return_value={"ok": True, "deleted": True}) as delete_provider_credential,
+            patch.object(projects, "audit_event") as audit_event,
+        ):
             out = projects.delete_provider_credential_route("github", org=None, user="user-1")
         delete_provider_credential.assert_called_once_with("user-1", "github", org=None)
+        audit_event.assert_called_once_with(
+            "provider_oauth_disconnect",
+            "user-1",
+            None,
+            outcome="success",
+            provider="github",
+            deleted=True,
+        )
         self.assertTrue(out.ok)
         self.assertTrue(out.deleted)
 
@@ -256,6 +320,8 @@ class TestProjectRoutes(unittest.TestCase):
         self.assertIn("/v1/projects/{project_id}/files/{tracked_file_id}", schema.get("paths", {}))
         self.assertIn("/v1/projects/{project_id}/events", schema.get("paths", {}))
         self.assertIn("/v1/projects/providers/{provider}/credentials", schema.get("paths", {}))
+        self.assertIn("/v1/projects/providers/google_drive/oauth/start", schema.get("paths", {}))
+        self.assertIn("/v1/projects/providers/google_drive/oauth/callback", schema.get("paths", {}))
 
     def test_delete_project_route(self):
         with patch.object(projects, "delete_project", return_value={"ok": True}) as delete_project:

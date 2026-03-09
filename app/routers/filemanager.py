@@ -17,28 +17,36 @@ from app.core.tables import T
 from app.core.settings import S
 from app.services.filemanager import (
     create_empty_folder,
+    create_empty_folder_dispatched,
     download_file,
+    download_file_dispatched,
     download_thumbnail,
     download_zip,
     is_previewable,
     list_children,
+    list_children_dispatched,
     list_children_page,
     list_shared_with,
     list_shared_with_me,
     move_node,
+    move_node_dispatched,
     resume_move,
     rollback_move,
     norm_path,
     remove_file,
+    remove_file_dispatched,
     remove_folder,
+    remove_folder_dispatched,
     search_prefix,
     share_node,
     unshare_node,
     split_parent_name,
     upload_file,
+    upload_file_dispatched,
     upload_zip,
     upload_archive,
     get_node,
+    get_node_dispatched,
     search_text,
     presign_upload,
     register_presigned_upload,
@@ -48,10 +56,12 @@ from app.services.filemanager import (
     encryption_info_from_node,
     preview_capability_from_node,
     record_download_usage,
+    resolve_path_dispatch,
     get_usage_summary,
     get_usage_daily,
     get_usage_storage,
     assert_download_allowed,
+    assert_mount_write_allowed,
 )
 from app.services.alerts import audit_event
 from app.metrics import (
@@ -68,6 +78,17 @@ from app.services.purchase_history import record_receipt_download
 from app.services.file_bundle_entitlements import assert_file_bundle_access
 from app.services.internal_api_entitlements import enforce_internal_api_entitlement
 from app.services.sessions import require_ui_session
+from app.services.file_providers import default_provider_registry
+from app.services.mounts_store import (
+    create_mount,
+    delete_mount,
+    get_mount,
+    list_mounts,
+    reconcile_mount_health,
+    reconcile_mounts,
+    set_mount_status,
+    update_mount,
+)
 
 router = APIRouter(prefix="/v1/fs", tags=["filemanager"])
 
@@ -106,6 +127,31 @@ def _decode_cursor(cursor: Optional[str]) -> Optional[Dict[str, Any]]:
 
 def _current_user(ctx=Depends(require_ui_session)) -> str:
     return ctx["user_sub"]
+
+
+def _require_google_drive_mounts_enabled() -> None:
+    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        return
+    raise HTTPException(
+        status_code=501,
+        detail={
+            "code": "feature_not_enabled",
+            "feature": "filemgr_google_drive_mounts",
+            "message": "Google Drive mounts are not enabled in this environment",
+        },
+    )
+
+
+def _enforce_mount_write_paths(owner: str, *paths: str, action: str) -> None:
+    for path in paths:
+        if isinstance(path, str) and path.strip():
+            assert_mount_write_allowed(owner, path, action=action)
+
+
+def _move_node_for_owner(owner: str, src: str, dst: str) -> Dict[str, Any]:
+    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        return move_node_dispatched(owner, src, dst)
+    return move_node(owner, src, dst)
 
 
 require_content_moderation_admin = require_admin_scope("content_moderation")
@@ -236,6 +282,60 @@ class FileCryptoTelemetryIn(BaseModel):
     remembered_password_used: bool = Field(default=False)
 
 
+class MountCreateIn(BaseModel):
+    provider: str = Field(default="google_drive", min_length=1, max_length=64)
+    mount_path: str = Field(..., min_length=1, max_length=2048)
+    provider_root_ref: str = Field(..., min_length=1, max_length=2048)
+    mode: str = Field(default="read_only", pattern="^(read_only|read_write)$")
+
+
+class MountUpdateIn(BaseModel):
+    mount_path: Optional[str] = Field(default=None, min_length=1, max_length=2048)
+    provider_root_ref: Optional[str] = Field(default=None, min_length=1, max_length=2048)
+    mode: Optional[str] = Field(default=None, pattern="^(read_only|read_write)$")
+
+
+class MountOut(BaseModel):
+    mount_id: str
+    owner: str
+    provider: str
+    mount_path: str
+    provider_root_ref: str
+    mode: str
+    status: str = "active"
+    status_reason: Optional[str] = None
+    reconnect_required: bool = False
+    last_checked_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class MountListOut(BaseModel):
+    items: List[MountOut] = Field(default_factory=list)
+
+
+class DeleteMountOut(BaseModel):
+    ok: bool
+    deleted: bool
+
+
+class MountReconcileOut(BaseModel):
+    owner: str
+    mount_id: str
+    provider: str
+    mount_path: str
+    provider_root_ref: str
+    stale: bool
+    issues: List[str] = Field(default_factory=list)
+    recommended_actions: List[str] = Field(default_factory=list)
+    status: str
+    reconnect_required: bool = False
+
+
+class MountReconcileListOut(BaseModel):
+    items: List[MountReconcileOut] = Field(default_factory=list)
+
+
 @router.get("/list")
 def list_files(
     path: str = Query("/", description="Folder path"),
@@ -255,7 +355,13 @@ def list_files(
     folder = norm_path(path, is_folder=True)
     cursor_payload = _decode_cursor(cursor)
     scan_forward = sort_dir == "asc"
-    if sort_by == "name":
+    dispatch = resolve_path_dispatch(user, folder)
+    if dispatch["kind"] == "mount":
+        if cursor_payload and cursor_payload.get("mode") != "offset":
+            raise HTTPException(status_code=400, detail="invalid cursor")
+        items = list_children_dispatched(user, folder)
+        next_cursor = None
+    elif sort_by == "name":
         if cursor_payload and cursor_payload.get("mode") not in {"ddb", None}:
             raise HTTPException(status_code=400, detail="invalid cursor")
         cursor_key = cursor_payload.get("key") if cursor_payload else None
@@ -314,7 +420,10 @@ def list_files(
 @router.get("/info")
 def file_info(path: str = Query(...), user: str = Depends(_current_user)):
     p = norm_path(path, is_folder=None)
-    it = get_node(user, p if p.endswith("/") else p)
+    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        it = get_node_dispatched(user, p if p.endswith("/") else p)
+    else:
+        it = get_node(user, p if p.endswith("/") else p)
     encryption_info = encryption_info_from_node(it)
     preview_info = preview_capability_from_node(it)
     return {
@@ -538,7 +647,11 @@ def admin_file_audit(
 
 @router.post("/folder")
 def create_folder(path: str = Body(..., embed=True), req: Request = None, user: str = Depends(_current_user)):
-    folder = create_empty_folder(user, path)
+    _enforce_mount_write_paths(user, path, action="create_folder")
+    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        folder = create_empty_folder_dispatched(user, path)
+    else:
+        folder = create_empty_folder(user, path)
     audit_event("filemgr_folder_created", user, req, outcome="success", path=folder)
     return {"ok": True, "path": folder}
 
@@ -548,6 +661,7 @@ def upload_fs_file(
     path: str = Query(..., description="Full file path, e.g. /docs/a.txt"),
     file: UploadFile = File(...),
     encrypted: bool = Query(False),
+    overwrite: bool = Query(False),
     enc_meta: Optional[str] = Query(default=None, description="JSON encryption metadata"),
     req: Request = None,
     user: str = Depends(_current_user),
@@ -557,9 +671,14 @@ def upload_fs_file(
         action="upload_file",
         request_id=(req.headers.get("X-Request-Id") if req else None),
     )
+    _enforce_mount_write_paths(user, path, action="upload_file")
     encrypted_flag = encrypted if isinstance(encrypted, bool) else False
     encryption_meta = _parse_encryption_meta(enc_meta) if encrypted_flag else None
-    result = upload_file(user, path, file, encryption_meta=encryption_meta)
+    overwrite_flag = overwrite if isinstance(overwrite, bool) else False
+    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        result = upload_file_dispatched(user, path, file, overwrite=overwrite_flag, encryption_meta=encryption_meta)
+    else:
+        result = upload_file(user, path, file, encryption_meta=encryption_meta)
     audit_event(
         "filemgr_file_uploaded",
         user,
@@ -576,6 +695,7 @@ def upload_fs_file(
 
 @router.post("/presign-upload", response_model=PresignUploadOut)
 def presign_fs_upload(inp: PresignUploadIn, user: str = Depends(_current_user)):
+    _enforce_mount_write_paths(user, inp.path, action="presign_upload")
     result = presign_upload(user, inp.path, content_type=inp.content_type)
     return PresignUploadOut(
         upload_url=result["upload_url"],
@@ -589,6 +709,7 @@ def presign_fs_upload(inp: PresignUploadIn, user: str = Depends(_current_user)):
 
 @router.post("/complete-upload")
 def complete_fs_upload(inp: CompleteUploadIn, req: Request = None, user: str = Depends(_current_user)):
+    _enforce_mount_write_paths(user, inp.path, action="complete_upload")
     _enforce_filemanager_internal_entitlement(
         user=user,
         action="upload_file",
@@ -623,7 +744,10 @@ def download_fs_file(path: str = Query(...), req: Request = None, user: str = De
         action="download_file",
         request_id=(req.headers.get("X-Request-Id") if req else None),
     )
-    result = download_file(user, path)
+    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        result = download_file_dispatched(user, path)
+    else:
+        result = download_file(user, path)
     assert_file_bundle_access(user, result["node"])
     assert_download_allowed(user, requested_bytes=int(result["node"].get("size") or 0))
     node = result["node"]
@@ -795,14 +919,27 @@ def remove_fs_file(path: str = Query(...), req: Request = None, user: str = Depe
         action="delete_file",
         request_id=(req.headers.get("X-Request-Id") if req else None),
     )
-    remove_file(user, path)
+    _enforce_mount_write_paths(user, path, action="delete_file")
+    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        remove_file_dispatched(user, path)
+    else:
+        remove_file(user, path)
     audit_event("filemgr_file_removed", user, req, outcome="success", path=path, **_file_audit_fields(file_path=norm_path(path, is_folder=False), owner=user))
     return {"ok": True}
 
 
 @router.delete("/folder")
 def remove_fs_folder(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
-    deleted_count = remove_folder(user, path)
+    _enforce_filemanager_internal_entitlement(
+        user=user,
+        action="delete_folder",
+        request_id=(req.headers.get("X-Request-Id") if req else None),
+    )
+    _enforce_mount_write_paths(user, path, action="delete_folder")
+    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        deleted_count = remove_folder_dispatched(user, path)
+    else:
+        deleted_count = remove_folder(user, path)
     correlation_id = uuid.uuid4().hex
     audit_event(
         "filemgr_folder_removed",
@@ -823,7 +960,8 @@ def move_fs_node(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
-    result = move_node(user, src, dst)
+    _enforce_mount_write_paths(user, src, dst, action="move_node")
+    result = _move_node_for_owner(user, src, dst)
     audit_event(
         "filemgr_node_moved",
         user,
@@ -874,9 +1012,10 @@ def rename_file(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    _enforce_mount_write_paths(user, path, action="rename_file")
     parent, _ = split_parent_name(norm_path(path, is_folder=False))
     dst = parent + new_name
-    result = move_node(user, path, dst)
+    result = _move_node_for_owner(user, path, dst)
     audit_event(
         "filemgr_file_renamed",
         user,
@@ -895,10 +1034,11 @@ def rename_folder(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    _enforce_mount_write_paths(user, path, action="rename_folder")
     folder = norm_path(path, is_folder=True)
     parent, _ = split_parent_name(folder)
     dst = parent + new_name + "/"
-    result = move_node(user, folder, dst)
+    result = _move_node_for_owner(user, folder, dst)
     audit_event(
         "filemgr_folder_renamed",
         user,
@@ -952,6 +1092,7 @@ def upload_zip_and_extract(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    _enforce_mount_write_paths(user, dest_folder, action="upload_zip")
     created = upload_zip(user, dest_folder, zip_file)
     audit_event(
         "filemgr_zip_uploaded",
@@ -971,6 +1112,7 @@ def upload_archive_and_extract(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    _enforce_mount_write_paths(user, dest_folder, action="upload_archive")
     created = upload_archive(user, dest_folder, archive_file)
     audit_event(
         "filemgr_archive_uploaded",
@@ -994,6 +1136,7 @@ def share_fs_node(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    _enforce_mount_write_paths(user, path, action="share_node")
     share_node(
         user,
         path,
@@ -1024,6 +1167,7 @@ def unshare_fs_node(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    _enforce_mount_write_paths(user, path, action="unshare_node")
     unshare_node(user, path, to_user)
     audit_event(
         "filemgr_node_unshared",
@@ -1349,7 +1493,11 @@ def remove_shared_file(
     user: str = Depends(_current_user),
 ):
     require_shared_access(user, owner, path, permission="write")
-    remove_file(owner, path)
+    _enforce_mount_write_paths(owner, path, action="shared_delete_file")
+    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        remove_file_dispatched(owner, path)
+    else:
+        remove_file(owner, path)
     audit_event("filemgr_file_removed", user, req, outcome="success", path=path, owner=owner)
     return {"ok": True}
 
@@ -1362,7 +1510,11 @@ def remove_shared_folder(
     user: str = Depends(_current_user),
 ):
     require_shared_access(user, owner, path, permission="write")
-    deleted_count = remove_folder(owner, path)
+    _enforce_mount_write_paths(owner, path, action="shared_delete_folder")
+    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        deleted_count = remove_folder_dispatched(owner, path)
+    else:
+        deleted_count = remove_folder(owner, path)
     audit_event(
         "filemgr_folder_removed",
         user,
@@ -1384,10 +1536,11 @@ def move_shared_node(
     user: str = Depends(_current_user),
 ):
     access = require_shared_access(user, owner, src, permission="write")
+    _enforce_mount_write_paths(owner, src, dst, action="shared_move_node")
     shared_root = access["path"]
     if shared_root.endswith("/") and not norm_path(dst, is_folder=None).startswith(shared_root):
         raise HTTPException(status_code=403, detail="destination must be within shared root")
-    result = move_node(owner, src, dst)
+    result = _move_node_for_owner(owner, src, dst)
     audit_event(
         "filemgr_node_moved",
         user,
@@ -1409,7 +1562,8 @@ def rename_shared_file(
     user: str = Depends(_current_user),
 ):
     require_shared_access(user, owner, path, permission="write")
-    result = move_node(owner, path, norm_path(path, is_folder=False).rsplit("/", 1)[0] + "/" + new_name)
+    _enforce_mount_write_paths(owner, path, action="shared_rename_file")
+    result = _move_node_for_owner(owner, path, norm_path(path, is_folder=False).rsplit("/", 1)[0] + "/" + new_name)
     audit_event("filemgr_file_renamed", user, req, outcome="success", path=path, new_name=new_name, owner=owner)
     return {"ok": True, **result}
 
@@ -1423,10 +1577,11 @@ def rename_shared_folder(
     user: str = Depends(_current_user),
 ):
     require_shared_access(user, owner, path, permission="write")
+    _enforce_mount_write_paths(owner, path, action="shared_rename_folder")
     current = norm_path(path, is_folder=True)
     parent = current.rstrip("/").rsplit("/", 1)[0] + "/"
     dst = norm_path(parent + new_name + "/", is_folder=True)
-    result = move_node(owner, current, dst)
+    result = _move_node_for_owner(owner, current, dst)
     audit_event("filemgr_folder_renamed", user, req, outcome="success", path=path, new_name=new_name, owner=owner)
     return {"ok": True, **result}
 
@@ -1439,7 +1594,11 @@ def create_shared_folder(
     user: str = Depends(_current_user),
 ):
     require_shared_access(user, owner, path, permission="write")
-    folder = create_empty_folder(owner, path)
+    _enforce_mount_write_paths(owner, path, action="shared_create_folder")
+    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        folder = create_empty_folder_dispatched(owner, path)
+    else:
+        folder = create_empty_folder(owner, path)
     audit_event("filemgr_folder_created", user, req, outcome="success", path=folder, owner=owner)
     return {"ok": True, "path": folder}
 
@@ -1450,14 +1609,20 @@ def upload_shared_file(
     path: str = Query(..., description="Full file path, e.g. /docs/a.txt"),
     file: UploadFile = File(...),
     encrypted: bool = Query(False),
+    overwrite: bool = Query(False),
     enc_meta: Optional[str] = Query(default=None, description="JSON encryption metadata"),
     req: Request = None,
     user: str = Depends(_current_user),
 ):
     require_shared_access(user, owner, path, permission="write")
+    _enforce_mount_write_paths(owner, path, action="shared_upload_file")
     encrypted_flag = encrypted if isinstance(encrypted, bool) else False
     encryption_meta = _parse_encryption_meta(enc_meta) if encrypted_flag else None
-    result = upload_file(owner, path, file, encryption_meta=encryption_meta)
+    overwrite_flag = overwrite if isinstance(overwrite, bool) else False
+    if bool(getattr(S, "filemgr_google_drive_mounts_enabled", False)):
+        result = upload_file_dispatched(owner, path, file, overwrite=overwrite_flag, encryption_meta=encryption_meta)
+    else:
+        result = upload_file(owner, path, file, encryption_meta=encryption_meta)
     audit_event(
         "filemgr_file_uploaded",
         user,
@@ -1521,6 +1686,7 @@ def upload_shared_zip(
     user: str = Depends(_current_user),
 ):
     require_shared_access(user, owner, dest_folder, permission="write")
+    _enforce_mount_write_paths(owner, dest_folder, action="shared_upload_zip")
     created = upload_zip(owner, dest_folder, zip_file)
     audit_event(
         "filemgr_zip_uploaded",
@@ -1543,6 +1709,7 @@ def upload_shared_archive(
     user: str = Depends(_current_user),
 ):
     require_shared_access(user, owner, dest_folder, permission="write")
+    _enforce_mount_write_paths(owner, dest_folder, action="shared_upload_archive")
     created = upload_archive(owner, dest_folder, archive_file)
     audit_event(
         "filemgr_archive_uploaded",
@@ -1593,6 +1760,138 @@ def shared_download_zip(
         media_type="application/zip",
         headers={"Content-Disposition": "attachment; filename=download.zip"},
     )
+
+
+@router.post("/mounts", response_model=MountOut)
+def create_mount_route(body: MountCreateIn, user: str = Depends(_current_user)):
+    _enforce_filemanager_internal_entitlement(user=user, action="mount_create")
+    _require_google_drive_mounts_enabled()
+    registry = default_provider_registry()
+    provider_client = registry.get(user, body.provider)
+    canonical_root_ref = provider_client.resolve(body.provider_root_ref)
+    if not provider_client.exists(canonical_root_ref):
+        raise HTTPException(status_code=404, detail="mount provider_root_ref not found")
+
+    mount = create_mount(
+        user,
+        provider=body.provider,
+        mount_path=body.mount_path,
+        provider_root_ref=canonical_root_ref,
+        mode=body.mode,
+    )
+    return MountOut(**mount.model_dump())
+
+
+@router.get("/mounts", response_model=MountListOut)
+def list_mounts_route(user: str = Depends(_current_user)):
+    _enforce_filemanager_internal_entitlement(user=user, action="mount_list")
+    _require_google_drive_mounts_enabled()
+    items = [MountOut(**item.model_dump()) for item in list_mounts(user)]
+    return MountListOut(items=items)
+
+
+@router.patch("/mounts/{mount_id}", response_model=MountOut)
+def update_mount_route(mount_id: str, body: MountUpdateIn, user: str = Depends(_current_user)):
+    _enforce_filemanager_internal_entitlement(user=user, action="mount_update")
+    _require_google_drive_mounts_enabled()
+    provider_root_ref = body.provider_root_ref
+    if provider_root_ref is not None:
+        existing = get_mount(user, mount_id)
+        registry = default_provider_registry()
+        provider_client = registry.get(user, existing.provider)
+        canonical_root_ref = provider_client.resolve(provider_root_ref)
+        if not provider_client.exists(canonical_root_ref):
+            raise HTTPException(status_code=404, detail="mount provider_root_ref not found")
+        provider_root_ref = canonical_root_ref
+
+    mount = update_mount(
+        user,
+        mount_id,
+        mount_path=body.mount_path,
+        provider_root_ref=provider_root_ref,
+        mode=body.mode,
+    )
+    return MountOut(**mount.model_dump())
+
+
+@router.delete("/mounts/{mount_id}", response_model=DeleteMountOut)
+def delete_mount_route(mount_id: str, user: str = Depends(_current_user)):
+    _enforce_filemanager_internal_entitlement(user=user, action="mount_delete")
+    _require_google_drive_mounts_enabled()
+    return DeleteMountOut(**delete_mount(user, mount_id))
+
+
+@router.get("/admin/mounts/reconcile", response_model=MountReconcileListOut)
+def admin_reconcile_mounts_route(
+    owner: str = Query(..., description="Mount owner user_sub"),
+    req: Request = None,
+    ctx: Dict[str, Any] = Depends(_admin_or_root_ctx),
+):
+    _require_google_drive_mounts_enabled()
+    items = [MountReconcileOut(**row) for row in reconcile_mounts(owner)]
+    audit_event(
+        "filemgr_mount_reconcile_scan",
+        ctx["user_sub"],
+        req,
+        outcome="success",
+        owner=owner,
+        stale_count=sum(1 for item in items if item.stale),
+        total_count=len(items),
+    )
+    return MountReconcileListOut(items=items)
+
+
+@router.post("/admin/mounts/{mount_id}/disable", response_model=MountOut)
+def admin_disable_mount_route(
+    mount_id: str,
+    owner: str = Query(..., description="Mount owner user_sub"),
+    reason: str = Query("admin_disabled", description="Disable reason"),
+    req: Request = None,
+    ctx: Dict[str, Any] = Depends(_admin_or_root_ctx),
+):
+    _require_google_drive_mounts_enabled()
+    updated = set_mount_status(
+        owner,
+        mount_id,
+        status="disabled",
+        status_reason=(reason or "admin_disabled"),
+        reconnect_required=True,
+    )
+    audit_event(
+        "filemgr_mount_disabled",
+        ctx["user_sub"],
+        req,
+        outcome="success",
+        owner=owner,
+        mount_id=mount_id,
+        reason=(reason or "admin_disabled"),
+    )
+    return MountOut(**updated.model_dump())
+
+
+@router.post("/admin/mounts/{mount_id}/reconcile-disable", response_model=MountOut)
+def admin_reconcile_disable_mount_route(
+    mount_id: str,
+    owner: str = Query(..., description="Mount owner user_sub"),
+    req: Request = None,
+    ctx: Dict[str, Any] = Depends(_admin_or_root_ctx),
+):
+    _require_google_drive_mounts_enabled()
+    result = reconcile_mount_health(owner, mount_id)
+    if not result.get("stale"):
+        raise HTTPException(status_code=409, detail="mount is not stale")
+    reason = ",".join(result.get("issues") or ["stale_mount"])
+    updated = set_mount_status(owner, mount_id, status="disabled", status_reason=reason, reconnect_required=bool(result.get("reconnect_required")))
+    audit_event(
+        "filemgr_mount_reconcile_disable",
+        ctx["user_sub"],
+        req,
+        outcome="success",
+        owner=owner,
+        mount_id=mount_id,
+        issues=result.get("issues"),
+    )
+    return MountOut(**updated.model_dump())
 
 
 @router.get("/usage/summary")

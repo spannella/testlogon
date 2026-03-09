@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.services.alerts import audit_event
+
 from app.services.projects_store import (
     add_tracked_file,
     create_project,
@@ -24,6 +26,7 @@ from app.services.provider_credentials import (
     get_provider_credential,
     upsert_provider_credential,
 )
+from app.services.provider_oauth import build_google_oauth_start, complete_google_oauth_callback
 from app.services.sessions import require_ui_session
 
 router = APIRouter(prefix="/v1/projects", tags=["projects"])
@@ -138,6 +141,18 @@ class ProviderCredentialOut(BaseModel):
 class DeleteProviderCredentialOut(BaseModel):
     ok: bool
     deleted: bool
+
+
+class ProviderOAuthStartOut(BaseModel):
+    provider: str
+    authorization_url: str
+    state: str
+    expires_at: str
+
+
+class ProviderOAuthCallbackIn(BaseModel):
+    code: str = Field(..., min_length=1, max_length=8192)
+    state: str = Field(..., min_length=1, max_length=8192)
 
 
 def _current_user(ctx=Depends(require_ui_session)) -> str:
@@ -320,4 +335,23 @@ def get_provider_credential_route(provider: str, org: Optional[str] = Query(defa
 
 @router.delete("/providers/{provider}/credentials", response_model=DeleteProviderCredentialOut)
 def delete_provider_credential_route(provider: str, org: Optional[str] = Query(default=None), user: str = Depends(_current_user)):
-    return DeleteProviderCredentialOut(**delete_provider_credential(user, provider, org=org))
+    result = delete_provider_credential(user, provider, org=org)
+    audit_event(
+        "provider_oauth_disconnect",
+        user,
+        None,
+        outcome="success",
+        provider=(provider or "").strip().lower(),
+        deleted=bool(result.get("deleted")),
+    )
+    return DeleteProviderCredentialOut(**result)
+
+
+@router.post("/providers/google_drive/oauth/start", response_model=ProviderOAuthStartOut)
+def start_google_drive_oauth_route(user: str = Depends(_current_user)):
+    return ProviderOAuthStartOut(**build_google_oauth_start(user))
+
+
+@router.post("/providers/google_drive/oauth/callback", response_model=ProviderCredentialOut)
+def complete_google_drive_oauth_callback_route(body: ProviderOAuthCallbackIn, user: str = Depends(_current_user)):
+    return ProviderCredentialOut(**complete_google_oauth_callback(user, code=body.code, state=body.state))

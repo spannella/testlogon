@@ -73,6 +73,7 @@ from app.services.api_usage_metering import record_api_usage_from_response, enfo
 from app.services.api_metering_policy import build_limit_denial_headers
 from app.routers.messaging import start_scheduled_messages_task
 from app.services.projects_reconcile import start_projects_reconcile_task
+from app.services.provider_oauth import validate_google_drive_mount_oauth_configuration
 from app.services.api_usage_entitlements import enforce_api_package_entitlement_pre_request
 
 
@@ -196,6 +197,7 @@ def create_app() -> FastAPI:
     app.include_router(device_trust_router)
     app.include_router(newsfeed_router)
     app.add_event_handler("startup", validate_startup_root_invariant)
+    app.add_event_handler("startup", validate_google_drive_mount_oauth_configuration)
     if _S.dev_mode:
         _dev_buckets = [b for b in [
             _S.filemgr_bucket,

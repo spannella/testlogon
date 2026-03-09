@@ -2156,3 +2156,273 @@ class TestFileManagerService(unittest.TestCase):
     def test_run_media_tool_rejects_non_list_args(self):
         with self.assertRaises(ValueError):
             filemanager._run_media_tool("ffprobe -version")
+
+
+
+
+
+
+    def test_move_node_dispatched_same_mount_calls_provider_move(self):
+        provider = SimpleNamespace(
+            get_metadata=lambda ref: {"type": "file", "name": "a.txt", "parents": ["p1"]} if ref == "gdrive://me/items/src" else {"type": "dir", "name": "folder", "parents": []},
+            resolve=lambda ref: ref,
+            list_children=lambda ref: [],
+            move_item=Mock(),
+        )
+        mount = SimpleNamespace(mount_id="m1", provider="google_drive", mount_path="/integrations/drive/")
+        src_dispatch = {"kind": "mount", "mount": mount, "provider": provider, "provider_ref": "gdrive://me/items/src", "mount_path": "/integrations/drive/"}
+        dst_dispatch = {"kind": "mount", "mount": mount, "provider": provider, "provider_ref": "gdrive://me/items/dst", "mount_path": "/integrations/drive/"}
+        parent_dispatch = {"kind": "mount", "mount": mount, "provider": provider, "provider_ref": "gdrive://me/items/parent", "mount_path": "/integrations/drive/"}
+        with patch.object(filemanager, "resolve_path_dispatch", side_effect=[src_dispatch, dst_dispatch, parent_dispatch]), patch.object(filemanager, "_provider_find_child_by_name", return_value=None):
+            out = filemanager.move_node_dispatched("owner-1", "/integrations/drive/a.txt", "/integrations/drive/new/a.txt")
+        provider.move_item.assert_called_once_with("gdrive://me/items/src", new_parent_ref="gdrive://me/items/parent", new_name="a.txt")
+        self.assertEqual(out["type"], "file")
+
+    def test_move_node_dispatched_rejects_cross_mount(self):
+        provider = SimpleNamespace(get_metadata=lambda ref: {"type": "file", "parents": ["p1"]}, resolve=lambda ref: ref)
+        src_mount = SimpleNamespace(mount_id="m1", provider="google_drive", mount_path="/integrations/drive/")
+        dst_mount = SimpleNamespace(mount_id="m2", provider="google_drive", mount_path="/integrations/drive2/")
+        src_dispatch = {"kind": "mount", "mount": src_mount, "provider": provider, "provider_ref": "gdrive://me/items/src", "mount_path": "/integrations/drive/"}
+        dst_dispatch = {"kind": "mount", "mount": dst_mount, "provider": provider, "provider_ref": "gdrive://me/items/dst", "mount_path": "/integrations/drive2/"}
+        with patch.object(filemanager, "resolve_path_dispatch", side_effect=[src_dispatch, dst_dispatch]):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.move_node_dispatched("owner-1", "/integrations/drive/a.txt", "/integrations/drive2/a.txt")
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "mount_move_unsupported")
+
+
+    def test_create_empty_folder_dispatched_creates_folder_in_mount(self):
+        provider = SimpleNamespace(
+            get_metadata=lambda ref: {"type": "dir"},
+            create_folder=lambda parent_ref, name: "gdrive://me/items/new-folder",
+        )
+        parent_dispatch = {
+            "kind": "mount",
+            "provider": provider,
+            "provider_ref": "gdrive://me/items/parent",
+        }
+        with patch.object(filemanager, "resolve_path_dispatch", side_effect=[{"kind": "mount"}, parent_dispatch]):
+            out = filemanager.create_empty_folder_dispatched("owner-1", "/integrations/drive/new/")
+        self.assertEqual(out, "/integrations/drive/new/")
+
+    def test_upload_file_dispatched_mount_passes_overwrite_to_provider(self):
+        provider = SimpleNamespace(
+            get_metadata=lambda ref: {"type": "dir"},
+            upload_file=lambda parent_ref, name, file_obj, content_type, overwrite: {"size": 9, "content_type": content_type or "application/octet-stream"},
+        )
+        parent_dispatch = {
+            "kind": "mount",
+            "provider": provider,
+            "provider_ref": "gdrive://me/items/parent",
+        }
+        upload = UploadFile(filename="a.txt", file=io.BytesIO(b"contents"), headers={"content-type": "text/plain"})
+        with (
+            patch.object(filemanager, "resolve_path_dispatch", side_effect=[{"kind": "mount"}, parent_dispatch]),
+            patch.object(filemanager, "record_filemgr_mount_bytes") as record_filemgr_mount_bytes,
+            patch.object(filemanager, "record_filemgr_mount_operation_latency") as record_filemgr_mount_operation_latency,
+        ):
+            out = filemanager.upload_file_dispatched("owner-1", "/integrations/drive/a.txt", upload, overwrite=True)
+        self.assertEqual(out["path"], "/integrations/drive/a.txt")
+        self.assertEqual(out["size"], 9)
+        record_filemgr_mount_bytes.assert_called_once_with("unknown", "in", "upload", 9)
+        record_filemgr_mount_operation_latency.assert_called_once()
+
+    def test_remove_file_dispatched_mount_deletes_provider_item(self):
+        provider = SimpleNamespace(
+            get_metadata=lambda ref: {"type": "file"},
+            delete_item=Mock(),
+        )
+        dispatch = {"kind": "mount", "provider": provider, "provider_ref": "gdrive://me/items/file-1"}
+        with patch.object(filemanager, "resolve_path_dispatch", return_value=dispatch):
+            filemanager.remove_file_dispatched("owner-1", "/integrations/drive/a.txt")
+        provider.delete_item.assert_called_once_with("gdrive://me/items/file-1")
+
+    def test_remove_folder_dispatched_mount_recursively_deletes(self):
+        refs = {
+            "gdrive://me/items/folder": {"type": "dir"},
+            "gdrive://me/items/child-file": {"type": "file"},
+        }
+        deleted = []
+        provider = SimpleNamespace(
+            get_metadata=lambda ref: refs[ref],
+            list_children=lambda ref: ["gdrive://me/items/child-file"] if ref == "gdrive://me/items/folder" else [],
+            delete_item=lambda ref: deleted.append(ref),
+        )
+        dispatch = {
+            "kind": "mount",
+            "provider": provider,
+            "provider_ref": "gdrive://me/items/folder",
+            "mount_path": "/integrations/drive/",
+        }
+        with patch.object(filemanager, "resolve_path_dispatch", return_value=dispatch):
+            count = filemanager.remove_folder_dispatched("owner-1", "/integrations/drive/sub/")
+        self.assertEqual(count, 2)
+        self.assertEqual(deleted, ["gdrive://me/items/child-file", "gdrive://me/items/folder"])
+
+
+    def test_assert_mount_write_allowed_rejects_read_only_mount(self):
+        dispatch = {
+            "kind": "mount",
+            "mount": SimpleNamespace(mount_id="m1", mount_path="/integrations/drive/", mode="read_only"),
+        }
+        with patch.object(filemanager, "resolve_path_dispatch", return_value=dispatch):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.assert_mount_write_allowed("owner-1", "/integrations/drive/a.txt", action="upload_file")
+
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail["code"], "mount_read_only")
+
+    def test_assert_mount_write_allowed_allows_read_write_mount(self):
+        dispatch = {
+            "kind": "mount",
+            "mount": SimpleNamespace(mount_id="m2", mount_path="/integrations/drive/", mode="read_write"),
+        }
+        with patch.object(filemanager, "resolve_path_dispatch", return_value=dispatch):
+            filemanager.assert_mount_write_allowed("owner-1", "/integrations/drive/a.txt", action="upload_file")
+
+
+    def test_download_file_dispatched_streams_from_provider_for_mounted_paths(self):
+        stream_response = SimpleNamespace(
+            iter_content=lambda chunk_size=0: iter([b"abc", b"def"]),
+            close=lambda: None,
+        )
+        provider = SimpleNamespace(
+            get_metadata=lambda ref: {
+                "name": "a.txt",
+                "type": "file",
+                "size": 6,
+                "mime_type": "text/plain",
+                "modified_time": "2026-01-01T00:00:00+00:00",
+            },
+            stream_file=lambda ref: stream_response,
+        )
+        dispatch = {
+            "kind": "mount",
+            "path": "/integrations/drive/a.txt",
+            "mount": SimpleNamespace(provider="google_drive"),
+            "mount_path": "/integrations/drive/",
+            "relative_parts": ["a.txt"],
+            "provider": provider,
+            "provider_ref": "gdrive://me/items/file-1",
+        }
+
+        with (
+            patch.object(filemanager, "resolve_path_dispatch", return_value=dispatch),
+            patch.object(filemanager, "record_filemgr_mount_bytes") as record_filemgr_mount_bytes,
+            patch.object(filemanager, "record_filemgr_mount_operation_latency") as record_filemgr_mount_operation_latency,
+        ):
+            out = filemanager.download_file_dispatched("owner-1", "/integrations/drive/a.txt")
+
+        self.assertEqual(out["node"]["content_type"], "text/plain")
+        self.assertEqual(out["node"]["size"], 6)
+        body = out["object"]["Body"]
+        self.assertEqual(body.read(3), b"abc")
+        self.assertEqual(body.read(3), b"def")
+        self.assertEqual(body.read(3), b"")
+        record_filemgr_mount_bytes.assert_called_once_with("google_drive", "out", "download", 6)
+        record_filemgr_mount_operation_latency.assert_called_once()
+
+
+    def test_resolve_path_dispatch_returns_local_for_non_mounted_paths(self):
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch("app.services.mounts_store.list_mounts", return_value=[]),
+        ):
+            out = filemanager.resolve_path_dispatch("owner-1", "/docs/a.txt")
+
+        self.assertEqual(out["kind"], "local")
+        self.assertEqual(out["path"], "/docs/a.txt")
+
+    def test_resolve_path_dispatch_ignores_disabled_mounts(self):
+        disabled_mount = SimpleNamespace(
+            mount_id="m-1",
+            provider="google_drive",
+            mount_path="/integrations/drive/",
+            provider_root_ref="gdrive://me/items/root",
+            status="disabled",
+        )
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch("app.services.mounts_store.list_mounts", return_value=[disabled_mount]),
+        ):
+            out = filemanager.resolve_path_dispatch("owner-1", "/integrations/drive/a.txt")
+
+        self.assertEqual(out["kind"], "local")
+
+    def test_resolve_path_dispatch_selects_longest_owner_mount_and_resolves_relative_segments(self):
+        mount_primary = SimpleNamespace(
+            mount_id="m-2",
+            owner="owner-1",
+            provider="google_drive",
+            mount_path="/integrations/drive/work/",
+            provider_root_ref="gdrive://me/items/work-root",
+        )
+        mount_parent = SimpleNamespace(
+            mount_id="m-1",
+            owner="owner-1",
+            provider="google_drive",
+            mount_path="/integrations/drive/",
+            provider_root_ref="gdrive://me/items/parent-root",
+        )
+
+        class _Provider:
+            def resolve(self, ref):
+                return ref
+
+            def list_children(self, canonical_ref):
+                if canonical_ref == "gdrive://me/items/work-root":
+                    return ["gdrive://me/items/reports-folder"]
+                if canonical_ref == "gdrive://me/items/reports-folder":
+                    return ["gdrive://me/items/summary-file"]
+                return []
+
+            def get_metadata(self, canonical_ref):
+                rows = {
+                    "gdrive://me/items/work-root": {"name": "work", "type": "dir"},
+                    "gdrive://me/items/reports-folder": {"name": "reports", "type": "dir"},
+                    "gdrive://me/items/summary-file": {"name": "summary.txt", "type": "file"},
+                }
+                return rows[canonical_ref]
+
+        registry = SimpleNamespace(get=lambda owner, provider: _Provider())
+
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch("app.services.mounts_store.list_mounts", return_value=[mount_parent, mount_primary]),
+            patch("app.services.file_providers.default_provider_registry", return_value=registry),
+        ):
+            out = filemanager.resolve_path_dispatch("owner-1", "/integrations/drive/work/reports/summary.txt")
+
+        self.assertEqual(out["kind"], "mount")
+        self.assertEqual(out["mount"].mount_id, "m-2")
+        self.assertEqual(out["provider_ref"], "gdrive://me/items/summary-file")
+        self.assertEqual(out["relative_parts"], ["reports", "summary.txt"])
+
+    def test_get_node_dispatched_uses_mount_metadata_for_mounted_path(self):
+        provider = SimpleNamespace(
+            resolve=lambda ref: ref,
+            get_metadata=lambda ref: {
+                "name": "summary.txt",
+                "type": "file",
+                "size": 123,
+                "mime_type": "text/plain",
+                "modified_time": "2026-01-01T00:00:00+00:00",
+            },
+        )
+        dispatch = {
+            "kind": "mount",
+            "path": "/integrations/drive/work/reports/summary.txt",
+            "mount": SimpleNamespace(provider="google_drive"),
+            "mount_path": "/integrations/drive/work/",
+            "relative_parts": ["reports", "summary.txt"],
+            "provider": provider,
+            "provider_ref": "gdrive://me/items/summary-file",
+        }
+
+        with patch.object(filemanager, "resolve_path_dispatch", return_value=dispatch):
+            node = filemanager.get_node_dispatched("owner-1", "/integrations/drive/work/reports/summary.txt")
+
+        self.assertEqual(node["type"], "file")
+        self.assertEqual(node["provider"], "google_drive")
+        self.assertEqual(node["provider_ref"], "gdrive://me/items/summary-file")
+        self.assertEqual(node["path"], "/integrations/drive/work/reports/summary.txt")

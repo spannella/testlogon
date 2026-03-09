@@ -259,6 +259,51 @@ class TestFileManagerRoutes(unittest.TestCase):
             record_download_usage.assert_called_once_with("user", "/docs/a.txt", 5, source="download", request_id=None)
             assert_download_allowed.assert_called_once_with("user", requested_bytes=5)
 
+
+
+
+    def test_upload_route_passes_overwrite_to_dispatched_upload(self):
+        upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"), headers={"content-type": "text/plain"})
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch.object(filemanager, "upload_file_dispatched", return_value={"path": "/integrations/drive/a.txt", "size": 5}) as upload_file_dispatched,
+            patch.object(filemanager, "record_filemgr_encryption_event"),
+        ):
+            resp = filemanager.upload_fs_file(path="/integrations/drive/a.txt", file=upload, overwrite=True, user="user")
+            self.assertTrue(resp["ok"])
+        self.assertTrue(upload_file_dispatched.call_args.kwargs["overwrite"])
+
+
+    def test_write_routes_reject_read_only_mount(self):
+        denied = HTTPException(status_code=403, detail={"code": "mount_read_only", "mode": "read_only"})
+        with patch.object(filemanager, "assert_mount_write_allowed", side_effect=denied):
+            with self.assertRaises(HTTPException) as create_exc:
+                filemanager.create_folder(path="/integrations/drive/new/", user="user")
+            with self.assertRaises(HTTPException) as upload_exc:
+                filemanager.upload_fs_file(path="/integrations/drive/a.txt", file=UploadFile(filename="a.txt", file=io.BytesIO(b"a")), user="user")
+            with self.assertRaises(HTTPException) as delete_exc:
+                filemanager.remove_fs_file(path="/integrations/drive/a.txt", user="user")
+
+        self.assertEqual(create_exc.exception.status_code, 403)
+        self.assertEqual(upload_exc.exception.detail["code"], "mount_read_only")
+        self.assertEqual(delete_exc.exception.status_code, 403)
+
+
+    def test_download_route_uses_dispatched_download_when_mounts_enabled(self):
+        obj = {"Body": io.BytesIO(b"hello")}
+        node = {"name": "a.txt", "content_type": "text/plain", "is_encrypted": False, "path": "/integrations/drive/a.txt", "size": 5}
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch.object(filemanager, "download_file_dispatched", return_value={"node": node, "object": obj}) as download_file_dispatched,
+            patch.object(filemanager, "assert_download_allowed"),
+            patch.object(filemanager, "record_download_usage"),
+            patch.object(filemanager, "record_filemgr_encryption_event"),
+        ):
+            resp = filemanager.download_fs_file(path="/integrations/drive/a.txt", user="user")
+            self.assertIsInstance(resp, StreamingResponse)
+        download_file_dispatched.assert_called_once_with("user", "/integrations/drive/a.txt")
+
+
     def test_preview_blocks_encrypted_file(self):
         obj = {"Body": io.BytesIO(b"cipher")}
         node = {"name": "a.txt", "type": "file", "content_type": "application/octet-stream", "is_encrypted": True, "path": "/docs/a.txt"}
@@ -452,6 +497,17 @@ class TestFileManagerRoutes(unittest.TestCase):
         with patch.object(filemanager, "move_node", return_value={"type": "file", "src": "/a", "dst": "/b"}):
             resp = filemanager.move_fs_node(src="/a", dst="/b", user="user")
             self.assertEqual(resp["type"], "file")
+
+
+
+    def test_move_route_uses_dispatched_move_when_mounts_enabled(self):
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch.object(filemanager, "move_node_dispatched", return_value={"type": "file", "src": "/integrations/drive/a.txt", "dst": "/integrations/drive/b.txt"}) as move_node_dispatched,
+        ):
+            resp = filemanager.move_fs_node(src="/integrations/drive/a.txt", dst="/integrations/drive/b.txt", user="user")
+        self.assertTrue(resp["ok"])
+        move_node_dispatched.assert_called_once_with("user", "/integrations/drive/a.txt", "/integrations/drive/b.txt")
 
 
     def test_move_resume_and_rollback(self):
@@ -781,3 +837,225 @@ class TestFileManagerRoutes(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 403)
         self.assertEqual(ctx.exception.detail["code"], "file_bundle_access_denied")
         self.assertEqual(ctx.exception.detail["reason"], "expired_entitlement")
+
+    def test_mount_create_route_validates_provider_root_and_persists(self):
+        body = filemanager.MountCreateIn(
+            provider="google_drive",
+            mount_path="/integrations/drive",
+            provider_root_ref="gdrive://me/items/root",
+            mode="read_only",
+        )
+        provider_client = SimpleNamespace(
+            resolve=lambda ref: "gdrive://me/items/root",
+            exists=lambda ref: True,
+        )
+        stored = SimpleNamespace(
+            model_dump=lambda: {
+                "mount_id": "m-1",
+                "owner": "user-1",
+                "provider": "google_drive",
+                "mount_path": "/integrations/drive/",
+                "provider_root_ref": "gdrive://me/items/root",
+                "mode": "read_only",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+        registry = SimpleNamespace(get=lambda owner, provider: provider_client)
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement") as enforce_internal,
+            patch.object(filemanager, "default_provider_registry", return_value=registry),
+            patch.object(filemanager, "create_mount", return_value=stored) as create_mount,
+        ):
+            out = filemanager.create_mount_route(body, user="user-1")
+
+        self.assertEqual(out.provider, "google_drive")
+        enforce_internal.assert_called_once_with(user="user-1", action="mount_create")
+        create_mount.assert_called_once()
+
+    def test_mount_create_route_raises_404_when_provider_root_missing(self):
+        body = filemanager.MountCreateIn(
+            provider="google_drive",
+            mount_path="/integrations/drive",
+            provider_root_ref="gdrive://me/items/missing",
+            mode="read_only",
+        )
+        provider_client = SimpleNamespace(
+            resolve=lambda ref: "gdrive://me/items/missing",
+            exists=lambda ref: False,
+        )
+        registry = SimpleNamespace(get=lambda owner, provider: provider_client)
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "default_provider_registry", return_value=registry),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.create_mount_route(body, user="user-1")
+
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_mount_list_update_delete_routes(self):
+        listed = [
+            SimpleNamespace(
+                model_dump=lambda: {
+                    "mount_id": "m-1",
+                    "owner": "user-1",
+                    "provider": "google_drive",
+                    "mount_path": "/integrations/drive/",
+                    "provider_root_ref": "gdrive://me/items/root",
+                    "mode": "read_only",
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                }
+            )
+        ]
+        updated = SimpleNamespace(
+            model_dump=lambda: {
+                "mount_id": "m-1",
+                "owner": "user-1",
+                "provider": "google_drive",
+                "mount_path": "/integrations/drive/",
+                "provider_root_ref": "gdrive://me/items/root2",
+                "mode": "read_write",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-02T00:00:00+00:00",
+            }
+        )
+        provider_client = SimpleNamespace(
+            resolve=lambda ref: "gdrive://me/items/root2",
+            exists=lambda ref: True,
+        )
+        registry = SimpleNamespace(get=lambda owner, provider: provider_client)
+        existing = SimpleNamespace(provider="google_drive")
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "list_mounts", return_value=listed),
+            patch.object(filemanager, "get_mount", return_value=existing),
+            patch.object(filemanager, "default_provider_registry", return_value=registry),
+            patch.object(filemanager, "update_mount", return_value=updated),
+            patch.object(filemanager, "delete_mount", return_value={"ok": True, "deleted": True}),
+        ):
+            list_out = filemanager.list_mounts_route(user="user-1")
+            self.assertEqual(len(list_out.items), 1)
+
+            body = filemanager.MountUpdateIn(provider_root_ref="gdrive://me/items/root2", mode="read_write")
+            patch_out = filemanager.update_mount_route("m-1", body, user="user-1")
+            self.assertEqual(patch_out.mode, "read_write")
+
+            delete_out = filemanager.delete_mount_route("m-1", user="user-1")
+            self.assertTrue(delete_out.deleted)
+
+    def test_mount_conflict_propagates_clear_409(self):
+        body = filemanager.MountCreateIn(
+            provider="google_drive",
+            mount_path="/integrations/drive",
+            provider_root_ref="gdrive://me/items/root",
+            mode="read_only",
+        )
+        provider_client = SimpleNamespace(
+            resolve=lambda ref: "gdrive://me/items/root",
+            exists=lambda ref: True,
+        )
+        registry = SimpleNamespace(get=lambda owner, provider: provider_client)
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "default_provider_registry", return_value=registry),
+            patch.object(filemanager, "create_mount", side_effect=HTTPException(status_code=409, detail="mount path overlaps existing mount")),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.create_mount_route(body, user="user-1")
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertIn("overlaps", ctx.exception.detail)
+
+
+    def test_mount_routes_reject_when_feature_flag_disabled(self):
+        body = filemanager.MountCreateIn(
+            provider="google_drive",
+            mount_path="/integrations/drive",
+            provider_root_ref="gdrive://me/items/root",
+            mode="read_only",
+        )
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=False)),
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+        ):
+            with self.assertRaises(HTTPException) as create_exc:
+                filemanager.create_mount_route(body, user="user-1")
+            with self.assertRaises(HTTPException) as list_exc:
+                filemanager.list_mounts_route(user="user-1")
+            with self.assertRaises(HTTPException) as patch_exc:
+                filemanager.update_mount_route("m-1", filemanager.MountUpdateIn(mode="read_only"), user="user-1")
+            with self.assertRaises(HTTPException) as delete_exc:
+                filemanager.delete_mount_route("m-1", user="user-1")
+
+        self.assertEqual(create_exc.exception.status_code, 501)
+        self.assertEqual(create_exc.exception.detail["code"], "feature_not_enabled")
+        self.assertEqual(list_exc.exception.status_code, 501)
+        self.assertEqual(patch_exc.exception.status_code, 501)
+        self.assertEqual(delete_exc.exception.status_code, 501)
+
+    def test_admin_reconcile_mounts_route_returns_stale_items(self):
+        rows = [
+            {
+                "owner": "user-1",
+                "mount_id": "m-1",
+                "provider": "google_drive",
+                "mount_path": "/integrations/drive/",
+                "provider_root_ref": "gdrive://me/items/root",
+                "stale": True,
+                "issues": ["revoked_credential"],
+                "recommended_actions": ["disable_mount", "prompt_reconnect"],
+                "status": "active",
+                "reconnect_required": True,
+            }
+        ]
+        ctx = {"user_sub": "admin-1", "role": "admin"}
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch.object(filemanager, "reconcile_mounts", return_value=rows) as reconcile_mounts,
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            out = filemanager.admin_reconcile_mounts_route(owner="user-1", ctx=ctx)
+        self.assertEqual(len(out.items), 1)
+        self.assertTrue(out.items[0].stale)
+        reconcile_mounts.assert_called_once_with("user-1")
+        audit_event.assert_called_once()
+
+    def test_admin_disable_mount_route_sets_disabled(self):
+        updated = SimpleNamespace(
+            model_dump=lambda: {
+                "mount_id": "m-1",
+                "owner": "user-1",
+                "provider": "google_drive",
+                "mount_path": "/integrations/drive/",
+                "provider_root_ref": "gdrive://me/items/root",
+                "mode": "read_only",
+                "status": "disabled",
+                "status_reason": "revoked_credential",
+                "reconnect_required": True,
+                "last_checked_at": "2026-01-02T00:00:00+00:00",
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "updated_at": "2026-01-02T00:00:00+00:00",
+            }
+        )
+        ctx = {"user_sub": "admin-1", "role": "admin"}
+        with (
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch.object(filemanager, "set_mount_status", return_value=updated) as set_mount_status,
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            out = filemanager.admin_disable_mount_route("m-1", owner="user-1", reason="revoked_credential", ctx=ctx)
+        self.assertEqual(out.status, "disabled")
+        set_mount_status.assert_called_once_with(
+            "user-1",
+            "m-1",
+            status="disabled",
+            status_reason="revoked_credential",
+            reconnect_required=True,
+        )
+        audit_event.assert_called_once()
