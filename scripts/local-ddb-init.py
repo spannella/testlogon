@@ -245,27 +245,6 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(
-            _resolve_table_name(S.message_reports_table_name, "MessageReports"),
-            "report_id",
-            gsi=[
-                {
-                    "index_name": "ByConversationCreatedAt",
-                    "partition_key": "conversation_id",
-                    "sort_key": "created_at",
-                },
-                {
-                    "index_name": "ByStatusCreatedAt",
-                    "partition_key": "status",
-                    "sort_key": "created_at",
-                },
-                {
-                    "index_name": "ByReporterCreatedAt",
-                    "partition_key": "reported_by_user_id",
-                    "sort_key": "created_at",
-                },
-            ],
-        ),
-        TableDef(
             _resolve_table_name(S.message_report_context_table_name, "MessageReportContext"),
             "report_id",
             "message_id",
@@ -382,40 +361,8 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(
-            _resolve_table_name(S.message_legal_holds_table_name, "MessageLegalHolds"),
-            "hold_id",
-            gsi=[
-                {
-                    "index_name": "ByConversationStatusCreatedAt",
-                    "partition_key": "conversation_status",
-                    "sort_key": "created_at",
-                },
-                {
-                    "index_name": "ByStatusCreatedAt",
-                    "partition_key": "status",
-                    "sort_key": "created_at",
-                },
-            ],
-        ),
-        TableDef(
             _resolve_table_name(S.message_archive_chain_heads_table_name, "MessageArchiveChainHeads"),
             "partition_key",
-        ),
-        TableDef(
-            _resolve_table_name(S.message_compliance_exports_table_name, "MessageComplianceExports"),
-            "export_id",
-            gsi=[
-                {
-                    "index_name": "ByCaseCreatedAt",
-                    "partition_key": "case_id",
-                    "sort_key": "created_at",
-                },
-                {
-                    "index_name": "ByStatusCreatedAt",
-                    "partition_key": "status",
-                    "sort_key": "created_at",
-                },
-            ],
         ),
         TableDef(
             os.getenv("DDB_MESSAGE_CONSUMPTION", "MessageConsumption"),
@@ -459,29 +406,41 @@ def _table_defs() -> List[TableDef]:
             gsi=[{"index_name": "ByConversationUserUpdatedAt", "partition_key": "conversation_user", "sort_key": "updated_at"}],
             attr_types={"updated_at": "N"},
         ),
-        # MessageReports: pk=report_id, GSIs ByConversationCreatedAt + ByReporterCreatedAt
+        # MessageReports: pk=report_id, GSIs ByConversationCreatedAt + ByStatusCreatedAt + ByReporterCreatedAt
         TableDef(
             _resolve_table_name(S.message_reports_table_name, "MessageReports"),
             "report_id",
             gsi=[
                 {"index_name": "ByConversationCreatedAt", "partition_key": "conversation_id", "sort_key": "created_at"},
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
                 {"index_name": "ByReporterCreatedAt", "partition_key": "reported_by_user_id", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
         ),
         # MessageReportContext: pk=(report_id, message_id)
         TableDef(_resolve_table_name(S.message_report_context_table_name, "MessageReportContext"), "report_id", "message_id"),
-        # MessageLegalHolds: pk=hold_id, GSI ByConversationStatusCreatedAt
+        # MessageLegalHolds: pk=hold_id, GSIs ByConversationStatusCreatedAt + ByStatusCreatedAt
         TableDef(
             _resolve_table_name(S.message_legal_holds_table_name, "MessageLegalHolds"),
             "hold_id",
-            gsi=[{"index_name": "ByConversationStatusCreatedAt", "partition_key": "conversation_status", "sort_key": "created_at"}],
+            gsi=[
+                {"index_name": "ByConversationStatusCreatedAt", "partition_key": "conversation_status", "sort_key": "created_at"},
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
+            ],
             attr_types={"created_at": "N"},
         ),
         # MessageArchiveChainHeads: pk=conversation_id
         TableDef(_resolve_table_name(S.message_archive_chain_heads_table_name, "MessageArchiveChainHeads"), "conversation_id"),
-        # MessageComplianceExports: pk=export_id
-        TableDef(_resolve_table_name(S.message_compliance_exports_table_name, "MessageComplianceExports"), "export_id"),
+        # MessageComplianceExports: pk=export_id, GSIs ByCaseCreatedAt + ByStatusCreatedAt
+        TableDef(
+            _resolve_table_name(S.message_compliance_exports_table_name, "MessageComplianceExports"),
+            "export_id",
+            gsi=[
+                {"index_name": "ByCaseCreatedAt", "partition_key": "case_id", "sort_key": "created_at"},
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 
