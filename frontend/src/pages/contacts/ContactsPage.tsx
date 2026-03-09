@@ -9,6 +9,7 @@ import {
   MoreVertical,
   UserPlus,
   User,
+  Flag,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -18,6 +19,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import {
   DropdownMenu,
@@ -27,10 +29,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
+import { ApiError } from "@/api/client";
 
 import { getContacts, addContact, removeContact, updateContact } from "@/api/endpoints/contacts";
 import { findOrCreateDm, sendFileShareMessage, sendCalendarShareMessage } from "@/api/endpoints/messaging";
+import { createModerationReport } from "@/api/endpoints/moderation";
 import type { ContactEntry, FileEntry, SendCalendarShareReq } from "@/api/types";
+import { ReportContentModal, type ReportContentPayload } from "@/components/shared/ReportContentModal";
 
 import { UserSearch } from "@/pages/messages/UserSearch";
 import { FilePickerDialog } from "@/pages/messages/FilePickerDialog";
@@ -38,14 +43,21 @@ import { CalendarPickerDialog } from "@/pages/messages/CalendarPickerDialog";
 
 // ── Avatar ─────────────────────────────────────────────────────────────────
 
-function ContactAvatar({ contact }: { contact: ContactEntry }) {
+function ContactAvatar({ contact, onOpenPhoto }: { contact: ContactEntry; onOpenPhoto: () => void }) {
   if (contact.profile_photo_url) {
     return (
-      <img
-        src={contact.profile_photo_url}
-        alt={contact.display_name}
-        className="h-9 w-9 rounded-full object-cover shrink-0"
-      />
+      <button
+        type="button"
+        onClick={onOpenPhoto}
+        className="shrink-0"
+        aria-label={`Open ${contact.display_name} profile photo`}
+      >
+        <img
+          src={contact.profile_photo_url}
+          alt={contact.display_name}
+          className="h-9 w-9 rounded-full object-cover"
+        />
+      </button>
     );
   }
   return (
@@ -76,6 +88,7 @@ interface ContactRowProps {
   onBlock: () => void;
   onUnblock: () => void;
   onRemove: () => void;
+  onOpenPhoto: () => void;
 }
 
 function ContactRow({
@@ -87,10 +100,11 @@ function ContactRow({
   onBlock,
   onUnblock,
   onRemove,
+  onOpenPhoto,
 }: ContactRowProps) {
   return (
     <div className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-accent/40 transition-colors">
-      <ContactAvatar contact={contact} />
+      <ContactAvatar contact={contact} onOpenPhoto={onOpenPhoto} />
 
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">{contact.display_name}</p>
@@ -182,6 +196,9 @@ export default function ContactsPage() {
   const [addOpen, setAddOpen] = React.useState(false);
   const [fileShareConvoId, setFileShareConvoId] = React.useState<string | null>(null);
   const [calShareConvoId, setCalShareConvoId] = React.useState<string | null>(null);
+  const [profilePhotoContact, setProfilePhotoContact] = React.useState<ContactEntry | null>(null);
+  const [reportOpen, setReportOpen] = React.useState(false);
+  const [reportServerError, setReportServerError] = React.useState<string | null>(null);
 
   // ── Data ────────────────────────────────────────────────────────────────
 
@@ -215,6 +232,33 @@ export default function ContactsPage() {
       updateContact(id, patch),
     onSuccess: invalidateContacts,
     onError: () => toast.error("Failed to update contact"),
+  });
+
+
+  const reportMut = useMutation({
+    mutationFn: ({ topics, reason_text }: ReportContentPayload) => {
+      if (!profilePhotoContact) throw new Error("No profile selected");
+      return createModerationReport({
+        content_type: "profile_photo",
+        content_id: profilePhotoContact.contact_id,
+        profile_user_id: profilePhotoContact.contact_id,
+        topics,
+        reason_text,
+      });
+    },
+    onSuccess: () => {
+      toast.success("Report received");
+      setReportOpen(false);
+      setReportServerError(null);
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && typeof error.message === "string" && error.message.trim()) {
+        setReportServerError(error.message);
+      } else {
+        setReportServerError("Could not submit report. Please try again.");
+      }
+      toast.error("Could not submit report. Please try again.");
+    },
   });
 
   // ── Action handlers ──────────────────────────────────────────────────────
@@ -312,6 +356,7 @@ export default function ContactsPage() {
               onBlock={() => handleBlock(c)}
               onUnblock={() => handleUnblock(c)}
               onRemove={() => handleRemove(c)}
+              onOpenPhoto={() => setProfilePhotoContact(c)}
             />
           ))}
         </div>
@@ -382,6 +427,63 @@ export default function ContactsPage() {
         onClose={() => setCalShareConvoId(null)}
         onSelect={handleCalendarSelect}
       />
+
+
+      <Dialog
+        open={profilePhotoContact !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setProfilePhotoContact(null);
+            if (!reportMut.isPending) setReportServerError(null);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{profilePhotoContact?.display_name ?? "Profile photo"}</DialogTitle>
+            <DialogDescription>View and report this profile photo.</DialogDescription>
+          </DialogHeader>
+          {profilePhotoContact?.profile_photo_url ? (
+            <div className="space-y-3">
+              <img
+                src={profilePhotoContact.profile_photo_url}
+                alt={profilePhotoContact.display_name}
+                className="w-full max-h-[70vh] rounded-lg object-contain"
+              />
+              <div className="flex justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setReportOpen(true)}
+                  className="gap-1.5"
+                >
+                  <Flag className="h-4 w-4" /> Report profile photo
+                </Button>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      {profilePhotoContact && (
+        <ReportContentModal
+          open={reportOpen}
+          onOpenChange={(open) => {
+            setReportOpen(open);
+            if (!open && !reportMut.isPending) {
+              setReportServerError(null);
+            }
+          }}
+          title="Report profile photo"
+          description="Share why this profile photo should be reviewed."
+          serverError={reportServerError}
+          isSubmitting={reportMut.isPending}
+          onSubmit={async (payload) => {
+            setReportServerError(null);
+            await reportMut.mutateAsync(payload);
+          }}
+        />
+      )}
     </div>
   );
 }

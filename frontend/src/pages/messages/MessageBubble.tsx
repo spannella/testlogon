@@ -64,6 +64,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { FilePreview } from "@/pages/files/FilePreview";
 import { downloadUrl, sharedPreviewUrl } from "@/api/endpoints/files";
 import type { FileEntry } from "@/api/types";
+import { ReportContentModal, type ReportContentPayload } from "@/components/shared/ReportContentModal";
 
 const QUICK_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
@@ -305,8 +306,8 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   const [fileSharePreviewOpen, setFileSharePreviewOpen] = useState(false);
   const [filePreviewOpen, setFilePreviewOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
-  const [reportReason, setReportReason] = useState("");
-  const [reportStatement, setReportStatement] = useState("");
+  const [reportServerError, setReportServerError] = useState<string | null>(null);
+  const [reportTarget, setReportTarget] = useState<"message" | "attachment">("message");
 
   const viewOnceTextRevealed = viewedOnceIds?.has(message.message_id) ?? false;
 
@@ -408,18 +409,23 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
     },
   });
 
-  const reportStatementTrimmed = reportStatement.trim();
-  const reportCanSubmit = reportReason.length >= 2 && reportStatementTrimmed.length >= 5 && reportStatementTrimmed.length <= 2000;
-
   const reportMut = useMutation({
-    mutationFn: () => reportMessage(conversationId, message.message_id, { reason_code: reportReason, statement: reportStatementTrimmed }),
+    mutationFn: ({ topics, reason_text }: ReportContentPayload) => reportMessage(conversationId, message.message_id, {
+      reason_code: topics[0],
+      statement: reason_text,
+    }),
     onSuccess: () => {
-      toast.success("Report submitted");
+      toast.success("Report received");
       setReportOpen(false);
-      setReportReason("");
-      setReportStatement("");
+      setReportServerError(null);
+      setReportTarget("message");
     },
-    onError: () => {
+    onError: (error) => {
+      if (error instanceof ApiError && typeof error.message === "string" && error.message.trim()) {
+        setReportServerError(error.message);
+      } else {
+        setReportServerError("Could not submit report. Please try again.");
+      }
       toast.error("Could not submit report. Please try again.");
     },
   });
@@ -648,7 +654,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                   {hideMut.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <EyeOff className="mr-2 h-4 w-4" />} Hide for me
                 </DropdownMenuItem>
                 {!isOwn && (
-                  <DropdownMenuItem onClick={() => setReportOpen(true)}>
+                  <DropdownMenuItem onClick={() => { setReportTarget("message"); setReportOpen(true); }}>
                     <Flag className="mr-2 h-4 w-4" /> Report message
                   </DropdownMenuItem>
                 )}
@@ -915,6 +921,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             ) : (
               <button
                 type="button"
+                aria-label="Open message image"
                 onClick={() => {
                   onViewOnce?.(message.message_id);
                   if (!message.message_id.startsWith("optimistic-")) {
@@ -984,6 +991,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
               // Normal image or own view-once: show actual image
               <button
                 type="button"
+                aria-label="Open message image"
                 onClick={() => {
                   if (message.consumption_policy && !isOwn) {
                     void handleOpenOnceAttachment();
@@ -1141,6 +1149,18 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                   setFilePreviewOpen(true);
                 }}
               />
+              {!isOwn && (
+                <button
+                  type="button"
+                  className="mt-1 text-xs text-muted-foreground hover:text-destructive"
+                  onClick={() => {
+                    setReportTarget("attachment");
+                    setReportOpen(true);
+                  }}
+                >
+                  Report attachment
+                </button>
+              )}
               {filePreviewOpen && message.file?.url && (
                 <FilePreview
                   file={{
@@ -1466,73 +1486,26 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
         conversationId={conversationId}
       />
 
-      <Dialog
+      <ReportContentModal
         open={reportOpen}
         onOpenChange={(open) => {
           setReportOpen(open);
           if (!open && !reportMut.isPending) {
-            setReportReason("");
-            setReportStatement("");
+            setReportServerError(null);
+            setReportTarget("message");
           }
         }}
-      >
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Flag className="h-4 w-4" />
-              Report message
-            </DialogTitle>
-            <DialogDescription>
-              Share why this message should be reviewed. Recent conversation context will be included automatically.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <label htmlFor={`report-reason-${message.message_id}`} className="text-sm font-medium">Reason</label>
-              <Select value={reportReason} onValueChange={setReportReason}>
-                <SelectTrigger id={`report-reason-${message.message_id}`} aria-label="Report reason">
-                  <SelectValue placeholder="Select a reason" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="harassment">Harassment or bullying</SelectItem>
-                  <SelectItem value="hate_speech">Hate speech</SelectItem>
-                  <SelectItem value="threat_or_violence">Threat or violence</SelectItem>
-                  <SelectItem value="sexual_content">Sexual content</SelectItem>
-                  <SelectItem value="spam">Spam or scam</SelectItem>
-                  <SelectItem value="other">Other</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <label htmlFor={`report-statement-${message.message_id}`} className="text-sm font-medium">Statement</label>
-              <Textarea
-                id={`report-statement-${message.message_id}`}
-                placeholder="Describe what happened and why you are reporting this message."
-                value={reportStatement}
-                onChange={(e) => setReportStatement(e.target.value)}
-                minLength={5}
-                maxLength={2000}
-                rows={4}
-                aria-describedby={`report-statement-help-${message.message_id}`}
-              />
-              <p id={`report-statement-help-${message.message_id}`} className="text-xs text-muted-foreground">
-                Required (5–2000 characters). Context from nearby messages is included for reviewers.
-              </p>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setReportOpen(false)} disabled={reportMut.isPending}>
-              Cancel
-            </Button>
-            <Button onClick={() => reportMut.mutate()} disabled={!reportCanSubmit || reportMut.isPending}>
-              {reportMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Submit report"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        title={reportTarget === "attachment" ? "Report attachment" : "Report message"}
+        description={reportTarget === "attachment"
+          ? "Share why this attachment should be reviewed. Recent conversation context will be included automatically."
+          : "Share why this message should be reviewed. Recent conversation context will be included automatically."}
+        isSubmitting={reportMut.isPending}
+        serverError={reportServerError}
+        onSubmit={async (payload) => {
+          setReportServerError(null);
+          await reportMut.mutateAsync(payload);
+        }}
+      />
 
       <Dialog
         open={tipStep !== null}
@@ -1725,6 +1698,19 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
         <Dialog open={lightboxOpen} onOpenChange={setLightboxOpen}>
           <DialogContent className="max-w-4xl p-0 overflow-hidden bg-black/90 border-none">
             <DialogHeader className="absolute top-0 right-0 z-10 flex flex-row items-center gap-2 p-3">
+              {!isOwn && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setReportTarget("attachment");
+                    setReportOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1 rounded-full bg-white/10 px-2.5 py-1.5 text-xs text-white hover:bg-white/20"
+                >
+                  <Flag className="h-3.5 w-3.5" /> Report image
+                </button>
+              )}
               <a
                 href={message.image.url}
                 download

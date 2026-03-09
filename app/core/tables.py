@@ -35,6 +35,11 @@ class Tables:
     conversation_pins: Any
     message_reports: Any
     message_report_context: Any
+    content_reports: Any
+    moderation_tickets: Any
+    moderation_actions: Any
+    moderation_audit_log: Any
+    user_enforcement_history: Any
     message_legal_holds: Any
     message_archive_chain_heads: Any
     message_compliance_exports: Any
@@ -81,6 +86,11 @@ T = Tables(
     conversation_pins=ddb.Table(S.conversation_pins_table_name),
     message_reports=ddb.Table(S.message_reports_table_name),
     message_report_context=ddb.Table(S.message_report_context_table_name),
+    content_reports=ddb.Table(S.content_reports_table_name),
+    moderation_tickets=ddb.Table(S.moderation_tickets_table_name),
+    moderation_actions=ddb.Table(S.moderation_actions_table_name),
+    moderation_audit_log=ddb.Table(S.moderation_audit_log_table_name),
+    user_enforcement_history=ddb.Table(S.user_enforcement_history_table_name),
     message_legal_holds=ddb.Table(S.message_legal_holds_table_name),
     message_archive_chain_heads=ddb.Table(S.message_archive_chain_heads_table_name),
     message_compliance_exports=ddb.Table(S.message_compliance_exports_table_name),

@@ -11,7 +11,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { deletePost, hidePost } from "@/api/endpoints/newsfeed";
+import { ReportContentModal, type ReportContentPayload } from "@/components/shared/ReportContentModal";
+import { deletePost, hidePost, reportFeedContent } from "@/api/endpoints/newsfeed";
+import { ApiError } from "@/api/client";
 
 interface PostActionsProps {
   postId: string;
@@ -22,6 +24,8 @@ interface PostActionsProps {
 export function PostActions({ postId, isOwn, onEdit }: PostActionsProps) {
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportServerError, setReportServerError] = useState<string | null>(null);
 
   const deleteMut = useMutation({
     mutationFn: () => deletePost(postId),
@@ -40,6 +44,29 @@ export function PostActions({ postId, isOwn, onEdit }: PostActionsProps) {
       void queryClient.invalidateQueries({ queryKey: ["feed"] });
     },
     onError: () => toast.error("Failed to hide post"),
+  });
+
+  const reportMut = useMutation({
+    mutationFn: ({ topics, reason_text }: ReportContentPayload) => reportFeedContent({
+      content_type: "feed_post",
+      content_id: postId,
+      topics,
+      reason_text,
+      post_id: postId,
+    }),
+    onSuccess: () => {
+      toast.success("Report received");
+      setReportOpen(false);
+      setReportServerError(null);
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && typeof error.message === "string" && error.message.trim()) {
+        setReportServerError(error.message);
+      } else {
+        setReportServerError("Could not submit report. Please try again.");
+      }
+      toast.error("Could not submit report. Please try again.");
+    },
   });
 
   return (
@@ -78,9 +105,7 @@ export function PostActions({ postId, isOwn, onEdit }: PostActionsProps) {
               <DropdownMenuItem onClick={() => hideMut.mutate()}>
                 <EyeOff className="mr-2 h-4 w-4" /> Hide
               </DropdownMenuItem>
-              <DropdownMenuItem
-                onClick={() => toast.info("Report submitted")}
-              >
+              <DropdownMenuItem onClick={() => setReportOpen(true)}>
                 <Flag className="mr-2 h-4 w-4" /> Report
               </DropdownMenuItem>
             </>
@@ -98,6 +123,26 @@ export function PostActions({ postId, isOwn, onEdit }: PostActionsProps) {
         onConfirm={() => deleteMut.mutate()}
         loading={deleteMut.isPending}
       />
+
+      {!isOwn && (
+        <ReportContentModal
+          open={reportOpen}
+          onOpenChange={(open) => {
+            setReportOpen(open);
+            if (!open && !reportMut.isPending) {
+              setReportServerError(null);
+            }
+          }}
+          title="Report post"
+          description="Share why this post should be reviewed."
+          serverError={reportServerError}
+          isSubmitting={reportMut.isPending}
+          onSubmit={async (payload) => {
+            setReportServerError(null);
+            await reportMut.mutateAsync(payload);
+          }}
+        />
+      )}
     </>
   );
 }

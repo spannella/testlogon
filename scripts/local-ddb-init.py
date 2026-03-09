@@ -269,6 +269,117 @@ def _table_defs() -> List[TableDef]:
             "message_id",
         ),
         TableDef(
+            _resolve_table_name(S.content_reports_table_name, "ContentReports"),
+            "report_id",
+            gsi=[
+                {
+                    "index_name": "ByContentCreatedAt",
+                    "partition_key": "content_ref",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByReporterCreatedAt",
+                    "partition_key": "reporter_user_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByCreatedAt",
+                    "partition_key": "created_scope",
+                    "sort_key": "created_at",
+                },
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.moderation_tickets_table_name, "ModerationTickets"),
+            "ticket_id",
+            gsi=[
+                {
+                    "index_name": "ByStatusLatestReportAt",
+                    "partition_key": "status",
+                    "sort_key": "latest_report_at",
+                },
+                {
+                    "index_name": "ByQueueLatestReportAt",
+                    "partition_key": "queue",
+                    "sort_key": "latest_report_at",
+                },
+                {
+                    "index_name": "ByAssignedAdminLatestReportAt",
+                    "partition_key": "assigned_admin_user_id",
+                    "sort_key": "latest_report_at",
+                },
+                {
+                    "index_name": "ByLatestReportAt",
+                    "partition_key": "latest_report_scope",
+                    "sort_key": "latest_report_at",
+                },
+                {
+                    "index_name": "ByContentStatusLatestReportAt",
+                    "partition_key": "content_ref_status",
+                    "sort_key": "latest_report_at",
+                },
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.moderation_actions_table_name, "ModerationActions"),
+            "action_id",
+            gsi=[
+                {
+                    "index_name": "ByTicketCreatedAt",
+                    "partition_key": "ticket_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByActionTypeCreatedAt",
+                    "partition_key": "action_type",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByTargetUserCreatedAt",
+                    "partition_key": "target_user_id",
+                    "sort_key": "created_at",
+                },
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.moderation_audit_log_table_name, "ModerationAuditLog"),
+            "audit_id",
+            gsi=[
+                {
+                    "index_name": "ByTicketCreatedAt",
+                    "partition_key": "ticket_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByActorCreatedAt",
+                    "partition_key": "actor_user_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByActionCreatedAt",
+                    "partition_key": "action",
+                    "sort_key": "created_at",
+                },
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.user_enforcement_history_table_name, "UserEnforcementHistory"),
+            "user_id",
+            "enforcement_id",
+            gsi=[
+                {
+                    "index_name": "ByStatusCreatedAt",
+                    "partition_key": "status",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "BySourceTicketCreatedAt",
+                    "partition_key": "source_ticket_id",
+                    "sort_key": "created_at",
+                },
+            ],
+        ),
+        TableDef(
             _resolve_table_name(S.message_legal_holds_table_name, "MessageLegalHolds"),
             "hold_id",
             gsi=[

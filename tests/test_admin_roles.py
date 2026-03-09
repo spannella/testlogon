@@ -314,7 +314,7 @@ def test_grant_role_rejects_unknown_admin_scope_values() -> None:
         "code": "invalid_admin_scopes",
         "reason": "unknown_scope_values",
         "invalid_scopes": ["nope"],
-        "allowed_scopes": ["auth_support", "billing_support", "content_moderation"],
+        "allowed_scopes": ["auth_support", "billing_support", "content_moderation", "content_moderation_senior"],
     }
 
 

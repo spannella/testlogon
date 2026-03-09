@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Heart, MessageCircle, Lock, DollarSign, X, ChevronLeft, ChevronRight, CreditCard, Check, Loader2, Share2, FileText } from "lucide-react";
+import { Heart, MessageCircle, Lock, DollarSign, X, ChevronLeft, ChevronRight, CreditCard, Check, Loader2, Share2, FileText, Flag } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -15,8 +15,9 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { likePost, unlikePost, unlockPost, addPostReaction, removePostReaction } from "@/api/endpoints/newsfeed";
+import { likePost, unlikePost, unlockPost, addPostReaction, removePostReaction, reportFeedContent } from "@/api/endpoints/newsfeed";
 import { getPaymentMethods } from "@/api/endpoints/billing";
+import { ApiError } from "@/api/client";
 import { useAuthStore } from "@/stores/authStore";
 import { CommentsThread } from "./CommentsThread";
 import { PostActions } from "./PostActions";
@@ -25,6 +26,7 @@ import { RichContentRenderer } from "./RichContentRenderer";
 import { TipDialog } from "./TipDialog";
 import { SharePostDialog } from "./SharePostDialog";
 import { FilePreview } from "@/pages/files/FilePreview";
+import { ReportContentModal, type ReportContentPayload } from "@/components/shared/ReportContentModal";
 import type { FeedPost, PaymentMethod, PostFileAttachment } from "@/api/types";
 import type { FileEntry } from "@/api/types";
 
@@ -65,6 +67,7 @@ function PostImageGrid({ urls, onClickImage }: PostImageGridProps) {
       <button
         type="button"
         className="mt-3 block w-full overflow-hidden rounded-lg"
+        aria-label="Open image 1"
         onClick={() => onClickImage(0)}
       >
         <img
@@ -84,6 +87,7 @@ function PostImageGrid({ urls, onClickImage }: PostImageGridProps) {
             key={i}
             type="button"
             className="aspect-square overflow-hidden"
+            aria-label={`Open image ${i + 1}`}
             onClick={() => onClickImage(i)}
           >
             <img src={url} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" />
@@ -100,6 +104,7 @@ function PostImageGrid({ urls, onClickImage }: PostImageGridProps) {
         <button
           type="button"
           className="col-span-2 aspect-video overflow-hidden"
+          aria-label="Open image 1"
           onClick={() => onClickImage(0)}
         >
           <img src={urls[0]} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" />
@@ -110,6 +115,7 @@ function PostImageGrid({ urls, onClickImage }: PostImageGridProps) {
             key={i + 1}
             type="button"
             className="aspect-square overflow-hidden"
+            aria-label={`Open image ${i + 2}`}
             onClick={() => onClickImage(i + 1)}
           >
             <img src={url} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" />
@@ -127,6 +133,7 @@ function PostImageGrid({ urls, onClickImage }: PostImageGridProps) {
             key={i}
             type="button"
             className="aspect-square overflow-hidden"
+            aria-label={`Open image ${i + 1}`}
             onClick={() => onClickImage(i)}
           >
             <img src={url} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" />
@@ -145,6 +152,7 @@ function PostImageGrid({ urls, onClickImage }: PostImageGridProps) {
           key={i}
           type="button"
           className="relative aspect-square overflow-hidden"
+          aria-label={`Open image ${i + 1}`}
           onClick={() => onClickImage(i)}
         >
           <img src={url} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" />
@@ -175,6 +183,9 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
   const [unlockDialogOpen, setUnlockDialogOpen] = useState(false);
   const [unlockPaymentMethodId, setUnlockPaymentMethodId] = useState<string | null>(null);
   const [filePreviewTarget, setFilePreviewTarget] = useState<PostFileAttachment | null>(null);
+  const [reportMediaOpen, setReportMediaOpen] = useState(false);
+  const [reportMediaIndex, setReportMediaIndex] = useState<number | null>(null);
+  const [reportMediaServerError, setReportMediaServerError] = useState<string | null>(null);
 
   const imageUrls = post.image_urls ?? [];
   const isOwn = post.author_id === userId;
@@ -205,6 +216,31 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
     },
     onError: () => {
       toast.error("Failed to unlock post");
+    },
+  });
+
+
+  const reportMediaMut = useMutation({
+    mutationFn: ({ topics, reason_text }: ReportContentPayload) => reportFeedContent({
+      content_type: "feed_media",
+      content_id: `${post.post_id}:${reportMediaIndex ?? 0}` ,
+      topics,
+      reason_text,
+      post_id: post.post_id,
+      media_index: reportMediaIndex ?? undefined,
+    }),
+    onSuccess: () => {
+      toast.success("Report received");
+      setReportMediaOpen(false);
+      setReportMediaServerError(null);
+    },
+    onError: (error) => {
+      if (error instanceof ApiError && typeof error.message === "string" && error.message.trim()) {
+        setReportMediaServerError(error.message);
+      } else {
+        setReportMediaServerError("Could not submit report. Please try again.");
+      }
+      toast.error("Could not submit report. Please try again.");
     },
   });
 
@@ -549,6 +585,26 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
         />
       )}
 
+      {!isOwn && (
+        <ReportContentModal
+          open={reportMediaOpen}
+          onOpenChange={(open) => {
+            setReportMediaOpen(open);
+            if (!open && !reportMediaMut.isPending) {
+              setReportMediaServerError(null);
+            }
+          }}
+          title="Report image"
+          description="Share why this image should be reviewed."
+          serverError={reportMediaServerError}
+          isSubmitting={reportMediaMut.isPending}
+          onSubmit={async (payload) => {
+            setReportMediaServerError(null);
+            await reportMediaMut.mutateAsync(payload);
+          }}
+        />
+      )}
+
       {/* Image lightbox */}
       {lightboxIdx !== null && imageUrls[lightboxIdx] && (
         <div
@@ -557,6 +613,21 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
           role="dialog"
           aria-label="Image preview"
         >
+          {!isOwn && (
+            <button
+              className="absolute left-4 top-4 inline-flex items-center gap-1 rounded-full bg-white/10 px-3 py-1.5 text-xs text-white transition-colors hover:bg-white/20"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (lightboxIdx === null) return;
+                setReportMediaIndex(lightboxIdx);
+                setReportMediaServerError(null);
+                setReportMediaOpen(true);
+              }}
+            >
+              <Flag className="h-3.5 w-3.5" /> Report image
+            </button>
+          )}
+
           <button
             className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
             onClick={closeLightbox}

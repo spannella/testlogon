@@ -80,11 +80,12 @@ import {
   Bell,
   LifeBuoy,
   UsersRound,
+  Scale,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
 import { useAuthStore } from "@/stores/authStore";
-import { canSeeRootRoleManagement } from "@/lib/adminCapabilities";
+import { canAccessModerationBoard, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 
 const MOBILE_NAV_GROUPS = [
   {
@@ -122,6 +123,7 @@ const MOBILE_NAV_GROUPS = [
   { label: "Ticket Spaces", path: "/tickets/spaces", icon: LifeBuoy },
       { label: "Settings", path: "/settings", icon: Settings },
       { label: "Role Mgmt", path: "/root/roles", icon: UsersRound },
+      { label: "Moderation Board", path: "/admin/moderation", icon: Scale },
     ],
   },
 ];
@@ -130,6 +132,7 @@ function MobileSidebar({ onNavigate }: { onNavigate: () => void }) {
   const location = useLocation();
   const accessToken = useAuthStore((s) => s.accessToken);
   const showRootRoleManagement = canSeeRootRoleManagement(accessToken);
+  const showModerationBoard = canAccessModerationBoard(accessToken);
 
   const isActive = (path: string) => {
     if (path === "/") return location.pathname === "/";
@@ -151,7 +154,11 @@ function MobileSidebar({ onNavigate }: { onNavigate: () => void }) {
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto px-2 py-3">
         {MOBILE_NAV_GROUPS.map((group, gi) => {
-          const items = group.items.filter((item) => item.path !== "/root/roles" || showRootRoleManagement);
+          const items = group.items.filter((item) => {
+            if (item.path === "/root/roles") return showRootRoleManagement;
+            if (item.path === "/admin/moderation") return showModerationBoard;
+            return true;
+          });
           if (items.length === 0) return null;
           return (
           <div key={group.title}>

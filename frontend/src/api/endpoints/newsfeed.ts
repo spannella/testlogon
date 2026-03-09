@@ -96,3 +96,17 @@ export const removePostReaction = (postId: string, emoji: string) =>
 
 /** SSE stream URL for real-time feed updates */
 export const feedSseUrl = "/sse";
+
+
+export interface ReportFeedContentReq {
+  content_type: "feed_post" | "feed_comment" | "feed_media";
+  content_id: string;
+  topics: string[];
+  reason_text: string;
+  post_id?: string;
+  comment_id?: string;
+  media_index?: number;
+}
+
+export const reportFeedContent = (body: ReportFeedContentReq) =>
+  api.post<{ ok: boolean; report_id: string }>("/moderation/reports", body);
