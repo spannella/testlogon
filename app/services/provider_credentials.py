@@ -168,6 +168,14 @@ def _validate_gitlab_token(token: str, api_base_url: Optional[str] = None) -> Di
     }
 
 
+def _validate_google_drive_token(token: str) -> Dict[str, Any]:
+    # GDM-001 only introduces provider acceptance. OAuth code-flow and richer
+    # token validation/metadata are added in subsequent tickets.
+    if not token or not token.strip():
+        raise HTTPException(status_code=400, detail="token is required")
+    return {"scopes": [], "metadata": {}}
+
+
 def _normalize_s3_endpoint_url(value: Optional[str]) -> Optional[str]:
     candidate = (value or "").strip().rstrip("/")
     if not candidate:
@@ -297,6 +305,7 @@ def _validate_s3_credentials_payload(
         },
     }
 
+
 def validate_provider_token(
     provider: str,
     token: Optional[str],
@@ -322,6 +331,8 @@ def validate_provider_token(
         if not token or not token.strip():
             raise HTTPException(status_code=400, detail="token is required")
         result = _validate_gitlab_token(token.strip(), api_base_url=api_base_url)
+    elif normalized_provider == "google_drive":
+        result = _validate_google_drive_token(token.strip())
     elif normalized_provider == "s3":
         result = _validate_s3_credentials_payload(
             token=token,
@@ -357,6 +368,8 @@ def upsert_provider_credential(
     org: Optional[str] = None,
     required_scopes: Optional[List[str]] = None,
     api_base_url: Optional[str] = None,
+    metadata_override: Optional[Dict[str, Any]] = None,
+    scopes_override: Optional[List[str]] = None,
     access_key_id: Optional[str] = None,
     secret_access_key: Optional[str] = None,
     session_token: Optional[str] = None,
@@ -392,13 +405,19 @@ def upsert_provider_credential(
 
     ts = now_iso()
     existing = get_provider_credential(owner, provider, org=org, allow_missing=True)
+    merged_metadata: Dict[str, Any] = dict(validated.get("metadata") or {})
+    if metadata_override:
+        merged_metadata.update(metadata_override)
+
+    resolved_scopes = list(scopes_override) if scopes_override is not None else (validated.get("scopes") or [])
+
     model = ProviderCredentialModel(
         owner=owner,
         provider=provider.strip().lower(),
         org=(org or None),
         token_ct_b64=token_ct_b64,
-        scopes=validated.get("scopes") or [],
-        metadata=validated.get("metadata") or {},
+        scopes=resolved_scopes,
+        metadata=merged_metadata,
         created_at=existing.created_at if existing else ts,
         updated_at=ts,
     )
@@ -474,6 +493,31 @@ def get_provider_auth_context(
     if missing:
         raise HTTPException(status_code=400, detail=f"stored token missing scopes: {', '.join(missing)}")
 
+    if cred.provider == "google_drive":
+        metadata = dict(cred.metadata or {})
+        if bool(metadata.get("reconnect_required")):
+            reason = str(metadata.get("auth_failure_reason") or "revoked")
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "code": "provider_reconnect_required",
+                    "provider": "google_drive",
+                    "reason": reason,
+                    "reconnect_required": True,
+                },
+            )
+        expires_at_epoch = _parse_expires_at_epoch(str(metadata.get("expires_at") or ""))
+        now_epoch = int(datetime.now(timezone.utc).timestamp())
+        # Refresh slightly early to avoid race with near-expired access tokens.
+        if expires_at_epoch is not None and expires_at_epoch <= (now_epoch + 60):
+            from app.services.provider_oauth import refresh_google_oauth_access_token
+
+            return refresh_google_oauth_access_token(
+                owner,
+                org=org,
+                required_scopes=required,
+            )
+
     try:
         token = kms_decrypt(cred.token_ct_b64).decode("utf-8")
     except RuntimeError as exc:
@@ -498,6 +542,78 @@ def get_provider_auth_context(
             out["token"] = out["secret_access_key"]
     return out
 
+
+
+
+def _parse_expires_at_epoch(value: Optional[str]) -> Optional[int]:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
+
+
+def rotate_provider_access_token(
+    owner: str,
+    provider: str,
+    access_token: str,
+    *,
+    org: Optional[str] = None,
+    scopes_override: Optional[List[str]] = None,
+    metadata_override: Optional[Dict[str, Any]] = None,
+) -> ProviderCredentialModel:
+    existing = get_provider_credential(owner, provider, org=org)
+    try:
+        token_ct_b64 = kms_encrypt((access_token or "").strip())
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail="credential encryption is not configured") from exc
+
+    merged_metadata = dict(existing.metadata or {})
+    if metadata_override:
+        merged_metadata.update(metadata_override)
+
+    updated = ProviderCredentialModel(
+        owner=existing.owner,
+        provider=existing.provider,
+        org=existing.org,
+        token_ct_b64=token_ct_b64,
+        scopes=list(scopes_override) if scopes_override is not None else list(existing.scopes or []),
+        metadata=merged_metadata,
+        created_at=existing.created_at,
+        updated_at=now_iso(),
+    )
+    T.projects.put_item(Item=_credential_to_item(updated))
+    return updated
+
+
+def merge_provider_credential_metadata(
+    owner: str,
+    provider: str,
+    *,
+    metadata_updates: Dict[str, Any],
+    org: Optional[str] = None,
+) -> ProviderCredentialModel:
+    existing = get_provider_credential(owner, provider, org=org)
+    merged_metadata = dict(existing.metadata or {})
+    merged_metadata.update(metadata_updates or {})
+
+    updated = ProviderCredentialModel(
+        owner=existing.owner,
+        provider=existing.provider,
+        org=existing.org,
+        token_ct_b64=existing.token_ct_b64,
+        scopes=list(existing.scopes or []),
+        metadata=merged_metadata,
+        created_at=existing.created_at,
+        updated_at=now_iso(),
+    )
+    T.projects.put_item(Item=_credential_to_item(updated))
+    return updated
 
 def delete_provider_credential(owner: str, provider: str, *, org: Optional[str] = None) -> Dict[str, bool]:
     key = {"PK": _credential_pk(owner), "SK": _credential_sk(provider, org)}

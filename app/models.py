@@ -1369,9 +1369,64 @@ class ProjectEventModel(BaseModel):
         return value
 
 
+
+
+class MountModel(BaseModel):
+    mount_id: str = Field(min_length=1, max_length=128)
+    owner: str = Field(min_length=1, max_length=256)
+    provider: str = Field(min_length=1, max_length=64)
+    mount_path: str = Field(min_length=1, max_length=2048)
+    provider_root_ref: str = Field(min_length=1, max_length=2048)
+    mode: Literal["read_only", "read_write"] = "read_only"
+    status: Literal["active", "disabled"] = "active"
+    status_reason: Optional[str] = None
+    reconnect_required: bool = False
+    last_checked_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+    @field_validator("mount_id", "owner", "provider", "mount_path", "provider_root_ref")
+    @classmethod
+    def _strip_required_text(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("value required")
+        return cleaned
+
+    @field_validator("provider")
+    @classmethod
+    def _normalize_provider(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("mount_path")
+    @classmethod
+    def _normalize_mount_path(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned.startswith("/"):
+            raise ValueError("mount_path must start with '/'")
+        return cleaned.rstrip("/") or "/"
+
+    @field_validator("status_reason")
+    @classmethod
+    def _normalize_status_reason(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip().lower()
+        return cleaned or None
+
+    @field_validator("created_at", "updated_at", "last_checked_at")
+    @classmethod
+    def _validate_iso(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        parsed = datetime.fromisoformat(value)
+        if parsed.tzinfo is None:
+            raise ValueError("timestamp must include timezone")
+        return value
+
 class ProviderCredentialModel(BaseModel):
     owner: str = Field(min_length=1, max_length=256)
-    provider: Literal["github", "gitlab", "s3"]
+    provider: Literal["github", "gitlab", "google_drive", "s3"]
     org: Optional[str] = Field(default=None, max_length=256)
     token_ct_b64: str = Field(min_length=1)
     scopes: List[str] = Field(default_factory=list)

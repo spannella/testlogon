@@ -1,0 +1,62 @@
+{
+  "title": "Google Drive Mount Operations",
+  "timezone": "browser",
+  "owner": "platform-filemanager-oncall",
+  "panels": [
+    {
+      "title": "Mounted API errors by status",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum(rate(filemgr_mount_api_errors_total{provider=\"google_drive\"}[5m])) by (status_code)", "legendFormat": "{{status_code}}"}
+      ]
+    },
+    {
+      "title": "Mounted auth/rate-limit error rate (401/403/429)",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum(rate(filemgr_mount_api_errors_total{provider=\"google_drive\",status_code=~\"401|403|429\"}[10m]))", "legendFormat": "auth+ratelimit"}
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 0.2, "color": "yellow"},
+        {"op": "gt", "value": 1.0, "color": "red"}
+      ]
+    },
+    {
+      "title": "Mounted operation p95 latency",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum(rate(filemgr_mount_operation_duration_seconds_bucket{provider=\"google_drive\"}[5m])) by (le, operation))", "legendFormat": "{{operation}} p95"}
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 1.5, "color": "yellow"},
+        {"op": "gt", "value": 3.0, "color": "red"}
+      ]
+    },
+    {
+      "title": "Mounted transfer bytes in/out",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum(rate(filemgr_mount_transfer_bytes_total{provider=\"google_drive\",direction=\"in\"}[5m])) by (operation)", "legendFormat": "in {{operation}}"},
+        {"expr": "sum(rate(filemgr_mount_transfer_bytes_total{provider=\"google_drive\",direction=\"out\"}[5m])) by (operation)", "legendFormat": "out {{operation}}"}
+      ]
+    },
+    {
+      "title": "Upload failure spikes",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum(rate(filemgr_mount_api_errors_total{provider=\"google_drive\",operation=\"upload\"}[10m]))", "legendFormat": "upload errors"}
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 0.1, "color": "yellow"},
+        {"op": "gt", "value": 0.5, "color": "red"}
+      ]
+    },
+    {
+      "title": "OAuth refresh attempts",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum(rate(filemgr_mount_refresh_attempts_total{provider=\"google_drive\"}[10m])) by (outcome, reason)", "legendFormat": "{{outcome}}/{{reason}}"}
+      ]
+    }
+  ]
+}
