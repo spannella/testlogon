@@ -186,7 +186,7 @@ async def set_email_prefs(body: AlertEmailPrefsReq, ctx: Dict[str, str] = Depend
 @router.get("/alerts/sms_prefs")
 async def get_sms_prefs(ctx: Dict[str, str] = Depends(require_ui_session)):
     prefs = get_alert_prefs(ctx["user_sub"])
-    return {"sms_numbers": prefs["sms_numbers"], "event_types": prefs["sms_event_types"]}
+    return {"sms_numbers": prefs["sms_numbers"], "sms_event_types": prefs["sms_event_types"]}
 
 
 @router.post("/alerts/sms_prefs")
@@ -199,7 +199,7 @@ async def set_sms_prefs(body: AlertSmsPrefsReq, ctx: Dict[str, str] = Depends(re
 @router.get("/alerts/toast_prefs")
 async def get_toast_prefs(ctx: Dict[str, str] = Depends(require_ui_session)):
     prefs = get_alert_prefs(ctx["user_sub"])
-    return {"event_types": prefs["toast_event_types"]}
+    return {"toast_event_types": prefs["toast_event_types"]}
 
 
 @router.post("/alerts/toast_prefs")

@@ -15,7 +15,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
 
       - name: Install backend deps
         run: |
@@ -24,7 +24,7 @@ jobs:
 
       - name: Run browser SSH backend unit/integration/e2e tests
         run: |
-          pytest -q tests/test_browser_ssh_terminal_protocol_unit.py tests/test_browser_ssh_terminal_e2e_flow.py tests/test_browser_ssh_terminal_scaffold.py tests/test_browser_ssh_terminal_form_ui.py
+          pytest -q tests/test_browser_ssh_terminal_protocol_unit.py tests/test_browser_ssh_terminal_e2e_flow.py tests/test_browser_ssh_terminal_scaffold.py tests/test_browser_ssh_terminal_form_ui.py tests/test_browser_ssh_terminal_security.py
 
   browser-ssh-playwright-e2e:
     runs-on: ubuntu-latest
@@ -35,7 +35,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -56,16 +56,32 @@ jobs:
       - name: Start backend for browser route
         env:
           BROWSER_SSH_TERMINAL_ENABLED: "1"
+          AWS_ACCESS_KEY_ID: "test"
+          AWS_SECRET_ACCESS_KEY: "test"
+          AWS_DEFAULT_REGION: "us-east-1"
+          ROOT_USER_SUB: "root"
         run: |
           nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 >/tmp/browser-ssh-e2e.log 2>&1 &
           echo $! > /tmp/browser-ssh-e2e.pid
+          # Wait for the server to be ready
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:8000/health && break || sleep 1
+          done
 
       - name: Run Browser SSH Playwright E2E
         env:
+          BROWSER_SSH_TERMINAL_ENABLED: "1"
           BROWSER_SSH_E2E_URL: "http://127.0.0.1:8000/browser-ssh"
         run: |
           cd frontend
           npx playwright test e2e/browser-ssh-terminal.spec.ts
+
+      - name: Upload backend log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-ssh-e2e-backend-log
+          path: /tmp/browser-ssh-e2e.log
 
       - name: Stop backend
         if: always()

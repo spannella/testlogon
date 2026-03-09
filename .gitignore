@@ -8,3 +8,10 @@ dist/
 logs/
 .backend.pid
 .frontend.pid
+
+# Runtime / generated / local tooling — not for version control
+.compliance_archive/
+.compliance_exports/
+.local/
+.logs/
+.venv/
