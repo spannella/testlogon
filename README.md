@@ -6,16 +6,12 @@ session management, MFA, billing, notifications, and a lightweight control panel
 **Requirements**: Ubuntu/Debian, git. Everything else is installed automatically.
 
 ```bash
-# 1. Clone and set up (installs Node 20, Java, Python venv, Playwright, generates secrets)
+# 1. One-time setup (installs Node 20, Java, Python venv, Playwright, generates secrets)
 git clone <repo-url> && cd testlogon
 bash scripts/setup_ubuntu.sh
 
-# 2. Start the full dev stack (DynamoDB Local, moto S3/Cognito, Stripe mock, backend, frontend)
-scripts/dev.sh start
-
-# 3. Set up E2E test sessions (run once after the stack is up)
-python3 e2e_session_setup.py
-python3 e2e_admin_session_setup.py
+# 2. Start the dev stack + seed E2E sessions
+just up
 ```
 
 | Service   | URL                       |
@@ -24,9 +20,9 @@ python3 e2e_admin_session_setup.py
 | Backend   | http://localhost:8000      |
 | API docs  | http://localhost:8000/docs |
 
-**Daily workflow**: `scripts/dev.sh restart` — clean-wipes state and restarts everything.
+**Daily workflow**: `just restart` — clean-wipes state, restarts everything, re-seeds E2E sessions.
 
-**E2E tests**: `cd frontend && npx playwright test`
+**E2E tests**: `just e2e`
 
 > See [Local dev stack](docs/local-dev-stack.md) for the full playbook, Docker mode, troubleshooting, and advanced options.
 
