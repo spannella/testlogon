@@ -17,7 +17,6 @@ import {
   FilePen,
   Settings,
   UsersRound,
-  Bug,
   MonitorSmartphone,
   Scale,
 } from "lucide-react";
@@ -32,7 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useAuthStore } from "@/stores/authStore";
 import { canAccessModerationBoard, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
-import { isDevtoolsLogUiEnabled, isVncRemoteDesktopEnabled } from "@/lib/featureFlags";
+import { isVncRemoteDesktopEnabled } from "@/lib/featureFlags";
 
 // ─── Tab config ─────────────────────────────────────────────────
 
@@ -56,7 +55,6 @@ const MORE_LINKS = [
   { label: "Ticket Spaces", path: "/tickets/spaces", icon: LifeBuoy },
   { label: "Remote Desktop", path: "/remote-desktop", icon: MonitorSmartphone },
   { label: "Settings", path: "/settings", icon: Settings },
-  { label: "Dev Tools", path: "/dev-tools/log-ui", icon: Bug },
   { label: "Role Mgmt", path: "/root/roles", icon: UsersRound },
   { label: "Moderation Board", path: "/admin/moderation", icon: Scale },
 ];
@@ -72,7 +70,6 @@ export default function MobileNav() {
 
   const moreLinks = MORE_LINKS.filter((item) => {
     if (item.path === "/root/roles") return showRootRoleManagement;
-    if (item.path === "/dev-tools/log-ui") return isDevtoolsLogUiEnabled();
     if (item.path === "/remote-desktop") return isVncRemoteDesktopEnabled();
     if (item.path === "/admin/moderation") return showModerationBoard;
     return true;

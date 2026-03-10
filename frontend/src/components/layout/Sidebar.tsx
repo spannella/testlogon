@@ -22,7 +22,6 @@ import {
   Headphones,
   PanelLeftClose,
   PanelLeft,
-  Bug,
   MonitorSmartphone,
   Scale,
 } from "lucide-react";
@@ -35,7 +34,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { canAccessModerationBoard, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 import { useQuery } from "@tanstack/react-query";
 import { getConversations } from "@/api/endpoints/messaging";
-import { isDevtoolsLogUiEnabled, isVncRemoteDesktopEnabled } from "@/lib/featureFlags";
+import { isVncRemoteDesktopEnabled } from "@/lib/featureFlags";
 
 // ─── Navigation Config ──────────────────────────────────────────
 
@@ -91,7 +90,6 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Ticket Spaces", path: "/tickets/spaces", icon: <LifeBuoy className="h-5 w-5" /> },
       { label: "Remote Desktop", path: "/remote-desktop", icon: <MonitorSmartphone className="h-5 w-5" /> },
       { label: "Settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
-      { label: "Dev Tools Log UI", path: "/dev-tools/log-ui", icon: <Bug className="h-5 w-5" /> },
       { label: "Role Management", path: "/root/roles", icon: <UsersRound className="h-5 w-5" /> },
       { label: "Moderation Board", path: "/admin/moderation", icon: <Scale className="h-5 w-5" /> },
     ],
@@ -152,7 +150,6 @@ export default function Sidebar() {
         {NAV_GROUPS.map((group, gi) => {
           const items = group.items.filter((item) => {
             if (item.path === "/root/roles") return showRootRoleManagement;
-            if (item.path === "/dev-tools/log-ui") return isDevtoolsLogUiEnabled();
             if (item.path === "/remote-desktop") return isVncRemoteDesktopEnabled();
             if (item.path === "/admin/moderation") return showModerationBoard;
             return true;

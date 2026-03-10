@@ -13,6 +13,8 @@ BACKEND_LOG="${DEV_LOG_DIR}/backend.log"
 FRONTEND_LOG="${DEV_LOG_DIR}/frontend.log"
 BACKEND_PID_FILE="${LOCAL_RUN_DIR}/backend.pid"
 FRONTEND_PID_FILE="${LOCAL_RUN_DIR}/frontend.pid"
+DEVTOOLS_LOG="${DEV_LOG_DIR}/devtools.log"
+DEVTOOLS_PID_FILE="${LOCAL_RUN_DIR}/devtools.pid"
 DDB_BOOTSTRAP_MARKER="${LOCAL_RUN_DIR}/ddb-bootstrap.done"
 
 # ---------------------------------------------------------------------------
@@ -123,6 +125,7 @@ cmd_start() {
   echo "Dev logs will be written to:"
   echo "  backend : ${BACKEND_LOG}"
   echo "  frontend: ${FRONTEND_LOG}"
+  echo "  devtools : ${DEVTOOLS_LOG}"
 
   # Start mock infrastructure (moto, DynamoDB Local, Stripe mock, KMS mock)
   echo "Starting local mock infrastructure..."
@@ -161,11 +164,19 @@ cmd_start() {
     echo "Frontend started (pid $(cat "$FRONTEND_PID_FILE")) → log: ${FRONTEND_LOG}"
   fi
 
+  # Start devtools frontend (standalone, port 3001)
+  if [[ -f "frontend/package.json" ]]; then
+    echo "Starting devtools UI..."
+    npm --prefix frontend run dev:devtools >>"$DEVTOOLS_LOG" 2>&1 &
+    echo $! > "$DEVTOOLS_PID_FILE"
+    echo "Devtools UI started (pid $(cat "$DEVTOOLS_PID_FILE")) → log: ${DEVTOOLS_LOG}"
+  fi
+
   echo ""
   echo "Waiting up to 30s for backend and frontend..."
   local deadline=$((SECONDS + 30))
   while ((SECONDS < deadline)); do
-    _probe_http "http://localhost:8000/openapi.json" && _probe_http "http://localhost:3000/" && break
+    _probe_http "http://localhost:8000/openapi.json" && _probe_http "http://localhost:3000/" && _probe_http "http://localhost:3001/" && break
     sleep 2
   done
 
@@ -178,10 +189,12 @@ cmd_stop() {
   for arg in "$@"; do [[ "$arg" == "--quiet" ]] && quiet=1; done
 
   _stop_pid_file "$FRONTEND_PID_FILE" "frontend"
+  _stop_pid_file "$DEVTOOLS_PID_FILE" "devtools"
   _stop_pid_file "$BACKEND_PID_FILE"  "backend"
   # Belt-and-suspenders: kill any orphaned processes
   pkill -f "uvicorn app.main:app" 2>/dev/null || true
   pkill -f "vite"                 2>/dev/null || true
+  pkill -f "vite.*devtools.config" 2>/dev/null || true
   scripts/local-stack-down.sh
 
   [[ "$quiet" == "0" ]] && echo "Dev stack stopped."
@@ -205,9 +218,11 @@ cmd_status() {
   _probe_http "http://localhost:8000/openapi.json" && be_ok=true  || be_ok=false
   _probe_http "http://localhost:3000/"          && fe_ok=true     || fe_ok=false
 
-  local be_proc fe_proc
+  local be_proc fe_proc dt_ok dt_proc
   _is_running "$BACKEND_PID_FILE"  && be_proc=true || be_proc=false
   _is_running "$FRONTEND_PID_FILE" && fe_proc=true || fe_proc=false
+  _probe_http "http://localhost:3001/"          && dt_ok=true     || dt_ok=false
+  _is_running "$DEVTOOLS_PID_FILE"              && dt_proc=true   || dt_proc=false
 
   echo "Dev stack status:"
   printf "  %-34s [%s]\n" "S3/Moto (LocalStack)"            "$(_status_icon $s3_ok)"
@@ -217,6 +232,7 @@ cmd_status() {
   printf "  %-34s [%s]\n" "KMS mock"                        "$(_status_icon $kms_ok)"
   printf "  %-34s [%s]  process=%s\n" "Backend  (localhost:8000)" "$(_status_icon $be_ok)" "$($be_proc && echo running || echo stopped)"
   printf "  %-34s [%s]  process=%s\n" "Frontend (localhost:3000)" "$(_status_icon $fe_ok)" "$($fe_proc && echo running || echo stopped)"
+  printf "  %-34s [%s]  process=%s\n" "Devtools (localhost:3001)" "$(_status_icon $dt_ok)" "$($dt_proc && echo running || echo stopped)"
 }
 
 # ---------------------------------------------------------------------------
