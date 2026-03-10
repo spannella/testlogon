@@ -61,10 +61,30 @@ _detect_external_ip() {
 # Commands
 # ---------------------------------------------------------------------------
 
+cmd_setup_check() {
+  local missing=0
+  if [[ ! -d ".venv" ]]; then
+    echo "ERROR: Python virtual environment (.venv) not found." >&2
+    missing=1
+  fi
+  if [[ ! -d "frontend/node_modules" ]]; then
+    echo "ERROR: Frontend dependencies (frontend/node_modules) not found." >&2
+    missing=1
+  fi
+  if [[ "$missing" -eq 1 ]]; then
+    echo "" >&2
+    echo "Run first-time setup:" >&2
+    echo "  bash scripts/setup_ubuntu.sh" >&2
+    echo "" >&2
+    exit 1
+  fi
+}
+
 cmd_start() {
   local clean=1
   for arg in "$@"; do [[ "$arg" == "--no-clean" ]] && clean=0; done
 
+  cmd_setup_check
   _mkdir
 
   # Bootstrap env
@@ -214,10 +234,13 @@ case "$cmd" in
   help|-h|--help)
     echo "Usage: scripts/dev.sh <start|stop|restart|status> [--no-clean]"
     echo ""
-    echo "  start [--no-clean]  Start the full dev stack (clean wipe by default)"
-    echo "  stop                Stop all dev processes"
+    echo "  start [--no-clean]    Start the full dev stack (clean wipe by default)"
+    echo "  stop                  Stop all dev processes"
     echo "  restart [--no-clean]  Stop then start"
-    echo "  status              Show health of all services"
+    echo "  status                Show health of all services"
+    echo ""
+    echo "First-time setup (fresh host):"
+    echo "  bash scripts/setup_ubuntu.sh"
     ;;
   *)
     echo "Unknown command: $cmd" >&2

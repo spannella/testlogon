@@ -1,6 +1,31 @@
 Refactored FastAPI security backend (split from the original single-file server). It powers
 session management, MFA, billing, notifications, and a lightweight control panel UI.
 
+## Quick start (fresh host)
+
+**Requirements**: Ubuntu/Debian, git. Everything else is installed automatically.
+
+```bash
+# 1. One-time setup (installs Node 20, Java, Python venv, Playwright, generates secrets)
+git clone <repo-url> && cd testlogon
+bash scripts/setup_ubuntu.sh
+
+# 2. Start the dev stack + seed E2E sessions
+just up
+```
+
+| Service   | URL                       |
+|-----------|---------------------------|
+| Frontend  | http://localhost:3000      |
+| Backend   | http://localhost:8000      |
+| API docs  | http://localhost:8000/docs |
+
+**Daily workflow**: `just restart` — clean-wipes state, restarts everything, re-seeds E2E sessions.
+
+**E2E tests**: `just e2e`
+
+> See [Local dev stack](docs/local-dev-stack.md) for the full playbook, Docker mode, troubleshooting, and advanced options.
+
 ## Documentation
 - [File reference](docs/file-reference.md)
 - [Run and deploy](docs/run-deploy.md)
