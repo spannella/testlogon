@@ -1,45 +1,9 @@
 import { test, expect } from "@playwright/test";
 
-const BASE_URL = "http://localhost:3000";
+const BASE_URL = "http://localhost:3001";
 
 test.describe("Dev Tools Log UI smoke", () => {
-  test.skip(process.env.VITE_ENABLE_DEVTOOLS_LOG_UI !== "1", "Requires VITE_ENABLE_DEVTOOLS_LOG_UI=1 in dev mode");
-
   test.beforeEach(async ({ page }) => {
-    await page.addInitScript(() => {
-      localStorage.setItem(
-        "auth-store",
-        JSON.stringify({
-          state: {
-            userId: "e2e-devtools@test.local",
-            accessToken: "devtools-e2e-token",
-            isAuthenticated: true,
-          },
-          version: 0,
-        }),
-      );
-    });
-
-    // Mock AppShell API calls so the fake token doesn't trigger 401 → logout cascade.
-    // Header.tsx fires GET /ui/profile and Sidebar.tsx fires GET /messaging/conversations on mount.
-    await page.route("**/ui/profile**", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ profile: { first_name: "Dev", last_name: "User", display_name: "Dev User" } }),
-      });
-    });
-    await page.route("**/messaging/conversations**", async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ conversations: [], next_cursor: null }),
-      });
-    });
-    await page.route("**/ui/session/refresh", async (route) => {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
-    });
-
     await page.route("**/internal/dev-tools/email/messages**", async (route) => {
       await route.fulfill({
         status: 200,
@@ -181,7 +145,7 @@ test.describe("Dev Tools Log UI smoke", () => {
   });
 
   test("opens the route, visits each tab, and verifies read-only markers", async ({ page }) => {
-    await page.goto(`${BASE_URL}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${BASE_URL}`, { waitUntil: "domcontentloaded" });
 
     await expect(page.getByRole("heading", { name: "Dev Tools Log UI" })).toBeVisible();
 
