@@ -43,6 +43,10 @@ status:
 e2e *args:
     cd frontend && npx playwright test {{args}}
 
+# Start the devtools UI server (standalone, port 3001)
+devtools:
+    npm --prefix frontend run dev:devtools
+
 # Run backend unit tests
 test *args:
     .venv/bin/pytest {{args}}

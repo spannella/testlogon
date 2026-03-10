@@ -15,15 +15,21 @@ It helps developers inspect mock artifacts produced by the local stack in one pl
 1. Start the local stack:
 
 ```bash
-scripts/run_dev.sh
+just up
 ```
 
-2. Open the frontend app:
+2. Open the Dev Tools UI:
 
-- Main app: `http://localhost:5173`
-- Dev Log UI: `http://localhost:5173/dev-tools/log-ui`
+- Dev Tools: `http://localhost:3001`
 
-`run_dev.sh` auto-enables the route by exporting `VITE_ENABLE_DEVTOOLS_LOG_UI=1` for local runs.
+The Dev Tools UI is a standalone Vite server on port 3001. No auth is required.
+Start it independently with:
+
+```bash
+just devtools
+```
+
+The main app runs on port 3000 as usual. The devtools server is started automatically by `just up` / `scripts/dev.sh start`.
 
 ## Data inputs and defaults
 
@@ -48,15 +54,15 @@ The only interactive write-like action is in-memory/local browser handling for t
 
 ## Troubleshooting
 
-### Dev Log route returns 404
+### Dev Tools page not loading
 
-- Confirm frontend flag is enabled: `VITE_ENABLE_DEVTOOLS_LOG_UI=1`
-- If using local flow, prefer `scripts/run_dev.sh` (it sets this automatically).
+- Confirm the devtools server is running on port 3001: `just devtools` or check `scripts/dev.sh status`.
+- The devtools server is started automatically by `just up` / `scripts/dev.sh start`.
 
 ### Page loads but no records appear
 
 - Confirm logs exist at the configured `DEVTOOLS_*` paths.
-- Check backend/frontend logs printed by `run_dev.sh` startup output.
+- Check backend/frontend logs printed by `scripts/dev.sh start` startup output.
 - If you used `--no-clean`, old logs may be retained; verify file timestamps and active path values.
 
 ### Billing tab is empty

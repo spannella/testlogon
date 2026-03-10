@@ -10,7 +10,8 @@
     "lint": "tsc --noEmit",
     "test": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:vnc": "playwright test e2e/vnc-remote-desktop.spec.ts"
+    "test:e2e:vnc": "playwright test e2e/vnc-remote-desktop.spec.ts",
+    "dev:devtools": "vite --config vite.devtools.config.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

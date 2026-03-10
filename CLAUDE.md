@@ -39,6 +39,7 @@ See `justfile` for all available commands.
 | Service | Port | Notes |
 |---------|------|-------|
 | Frontend (Vite) | 3000 | React app; proxies `/api`, `/ui`, `/mock`, `/internal`, etc. to backend |
+| Dev Tools UI | 3001 | Standalone React app; no auth needed; proxies `/internal` to backend |
 | Backend (uvicorn) | 8000 | FastAPI; `GET /openapi.json` for full API spec, `/docs` for Swagger UI |
 | DynamoDB Local | 8001 | Persistent across backend restarts; data in `.local/tools/dynamodb-local/data/` |
 | Moto (S3 + Cognito mock) | 4566 | LocalStack-compatible AWS mock |
