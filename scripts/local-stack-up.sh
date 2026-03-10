@@ -154,7 +154,13 @@ start_host_stack() {
 
   if ! command -v moto_server >/dev/null 2>&1 || ! python3 -c "import flask" >/dev/null 2>&1; then
     echo "Installing moto server for host-mode S3/Cognito mocks..."
-    python3 -m pip install --user "moto[server]>=5,<6" >/dev/null
+    # Prefer venv pip (avoids --user conflicts inside a virtualenv)
+    REPO_ROOT_LOCAL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    if [[ -x "${REPO_ROOT_LOCAL}/.venv/bin/pip" ]]; then
+      "${REPO_ROOT_LOCAL}/.venv/bin/pip" install "moto[server]>=5,<6" -q
+    else
+      python3 -m pip install --user "moto[server]>=5,<6" -q
+    fi
   fi
 
   install_dynamodb_local

@@ -1,6 +1,35 @@
 Refactored FastAPI security backend (split from the original single-file server). It powers
 session management, MFA, billing, notifications, and a lightweight control panel UI.
 
+## Quick start (fresh host)
+
+**Requirements**: Ubuntu/Debian, git. Everything else is installed automatically.
+
+```bash
+# 1. Clone and set up (installs Node 20, Java, Python venv, Playwright, generates secrets)
+git clone <repo-url> && cd testlogon
+bash scripts/setup_ubuntu.sh
+
+# 2. Start the full dev stack (DynamoDB Local, moto S3/Cognito, Stripe mock, backend, frontend)
+scripts/dev.sh start
+
+# 3. Set up E2E test sessions (run once after the stack is up)
+python3 e2e_session_setup.py
+python3 e2e_admin_session_setup.py
+```
+
+| Service   | URL                       |
+|-----------|---------------------------|
+| Frontend  | http://localhost:3000      |
+| Backend   | http://localhost:8000      |
+| API docs  | http://localhost:8000/docs |
+
+**Daily workflow**: `scripts/dev.sh restart` — clean-wipes state and restarts everything.
+
+**E2E tests**: `cd frontend && npx playwright test`
+
+> See [Local dev stack](docs/local-dev-stack.md) for the full playbook, Docker mode, troubleshooting, and advanced options.
+
 ## Documentation
 - [File reference](docs/file-reference.md)
 - [Run and deploy](docs/run-deploy.md)
