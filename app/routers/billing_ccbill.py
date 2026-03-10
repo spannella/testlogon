@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import hashlib
-from pathlib import Path
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import HTMLResponse
 
 from app.core.normalize import client_ip_from_request
 from app.core.settings import S
@@ -107,12 +106,6 @@ def _dollars_str_to_cents(s: Optional[str]) -> Optional[int]:
         return int(d * 100)
     except Exception:
         return None
-
-
-@router.get("/billing", response_class=HTMLResponse)
-def billing_index():
-    static_dir = Path(__file__).resolve().parents[1] / "static"
-    return FileResponse(static_dir / "index.html")
 
 
 @router.get("/api/billing/config")

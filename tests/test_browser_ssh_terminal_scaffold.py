@@ -105,8 +105,7 @@ def test_browser_ssh_frontend_route_guarded_by_feature_flag(monkeypatch) -> None
     enabled_app = create_app()
     enabled_client = TestClient(enabled_app)
     enabled_resp = enabled_client.get("/browser-ssh")
-    assert enabled_resp.status_code == 200
-    assert "text/html" in enabled_resp.headers.get("content-type", "")
+    assert enabled_resp.status_code == 410
 
 
 def test_browser_ssh_websocket_invalid_payload_does_not_crash_session(monkeypatch) -> None:

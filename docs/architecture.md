@@ -151,7 +151,7 @@ Internet → HTTPS load balancer / ingress
 
 - Run with `scripts/run_prod.sh` (wraps uvicorn with production settings)
 - Requires real AWS credentials and all required env vars from `.env.local.example`
-- Static frontend assets served by a CDN or from `app/static/` (production build)
+- Static frontend assets served by a CDN (production build of `frontend/`)
 - See `docs/run-deploy.md` for full deployment checklist
 
 ---
