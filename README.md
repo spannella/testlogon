@@ -27,6 +27,7 @@ just up
 > See [Local dev stack](docs/local-dev-stack.md) for the full playbook, Docker mode, troubleshooting, and advanced options.
 
 ## Documentation
+- [**CLAUDE.md**](CLAUDE.md) — AI/contributor quick-reference: architecture, dev commands, conventions, gotchas
 - [File reference](docs/file-reference.md)
 - [Run and deploy](docs/run-deploy.md)
 - [Local dev stack](docs/local-dev-stack.md)
