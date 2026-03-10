@@ -112,10 +112,6 @@ class BillingRoutesTests(unittest.TestCase):
         self.assertIn("clientAccnum", body)
         self.assertIn("clientSubacc", body)
 
-    def test_billing_page_route(self) -> None:
-        response = routes.billing_index()
-        self.assertTrue(str(response.path).endswith("index.html"))
-
     def test_settings_and_autopay(self) -> None:
         body = routes.get_settings(self.ctx)
         self.assertFalse(body["autopay_enabled"])

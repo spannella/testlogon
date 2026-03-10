@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 from app.auth.root_invariant import validate_startup_root_invariant
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
 from app.core.settings import Settings
 from app.metrics import METRICS_ENABLED, metrics_endpoint, metrics_middleware, set_app_info
@@ -141,19 +139,12 @@ def _build_cors_options() -> dict[str, object]:
 def create_app() -> FastAPI:
     app = FastAPI(title="Security Backend (refactored)", version="0.1.0", redirect_slashes=False)
     settings = Settings()
-    static_dir = Path(__file__).resolve().parent / "static"
-
-    app.mount("/static", StaticFiles(directory=static_dir), name="static")
-
-    @app.get("/")
-    async def index():
-        return FileResponse(static_dir / "index.html")
 
     @app.get("/browser-ssh")
     async def browser_ssh_route():
         if not browser_ssh_terminal_enabled():
             raise HTTPException(status_code=404, detail="Not found")
-        return FileResponse(static_dir / "index.html")
+        raise HTTPException(status_code=410, detail="Browser SSH terminal UI has moved to the frontend.")
 
     app.add_middleware(CORSMiddleware, **_build_cors_options())
     app.middleware("http")(_api_usage_metering_middleware())
