@@ -19,7 +19,7 @@ import { execSync } from "child_process";
 
 const API      = "http://localhost:8000";
 const BASE     = "http://localhost:3000";
-const DEVTOOLS = "http://localhost:3001/devtools.html";  // standalone devtools UI
+const DEVTOOLS = "http://localhost:3001";  // standalone devtools UI
 
 const ALICE_ID = "e2e_alice@test.local";
 
