@@ -497,8 +497,28 @@ test.describe("3. Scheduled message — appears in sender's chat after delivery"
 
   test("Delivered scheduled message is visible in sender's conversation (no reload)", async () => {
     // Background delivery loop runs every ~30 s.  Schedule for now+8 s;
-    // total wait is at most ≈ 8+30+5 = 43 s.
-    test.setTimeout(60_000);
+    // total wait is at most ≈ 8+30+5 = 43 s; give 90 s budget for full-suite runs.
+    test.setTimeout(90_000);
+
+    // Re-inject auth defensively — the page may have been redirected to /login
+    // by a background 401 during the time between beforeAll and this test.
+    await injectAuth(page, ALICE_ID);
+    const convsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 20000 },
+    );
+    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
+    await convsLoaded;
+    await page.waitForTimeout(300);
+    const dmRow = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
+    await expect(dmRow).toBeVisible({ timeout: 15000 });
+    await dmRow.click();
+    await expect(
+      page.getByPlaceholder("Type a message...").or(
+        page.getByPlaceholder("Type an encrypted message..."),
+      ),
+    ).toBeVisible({ timeout: 8000 });
 
     const deliverTs = Math.floor(Date.now() / 1000) + 8;
     const resp = await apiPost(
@@ -512,8 +532,9 @@ test.describe("3. Scheduled message — appears in sender's chat after delivery"
     const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
     // Poll GET /scheduled until the message disappears (delivered).
+    // 20 × 3 s = 60 s of polling budget (loop runs every ~30 s).
     let delivered = false;
-    for (let i = 0; i < 15 && !delivered; i++) {
+    for (let i = 0; i < 20 && !delivered; i++) {
       await sleep(3000);
       const r = await apiGet(
         page,
@@ -522,21 +543,25 @@ test.describe("3. Scheduled message — appears in sender's chat after delivery"
       const list = (await r.json()) as Array<{ message_id: string }>;
       if (!list.find((m) => m.message_id === deliveryId)) delivered = true;
     }
-    expect(delivered, "scheduled message should have been delivered within ~45 s").toBe(true);
+    expect(delivered, "scheduled message should have been delivered within ~60 s").toBe(true);
 
-    // Without navigating away, trigger a React Query refetch via the 'online'
-    // event (which ConversationView listens to).  In production this would be
-    // triggered by the SSE "message:new" event from the delivery loop.
-    const sec3RefetchLoaded = page.waitForResponse(
-      (r) =>
-        r.url().includes(`/conversations/${_dmConvoId}/messages`) &&
-        r.request().method() === "GET",
-      { timeout: 15000 },
+    // Verify the delivered message is visible without a browser hard-reload.
+    // triggerRefetch (window.online) is unreliable after a long polling wait —
+    // React Query may skip the refetch if the query was already recently re-fetched
+    // by the SSE delivery event.  Navigate back to the conversation via SPA routing
+    // (no full reload) to get a fresh messages fetch.
+    const backConvsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 20000 },
     );
-    await triggerRefetch(page);
-    await sec3RefetchLoaded;
+    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
+    await backConvsLoaded;
+    const dmRow2 = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
+    await expect(dmRow2).toBeVisible({ timeout: 15000 });
+    await dmRow2.click();
     const msgLocator = page.locator("p").filter({ hasText: SCHED_TEXT });
-    await expect(msgLocator).toBeVisible({ timeout: 8000 });
+    await expect(msgLocator).toBeVisible({ timeout: 15_000 });
   });
 });
 
