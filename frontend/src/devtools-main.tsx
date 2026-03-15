@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import DevToolsLogUiPage from "@/pages/devtools/DevToolsLogUiPage";
 import { ThemeProvider } from "@/components/ThemeProvider";
-import "./index.css";
+import "./globals.css";
 
 const queryClient = new QueryClient({
   defaultOptions: {

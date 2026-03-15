@@ -99,10 +99,12 @@ export default function SftpMockBrowserTab() {
   const [filesystemPath, setFilesystemPath] = React.useState<string>("");
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string>("");
+  const [mountsLoaded, setMountsLoaded] = React.useState(false);
 
   const mountsQuery = useQuery({
     queryKey: ["files-sftp-mounts"],
     queryFn: () => listSftpMounts(),
+    enabled: mountsLoaded,
   });
 
   const loadFiles = React.useCallback(
@@ -142,13 +144,14 @@ export default function SftpMockBrowserTab() {
     void loadFiles({ path });
   }, [mountId, path, loadFiles]);
 
-  // Auto-select first mount
+  // Auto-select first mount once mounts are loaded
   React.useEffect(() => {
+    if (!mountsLoaded) return;
     const mounts = mountsQuery.data?.items ?? [];
     if (!mountId && mounts.length > 0) {
       setMountId(String(mounts[0]?.id || ""));
     }
-  }, [mountsQuery.data, mountId]);
+  }, [mountsQuery.data, mountId, mountsLoaded]);
 
   const displayItems = React.useMemo(() => {
     const q = filterText.trim().toLowerCase();
@@ -187,220 +190,229 @@ export default function SftpMockBrowserTab() {
       <p className="text-sm text-muted-foreground">
         Browse mock SFTP mount paths. Requires{" "}
         <code className="rounded bg-muted px-1">FILEMGR_SFTP_BACKEND=mock</code> on the backend.
+        Requires an active session (log into the main app first).
       </p>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Label htmlFor="mock-mount-id">Mount</Label>
-        <select
-          id="mock-mount-id"
-          className="h-9 rounded-md border px-2 text-sm"
-          value={mountId}
-          onChange={(e) => {
-            setMountId(e.target.value);
-            setPath("/");
-            setPathInput("/");
-            setCursor(undefined);
-          }}
-        >
-          <option value="">Select mount…</option>
-          {(mountsQuery.data?.items ?? []).map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.id} ({m.protocol || "sftp"})
-            </option>
-          ))}
-        </select>
-
-        <Label htmlFor="mock-path-input">Path</Label>
-        <Input
-          id="mock-path-input"
-          value={pathInput}
-          onChange={(e) => setPathInput(e.target.value)}
-          className="max-w-xs"
-        />
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            const next = normalizeMockPath(pathInput);
-            setPath(next);
-            setCursor(undefined);
-          }}
-          disabled={!mountId || loading}
-        >
-          Go
+      {!mountsLoaded ? (
+        <Button variant="outline" size="sm" onClick={() => setMountsLoaded(true)}>
+          Load mounts
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => {
-            const next = parentMockPath(path);
-            setPath(next);
-            setPathInput(next);
-            setCursor(undefined);
-          }}
-          disabled={!mountId || loading}
-        >
-          Up
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void loadFiles({ path })}
-          disabled={!mountId || loading}
-        >
-          Refresh
-        </Button>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        {crumbs.map((c, idx) => (
-          <React.Fragment key={c.path}>
-            {idx > 0 && <span className="text-muted-foreground">/</span>}
-            <button
-              className="underline"
-              onClick={() => {
-                setPath(c.path);
-                setPathInput(c.path);
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <Label htmlFor="mock-mount-id">Mount</Label>
+            <select
+              id="mock-mount-id"
+              className="h-9 rounded-md border px-2 text-sm"
+              value={mountId}
+              onChange={(e) => {
+                setMountId(e.target.value);
+                setPath("/");
+                setPathInput("/");
                 setCursor(undefined);
               }}
             >
-              {c.label}
-            </button>
-          </React.Fragment>
-        ))}
-      </div>
+              <option value="">Select mount…</option>
+              {(mountsQuery.data?.items ?? []).map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.id} ({m.protocol || "sftp"})
+                </option>
+              ))}
+            </select>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          placeholder="Filter by name or path"
-          value={filterText}
-          onChange={(e) => setFilterText(e.target.value)}
-          className="max-w-xs"
-        />
-        <select
-          className="h-9 rounded-md border px-2 text-sm"
-          value={filterType}
-          onChange={(e) => setFilterType(e.target.value as MockFilterType)}
-        >
-          <option value="all">All types</option>
-          <option value="folder">Folders</option>
-          <option value="file">Files</option>
-        </select>
-        <select
-          className="h-9 rounded-md border px-2 text-sm"
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as MockSortBy)}
-        >
-          <option value="name">Sort: name</option>
-          <option value="type">Sort: type</option>
-          <option value="size">Sort: size</option>
-          <option value="mtime">Sort: modified</option>
-        </select>
-        <select
-          className="h-9 rounded-md border px-2 text-sm"
-          value={sortDir}
-          onChange={(e) => setSortDir(e.target.value as MockSortDir)}
-        >
-          <option value="asc">Ascending</option>
-          <option value="desc">Descending</option>
-        </select>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() =>
-            navigator.clipboard
-              ?.writeText(`/mounts/${mountId}${path}`)
-              .then(() => toast.success("Copied mount-relative path"))
-          }
-          disabled={!mountId}
-        >
-          Copy mount-relative path
-        </Button>
-        {filesystemPath && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() =>
-              navigator.clipboard
-                ?.writeText(filesystemPath)
-                .then(() => toast.success("Copied filesystem path"))
-            }
-          >
-            Copy filesystem path
-          </Button>
-        )}
-        <span className="text-muted-foreground">
-          /mounts/{mountId || "<mount>"}
-          {path}
-        </span>
-      </div>
-
-      {filesystemPath && (
-        <div className="rounded border bg-muted/40 px-2 py-1 text-xs text-muted-foreground">
-          Filesystem path: <span className="font-mono">{filesystemPath}</span>
-        </div>
-      )}
-
-      {error && (
-        <div className="rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900">
-          {error}
-        </div>
-      )}
-
-      <div className="max-h-96 overflow-auto rounded border">
-        {loading ? (
-          <div className="p-3 text-sm text-muted-foreground">Loading…</div>
-        ) : displayItems.length === 0 ? (
-          <div className="p-3 text-sm text-muted-foreground">
-            {mountId ? "No items match current filters." : "Select a mount to browse."}
+            <Label htmlFor="mock-path-input">Path</Label>
+            <Input
+              id="mock-path-input"
+              value={pathInput}
+              onChange={(e) => setPathInput(e.target.value)}
+              className="max-w-xs"
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const next = normalizeMockPath(pathInput);
+                setPath(next);
+                setCursor(undefined);
+              }}
+              disabled={!mountId || loading}
+            >
+              Go
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const next = parentMockPath(path);
+                setPath(next);
+                setPathInput(next);
+                setCursor(undefined);
+              }}
+              disabled={!mountId || loading}
+            >
+              Up
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void loadFiles({ path })}
+              disabled={!mountId || loading}
+            >
+              Refresh
+            </Button>
           </div>
-        ) : (
-          <div className="divide-y">
-            {displayItems.map((it) => (
-              <div
-                key={`${it.path}-${it.modified_at}`}
-                className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
-              >
-                <div className="min-w-0">
-                  <div className="truncate font-mono">{it.path}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {it.type}
-                    {it.type === "file" ? ` • ${formatBytesCompact(Number(it.size || 0))}` : ""}
-                  </div>
-                </div>
-                {it.type === "folder" && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      const next = normalizeMockPath(it.path);
-                      setPath(next);
-                      setPathInput(next);
-                      setCursor(undefined);
-                    }}
-                  >
-                    Open
-                  </Button>
-                )}
-              </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            {crumbs.map((c, idx) => (
+              <React.Fragment key={c.path}>
+                {idx > 0 && <span className="text-muted-foreground">/</span>}
+                <button
+                  className="underline"
+                  onClick={() => {
+                    setPath(c.path);
+                    setPathInput(c.path);
+                    setCursor(undefined);
+                  }}
+                >
+                  {c.label}
+                </button>
+              </React.Fragment>
             ))}
           </div>
-        )}
-      </div>
 
-      {cursor && !loading && (
-        <div className="flex justify-end">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void loadFiles({ append: true, cursor, path })}
-          >
-            Load more
-          </Button>
-        </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              placeholder="Filter by name or path"
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+              className="max-w-xs"
+            />
+            <select
+              className="h-9 rounded-md border px-2 text-sm"
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value as MockFilterType)}
+            >
+              <option value="all">All types</option>
+              <option value="folder">Folders</option>
+              <option value="file">Files</option>
+            </select>
+            <select
+              className="h-9 rounded-md border px-2 text-sm"
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as MockSortBy)}
+            >
+              <option value="name">Sort: name</option>
+              <option value="type">Sort: type</option>
+              <option value="size">Sort: size</option>
+              <option value="mtime">Sort: modified</option>
+            </select>
+            <select
+              className="h-9 rounded-md border px-2 text-sm"
+              value={sortDir}
+              onChange={(e) => setSortDir(e.target.value as MockSortDir)}
+            >
+              <option value="asc">Ascending</option>
+              <option value="desc">Descending</option>
+            </select>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                navigator.clipboard
+                  ?.writeText(`/mounts/${mountId}${path}`)
+                  .then(() => toast.success("Copied mount-relative path"))
+              }
+              disabled={!mountId}
+            >
+              Copy mount-relative path
+            </Button>
+            {filesystemPath && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() =>
+                  navigator.clipboard
+                    ?.writeText(filesystemPath)
+                    .then(() => toast.success("Copied filesystem path"))
+                }
+              >
+                Copy filesystem path
+              </Button>
+            )}
+            <span className="text-muted-foreground">
+              /mounts/{mountId || "<mount>"}
+              {path}
+            </span>
+          </div>
+
+          {filesystemPath && (
+            <div className="rounded border bg-muted/40 px-2 py-1 text-xs text-muted-foreground">
+              Filesystem path: <span className="font-mono">{filesystemPath}</span>
+            </div>
+          )}
+
+          {error && (
+            <div className="rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900">
+              {error}
+            </div>
+          )}
+
+          <div className="max-h-96 overflow-auto rounded border">
+            {loading ? (
+              <div className="p-3 text-sm text-muted-foreground">Loading…</div>
+            ) : displayItems.length === 0 ? (
+              <div className="p-3 text-sm text-muted-foreground">
+                {mountId ? "No items match current filters." : "Select a mount to browse."}
+              </div>
+            ) : (
+              <div className="divide-y">
+                {displayItems.map((it) => (
+                  <div
+                    key={`${it.path}-${it.modified_at}`}
+                    className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate font-mono">{it.path}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {it.type}
+                        {it.type === "file" ? ` • ${formatBytesCompact(Number(it.size || 0))}` : ""}
+                      </div>
+                    </div>
+                    {it.type === "folder" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const next = normalizeMockPath(it.path);
+                          setPath(next);
+                          setPathInput(next);
+                          setCursor(undefined);
+                        }}
+                      >
+                        Open
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {cursor && !loading && (
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void loadFiles({ append: true, cursor, path })}
+              >
+                Load more
+              </Button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
