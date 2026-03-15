@@ -191,8 +191,22 @@ def main() -> None:
     print(f"Wrote frontend config to {FRONTEND_ENV_FILE}")
 
 
+def _is_dev_mode() -> bool:
+    if os.getenv("DEV_MODE") == "1":
+        return True
+    env_val = _read_env_value(ENV_FILE, "DEV_MODE")
+    return env_val == "1"
+
+
 if __name__ == "__main__":
     try:
         main()
     except (ClientError, BotoCoreError) as exc:
-        raise SystemExit(f"Failed to initialize local Cognito: {exc}")
+        if _is_dev_mode():
+            print(
+                f"Warning: Could not initialize local Cognito ({exc}). "
+                "Skipping — Cognito is not used in dev_mode "
+                "(DEV_MODE=1 causes _cognito_available() to return False)."
+            )
+        else:
+            raise SystemExit(f"Failed to initialize local Cognito: {exc}")
