@@ -8,9 +8,11 @@ Output: JSON dict { "alice": {...cookies...}, "bob": {...cookies...} }
 """
 import json, time, uuid, secrets, os, sys
 
-# Load env vars from .env so we get the right table names and secret
+# Load env vars from .env.local so we get the right table names and secret
 from pathlib import Path
 env_file = Path(__file__).parent / "app" / ".env"
+if not env_file.exists():
+    env_file = Path(__file__).parent / ".env.local"
 if not env_file.exists():
     env_file = Path(__file__).parent / ".env"
 if env_file.exists():
