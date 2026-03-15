@@ -21,7 +21,7 @@ import { randomBytes } from "crypto";
 
 const API      = "http://localhost:8000";
 const BASE     = "http://localhost:3000";
-const DEVTOOLS = "http://localhost:3001";
+const DEVTOOLS = "http://localhost:3001/devtools.html";  // standalone devtools UI
 const REPO = "/home/ubuntu/testlogon";
 
 /** Stripe-format billing log that the dev-tools billing endpoint reads. */

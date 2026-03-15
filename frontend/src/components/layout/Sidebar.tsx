@@ -24,6 +24,7 @@ import {
   PanelLeft,
   MonitorSmartphone,
   Scale,
+  Wrench,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -34,7 +35,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { canAccessModerationBoard, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 import { useQuery } from "@tanstack/react-query";
 import { getConversations } from "@/api/endpoints/messaging";
-import { isVncRemoteDesktopEnabled } from "@/lib/featureFlags";
+import { isVncRemoteDesktopEnabled, isDevtoolsLogUiEnabled } from "@/lib/featureFlags";
 
 // ─── Navigation Config ──────────────────────────────────────────
 
@@ -218,6 +219,29 @@ export default function Sidebar() {
           );
         })}
       </nav>
+
+      {/* Dev Tools link (dev-mode only, gated by feature flag) */}
+      {isDevtoolsLogUiEnabled() && (
+        <div className="border-t border-border px-2 py-2">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <a
+                href="http://localhost:3001/devtools.html"
+                target="_blank"
+                rel="noopener noreferrer"
+                className={cn(
+                  "group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors text-muted-foreground hover:bg-accent hover:text-foreground",
+                  collapsed && "justify-center px-0 gap-0",
+                )}
+              >
+                <Wrench className="h-5 w-5 shrink-0" />
+                {!collapsed && <span className="truncate">Dev Tools</span>}
+              </a>
+            </TooltipTrigger>
+            <TooltipContent side="right" sideOffset={8}>Dev Tools</TooltipContent>
+          </Tooltip>
+        </div>
+      )}
 
       {/* Collapse toggle */}
       <div className="border-t border-border p-2">
