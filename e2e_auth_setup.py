@@ -17,8 +17,10 @@ import sys
 import time
 from pathlib import Path
 
-# Load env vars from .env
+# Load env vars from .env.local so we get the right table names and secret
 env_file = Path(__file__).parent / "app" / ".env"
+if not env_file.exists():
+    env_file = Path(__file__).parent / ".env.local"
 if not env_file.exists():
     env_file = Path(__file__).parent / ".env"
 if env_file.exists():
