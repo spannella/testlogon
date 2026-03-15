@@ -690,12 +690,23 @@ test.describe("6. View-once text — not auto-consumed when it scrolls into view
   });
 
   test("After navigating away WITHOUT tapping, the tap button is still shown (not consumed)", async () => {
+    test.setTimeout(60000);
     // Do NOT click the tap button — just navigate away and come back.
+    // Re-inject auth before navigating — in the full suite other sections may have
+    // accumulated enough accumulated time that the access_token needs refreshing.
+    await injectAuth(page, ALICE_ID);
+    // Register the conversations listener BEFORE goto so we don't miss the response
+    // (in the full suite with 600+ DMs the list load can take 10-15 s).
+    const sec6ConvsLoaded = page.waitForResponse(
+      (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
+        && !r.url().match(/\/conversations\/[^/]+$/),
+      { timeout: 30000 },
+    );
     await page.goto(`${BASE}/messages`, { waitUntil: "load" });
-    await page.waitForTimeout(600);
+    await sec6ConvsLoaded;
 
     const row = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
-    await expect(row).toBeVisible({ timeout: 8000 });
+    await expect(row).toBeVisible({ timeout: 15000 });
     await row.click();
 
     // If the ViewTracker auto-consumed the message via IntersectionObserver,
@@ -743,6 +754,10 @@ test.describe("7. Locked message — unlock button opens dialog (not direct muta
     // ── Bob's page ──
     bobPage = await browser.newPage();
     await injectAuth(bobPage, BOB_ID);
+    // Warm up device-trust check: first request from a new context may return
+    // 401 (device registered), second succeeds. Without this, the page.goto()
+    // below can trigger a 401 → logout → redirect to /login.
+    await warmupDevice(bobPage, BOB_ID);
     const sec7BobConvsLoaded = bobPage.waitForResponse(
       (r) => r.url().includes("/messaging/conversations") && r.request().method() === "GET"
         && !r.url().match(/\/conversations\/[^/]+$/),
@@ -980,11 +995,13 @@ test.describe("10. Expired message — conversation list preview shows '[This me
     page = await browser.newPage();
     await openDmWithBob(page);
 
-    // Bob sends a message that expires in 12 seconds.
+    // Bob sends a message that expires in 15 seconds.  The extra headroom
+    // (vs. the previous 12 s) prevents flakiness in slow full-suite runs where
+    // the beforeAll itself can consume several seconds before the sleep begins.
     const r = await apiPostBearer(
       request,
       `/messaging/conversations/${_dmConvoId}/messages`,
-      { text: MSG_TEXT, expires_in_seconds: 12 },
+      { text: MSG_TEXT, expires_in_seconds: 15 },
       BOB_ID,
     );
     if (!r.ok()) throw new Error(`Bob expiry send failed: ${r.status()} — ${await r.text()}`);
@@ -1022,8 +1039,9 @@ test.describe("10. Expired message — conversation list preview shows '[This me
     const convoRow = page.getByRole("button").filter({ hasText: "E2E Bob" }).first();
     await expect(convoRow).toBeVisible({ timeout: 8000 });
 
-    // Wait for the 12-second TTL + 4-second buffer.
-    await sleep(16_000);
+    // Wait for the 15-second TTL + 7-second buffer (22 s total).
+    // The extra buffer absorbs backend latency and slow full-suite runs.
+    await sleep(22_000);
 
     // Reload again after expiry to get the fresh expired state from the backend.
     const sec10Reload2ConvsLoaded = page.waitForResponse(

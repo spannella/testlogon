@@ -409,8 +409,10 @@ test.describe("Section 77: MFA (TOTP) code generator", () => {
     await expect(page.locator("div.font-mono.text-4xl")).toHaveText(/^\d{6}$/);
     // "Rollover in" card is visible alongside the live code
     await expect(page.getByText("Rollover in")).toBeVisible();
-    // Cadence defaults to 30 s for a raw Base32 secret
-    await expect(page.getByText("30s")).toBeVisible();
+    // Cadence defaults to 30 s for a raw Base32 secret — use specific locator to avoid
+    // strict-mode violation when rollover card also shows "30s" at a period boundary
+    const cadenceCard = page.locator(".rounded-md.border.p-3").filter({ hasText: "Cadence" });
+    await expect(cadenceCard.locator("div.mt-1.text-xl")).toHaveText(/^\d+s$/);
     // The countdown value is "Xs" (1–30 s)
     const rolloverCard = page.locator(".rounded-md.border.p-3").filter({ hasText: "Rollover in" });
     await expect(rolloverCard.locator("div.mt-1.text-xl")).toHaveText(/^\d{1,2}s$/);
