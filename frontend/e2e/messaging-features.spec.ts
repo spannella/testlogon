@@ -1646,8 +1646,15 @@ test.describe("11. Tips and locked messages", () => {
       .locator("label")
       .filter({ hasText: /require tip to unlock/i })
       .locator("input[type='checkbox']");
-    // After mutual-exclusion test, lock is unchecked — check it
+    const tipCheck = alicePage
+      .locator("label")
+      .filter({ hasText: /attach tip/i })
+      .locator("input[type='checkbox']");
+    // After mutual-exclusion test, lock is unchecked — check it.
+    // Checking lock should uncheck tip (mutual exclusion) — wait for that to settle
+    // before filling the compose bar, otherwise the tip PM requirement keeps Send disabled.
     if (!(await lockCheck.isChecked())) await lockCheck.check();
+    await expect(tipCheck).not.toBeChecked({ timeout: 5000 });
     // Wait for the lock price input to appear after state update
     await expect(alicePage.locator("input[placeholder='e.g. 1.00']")).toBeVisible({ timeout: 3000 });
     await alicePage.locator("input[placeholder='e.g. 1.00']").fill("1");
@@ -1771,10 +1778,14 @@ test.describe("11. Tips and locked messages", () => {
     await dialog.getByRole("button", { name: /pay.*unlock/i })
       .evaluate((el) => (el as HTMLButtonElement).click());
     await unlockDone;
+    // Trigger React Query refetch so the invalidated messages cache is reloaded
+    // promptly — without this the UI update can take longer than 8 s in a slow
+    // full-suite run, causing a flaky toBeVisible failure.
+    await bobPage.evaluate(() => window.dispatchEvent(new Event("online")));
     // After successful unlock the query is invalidated; message text should appear.
     await expect(
       bobPage.locator("p").filter({ hasText: UI_LOCK }),
-    ).toBeVisible({ timeout: 8000 });
+    ).toBeVisible({ timeout: 15000 });
   });
 
   // ── UI: attached tip on send ───────────────────────────────────────────────

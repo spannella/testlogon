@@ -89,18 +89,50 @@ async function msgPatch(request: APIRequestContext, userId: string, path: string
   });
 }
 
-/** POST to compliance/session-auth API using page cookies + CSRF. */
+/** Build a Cookie: header string from the session's cookies. */
+function sessionCookieHeader(identity: string): string {
+  const sess = getAdminSessions()[identity]!;
+  return sess.cookies.map(c => `${c.name}=${c.value}`).join("; ");
+}
+
+/** POST to compliance/session-auth API using explicit Cookie header + CSRF.
+ *  Passing cookies via the Cookie: header is more reliable than relying on
+ *  Playwright's context cookie-jar, which can transiently miss httpOnly
+ *  cookies from fresh browser contexts in the full suite. */
 async function compPost(page: Page, identity: string, path: string, body?: unknown) {
   const sess = getAdminSessions()[identity]!;
   return page.request.post(`${API}/${path}`, {
     data: body ?? {},
-    headers: { "x-csrf-token": sess.csrf_token, "Content-Type": "application/json" },
+    headers: {
+      "x-csrf-token": sess.csrf_token,
+      "Content-Type": "application/json",
+      "Cookie": sessionCookieHeader(identity),
+    },
   });
 }
 
-/** GET from compliance/session-auth API using page cookies. */
-async function compGet(page: Page, path: string, params?: Record<string, string>) {
-  return page.request.get(`${API}/${path}`, { params });
+/** GET from compliance/session-auth API using Node.js global fetch.
+ *  Uses Node.js fetch (not Playwright's page.request) to bypass any Playwright
+ *  browser-context cookie or networking issues that occur in the full suite.
+ *  Returns a Playwright-compatible response object ({status(), json(), text(), ok()}). */
+async function compGet(_page: Page, path: string, params?: Record<string, string>, identity = "compliance_admin") {
+  const url = new URL(`${API}/${path}`);
+  if (params) {
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+  }
+  const res = await fetch(url.toString(), {
+    headers: { "Cookie": sessionCookieHeader(identity) },
+  });
+  const bodyText = await res.text();
+  const headersMap: Record<string, string> = {};
+  res.headers.forEach((value, key) => { headersMap[key] = value; });
+  return {
+    status: () => res.status,
+    ok: () => res.ok,
+    text: async () => bodyText,
+    json: async () => JSON.parse(bodyText) as unknown,
+    headers: () => headersMap,
+  };
 }
 
 // ─── Shared setup: create alice-bob DM + group with a message ─────────────────
@@ -412,6 +444,8 @@ test.describe("94. Messaging compliance — archive event query", () => {
     getAdminSessions();
     fixture = await setupConversationsAndMessages(request);
     compliancePage = await newIdentityPage(browser, "compliance_admin");
+    // Note: compGet/compPost now pass cookies explicitly via Cookie: header, so
+    // no warmup loop or cookie re-injection is needed here.
   });
 
   test.afterAll(async () => {
@@ -420,8 +454,12 @@ test.describe("94. Messaging compliance — archive event query", () => {
 
   test("94.1 Compliance admin can query archive events (paginated response)", async () => {
     const resp = await compGet(compliancePage, "messaging/compliance/archive/events");
-    expect(resp.status()).toBe(200);
-    const body = await resp.json() as { items: unknown[]; total_matches: number };
+    const rawBody = await resp.text();
+    expect(
+      resp.status(),
+      `Expected 200 but got ${resp.status()}. Body: ${rawBody.slice(0, 300)}`,
+    ).toBe(200);
+    const body = JSON.parse(rawBody) as { items: unknown[]; total_matches: number };
     expect(Array.isArray(body.items)).toBe(true);
     expect(typeof body.total_matches).toBe("number");
   });

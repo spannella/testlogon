@@ -36,7 +36,7 @@ import { PageHeader } from "@/components/shared/PageHeader";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import type { SortState } from "@/components/shared/DataTable";
-import type { FileEntry, SharedItem, MountMockFileItem } from "@/api/types";
+import type { FileEntry, SharedItem } from "@/api/types";
 import { encryptFileChunked, decryptFileChunked, type EncryptionMetadata } from "@/lib/fileEncryption";
 import { evaluateEncryptionPassword } from "@/lib/encryptionPasswordPolicy";
 import {
@@ -67,8 +67,6 @@ import {
   getSharedFileInfo,
   getUsageSummary,
   sharedPreviewUrl,
-  listSftpMounts,
-  listMountMockFiles,
 } from "@/api/endpoints/files";
 import { FileTable } from "./FileTable";
 import { ImageEditorDialog } from "./ImageEditorDialog";
@@ -80,7 +78,6 @@ import { UploadZone } from "./UploadZone";
 import { BulkActions } from "./BulkActions";
 import { MoveDialog } from "./MoveDialog";
 import ImpersonationRouteIndicator from "@/components/shared/ImpersonationRouteIndicator";
-import { ApiError } from "@/api/client";
 
 type SearchMode = "name" | "content";
 type PasswordDialogResult = { password: string; remember: boolean };
@@ -111,70 +108,6 @@ function warningLevel(percent: number): "none" | "warn" | "critical" {
   return "none";
 }
 
-type MockSortBy = "name" | "type" | "size" | "mtime";
-type MockSortDir = "asc" | "desc";
-type MockFilterType = "all" | "file" | "folder";
-
-function normalizeMockPath(path: string): string {
-  const raw = (path || "/").trim() || "/";
-  const parts: string[] = [];
-  raw.split("/").forEach((part) => {
-    if (!part || part === ".") return;
-    if (part === "..") {
-      parts.pop();
-      return;
-    }
-    parts.push(part);
-  });
-  return parts.length ? `/${parts.join("/")}/` : "/";
-}
-
-function parentMockPath(path: string): string {
-  const parts = normalizeMockPath(path).split("/").filter(Boolean);
-  if (!parts.length) return "/";
-  parts.pop();
-  return parts.length ? `/${parts.join("/")}/` : "/";
-}
-
-function mockBreadcrumbs(path: string): Array<{ label: string; path: string }> {
-  const parts = normalizeMockPath(path).split("/").filter(Boolean);
-  const crumbs: Array<{ label: string; path: string }> = [{ label: "root", path: "/" }];
-  let acc = "";
-  for (const part of parts) {
-    acc += `/${part}`;
-    crumbs.push({ label: part, path: `${acc}/` });
-  }
-  return crumbs;
-}
-
-function extractMockErrorCode(err: unknown): string {
-  const body = err instanceof ApiError
-    ? err.body
-    : (err && typeof err === "object" && "body" in (err as Record<string, unknown>)
-      ? (err as { body?: unknown }).body
-      : null);
-  if (body && typeof body === "object") {
-    const detail = (body as { detail?: unknown }).detail;
-    if (detail && typeof detail === "object") {
-      const code = (detail as { code?: unknown }).code;
-      if (typeof code === "string") return code;
-    }
-  }
-  return "";
-}
-
-function mockErrorRemediation(code: string, path: string): string {
-  if (code === "sftp_mock_backend_disabled") {
-    return "Enable FILEMGR_SFTP_BACKEND=mock and restart the backend, then retry.";
-  }
-  if (code === "mock_path_not_found") {
-    return `Path ${path} was not found. Navigate from root or create it under the local mock directory.`;
-  }
-  if (code === "mock_path_not_directory") {
-    return `Path ${path} is a file. Browse to a folder path (try Up) before listing.`;
-  }
-  return "Verify mount/path settings and try again.";
-}
 
 export default function FilesPage() {
   const queryClient = useQueryClient();
@@ -220,21 +153,6 @@ export default function FilesPage() {
   const [moveTarget, setMoveTarget] = React.useState<FileEntry | null>(null);
   const [imageEditTarget, setImageEditTarget] = React.useState<FileEntry | null>(null);
 
-  // Mock browser dialog (TypeScript UI)
-  const [mockBrowserOpen, setMockBrowserOpen] = React.useState(false);
-  const [mockMountId, setMockMountId] = React.useState("");
-  const [mockPath, setMockPath] = React.useState("/");
-  const [mockPathInput, setMockPathInput] = React.useState("/");
-  const [mockFilterText, setMockFilterText] = React.useState("");
-  const [mockFilterType, setMockFilterType] = React.useState<MockFilterType>("all");
-  const [mockSortBy, setMockSortBy] = React.useState<MockSortBy>("name");
-  const [mockSortDir, setMockSortDir] = React.useState<MockSortDir>("asc");
-  const [mockCursor, setMockCursor] = React.useState<string | undefined>(undefined);
-  const [mockItems, setMockItems] = React.useState<MountMockFileItem[]>([]);
-  const [mockFilesystemPath, setMockFilesystemPath] = React.useState<string>("");
-  const [mockLoading, setMockLoading] = React.useState(false);
-  const [mockError, setMockError] = React.useState<string>("");
-
   // ── Queries ─────────────────────────────────────────────────────
 
   const filesQuery = useQuery({
@@ -260,47 +178,6 @@ export default function FilesPage() {
     queryFn: () => getUsageSummary(),
   });
 
-  const mountsQuery = useQuery({
-    queryKey: ["files-sftp-mounts"],
-    queryFn: () => listSftpMounts(),
-    enabled: mockBrowserOpen,
-  });
-
-  const loadMockFiles = React.useCallback(async (opts?: { append?: boolean; cursor?: string; path?: string }) => {
-    const mountId = String(mockMountId || "").trim();
-    if (!mountId) return;
-    const browsePath = normalizeMockPath(opts?.path ?? mockPath);
-    setMockLoading(true);
-    setMockError("");
-    try {
-      const resp = await listMountMockFiles(mountId, {
-        path: browsePath,
-        limit: 200,
-        cursor: opts?.cursor,
-      });
-      const next = Array.isArray(resp.items) ? resp.items : [];
-      setMockItems((prev) => (opts?.append ? [...prev, ...next] : next));
-      setMockPath(resp.path || browsePath);
-      setMockPathInput(resp.path || browsePath);
-      setMockCursor(resp.cursor || undefined);
-      setMockFilesystemPath(resp.filesystem_path || "");
-    } catch (err) {
-      const code = extractMockErrorCode(err);
-      setMockError(mockErrorRemediation(code, browsePath));
-      setMockItems([]);
-      setMockCursor(undefined);
-      setMockFilesystemPath("");
-    } finally {
-      setMockLoading(false);
-    }
-  }, [mockMountId, mockPath]);
-
-  React.useEffect(() => {
-    if (!mockBrowserOpen) return;
-    if (!mockMountId) return;
-    void loadMockFiles({ path: mockPath });
-  }, [mockBrowserOpen, mockMountId, mockPath, loadMockFiles]);
-
   const displayItems: FileEntry[] = isSearching
     ? searchMode === "name"
       ? (nameSearchQuery.data?.results ?? [])
@@ -312,39 +189,6 @@ export default function FilesPage() {
       ? nameSearchQuery.isLoading
       : contentSearchQuery.isLoading
     : filesQuery.isLoading;
-
-  const mockDisplayItems = React.useMemo(() => {
-    const q = mockFilterText.trim().toLowerCase();
-    const filtered = mockItems.filter((it) => {
-      if (mockFilterType !== "all" && it.type !== mockFilterType) return false;
-      if (!q) return true;
-      const hay = `${it.name} ${it.path} ${it.type}`.toLowerCase();
-      return hay.includes(q);
-    });
-    filtered.sort((a, b) => {
-      let av: string | number;
-      let bv: string | number;
-      if (mockSortBy === "size") {
-        av = Number(a.size || 0);
-        bv = Number(b.size || 0);
-      } else if (mockSortBy === "mtime") {
-        av = Number(a.modified_at || 0);
-        bv = Number(b.modified_at || 0);
-      } else if (mockSortBy === "type") {
-        av = String(a.type || "");
-        bv = String(b.type || "");
-      } else {
-        av = String(a.name || "").toLowerCase();
-        bv = String(b.name || "").toLowerCase();
-      }
-      if (av < bv) return mockSortDir === "asc" ? -1 : 1;
-      if (av > bv) return mockSortDir === "asc" ? 1 : -1;
-      return 0;
-    });
-    return filtered;
-  }, [mockFilterText, mockFilterType, mockItems, mockSortBy, mockSortDir]);
-
-  const mockCrumbs = React.useMemo(() => mockBreadcrumbs(mockPath), [mockPath]);
 
   // ── Mutations ───────────────────────────────────────────────────
 
@@ -918,21 +762,6 @@ export default function FilesPage() {
               Clear remembered passwords
             </Button>
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setMockBrowserOpen(true);
-                const mounts = mountsQuery.data?.items ?? [];
-                if (!mockMountId && mounts.length > 0) {
-                  setMockMountId(String(mounts[0]?.id || ""));
-                }
-              }}
-              data-testid="open-ts-mock-browser"
-            >
-              Mock browser
-            </Button>
-
             <div className="rounded-md border px-3 py-1.5 text-xs" data-testid="files-usage-widget">
               {usageSummary ? (
                 <div className="space-y-0.5">
@@ -1037,174 +866,6 @@ export default function FilesPage() {
           <SharedWithMe onPreviewShared={handlePreviewShared} onDownloadShared={handleSharedDownload} />
         </TabsContent>
       </Tabs>
-
-      <Dialog
-        open={mockBrowserOpen}
-        onOpenChange={(open) => {
-          setMockBrowserOpen(open);
-          if (!open) {
-            setMockError("");
-            setMockCursor(undefined);
-          }
-        }}
-      >
-        <DialogContent className="max-w-4xl">
-          <DialogHeader>
-            <DialogTitle>Mock remote filesystem browser</DialogTitle>
-            <DialogDescription>TypeScript UI developer tool for mounted mock paths.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <Label htmlFor="mock-mount-id">Mount</Label>
-              <select
-                id="mock-mount-id"
-                className="h-9 rounded-md border px-2 text-sm"
-                value={mockMountId}
-                onChange={(e) => {
-                  const nextMountId = e.target.value;
-                  setMockMountId(nextMountId);
-                  setMockPath("/");
-                  setMockPathInput("/");
-                  setMockCursor(undefined);
-                }}
-              >
-                <option value="">Select mount…</option>
-                {(mountsQuery.data?.items ?? []).map((m) => (
-                  <option key={m.id} value={m.id}>{m.id} ({m.protocol || "sftp"})</option>
-                ))}
-              </select>
-
-              <Label htmlFor="mock-path-input">Path</Label>
-              <Input
-                id="mock-path-input"
-                value={mockPathInput}
-                onChange={(e) => setMockPathInput(e.target.value)}
-                className="max-w-xs"
-              />
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  const next = normalizeMockPath(mockPathInput);
-                  setMockPath(next);
-                  setMockCursor(undefined);
-                }}
-                disabled={!mockMountId || mockLoading}
-              >
-                Go
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  const next = parentMockPath(mockPath);
-                  setMockPath(next);
-                  setMockPathInput(next);
-                  setMockCursor(undefined);
-                }}
-                disabled={!mockMountId || mockLoading}
-              >
-                Up
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => void loadMockFiles({ path: mockPath })} disabled={!mockMountId || mockLoading}>
-                Refresh
-              </Button>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              {mockCrumbs.map((c, idx) => (
-                <React.Fragment key={c.path}>
-                  {idx > 0 && <span className="text-muted-foreground">/</span>}
-                  <button className="underline" onClick={() => { setMockPath(c.path); setMockPathInput(c.path); setMockCursor(undefined); }}>{c.label}</button>
-                </React.Fragment>
-              ))}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                placeholder="Filter by name or path"
-                value={mockFilterText}
-                onChange={(e) => setMockFilterText(e.target.value)}
-                className="max-w-xs"
-              />
-              <select className="h-9 rounded-md border px-2 text-sm" value={mockFilterType} onChange={(e) => setMockFilterType(e.target.value as MockFilterType)}>
-                <option value="all">All types</option>
-                <option value="folder">Folders</option>
-                <option value="file">Files</option>
-              </select>
-              <select className="h-9 rounded-md border px-2 text-sm" value={mockSortBy} onChange={(e) => setMockSortBy(e.target.value as MockSortBy)}>
-                <option value="name">Sort: name</option>
-                <option value="type">Sort: type</option>
-                <option value="size">Sort: size</option>
-                <option value="mtime">Sort: modified</option>
-              </select>
-              <select className="h-9 rounded-md border px-2 text-sm" value={mockSortDir} onChange={(e) => setMockSortDir(e.target.value as MockSortDir)}>
-                <option value="asc">Ascending</option>
-                <option value="desc">Descending</option>
-              </select>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 text-xs">
-              <Button variant="ghost" size="sm" onClick={() => navigator.clipboard?.writeText(`/mounts/${mockMountId}${mockPath}`).then(() => toast.success("Copied mount-relative path"))} disabled={!mockMountId}>
-                Copy mount-relative path
-              </Button>
-              {mockFilesystemPath && (
-                <Button variant="ghost" size="sm" onClick={() => navigator.clipboard?.writeText(mockFilesystemPath).then(() => toast.success("Copied filesystem path"))}>
-                  Copy filesystem path
-                </Button>
-              )}
-              <span className="text-muted-foreground">/mounts/{mockMountId || "<mount>"}{mockPath}</span>
-            </div>
-
-            {mockFilesystemPath && (
-              <div className="rounded border bg-muted/40 px-2 py-1 text-xs text-muted-foreground">
-                Filesystem path: <span className="font-mono">{mockFilesystemPath}</span>
-              </div>
-            )}
-
-            {mockError && (
-              <div className="rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900" data-testid="mock-browser-remediation">
-                {mockError}
-              </div>
-            )}
-
-            <div className="max-h-80 overflow-auto rounded border">
-              {mockLoading ? (
-                <div className="p-3 text-sm text-muted-foreground">Loading…</div>
-              ) : mockDisplayItems.length === 0 ? (
-                <div className="p-3 text-sm text-muted-foreground">No items match current filters.</div>
-              ) : (
-                <div className="divide-y">
-                  {mockDisplayItems.map((it) => (
-                    <div key={`${it.path}-${it.modified_at}`} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
-                      <div className="min-w-0">
-                        <div className="truncate font-mono">{it.path}</div>
-                        <div className="text-xs text-muted-foreground">{it.type}{it.type === "file" ? ` • ${formatBytesCompact(Number(it.size || 0))}` : ""}</div>
-                      </div>
-                      {it.type === "folder" && (
-                        <Button variant="outline" size="sm" onClick={() => { const next = normalizeMockPath(it.path); setMockPath(next); setMockPathInput(next); setMockCursor(undefined); }}>
-                          Open
-                        </Button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {mockCursor && !mockLoading && (
-              <div className="flex justify-end">
-                <Button variant="outline" size="sm" onClick={() => void loadMockFiles({ append: true, cursor: mockCursor, path: mockPath })}>
-                  Load more
-                </Button>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setMockBrowserOpen(false)}>Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* New folder dialog */}
       <Dialog open={newFolderOpen} onOpenChange={setNewFolderOpen}>

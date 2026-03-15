@@ -11,8 +11,7 @@
  *
  * Prerequisites (set in .env.local / frontend/.env.local):
  *   DEV_MODE=1                    — enables /internal/dev-tools/* and writes email/SMS logs
- *   VITE_ENABLE_DEVTOOLS_LOG_UI=1 — shows /dev-tools/log-ui route in the sidebar
- *   Backend running on port 8000, Vite dev server on port 3000
+ *   Backend running on port 8000, Vite dev servers on port 3000 (main) and 3001 (devtools)
  */
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
@@ -20,8 +19,9 @@ import { execSync } from "child_process";
 import { writeFileSync, unlinkSync, appendFileSync } from "fs";
 import { randomBytes } from "crypto";
 
-const API  = "http://localhost:8000";
-const BASE = "http://localhost:3000";
+const API      = "http://localhost:8000";
+const BASE     = "http://localhost:3000";
+const DEVTOOLS = "http://localhost:3001";
 const REPO = "/home/ubuntu/testlogon";
 
 /** Stripe-format billing log that the dev-tools billing endpoint reads. */
@@ -307,7 +307,7 @@ test.describe("Section 79: Email MFA via dev log UI", () => {
   });
 
   test("79.6 dev tools Email tab shows alice's enrollment email in the browser UI", async () => {
-    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     // Email tab is default; mailbox list and the OTP body text should be visible
     await expect(page.getByText("All Inboxes")).toBeVisible();
     await expect(page.getByText(ALICE_ID).first()).toBeVisible();
@@ -425,7 +425,7 @@ test.describe("Section 80: SMS MFA via dev log UI", () => {
   });
 
   test("80.5 dev tools SMS tab shows the enrollment conversation in the browser UI", async () => {
-    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: "SMS" }).click();
     // The test phone number appears as the conversation title in the sidebar
     await expect(page.getByText(SMS_PHONE).first()).toBeVisible({ timeout: 10_000 });
@@ -546,7 +546,7 @@ test.describe("Section 81: Billing ledger tie-out via dev log UI", () => {
   });
 
   test("81.6 dev tools Billing tab shows injected entries in the ledger table", async () => {
-    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: "Billing" }).click();
     // Wait for ledger data to render (many rows may show "charge.succeeded"; use .first())
     await expect(page.getByRole("cell", { name: "charge.succeeded" }).first()).toBeVisible();
@@ -557,7 +557,7 @@ test.describe("Section 81: Billing ledger tie-out via dev log UI", () => {
   });
 
   test("81.7 billing summary is internally consistent: gross = net + fees", async () => {
-    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: "Billing" }).click();
     await expect(page.getByRole("cell", { name: "charge.succeeded" }).first()).toBeVisible();
     // Fetch the live summary and verify the fundamental accounting identity

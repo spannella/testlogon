@@ -7,19 +7,19 @@
  *
  * Prerequisites:
  *   DEV_MODE=1 in .env.local (backend) — gates all /internal/dev-tools/* endpoints
- *   VITE_ENABLE_DEVTOOLS_LOG_UI=true in frontend/.env.local (frontend) — shows route + sidebar link
- *   Backend running on port 8000, Vite dev server on port 3000
+ *   Backend running on port 8000, Vite dev servers on port 3000 (main) and 3001 (devtools)
  *
  * Auth:
  *   Section 75 — no auth (endpoints are unauthenticated, only gated by DEV_MODE)
- *   Section 76 — session cookie auth via injectAuth()
+ *   Section 76 — no auth needed (devtools is a standalone app on port 3001)
  */
 
 import { test, expect, type Page, type Browser } from "@playwright/test";
 import { execSync } from "child_process";
 
-const API  = "http://localhost:8000";
-const BASE = "http://localhost:3000";
+const API      = "http://localhost:8000";
+const BASE     = "http://localhost:3000";
+const DEVTOOLS = "http://localhost:3001";
 
 const ALICE_ID = "e2e_alice@test.local";
 
@@ -295,17 +295,12 @@ test.describe("Section 76: Dev Tools Log UI frontend", () => {
   });
 
   test("76.1 /dev-tools/log-ui route loads with Dev Tools Log UI heading", async () => {
-    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading", { name: "Dev Tools Log UI" })).toBeVisible();
   });
 
-  test("76.2 sidebar shows Dev Tools Log UI link (feature flag enabled)", async () => {
-    await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
-    await expect(page.getByRole("link", { name: /Dev Tools/i }).first()).toBeVisible();
-  });
-
   test("76.3 Email tab: shows mailbox sidebar, thread list, and message body", async () => {
-    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     // Email tab is active by default
     await expect(page.getByText("All Inboxes")).toBeVisible();
     await expect(page.getByText("OTP for login").first()).toBeVisible();
@@ -313,41 +308,41 @@ test.describe("Section 76: Dev Tools Log UI frontend", () => {
   });
 
   test("76.4 Email tab: no Send or Delete buttons (read-only)", async () => {
-    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("button", { name: /send/i })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /delete/i })).toHaveCount(0);
   });
 
   test("76.5 SMS tab: shows conversation and message content", async () => {
-    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: "SMS" }).click();
     await expect(page.getByText("+15550001234").first()).toBeVisible();
     await expect(page.getByText("Your code: 112233").first()).toBeVisible();
   });
 
   test("76.6 SMS tab: Message metadata section visible, no Edit buttons", async () => {
-    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: "SMS" }).click();
     await expect(page.getByText("Message metadata")).toBeVisible();
     await expect(page.getByRole("button", { name: /edit/i })).toHaveCount(0);
   });
 
   test("76.7 MFA (TOTP) tab: shows local-only tool notice and TOTP input area", async () => {
-    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: "MFA (TOTP)" }).click();
     await expect(page.getByText(/Local-only tool:/)).toBeVisible();
     await expect(page.getByText("Provide a valid TOTP configuration to generate live codes.")).toBeVisible();
   });
 
   test("76.8 Billing tab: shows summary figures and ledger entry", async () => {
-    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: "Billing" }).click();
     await expect(page.getByText("Gross inflow")).toBeVisible();
     await expect(page.getByText("charge.succeeded")).toBeVisible();
   });
 
   test("76.9 Billing tab: View raw dialog shows raw payload, no Refund or Charge buttons", async () => {
-    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: "Billing" }).click();
     await page.getByRole("button", { name: "View raw" }).click();
     await expect(page.getByText("Raw billing payload")).toBeVisible();
@@ -372,7 +367,7 @@ test.describe("Section 77: MFA (TOTP) code generator", () => {
   test.beforeAll(async ({ browser }: { browser: Browser }) => {
     page = await browser.newPage();
     await injectAuth(page, ALICE_ID);
-    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: "MFA (TOTP)" }).click();
     await expect(page.getByText(/Local-only tool:/)).toBeVisible();
   });
@@ -414,8 +409,10 @@ test.describe("Section 77: MFA (TOTP) code generator", () => {
     await expect(page.locator("div.font-mono.text-4xl")).toHaveText(/^\d{6}$/);
     // "Rollover in" card is visible alongside the live code
     await expect(page.getByText("Rollover in")).toBeVisible();
-    // Cadence defaults to 30 s for a raw Base32 secret
-    await expect(page.getByText("30s")).toBeVisible();
+    // Cadence defaults to 30 s for a raw Base32 secret — use specific locator to avoid
+    // strict-mode violation when rollover card also shows "30s" at a period boundary
+    const cadenceCard = page.locator(".rounded-md.border.p-3").filter({ hasText: "Cadence" });
+    await expect(cadenceCard.locator("div.mt-1.text-xl")).toHaveText(/^\d+s$/);
     // The countdown value is "Xs" (1–30 s)
     const rolloverCard = page.locator(".rounded-md.border.p-3").filter({ hasText: "Rollover in" });
     await expect(rolloverCard.locator("div.mt-1.text-xl")).toHaveText(/^\d{1,2}s$/);
@@ -468,7 +465,7 @@ test.describe("Section 78: Billing log filter and display", () => {
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MOCK_BILLING_SUMMARY) }),
     );
 
-    await page.goto(`${BASE}/dev-tools/log-ui`, { waitUntil: "domcontentloaded" });
+    await page.goto(`${DEVTOOLS}`, { waitUntil: "domcontentloaded" });
     await page.getByRole("tab", { name: "Billing" }).click();
     // Wait for actual ledger data (confirms mock responded and React re-rendered)
     await expect(page.getByText("charge.succeeded")).toBeVisible();

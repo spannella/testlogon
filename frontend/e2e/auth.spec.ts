@@ -606,6 +606,30 @@ test.describe("11. SMS MFA at registration", () => {
   });
 });
 
+/**
+ * Clear the IP-based MFA TOTP rate-limit bucket from DynamoDB so that section
+ * 13 tests don't get 429s from accumulated calls across multiple test runs.
+ */
+function clearTotpRateLimitBucket(): void {
+  execSync(
+    `/home/ubuntu/testlogon/.venv/bin/python3 -c "
+import boto3, os
+from pathlib import Path
+for line in Path('/home/ubuntu/testlogon/.env.local').read_text().splitlines():
+    line = line.strip()
+    if line and not line.startswith('#') and '=' in line:
+        k, v = line.split('=', 1)
+        os.environ.setdefault(k.strip(), v.strip())
+ddb = boto3.resource('dynamodb', endpoint_url=os.environ.get('DDB_ENDPOINT_URL', 'http://localhost:8001'), region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+t = ddb.Table(os.environ.get('DDB_SESSIONS_TABLE', 'sessions'))
+t.delete_item(Key={'user_sub': 'ip#127.0.0.1', 'session_id': 'rl#mfa_verify#totp'})
+t.delete_item(Key={'user_sub': 'ip#127.0.0.1', 'session_id': 'lockout#mfa_totp'})
+print('cleared')
+"`,
+    { timeout: 10_000 },
+  );
+}
+
 // ─── Helpers for section 13 ───────────────────────────────────────────────────
 
 interface MfaMultiSetup {
@@ -664,6 +688,10 @@ test.describe("13. Multi-device TOTP MFA", () => {
   let enrollPage: import("@playwright/test").Page;
 
   test.beforeAll(async ({ browser }) => {
+    // Clear accumulated IP rate-limit / lockout state from previous runs so
+    // that totp/verify calls don't get throttled when the suite runs repeatedly.
+    clearTotpRateLimitBucket();
+
     // Create a fresh user with known credentials + a session stamped with
     // mfa_verified_at so require_fresh_mfa() passes for device enrollment.
     setupData = runMfaMultiSetup();

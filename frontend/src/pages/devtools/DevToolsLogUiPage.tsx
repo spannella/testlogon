@@ -19,6 +19,7 @@ import {
 } from "@/hooks/useDevtoolsData";
 import { parseTotpConfigInput, type TotpConfig } from "@/lib/totpConfigParser";
 import { generateTotpCode } from "@/lib/totpGenerator";
+import SftpMockBrowserTab from "./SftpMockBrowserTab";
 
 const ALL_INBOXES = "__all_inboxes__";
 
@@ -272,11 +273,12 @@ export default function DevToolsLogUiPage() {
       />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4">
+        <TabsList className="grid w-full grid-cols-3 sm:grid-cols-5">
           <TabsTrigger value="email">Email</TabsTrigger>
           <TabsTrigger value="sms">SMS</TabsTrigger>
           <TabsTrigger value="mfa">MFA (TOTP)</TabsTrigger>
           <TabsTrigger value="billing">Billing</TabsTrigger>
+          <TabsTrigger value="file-mounts">File Mounts</TabsTrigger>
         </TabsList>
 
         <TabsContent value="email" className="space-y-4">
@@ -815,6 +817,10 @@ export default function DevToolsLogUiPage() {
               </div>
             </div>
           )}
+        </TabsContent>
+
+        <TabsContent value="file-mounts" className="space-y-4">
+          <SftpMockBrowserTab />
         </TabsContent>
       </Tabs>
     </div>
