@@ -8792,11 +8792,20 @@ def list_scheduled_messages(
 ):
     """Return the caller's pending scheduled messages in a conversation."""
     require_participant_active(user_id, conversation_id)
-    resp = tbl_msgs.query(
+    # Paginate through all DDB pages — FilterExpression is applied after the 1MB page
+    # fetch, so a single query() call silently misses items on later pages (fixes #145).
+    items = []
+    kwargs: dict = dict(
         KeyConditionExpression=Key("conversation_id").eq(conversation_id),
         FilterExpression=Attr("status").eq("scheduled") & Attr("sender_id").eq(user_id),
     )
-    items = resp.get("Items", [])
+    while True:
+        resp = tbl_msgs.query(**kwargs)
+        items.extend(resp.get("Items", []))
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        kwargs["ExclusiveStartKey"] = last_key
     items.sort(key=lambda x: int(x.get("deliver_at", 0)))
     return [_message_out_from_item(item, user_id) for item in items]
 

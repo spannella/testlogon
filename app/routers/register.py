@@ -52,6 +52,8 @@ def _require_cognito() -> None:
 
 
 def _cognito_available() -> bool:
+    if S.dev_mode:
+        return False  # Use direct DDB registration path in dev mode (fixes #144)
     return bool(S.cognito_app_client_id)
 
 

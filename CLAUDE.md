@@ -270,6 +270,12 @@ Feature flags (all default to `true` in `.env.local.example`):
 
 **Conversations list pagination**: `list_conversations` paginates with `Limit=500` per page (up to 2000 total). Test runs accumulate many DMs; always create test DMs via session auth (`page.request`) not Bearer auth — Bearer-auth DMs don't appear in session-auth conversation lists.
 
+**DDB FilterExpression doesn't reduce page size**: DynamoDB fetches up to 1MB *before* applying `FilterExpression`. Any query that filters a sparse attribute (e.g. `status=scheduled` on a Messages table) must loop via `LastEvaluatedKey` — a single `query()` call silently misses items beyond the first page on a busy table.
+
+**`_cognito_available()` must return False in dev mode**: `local-cognito-init.py` sets `COGNITO_APP_CLIENT_ID`, which causes `_cognito_available()` to return `True`. In dev mode this sends registration down the Cognito path, which fails silently and never creates the user record or MFA challenge in DDB. The function now short-circuits to `False` when `S.dev_mode` is `True`.
+
+**Test data accumulates — run `just restart` before a full e2e suite**: Each run adds helpdesk conversations, DM messages, and rate-limit records that are never cleaned up. After many runs the helpdesk queue response grows to 200KB+, which causes browser network errors that hide the Agent Queue UI (sections 50.2–50.4). Run `just restart` to wipe and re-seed before a clean suite run.
+
 ---
 
 ## Adding a new feature — checklist
