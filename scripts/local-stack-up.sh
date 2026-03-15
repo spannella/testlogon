@@ -190,20 +190,12 @@ start_host_stack() {
   wait_up "http://localhost:7999/health" "Mock KMS"
 }
 
-if command -v docker >/dev/null 2>&1; then
-  docker compose -f docker-compose.local.yml up -d
-
-  echo "Waiting for local services to be healthy..."
-  for _ in {1..40}; do
-    if curl -q -sf http://localhost:4566/health >/dev/null 2>&1 && curl -q -sf http://localhost:8001/ >/dev/null 2>&1 && curl -q -sf http://localhost:12111/ >/dev/null 2>&1; then
-      break
-    fi
-    sleep 1
-  done
-else
-  echo "Docker not found; starting local stack in host mode (moto + DynamoDB Local + stripe-mock)."
-  start_host_stack
-fi
+# Always use host mode (moto + DynamoDB Local jar + stripe-mock binary).
+# Docker-compose mode is avoided because LocalStack community edition does not
+# include cognito-idp, and its DynamoDB container has volume permission issues
+# with named Docker volumes. Java and Python are always available after setup_ubuntu.sh.
+echo "Starting local stack in host mode (moto + DynamoDB Local + stripe-mock)."
+start_host_stack
 
 start_keycloak_host
 
