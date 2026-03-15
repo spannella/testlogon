@@ -83,7 +83,7 @@ export function ScheduledMessages({ open, onOpenChange, conversationId }: Schedu
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-80 sm:w-96">
+      <SheetContent side="right" className="w-80 sm:w-96" onInteractOutside={(e) => e.preventDefault()}>
         <SheetHeader>
           <SheetTitle className="flex items-center gap-2">
             <Clock className="h-4 w-4" />
