@@ -32,7 +32,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Separator } from "@/components/ui/separator";
 import { useUiStore } from "@/stores/uiStore";
 import { useAuthStore } from "@/stores/authStore";
-import { canAccessModerationBoard, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
+import { canAccessModerationBoard, canAccessPaymentIncidentQueue, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 import { useQuery } from "@tanstack/react-query";
 import { getConversations } from "@/api/endpoints/messaging";
 import { isVncRemoteDesktopEnabled, isDevtoolsLogUiEnabled } from "@/lib/featureFlags";
@@ -93,6 +93,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
       { label: "Role Management", path: "/root/roles", icon: <UsersRound className="h-5 w-5" /> },
       { label: "Moderation Board", path: "/admin/moderation", icon: <Scale className="h-5 w-5" /> },
+      { label: "Payment Incidents", path: "/admin/payment-incidents", icon: <CreditCard className="h-5 w-5" /> },
     ],
   },
 ];
@@ -106,6 +107,7 @@ export default function Sidebar() {
   const accessToken = useAuthStore((s) => s.accessToken);
   const showRootRoleManagement = canSeeRootRoleManagement(accessToken);
   const showModerationBoard = canAccessModerationBoard(accessToken);
+  const showPaymentIncidents = canAccessPaymentIncidentQueue(accessToken);
 
   const { data: convoData } = useQuery({
     queryKey: ["conversations"],
@@ -153,6 +155,7 @@ export default function Sidebar() {
             if (item.path === "/root/roles") return showRootRoleManagement;
             if (item.path === "/remote-desktop") return isVncRemoteDesktopEnabled();
             if (item.path === "/admin/moderation") return showModerationBoard;
+            if (item.path === "/admin/payment-incidents") return showPaymentIncidents;
             return true;
           });
           if (items.length === 0) return null;

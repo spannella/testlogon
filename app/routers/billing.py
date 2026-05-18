@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import hashlib
 import logging
 import sys
+import threading
+import time
+import uuid
+from collections import OrderedDict
 from typing import Any, Callable, Dict, Iterable, List, Optional
 from urllib.parse import urljoin
 
@@ -25,6 +31,8 @@ from app.models import (
     AddCardReq,
     AddChargeReq,
     BillingCheckoutReq,
+    PaymentIncidentEvidenceUploadReq,
+    PaymentIncidentSubmitResponseReq,
     StripePaymentMethodOut,
     PayBalanceReq,
     SetAutopayReq,
@@ -63,12 +71,353 @@ from app.services.billing_dunning import (
     schedule_dunning,
 )
 from app.services.ttl import with_ttl
+from app.services.payment_incident_providers import (
+    DEFAULT_PROVIDER_REGISTRY,
+    resolve_provider_adapter,
+)
+from app.services.payment_incident_stripe_adapter import StripePaymentIncidentAdapter
+from app.services.payment_incident_paypal_adapter import PayPalPaymentIncidentAdapter
+from app.services.payment_incident_ccbill_adapter import CCBillPaymentIncidentAdapter
+from app.services.payment_incident_transitions import PaymentIncidentTransitionService, PaymentIncidentTransitionError
+from app.services.payment_incidents_domain import PaymentIncidentType
+from app.services.payment_incidents_store import DynamoPaymentIncidentRepository
+from app.services.payment_incident_ticket_sync import ensure_incident_ticket_link, evaluate_ticket_trigger, sync_ticket_from_incident
+from app.services.payment_failure_alerts import dispatch_auto_payment_failure_alert, clear_auto_payment_failure_alerts
+from app.services.payment_incident_metrics import (
+    record_incident_created,
+    record_retry_attempt,
+    record_webhook_outcome,
+    record_webhook_replay_event,
+    set_webhook_replay_cache_entries,
+)
 
 router = APIRouter(tags=["billing"])
 logger = logging.getLogger(__name__)
+_PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE: "OrderedDict[str, float]" = OrderedDict()
+_PAYMENT_INCIDENT_WEBHOOK_REPLAY_LOCK = threading.Lock()
+
+
+DEFAULT_PROVIDER_REGISTRY.register(StripePaymentIncidentAdapter())
+DEFAULT_PROVIDER_REGISTRY.register(PayPalPaymentIncidentAdapter())
+DEFAULT_PROVIDER_REGISTRY.register(CCBillPaymentIncidentAdapter())
 
 
 require_billing_support_admin = require_admin_scope("billing_support")
+
+
+_PAYMENT_INCIDENT_WEBHOOK_ERROR_RESPONSES: dict[int, dict[str, Any]] = {
+    400: {
+        "description": "Webhook verification or payload parsing rejected",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "invalid_signature": {
+                        "summary": "Invalid signature",
+                        "value": {"detail": {"code": "invalid_signature", "message": "bad sig"}},
+                    },
+                    "invalid_payload": {
+                        "summary": "Payload parse failed",
+                        "value": {"detail": {"code": "invalid_payload", "message": "webhook payload could not be parsed"}},
+                    },
+                    "signature_too_large": {
+                        "summary": "Signature header exceeds configured limit",
+                        "value": {"detail": {"code": "signature_too_large", "message": "webhook signature exceeds configured size limit"}},
+                    },
+                    "signature_missing": {
+                        "summary": "Required signature header is missing",
+                        "value": {"detail": {"code": "signature_missing", "message": "webhook signature is required"}},
+                    },
+                    "verification_error": {
+                        "summary": "Verification subsystem error",
+                        "value": {"detail": {"code": "verification_error", "message": "webhook verification failed"}},
+                    },
+                    "too_many_events": {
+                        "summary": "Parsed event batch exceeds configured limit",
+                        "value": {"detail": {"code": "too_many_events", "message": "webhook contains too many events"}},
+                    },
+                }
+            }
+        },
+    },
+    409: {
+        "description": "Replay detected or invalid transition",
+        "content": {
+            "application/json": {
+                "examples": {
+                    "replay_detected": {
+                        "summary": "Duplicate webhook delivery",
+                        "value": {"detail": {"code": "replay_detected", "message": "duplicate webhook delivery rejected"}},
+                    },
+                    "invalid_transition": {
+                        "summary": "Transition conflict",
+                        "value": {"detail": {"code": "invalid_transition", "message": "invalid incident transition"}},
+                    },
+                }
+            }
+        },
+    },
+    413: {
+        "description": "Webhook payload too large",
+        "content": {
+            "application/json": {
+                "example": {"detail": {"code": "payload_too_large", "message": "webhook payload exceeds configured size limit"}}
+            }
+        },
+    },
+    415: {
+        "description": "Unsupported webhook content type",
+        "content": {
+            "application/json": {
+                "example": {"detail": {"code": "unsupported_media_type", "message": "webhook content type is not supported"}}
+            }
+        },
+    },
+    404: {
+        "description": "Incident not found while applying transition",
+        "content": {
+            "application/json": {
+                "example": {"detail": {"code": "missing_incident", "message": "incident not found"}}
+            }
+        },
+    },
+}
+
+
+def _rollout_provider_set(raw: str, *, default_all: bool = False) -> set[str]:
+    vals = {p.strip().lower() for p in str(raw or "").split(",") if p.strip()}
+    if vals:
+        return vals
+    if default_all:
+        return {"stripe", "paypal", "ccbill"}
+    return set()
+
+
+def _payment_incident_rollout_mode(provider: str) -> str:
+    normalized = str(provider or "").strip().lower()
+    if not getattr(S, "payment_incidents_rollout_enabled", True):
+        return "disabled"
+    rollout_providers = _rollout_provider_set(getattr(S, "payment_incidents_rollout_providers", ""), default_all=True)
+    if normalized not in rollout_providers:
+        return "disabled"
+    shadow_all = bool(getattr(S, "payment_incidents_shadow_mode", False))
+    shadow_providers = _rollout_provider_set(getattr(S, "payment_incidents_shadow_providers", ""))
+    if shadow_all or normalized in shadow_providers:
+        return "shadow"
+    return "live"
+
+
+def _audit_shadow_validation(*, provider: str, events: list[Any], req: Request) -> None:
+    limit = max(1, int(getattr(S, "payment_incidents_shadow_audit_sample_limit", 25)))
+    sample = []
+    for event in events[:limit]:
+        sample.append(
+            {
+                "provider_event_id": getattr(event, "provider_event_id", ""),
+                "incident_id": getattr(event, "incident_id", ""),
+                "incident_type": getattr(event, "incident_type", ""),
+                "target_status": getattr(event, "target_status", ""),
+            }
+        )
+    audit_event(
+        "payment_incident_rollout_shadow_validated",
+        "system",
+        req,
+        outcome="success",
+        provider=provider,
+        event_count=len(events),
+        sampled_events=sample,
+    )
+
+
+def _payment_incident_webhook_max_body_bytes() -> int:
+    raw = int(getattr(S, "payment_incidents_webhook_max_body_bytes", 262144) or 262144)
+    return max(1024, raw)
+
+
+def _payment_incident_webhook_max_signature_bytes() -> int:
+    raw = int(getattr(S, "payment_incidents_webhook_max_signature_bytes", 2048) or 2048)
+    return max(64, raw)
+
+
+def _payment_incident_webhook_max_events() -> int:
+    raw = int(getattr(S, "payment_incidents_webhook_max_events", 200) or 200)
+    return max(1, raw)
+
+
+def _payment_incident_webhook_allowed_content_types() -> set[str]:
+    raw = str(getattr(S, "payment_incidents_webhook_allowed_content_types", "application/json") or "")
+    vals = {v.strip().lower() for v in raw.split(",") if v.strip()}
+    return vals or {"application/json"}
+
+
+def _enforce_payment_incident_webhook_content_type(*, provider: str, req: Request) -> None:
+    content_type = (req.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if not content_type:
+        return
+    if content_type in _payment_incident_webhook_allowed_content_types():
+        return
+    record_webhook_outcome(provider=provider, outcome="rejected", reason="unsupported_media_type")
+    raise HTTPException(
+        status_code=415,
+        detail={"code": "unsupported_media_type", "message": "webhook content type is not supported"},
+    )
+
+
+def _enforce_payment_incident_webhook_size_from_headers(*, provider: str, req: Request) -> None:
+    max_bytes = _payment_incident_webhook_max_body_bytes()
+    header_value = req.headers.get("content-length")
+    if not header_value:
+        return
+    try:
+        content_length = int(header_value)
+    except (TypeError, ValueError):
+        return
+    if content_length <= max_bytes:
+        return
+    record_webhook_outcome(provider=provider, outcome="rejected", reason="payload_too_large")
+    raise HTTPException(
+        status_code=413,
+        detail={"code": "payload_too_large", "message": "webhook payload exceeds configured size limit"},
+    )
+
+
+def _enforce_payment_incident_webhook_size_from_body(*, provider: str, payload: bytes) -> None:
+    if len(payload) <= _payment_incident_webhook_max_body_bytes():
+        return
+    record_webhook_outcome(provider=provider, outcome="rejected", reason="payload_too_large")
+    raise HTTPException(
+        status_code=413,
+        detail={"code": "payload_too_large", "message": "webhook payload exceeds configured size limit"},
+    )
+
+
+def _enforce_payment_incident_webhook_signature_size(*, provider: str, signature: str | None) -> None:
+    sig = signature or ""
+    if len(sig.encode("utf-8")) <= _payment_incident_webhook_max_signature_bytes():
+        return
+    record_webhook_outcome(provider=provider, outcome="rejected", reason="signature_too_large")
+    raise HTTPException(
+        status_code=400,
+        detail={"code": "signature_too_large", "message": "webhook signature exceeds configured size limit"},
+    )
+
+
+def _enforce_payment_incident_webhook_signature_present(*, provider: str, signature: str | None) -> None:
+    if not bool(getattr(S, "payment_incidents_webhook_require_signature", True)):
+        return
+    if signature and str(signature).strip():
+        return
+    record_webhook_outcome(provider=provider, outcome="rejected", reason="signature_missing")
+    raise HTTPException(
+        status_code=400,
+        detail={"code": "signature_missing", "message": "webhook signature is required"},
+    )
+
+
+def _enforce_payment_incident_webhook_event_count(*, provider: str, events: list[Any]) -> None:
+    if len(events) <= _payment_incident_webhook_max_events():
+        return
+    record_webhook_outcome(provider=provider, outcome="rejected", reason="too_many_events")
+    raise HTTPException(
+        status_code=400,
+        detail={"code": "too_many_events", "message": "webhook contains too many events"},
+    )
+
+
+def _verify_payment_incident_webhook(*, provider: str, adapter: Any, signature: str | None, payload: bytes, headers: dict[str, str]) -> Any:
+    try:
+        return adapter.verify_webhook(signature=signature, body=payload, headers=headers)
+    except Exception as exc:
+        logger.warning("payment incident webhook verification error", extra={"provider": provider, "error": str(exc)})
+        record_webhook_outcome(provider=provider, outcome="rejected", reason="verification_error")
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "verification_error", "message": "webhook verification failed"},
+        ) from exc
+
+
+def _parse_payment_incident_webhook_events(*, provider: str, adapter: Any, payload: bytes, headers: dict[str, str]) -> list[Any]:
+    try:
+        return adapter.parse_webhook_events(body=payload, headers=headers)
+    except Exception as exc:
+        logger.warning("payment incident webhook parse error", extra={"provider": provider, "error": str(exc)})
+        record_webhook_outcome(provider=provider, outcome="rejected", reason="invalid_payload")
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_payload", "message": "webhook payload could not be parsed"},
+        ) from exc
+
+
+def _payment_incident_webhook_replay_ttl_seconds() -> int:
+    return max(0, int(getattr(S, "payment_incidents_webhook_replay_ttl_seconds", 300) or 0))
+
+
+def _payment_incident_webhook_replay_cache_size() -> int:
+    return max(1, int(getattr(S, "payment_incidents_webhook_replay_cache_size", 5000) or 5000))
+
+
+def _payment_incident_webhook_replay_key(*, provider: str, signature: str | None, payload: bytes) -> str | None:
+    ttl_seconds = _payment_incident_webhook_replay_ttl_seconds()
+    if ttl_seconds <= 0:
+        return None
+    sig = (signature or "").strip()
+    if not sig:
+        return None
+
+    digest = hashlib.sha256()
+    digest.update(provider.encode("utf-8"))
+    digest.update(b"|")
+    digest.update(sig.encode("utf-8"))
+    digest.update(b"|")
+    digest.update(payload)
+    return digest.hexdigest()
+
+
+def _prune_payment_incident_webhook_replay_cache(*, now: float) -> None:
+    while _PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE:
+        first_key = next(iter(_PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE))
+        if _PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE[first_key] > now:
+            break
+        _PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE.popitem(last=False)
+
+
+def _reject_payment_incident_webhook_replay(*, provider: str, signature: str | None, payload: bytes) -> str | None:
+    cache_key = _payment_incident_webhook_replay_key(provider=provider, signature=signature, payload=payload)
+    if not cache_key:
+        record_webhook_replay_event(provider=provider, event="skipped")
+        return None
+    now = time.time()
+
+    with _PAYMENT_INCIDENT_WEBHOOK_REPLAY_LOCK:
+        _prune_payment_incident_webhook_replay_cache(now=now)
+        set_webhook_replay_cache_entries(entries=len(_PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE))
+
+        existing_expiry = _PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE.get(cache_key)
+        if existing_expiry and existing_expiry > now:
+            record_webhook_replay_event(provider=provider, event="rejected")
+            record_webhook_outcome(provider=provider, outcome="rejected", reason="replay_detected")
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "replay_detected", "message": "duplicate webhook delivery rejected"},
+            )
+    record_webhook_replay_event(provider=provider, event="checked")
+    return cache_key
+
+
+def _mark_payment_incident_webhook_replay(*, provider: str, cache_key: str | None) -> None:
+    if not cache_key:
+        return
+    now = time.time()
+    expires_at = now + _payment_incident_webhook_replay_ttl_seconds()
+    with _PAYMENT_INCIDENT_WEBHOOK_REPLAY_LOCK:
+        _prune_payment_incident_webhook_replay_cache(now=now)
+        _PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE[cache_key] = expires_at
+        _PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE.move_to_end(cache_key)
+        max_size = _payment_incident_webhook_replay_cache_size()
+        while len(_PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE) > max_size:
+            _PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE.popitem(last=False)
+        set_webhook_replay_cache_entries(entries=len(_PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE))
+    record_webhook_replay_event(provider=provider, event="marked")
 
 
 async def require_billing_admin_operator(user: AuthenticatedUser = Depends(get_authenticated_user), request: Request = None) -> AuthenticatedUser:
@@ -132,6 +481,19 @@ def _billing_write_user_context(ctx: Dict[str, Any], target_user_sub: Optional[s
             "effective_sub": effective_sub,
         }
     return effective_sub, tags
+
+
+def _incident_owned_by_user(incident: Dict[str, Any], user_sub: str) -> bool:
+    account_id = str(incident.get("account_id") or "")
+    customer_id = str(incident.get("customer_id") or "")
+    return account_id == user_sub or customer_id == user_sub
+
+
+def _resolve_customer_issue_or_404(repo: DynamoPaymentIncidentRepository, *, incident_id: str, user_sub: str) -> Dict[str, Any]:
+    incident = repo.get_incident(incident_id)
+    if not incident or not _incident_owned_by_user(incident, user_sub):
+        raise HTTPException(status_code=404, detail={"code": "payment_issue_not_found", "message": "payment issue not found"})
+    return incident
 
 
 def dual_route(methods: str | Iterable[str], path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -1181,6 +1543,696 @@ async def stripe_webhook(req: Request) -> Dict[str, Any]:
             )
 
     return {"received": True}
+
+
+def _incident_type_from_str(value: str) -> PaymentIncidentType:
+    normalized = str(value or "").strip().lower()
+    if normalized == "dispute":
+        return PaymentIncidentType.DISPUTE
+    if normalized == "chargeback":
+        return PaymentIncidentType.CHARGEBACK
+    if normalized == "payment_failure":
+        return PaymentIncidentType.PAYMENT_FAILURE
+    raise ValueError(f"unsupported incident_type '{value}'")
+
+
+@router.post("/api/billing/webhooks/stripe", responses={**_PAYMENT_INCIDENT_WEBHOOK_ERROR_RESPONSES, 501: {"description": "Stripe webhook secret is not configured"}})
+async def stripe_payment_incidents_webhook(req: Request) -> Dict[str, Any]:
+    ensure_stripe_configured()
+    if not S.stripe_webhook_secret:
+        raise HTTPException(501, "Stripe webhook secret not configured")
+
+    _enforce_payment_incident_webhook_content_type(provider="stripe", req=req)
+    _enforce_payment_incident_webhook_size_from_headers(provider="stripe", req=req)
+    payload = await req.body()
+    _enforce_payment_incident_webhook_size_from_body(provider="stripe", payload=payload)
+    sig = req.headers.get("stripe-signature")
+    _enforce_payment_incident_webhook_signature_present(provider="stripe", signature=sig)
+    _enforce_payment_incident_webhook_signature_size(provider="stripe", signature=sig)
+    headers = dict(req.headers)
+
+    adapter = resolve_provider_adapter("stripe")
+    verification = _verify_payment_incident_webhook(
+        provider="stripe",
+        adapter=adapter,
+        signature=sig,
+        payload=payload,
+        headers=headers,
+    )
+    if not verification.valid:
+        record_webhook_outcome(provider="stripe", outcome="rejected", reason=verification.code)
+        raise HTTPException(status_code=400, detail={"code": verification.code, "message": verification.message})
+
+    events = _parse_payment_incident_webhook_events(provider="stripe", adapter=adapter, payload=payload, headers=headers)
+    _enforce_payment_incident_webhook_event_count(provider="stripe", events=events)
+    if not events:
+        record_webhook_outcome(provider="stripe", outcome="ignored", reason="empty_events")
+        return {"received": True, "processed": 0, "deduped": 0, "ignored": True}
+    rollout_mode = _payment_incident_rollout_mode("stripe")
+    if rollout_mode == "disabled":
+        record_webhook_outcome(provider="stripe", outcome="ignored", reason="rollout_disabled")
+        return {"received": True, "processed": 0, "deduped": 0, "ignored": True, "reason": "rollout_disabled"}
+    if rollout_mode == "shadow":
+        record_webhook_outcome(provider="stripe", outcome="ignored", reason="shadow_mode")
+        _audit_shadow_validation(provider="stripe", events=events, req=req)
+        return {"received": True, "processed": 0, "deduped": 0, "ignored": True, "shadow_validated": len(events)}
+    replay_cache_key = _reject_payment_incident_webhook_replay(provider="stripe", signature=sig, payload=payload)
+
+    repo = DynamoPaymentIncidentRepository()
+    transition_service = PaymentIncidentTransitionService(repository=repo)
+
+    processed = 0
+    deduped = 0
+
+    for event in events:
+        if not event.incident_id:
+            continue
+
+        existing = repo.list_incidents_by_case(provider="stripe", case_id=event.incident_id, limit=1)
+        if existing:
+            incident = existing[0]
+        else:
+            incident = repo.put_incident(
+                {
+                    "incident_id": f"pinc_{uuid.uuid4().hex[:20]}",
+                    "provider": "stripe",
+                    "provider_incident_id": event.incident_id,
+                    "incident_type": event.incident_type,
+                    "payment_reference": event.payload.get("payment_reference") or event.incident_id,
+                    "account_id": event.payload.get("account_id", "unknown"),
+                    "customer_id": event.payload.get("customer_id", "unknown"),
+                    "subscription_id": event.payload.get("subscription_id"),
+                    "order_id": event.payload.get("order_id"),
+                    "amount": event.payload.get("amount", "0"),
+                    "currency": event.payload.get("currency", "usd"),
+                    "status": event.target_status,
+                    "requires_customer_action": bool(event.payload.get("requires_customer_action", False)),
+                    "customer_action_type": event.payload.get("customer_action_type"),
+                    "response_due_at": event.payload.get("response_due_at"),
+                    "raw_payload_ref": f"stripe_event:{event.provider_event_id}",
+                }
+            )
+            record_incident_created(incident=incident)
+
+        try:
+            result = transition_service.apply_provider_transition(
+                incident_id=incident["incident_id"],
+                incident_type=_incident_type_from_str(event.incident_type),
+                target_status=event.target_status,
+                provider="stripe",
+                provider_event_id=event.provider_event_id,
+                source_event_type=event.payload.get("source_event_type", "stripe.webhook"),
+                payload=event.payload,
+            )
+        except PaymentIncidentTransitionError as exc:
+            record_webhook_outcome(provider="stripe", outcome="failed", reason=exc.code)
+            if exc.code == "invalid_transition":
+                raise HTTPException(status_code=409, detail={"code": exc.code, "message": exc.message}) from exc
+            raise HTTPException(status_code=404, detail={"code": exc.code, "message": exc.message}) from exc
+
+        if result.duplicate:
+            deduped += 1
+            record_webhook_outcome(provider="stripe", outcome="deduped", reason="idempotency")
+        else:
+            processed += 1
+            record_webhook_outcome(provider="stripe", outcome="processed", reason="ok")
+            trigger = evaluate_ticket_trigger(result.incident)
+            if trigger:
+                ensure_incident_ticket_link(repo, incident=result.incident, trigger=trigger)
+            sync_ticket_from_incident(repo, incident=result.incident)
+            dispatch_auto_payment_failure_alert(repo, incident=result.incident)
+            clear_auto_payment_failure_alerts(repo, incident=result.incident)
+
+    if processed > 0 or deduped > 0:
+        _mark_payment_incident_webhook_replay(provider="stripe", cache_key=replay_cache_key)
+    return {"received": True, "processed": processed, "deduped": deduped}
+
+
+@router.post("/api/billing/webhooks/paypal", responses=_PAYMENT_INCIDENT_WEBHOOK_ERROR_RESPONSES)
+async def paypal_payment_incidents_webhook(req: Request) -> Dict[str, Any]:
+    _enforce_payment_incident_webhook_content_type(provider="paypal", req=req)
+    _enforce_payment_incident_webhook_size_from_headers(provider="paypal", req=req)
+    payload = await req.body()
+    _enforce_payment_incident_webhook_size_from_body(provider="paypal", payload=payload)
+    sig = req.headers.get("paypal-transmission-sig")
+    _enforce_payment_incident_webhook_signature_present(provider="paypal", signature=sig)
+    _enforce_payment_incident_webhook_signature_size(provider="paypal", signature=sig)
+    headers = dict(req.headers)
+    adapter = resolve_provider_adapter("paypal")
+
+    verification = _verify_payment_incident_webhook(
+        provider="paypal",
+        adapter=adapter,
+        signature=sig,
+        payload=payload,
+        headers=headers,
+    )
+    if not verification.valid:
+        record_webhook_outcome(provider="paypal", outcome="rejected", reason=verification.code)
+        raise HTTPException(status_code=400, detail={"code": verification.code, "message": verification.message})
+
+    events = _parse_payment_incident_webhook_events(provider="paypal", adapter=adapter, payload=payload, headers=headers)
+    _enforce_payment_incident_webhook_event_count(provider="paypal", events=events)
+    if not events:
+        record_webhook_outcome(provider="paypal", outcome="ignored", reason="empty_events")
+        return {"received": True, "processed": 0, "deduped": 0, "ignored": True}
+    rollout_mode = _payment_incident_rollout_mode("paypal")
+    if rollout_mode == "disabled":
+        record_webhook_outcome(provider="paypal", outcome="ignored", reason="rollout_disabled")
+        return {"received": True, "processed": 0, "deduped": 0, "ignored": True, "reason": "rollout_disabled"}
+    if rollout_mode == "shadow":
+        record_webhook_outcome(provider="paypal", outcome="ignored", reason="shadow_mode")
+        _audit_shadow_validation(provider="paypal", events=events, req=req)
+        return {"received": True, "processed": 0, "deduped": 0, "ignored": True, "shadow_validated": len(events)}
+    replay_cache_key = _reject_payment_incident_webhook_replay(provider="paypal", signature=sig, payload=payload)
+
+    repo = DynamoPaymentIncidentRepository()
+    transition_service = PaymentIncidentTransitionService(repository=repo)
+
+    processed = 0
+    deduped = 0
+
+    for event in events:
+        if not event.incident_id:
+            continue
+
+        existing = repo.list_incidents_by_case(provider="paypal", case_id=event.incident_id, limit=1)
+        if existing:
+            incident = existing[0]
+        else:
+            incident = repo.put_incident(
+                {
+                    "incident_id": f"pinc_{uuid.uuid4().hex[:20]}",
+                    "provider": "paypal",
+                    "provider_incident_id": event.incident_id,
+                    "incident_type": event.incident_type,
+                    "payment_reference": event.payload.get("payment_reference") or event.incident_id,
+                    "account_id": event.payload.get("account_id", "unknown"),
+                    "customer_id": event.payload.get("customer_id", "unknown"),
+                    "subscription_id": event.payload.get("subscription_id"),
+                    "order_id": event.payload.get("order_id"),
+                    "amount": event.payload.get("amount", "0"),
+                    "currency": event.payload.get("currency", "usd"),
+                    "status": event.target_status,
+                    "requires_customer_action": bool(event.payload.get("requires_customer_action", False)),
+                    "customer_action_type": event.payload.get("customer_action_type"),
+                    "response_due_at": event.payload.get("response_due_at"),
+                    "raw_payload_ref": f"paypal_event:{event.provider_event_id}",
+                }
+            )
+            record_incident_created(incident=incident)
+
+        try:
+            result = transition_service.apply_provider_transition(
+                incident_id=incident["incident_id"],
+                incident_type=_incident_type_from_str(event.incident_type),
+                target_status=event.target_status,
+                provider="paypal",
+                provider_event_id=event.provider_event_id,
+                source_event_type=event.payload.get("source_event_type", "paypal.webhook"),
+                payload=event.payload,
+            )
+        except PaymentIncidentTransitionError as exc:
+            record_webhook_outcome(provider="paypal", outcome="failed", reason=exc.code)
+            if exc.code == "invalid_transition":
+                raise HTTPException(status_code=409, detail={"code": exc.code, "message": exc.message}) from exc
+            raise HTTPException(status_code=404, detail={"code": exc.code, "message": exc.message}) from exc
+
+        if result.duplicate:
+            deduped += 1
+            record_webhook_outcome(provider="paypal", outcome="deduped", reason="idempotency")
+        else:
+            processed += 1
+            record_webhook_outcome(provider="paypal", outcome="processed", reason="ok")
+            trigger = evaluate_ticket_trigger(result.incident)
+            if trigger:
+                ensure_incident_ticket_link(repo, incident=result.incident, trigger=trigger)
+            sync_ticket_from_incident(repo, incident=result.incident)
+            dispatch_auto_payment_failure_alert(repo, incident=result.incident)
+            clear_auto_payment_failure_alerts(repo, incident=result.incident)
+
+    if processed > 0 or deduped > 0:
+        _mark_payment_incident_webhook_replay(provider="paypal", cache_key=replay_cache_key)
+    return {"received": True, "processed": processed, "deduped": deduped}
+
+
+@router.post("/api/billing/webhooks/ccbill", responses=_PAYMENT_INCIDENT_WEBHOOK_ERROR_RESPONSES)
+async def ccbill_payment_incidents_webhook(req: Request) -> Dict[str, Any]:
+    _enforce_payment_incident_webhook_content_type(provider="ccbill", req=req)
+    _enforce_payment_incident_webhook_size_from_headers(provider="ccbill", req=req)
+    payload = await req.body()
+    _enforce_payment_incident_webhook_size_from_body(provider="ccbill", payload=payload)
+    sig = req.headers.get((S.ccbill_webhook_signature_header or "x-ccbill-signature"))
+    _enforce_payment_incident_webhook_signature_present(provider="ccbill", signature=sig)
+    _enforce_payment_incident_webhook_signature_size(provider="ccbill", signature=sig)
+    headers = dict(req.headers)
+    adapter = resolve_provider_adapter("ccbill")
+
+    verification = _verify_payment_incident_webhook(
+        provider="ccbill",
+        adapter=adapter,
+        signature=sig,
+        payload=payload,
+        headers=headers,
+    )
+    if not verification.valid:
+        record_webhook_outcome(provider="ccbill", outcome="rejected", reason=verification.code)
+        raise HTTPException(status_code=400, detail={"code": verification.code, "message": verification.message})
+
+    events = _parse_payment_incident_webhook_events(provider="ccbill", adapter=adapter, payload=payload, headers=headers)
+    _enforce_payment_incident_webhook_event_count(provider="ccbill", events=events)
+    if not events:
+        record_webhook_outcome(provider="ccbill", outcome="ignored", reason="empty_events")
+        return {"received": True, "processed": 0, "deduped": 0, "ignored": True}
+    rollout_mode = _payment_incident_rollout_mode("ccbill")
+    if rollout_mode == "disabled":
+        record_webhook_outcome(provider="ccbill", outcome="ignored", reason="rollout_disabled")
+        return {"received": True, "processed": 0, "deduped": 0, "ignored": True, "reason": "rollout_disabled"}
+    if rollout_mode == "shadow":
+        record_webhook_outcome(provider="ccbill", outcome="ignored", reason="shadow_mode")
+        _audit_shadow_validation(provider="ccbill", events=events, req=req)
+        return {"received": True, "processed": 0, "deduped": 0, "ignored": True, "shadow_validated": len(events)}
+    replay_cache_key = _reject_payment_incident_webhook_replay(provider="ccbill", signature=sig, payload=payload)
+
+    repo = DynamoPaymentIncidentRepository()
+    transition_service = PaymentIncidentTransitionService(repository=repo)
+
+    processed = 0
+    deduped = 0
+
+    for event in events:
+        if not event.incident_id:
+            continue
+
+        existing = repo.list_incidents_by_case(provider="ccbill", case_id=event.incident_id, limit=1)
+        if existing:
+            incident = existing[0]
+        else:
+            incident = repo.put_incident(
+                {
+                    "incident_id": f"pinc_{uuid.uuid4().hex[:20]}",
+                    "provider": "ccbill",
+                    "provider_incident_id": event.incident_id,
+                    "incident_type": event.incident_type,
+                    "payment_reference": event.payload.get("payment_reference") or event.incident_id,
+                    "account_id": event.payload.get("account_id", "unknown"),
+                    "customer_id": event.payload.get("customer_id", "unknown"),
+                    "subscription_id": event.payload.get("subscription_id"),
+                    "order_id": event.payload.get("order_id"),
+                    "amount": event.payload.get("amount", "0"),
+                    "currency": event.payload.get("currency", "usd"),
+                    "status": event.target_status,
+                    "requires_customer_action": bool(event.payload.get("requires_customer_action", False)),
+                    "customer_action_type": event.payload.get("customer_action_type"),
+                    "response_due_at": event.payload.get("response_due_at"),
+                    "raw_payload_ref": f"ccbill_event:{event.provider_event_id}",
+                }
+            )
+            record_incident_created(incident=incident)
+
+        try:
+            result = transition_service.apply_provider_transition(
+                incident_id=incident["incident_id"],
+                incident_type=_incident_type_from_str(event.incident_type),
+                target_status=event.target_status,
+                provider="ccbill",
+                provider_event_id=event.provider_event_id,
+                source_event_type=event.payload.get("source_event_type", "ccbill.webhook"),
+                payload=event.payload,
+            )
+        except PaymentIncidentTransitionError as exc:
+            record_webhook_outcome(provider="ccbill", outcome="failed", reason=exc.code)
+            if exc.code == "invalid_transition":
+                raise HTTPException(status_code=409, detail={"code": exc.code, "message": exc.message}) from exc
+            raise HTTPException(status_code=404, detail={"code": exc.code, "message": exc.message}) from exc
+
+        if result.duplicate:
+            deduped += 1
+            record_webhook_outcome(provider="ccbill", outcome="deduped", reason="idempotency")
+        else:
+            processed += 1
+            record_webhook_outcome(provider="ccbill", outcome="processed", reason="ok")
+            trigger = evaluate_ticket_trigger(result.incident)
+            if trigger:
+                ensure_incident_ticket_link(repo, incident=result.incident, trigger=trigger)
+            sync_ticket_from_incident(repo, incident=result.incident)
+            dispatch_auto_payment_failure_alert(repo, incident=result.incident)
+            clear_auto_payment_failure_alerts(repo, incident=result.incident)
+
+    if processed > 0 or deduped > 0:
+        _mark_payment_incident_webhook_replay(provider="ccbill", cache_key=replay_cache_key)
+    return {"received": True, "processed": processed, "deduped": deduped}
+
+
+@router.get("/api/admin/payment-incidents")
+def admin_list_payment_incidents(
+    provider: Optional[str] = None,
+    incident_type: Optional[str] = None,
+    status: Optional[str] = None,
+    customer_id: Optional[str] = None,
+    due_before_ts: Optional[int] = None,
+    min_amount: Optional[float] = None,
+    max_amount: Optional[float] = None,
+    limit: int = 100,
+    actor: AuthenticatedUser = Depends(require_billing_admin_operator),
+) -> Dict[str, Any]:
+    _require_billing_support_actor(actor)
+    repo = DynamoPaymentIncidentRepository()
+    items = repo.list_incidents(
+        provider=provider,
+        incident_type=incident_type,
+        status=status,
+        customer_id=customer_id,
+        due_before_ts=due_before_ts,
+        min_amount=min_amount,
+        max_amount=max_amount,
+        limit=max(1, min(limit, 250)),
+    )
+    return {"items": items, "count": len(items)}
+
+
+@dual_route("GET", "/billing/payment-issues")
+def list_payment_issues(
+    ctx=Depends(require_ui_session),
+    actor: AuthenticatedUser = Depends(get_authenticated_user),
+    user_sub: Optional[str] = None,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    user_id = _billing_read_user_sub(ctx, user_sub, actor)
+    repo = DynamoPaymentIncidentRepository()
+    issues = repo.list_incidents(incident_type=PaymentIncidentType.PAYMENT_FAILURE.value, limit=max(1, min(limit, 250)))
+    owned = [it for it in issues if _incident_owned_by_user(it, user_id)]
+    out = []
+    for item in owned:
+        out.append(
+            {
+                **item,
+                "retry_attempts": repo.list_retry_attempts(incident_id=str(item.get("incident_id")), limit=10),
+            }
+        )
+    return {"items": out, "count": len(out)}
+
+
+def _run_payment_issue_retry(
+    *,
+    repo: DynamoPaymentIncidentRepository,
+    incident: Dict[str, Any],
+    user_sub: str,
+    action: str,
+    payment_method_id: str | None = None,
+    request: Request | None = None,
+    audit_name: str = "payment_issue_retry",
+    metadata: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    provider = str(incident.get("provider") or "")
+    adapter = resolve_provider_adapter(provider)
+    attempt_id = str(uuid.uuid4())
+    payment_reference = str(incident.get("payment_reference") or incident.get("provider_incident_id") or incident.get("incident_id") or "")
+    retry_result = adapter.retry_payment(payment_reference=payment_reference, metadata={"action": action, **(metadata or {})})
+    attempt = repo.put_retry_attempt(
+        incident_id=str(incident.get("incident_id")),
+        attempt_id=attempt_id,
+        attempt={
+            "action": action,
+            "requested_by": user_sub,
+            "payment_method_id": payment_method_id,
+            "provider": provider,
+            "payment_reference": payment_reference,
+            "ok": retry_result.ok,
+            "code": retry_result.code,
+            "message": retry_result.message,
+            "payload": retry_result.payload,
+        },
+    )
+    record_retry_attempt(incident=incident, action=action, ok=retry_result.ok, code=retry_result.code)
+
+    if str(incident.get("incident_type") or "") == PaymentIncidentType.PAYMENT_FAILURE.value:
+        transition_service = PaymentIncidentTransitionService(repo)
+        try:
+            if str(incident.get("status") or "") != "retry_pending":
+                transition_service.apply_provider_transition(
+                    incident_id=str(incident["incident_id"]),
+                    incident_type=PaymentIncidentType.PAYMENT_FAILURE,
+                    target_status="retry_pending",
+                    provider=provider,
+                    provider_event_id=f"retry_pending:{attempt_id}",
+                    source_event_type=f"customer.{action}",
+                    payload={"attempt_id": attempt_id},
+                )
+            transition_service.apply_provider_transition(
+                incident_id=str(incident["incident_id"]),
+                incident_type=PaymentIncidentType.PAYMENT_FAILURE,
+                target_status="retry_succeeded" if retry_result.ok else "customer_action_required",
+                provider=provider,
+                provider_event_id=f"retry_result:{attempt_id}",
+                source_event_type=f"customer.{action}",
+                payload={"attempt_id": attempt_id, "retry_code": retry_result.code},
+            )
+        except Exception:
+            repo.update_incident_status(
+                incident_id=str(incident["incident_id"]),
+                status="retry_succeeded" if retry_result.ok else "customer_action_required",
+                status_reason=retry_result.code,
+            )
+    updated_incident = repo.get_incident(str(incident.get("incident_id")))
+    if updated_incident:
+        trigger = evaluate_ticket_trigger(updated_incident)
+        if trigger:
+            ensure_incident_ticket_link(repo, incident=updated_incident, trigger=trigger)
+        sync_ticket_from_incident(repo, incident=updated_incident)
+        dispatch_auto_payment_failure_alert(repo, incident=updated_incident)
+        clear_auto_payment_failure_alerts(repo, incident=updated_incident)
+
+    audit_event(
+        audit_name,
+        user_sub,
+        request,
+        outcome="success" if retry_result.ok else "failure",
+        incident_id=incident.get("incident_id"),
+        attempt_id=attempt_id,
+        action=action,
+        provider=provider,
+        code=retry_result.code,
+        payment_method_id=payment_method_id,
+    )
+    return {"ok": retry_result.ok, "code": retry_result.code, "message": retry_result.message, "attempt": attempt}
+
+
+@dual_route("POST", "/billing/payment-issues/{incident_id}/confirm-and-retry")
+def confirm_and_retry_payment_issue(
+    incident_id: str,
+    req: Request = None,
+    ctx=Depends(require_ui_session),
+    actor: AuthenticatedUser = Depends(get_authenticated_user),
+    user_sub: Optional[str] = None,
+) -> Dict[str, Any]:
+    user_id = _billing_read_user_sub(ctx, user_sub, actor)
+    repo = DynamoPaymentIncidentRepository()
+    incident = _resolve_customer_issue_or_404(repo, incident_id=incident_id, user_sub=user_id)
+    return _run_payment_issue_retry(
+        repo=repo,
+        incident=incident,
+        user_sub=user_id,
+        action="confirm_and_retry",
+        request=req,
+        audit_name="payment_issue_confirm_and_retry",
+    )
+
+
+@dual_route("POST", "/billing/payment-issues/{incident_id}/retry-automatic-payment")
+def retry_automatic_payment_issue(
+    incident_id: str,
+    req: Request = None,
+    ctx=Depends(require_ui_session),
+    actor: AuthenticatedUser = Depends(get_authenticated_user),
+    user_sub: Optional[str] = None,
+) -> Dict[str, Any]:
+    user_id = _billing_read_user_sub(ctx, user_sub, actor)
+    repo = DynamoPaymentIncidentRepository()
+    incident = _resolve_customer_issue_or_404(repo, incident_id=incident_id, user_sub=user_id)
+    return _run_payment_issue_retry(
+        repo=repo,
+        incident=incident,
+        user_sub=user_id,
+        action="retry_automatic_payment",
+        request=req,
+        audit_name="payment_issue_retry_automatic_payment",
+        metadata={"retry_mode": "autopay"},
+    )
+
+
+@dual_route("POST", "/billing/payment-methods/{payment_method_id}/set-default-and-retry")
+def set_default_and_retry_payment_issue(
+    payment_method_id: str,
+    incident_id: str,
+    req: Request = None,
+    ctx=Depends(require_ui_session),
+    actor: AuthenticatedUser = Depends(get_authenticated_user),
+    user_sub: Optional[str] = None,
+) -> Dict[str, Any]:
+    ensure_stripe_configured()
+    user_id = _billing_read_user_sub(ctx, user_sub, actor)
+    pk = user_pk(user_id)
+    if not ddb_get(T.billing, pk, pm_sk(payment_method_id)):
+        raise HTTPException(status_code=404, detail={"code": "payment_method_not_found", "message": "payment method not found"})
+    set_default_pm(user_id, payment_method_id)
+    customer_id = get_or_create_customer(user_id)
+    stripe.Customer.modify(customer_id, invoice_settings={"default_payment_method": payment_method_id})
+    repo = DynamoPaymentIncidentRepository()
+    incident = _resolve_customer_issue_or_404(repo, incident_id=incident_id, user_sub=user_id)
+    return _run_payment_issue_retry(
+        repo=repo,
+        incident=incident,
+        user_sub=user_id,
+        action="set_default_and_retry",
+        payment_method_id=payment_method_id,
+        request=req,
+        audit_name="payment_issue_set_default_and_retry",
+        metadata={"retry_mode": "autopay", "default_payment_method_id": payment_method_id},
+    )
+
+
+@router.get("/api/admin/payment-incidents/{incident_id}")
+def admin_get_payment_incident(
+    incident_id: str,
+    actor: AuthenticatedUser = Depends(require_billing_admin_operator),
+) -> Dict[str, Any]:
+    _require_billing_support_actor(actor)
+    repo = DynamoPaymentIncidentRepository()
+    item = repo.get_incident(incident_id)
+    if not item:
+        raise HTTPException(status_code=404, detail={"code": "payment_incident_not_found", "message": "payment incident not found"})
+    return {
+        **item,
+        "events": repo.list_incident_events(incident_id=incident_id, limit=200),
+        "evidence_versions": repo.list_dispute_evidence(incident_id=incident_id, limit=50),
+        "ticket_link": repo.get_ticket_link(incident_id=incident_id),
+    }
+
+
+@router.post("/api/admin/payment-incidents/{incident_id}/evidence")
+def admin_upload_payment_incident_evidence(
+    incident_id: str,
+    body: PaymentIncidentEvidenceUploadReq,
+    req: Request,
+    actor: AuthenticatedUser = Depends(require_billing_admin_operator),
+) -> Dict[str, Any]:
+    _require_billing_support_actor(actor)
+    repo = DynamoPaymentIncidentRepository()
+    incident = repo.get_incident(incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail={"code": "payment_incident_not_found", "message": "payment incident not found"})
+    if str(incident.get("incident_type") or "") != PaymentIncidentType.DISPUTE.value:
+        raise HTTPException(status_code=400, detail={"code": "payment_incident_not_dispute", "message": "incident does not support dispute evidence"})
+
+    existing_versions = repo.list_dispute_evidence(incident_id=incident_id, limit=200)
+    max_version = 0
+    for row in existing_versions:
+        try:
+            max_version = max(max_version, int(str(row.get("version") or "0")))
+        except Exception:
+            continue
+    next_version = max_version + 1
+    evidence_payload = {
+        "summary": body.summary,
+        "evidence_items": body.evidence_items,
+        "file_refs": body.file_refs,
+        "uploaded_by": actor.sub,
+    }
+    saved = repo.put_dispute_evidence(incident_id=incident_id, version=next_version, evidence=evidence_payload)
+    event = repo.append_incident_event(
+        incident_id=incident_id,
+        event_id=str(uuid.uuid4()),
+        event_type="evidence_uploaded",
+        payload={"version": next_version, "summary": body.summary, "uploaded_by": actor.sub, "file_ref_count": len(body.file_refs)},
+    )
+    audit_event(
+        "payment_incident_evidence_uploaded",
+        actor.sub,
+        req,
+        outcome="success",
+        incident_id=incident_id,
+        version=next_version,
+        summary=body.summary,
+        file_ref_count=len(body.file_refs),
+    )
+    return {"incident_id": incident_id, "version": next_version, "evidence": saved, "event": event}
+
+
+@router.post("/api/admin/payment-incidents/{incident_id}/submit-response")
+def admin_submit_payment_incident_response(
+    incident_id: str,
+    body: PaymentIncidentSubmitResponseReq,
+    req: Request,
+    actor: AuthenticatedUser = Depends(require_billing_admin_operator),
+) -> Dict[str, Any]:
+    _require_billing_support_actor(actor)
+    repo = DynamoPaymentIncidentRepository()
+    incident = repo.get_incident(incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail={"code": "payment_incident_not_found", "message": "payment incident not found"})
+    if str(incident.get("incident_type") or "") != PaymentIncidentType.DISPUTE.value:
+        raise HTTPException(status_code=400, detail={"code": "payment_incident_not_dispute", "message": "incident does not support dispute response"})
+
+    provider = str(incident.get("provider") or "")
+    adapter = resolve_provider_adapter(provider)
+    evidence_versions = repo.list_dispute_evidence(incident_id=incident_id, limit=50)
+    latest_evidence = evidence_versions[0] if evidence_versions else None
+    provider_result = adapter.submit_dispute_response(
+        provider_incident_id=str(incident.get("provider_incident_id") or incident_id),
+        evidence={
+            "response_summary": body.response_summary,
+            "rationale": body.rationale,
+            "evidence_version": latest_evidence.get("version") if latest_evidence else None,
+            "evidence_payload": latest_evidence.get("payload") if latest_evidence else {},
+        },
+    )
+
+    transition_service = PaymentIncidentTransitionService(repo)
+    provider_event_id = f"admin_response:{uuid.uuid4()}"
+    transition_result = transition_service.apply_provider_transition(
+        incident_id=incident_id,
+        incident_type=_incident_type_from_str(str(incident.get("incident_type") or "")),
+        target_status="response_submitted",
+        provider=provider,
+        provider_event_id=provider_event_id,
+        source_event_type=body.event_type,
+        payload={
+            "submitted_by": actor.sub,
+            "response_summary": body.response_summary,
+            "rationale": body.rationale,
+            "provider_payload": provider_result.payload,
+            "provider_message": provider_result.message,
+        },
+    )
+
+    response_event = repo.append_incident_event(
+        incident_id=incident_id,
+        event_id=str(uuid.uuid4()),
+        event_type="provider_response_submitted",
+        payload={
+            "submitted_by": actor.sub,
+            "response_summary": body.response_summary,
+            "rationale": body.rationale,
+            "provider_code": provider_result.code,
+        },
+    )
+    audit_event(
+        "payment_incident_response_submitted",
+        actor.sub,
+        req,
+        outcome="success",
+        incident_id=incident_id,
+        response_summary=body.response_summary,
+        rationale=body.rationale,
+        provider_code=provider_result.code,
+    )
+    return {
+        "ok": provider_result.ok,
+        "incident": transition_result.incident,
+        "provider_code": provider_result.code,
+        "event": response_event,
+    }
 
 
 @dual_route("POST", "/billing/_dev/add-charge")

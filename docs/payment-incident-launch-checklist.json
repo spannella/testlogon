@@ -1,0 +1,49 @@
+{
+  "feature": "payment_incidents",
+  "ticket": "PDM-019",
+  "version": 1,
+  "required": [
+    {
+      "id": "shadow_parity_validated",
+      "title": "Shadow mode parity validated",
+      "owner": "billing_eng",
+      "status": "pending",
+      "evidence": ""
+    },
+    {
+      "id": "backfill_dryrun_reviewed",
+      "title": "Backfill dry-run reviewed",
+      "owner": "ops",
+      "status": "pending",
+      "evidence": ""
+    },
+    {
+      "id": "backfill_apply_reviewed",
+      "title": "Backfill apply report reviewed",
+      "owner": "billing_eng",
+      "status": "pending",
+      "evidence": ""
+    },
+    {
+      "id": "runbook_signoff_support",
+      "title": "Support runbook signoff",
+      "owner": "support_lead",
+      "status": "pending",
+      "evidence": ""
+    },
+    {
+      "id": "runbook_signoff_oncall",
+      "title": "On-call runbook signoff",
+      "owner": "sre_oncall",
+      "status": "pending",
+      "evidence": ""
+    },
+    {
+      "id": "rollback_owner_confirmed",
+      "title": "Rollback owner and procedure confirmed",
+      "owner": "incident_commander",
+      "status": "pending",
+      "evidence": ""
+    }
+  ]
+}

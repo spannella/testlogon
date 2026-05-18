@@ -64,3 +64,12 @@ export function canAccessModerationBoard(token: string | null): boolean {
   if (!profile) return false;
   return profile.type === "general" || profile.scopes.includes("content_moderation");
 }
+
+export function canAccessPaymentIncidentQueue(token: string | null): boolean {
+  const role = getRoleFromAccessToken(token);
+  if (role === "root") return true;
+  if (role !== "admin") return false;
+  const profile = getAdminProfileFromAccessToken(token);
+  if (!profile) return false;
+  return profile.type === "general" || profile.scopes.includes("billing_support");
+}

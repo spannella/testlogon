@@ -33,6 +33,7 @@ const PurchasesPage = lazy(() => import("@/pages/purchases/PurchasesPage"));
 const SubscriptionsPage = lazy(() => import("@/pages/subscriptions/SubscriptionsPage"));
 const RootRoleManagementPage = lazy(() => import("@/pages/admin/RootRoleManagementPage"));
 const ModerationBoardPage = lazy(() => import("@/pages/admin/ModerationBoardPage"));
+const PaymentIncidentQueuePage = lazy(() => import("@/pages/admin/PaymentIncidentQueuePage"));
 const PublicEventPage = lazy(() => import("@/pages/calendar/PublicEventPage"));
 const ContactsPage = lazy(() => import("@/pages/contacts/ContactsPage"));
 const HelpdeskPage = lazy(() => import("@/pages/helpdesk/HelpdeskPage"));
@@ -98,6 +99,7 @@ export default function App() {
           <Route path="subscriptions" element={<SubscriptionsPage />} />
           <Route path="root/roles" element={<RootRoleManagementPage />} />
           <Route path="admin/moderation" element={<ModerationBoardPage />} />
+          <Route path="admin/payment-incidents" element={<PaymentIncidentQueuePage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

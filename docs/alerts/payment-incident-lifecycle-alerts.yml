@@ -1,0 +1,58 @@
+groups:
+  - name: payment-incident-lifecycle
+    rules:
+      - alert: PaymentIncidentWebhookFailureSpike
+        expr: |
+          (
+            sum(rate(payment_incident_events_total{event="transition",outcome!="ok"}[10m]))
+            /
+            clamp_min(sum(rate(payment_incident_events_total{event="transition"}[10m])), 1e-9)
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: page
+          service: billing
+          component: payment_incidents
+        annotations:
+          summary: "Payment incident transition failures above 5% for 10m"
+          description: "Potential webhook/provider issue. Validate provider connectivity, signatures, and adapter parsing."
+
+      - alert: PaymentIncidentDisputeBacklogGrowth
+        expr: |
+          sum(increase(payment_incident_events_total{incident_type=~"dispute|chargeback",event="transition",status=~"opened|evidence_required|under_review"}[6h])) > 100
+        for: 30m
+        labels:
+          severity: warning
+          service: billing
+          component: payment_incidents
+        annotations:
+          summary: "Dispute backlog growth exceeds threshold"
+          description: "High dispute inflow in actionable states over 6h. Review staffing and evidence submission throughput."
+
+      - alert: PaymentIncidentRetryTerminalFailureSpike
+        expr: |
+          sum(increase(payment_incident_events_total{incident_type="payment_failure",event="transition",status="retry_failed_terminal"}[30m])) > 20
+        for: 15m
+        labels:
+          severity: page
+          service: billing
+          component: payment_incidents
+        annotations:
+          summary: "Terminal payment retry failures spiking"
+          description: "Retry failures entered terminal state above threshold. Validate gateway/provider health and customer recovery UX."
+
+      - alert: PaymentIncidentResponseSlaBreachRate
+        expr: |
+          (
+            sum(increase(payment_incident_response_sla_breaches_total[24h]))
+            /
+            clamp_min(sum(increase(payment_incident_events_total{incident_type=~"dispute|chargeback",event="transition",status="response_submitted"}[24h])), 1)
+          ) > 0.1
+        for: 30m
+        labels:
+          severity: warning
+          service: billing
+          component: payment_incidents
+        annotations:
+          summary: "Dispute response SLA breach rate above 10% in 24h"
+          description: "Investigate response operations, ticket handling, and evidence workflow bottlenecks."

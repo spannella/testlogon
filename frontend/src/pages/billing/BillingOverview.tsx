@@ -14,6 +14,14 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { getBalance, getSettings, getConfig, setAutopay, payBalance } from "@/api/endpoints/billing";
+import {
+  getPaymentIssues,
+  confirmAndRetryCharge,
+  retryAutomaticPayment,
+  setDefaultAndRetryAutomaticPayment,
+  getPaymentMethods,
+  type PaymentIssue,
+} from "@/api/endpoints/billing";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useState } from "react";
 
@@ -31,6 +39,12 @@ interface BillingOverviewProps {
 export function BillingOverview({ onTabChange }: BillingOverviewProps) {
   const queryClient = useQueryClient();
   const [payOpen, setPayOpen] = useState(false);
+  const [retryOpen, setRetryOpen] = useState(false);
+  const [retryResult, setRetryResult] = useState<{ ok: boolean; code: string; message: string } | null>(null);
+  const [resolvedIssueIds, setResolvedIssueIds] = useState<string[]>([]);
+  const [methodConfirmed, setMethodConfirmed] = useState(false);
+  const [selectedMethodId, setSelectedMethodId] = useState<string>("");
+  const [autoRetryResult, setAutoRetryResult] = useState<{ ok: boolean; code: string; message: string } | null>(null);
 
   const balanceQuery = useQuery({
     queryKey: ["billing", "balance"],
@@ -45,6 +59,16 @@ export function BillingOverview({ onTabChange }: BillingOverviewProps) {
   const configQuery = useQuery({
     queryKey: ["billing", "config"],
     queryFn: getConfig,
+  });
+
+  const paymentIssuesQuery = useQuery({
+    queryKey: ["billing", "payment-issues"],
+    queryFn: () => getPaymentIssues(50),
+  });
+
+  const paymentMethodsQuery = useQuery({
+    queryKey: ["billing", "payment-methods"],
+    queryFn: getPaymentMethods,
   });
 
   const autopayMutation = useMutation({
@@ -70,6 +94,47 @@ export function BillingOverview({ onTabChange }: BillingOverviewProps) {
     },
   });
 
+  const retryMutation = useMutation({
+    mutationFn: (issueId: string) => confirmAndRetryCharge(issueId),
+    onSuccess: (result) => {
+      setRetryResult(result);
+      queryClient.invalidateQueries({ queryKey: ["billing", "payment-issues"] });
+      queryClient.invalidateQueries({ queryKey: ["billing", "balance"] });
+      if (result.ok) {
+        toast.success("Retry requested");
+      } else {
+        toast.error("Retry could not be completed");
+      }
+    },
+    onError: () => {
+      setRetryResult({ ok: false, code: "request_failed", message: "Unable to process retry request." });
+      toast.error("Retry failed");
+    },
+  });
+
+  const autoRetryMutation = useMutation({
+    mutationFn: (input: { issueId: string; paymentMethodId?: string }) => {
+      if (input.paymentMethodId) {
+        return setDefaultAndRetryAutomaticPayment(input.paymentMethodId, input.issueId);
+      }
+      return retryAutomaticPayment(input.issueId);
+    },
+    onSuccess: (result, input) => {
+      setAutoRetryResult(result);
+      queryClient.invalidateQueries({ queryKey: ["billing", "payment-issues"] });
+      if (result.ok) {
+        setResolvedIssueIds((prev) => [...prev, input.issueId]);
+        toast.success("Automatic payment retry submitted");
+      } else {
+        toast.error("Automatic retry failed");
+      }
+    },
+    onError: () => {
+      setAutoRetryResult({ ok: false, code: "request_failed", message: "Unable to process automatic retry." });
+      toast.error("Automatic retry failed");
+    },
+  });
+
   const balance = balanceQuery.data;
   const settings = settingsQuery.data;
   const config = configQuery.data;
@@ -79,6 +144,21 @@ export function BillingOverview({ onTabChange }: BillingOverviewProps) {
   const netBalance = totalPayments - totalOwed;
 
   const isLoading = balanceQuery.isLoading || settingsQuery.isLoading;
+  const paymentIssues = (paymentIssuesQuery.data?.items ?? []).filter((issue) => !resolvedIssueIds.includes(issue.incident_id));
+  const immediateIssue: PaymentIssue | null = paymentIssues.find((issue) => {
+    const action = String(issue.customer_action_type || "");
+    const status = String(issue.status || "");
+    return Boolean(issue.requires_customer_action) && (
+      action === "confirm" || action === "retry" || status === "customer_action_required" || status === "ready_to_retry"
+    );
+  }) ?? null;
+  const autoPaymentIssue: PaymentIssue | null = paymentIssues.find((issue) => {
+    const action = String(issue.customer_action_type || "");
+    return Boolean(issue.requires_customer_action) && action === "update_method";
+  }) ?? null;
+  const repeatedFailure = ((autoPaymentIssue?.retry_attempts?.length ?? 0) >= 2) || autoRetryResult?.ok === false;
+  const availableMethods = paymentMethodsQuery.data ?? [];
+  const retryEnabled = Boolean(autoPaymentIssue && methodConfirmed && selectedMethodId && !autoRetryMutation.isPending);
 
   if (isLoading) {
     return (
@@ -94,6 +174,105 @@ export function BillingOverview({ onTabChange }: BillingOverviewProps) {
 
   return (
     <div className="space-y-6">
+      {immediateIssue && (
+        <Card className="border-orange-300 bg-orange-50/60 dark:border-orange-900 dark:bg-orange-950/20">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Payment issue needs confirmation</CardTitle>
+            <CardDescription>
+              We couldn&apos;t complete a recent charge. Confirm to retry immediately.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="text-sm text-muted-foreground">
+              Issue <span className="font-mono">{immediateIssue.incident_id}</span> • {immediateIssue.provider || "provider"} • {immediateIssue.status}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => { setRetryResult(null); setRetryOpen(true); }}>
+                Confirm and Retry Charge
+              </Button>
+              <Button variant="outline" onClick={() => onTabChange?.("methods")}>
+                Review payment methods
+              </Button>
+            </div>
+            {retryResult && (
+              <div className={cn("rounded-md border p-2 text-sm", retryResult.ok ? "border-emerald-300 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30" : "border-destructive/30 bg-destructive/10")}>
+                {retryResult.ok
+                  ? "Retry submitted successfully. We’ll update this page when payment state changes."
+                  : "Retry did not complete. Please verify your payment method and try again."}
+                <span className="ml-1 text-xs text-muted-foreground">({retryResult.code})</span>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {autoPaymentIssue && (
+        <Card className="border-blue-300 bg-blue-50/60 dark:border-blue-900 dark:bg-blue-950/20">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">Automatic payment needs a method fix</CardTitle>
+            <CardDescription>
+              Update/confirm a valid payment method, then retry automatic payment.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="text-sm text-muted-foreground">
+              Issue <span className="font-mono">{autoPaymentIssue.incident_id}</span> • {autoPaymentIssue.provider || "provider"} • {autoPaymentIssue.status}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => onTabChange?.("methods")}>
+                Fix payment method
+              </Button>
+            </div>
+
+            <div className="space-y-2 rounded-md border p-3">
+              <label className="text-sm font-medium" htmlFor="retry-method-select">Payment method to use</label>
+              <select
+                id="retry-method-select"
+                className="h-9 w-full rounded-md border bg-background px-3 text-sm"
+                value={selectedMethodId}
+                onChange={(e) => setSelectedMethodId(e.target.value)}
+              >
+                <option value="">Select method…</option>
+                {availableMethods.map((pm) => (
+                  <option key={pm.payment_method_id} value={pm.payment_method_id}>
+                    {pm.label || pm.payment_method_id}
+                  </option>
+                ))}
+              </select>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={methodConfirmed}
+                  onChange={(e) => setMethodConfirmed(e.target.checked)}
+                />
+                I updated/confirmed this payment method
+              </label>
+              <Button
+                onClick={() => autoRetryMutation.mutate({ issueId: autoPaymentIssue.incident_id, paymentMethodId: selectedMethodId || undefined })}
+                disabled={!retryEnabled}
+              >
+                Retry automatic payment
+              </Button>
+            </div>
+
+            {autoRetryResult && (
+              <div className={cn("rounded-md border p-2 text-sm", autoRetryResult.ok ? "border-emerald-300 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/30" : "border-destructive/30 bg-destructive/10")}>
+                {autoRetryResult.ok
+                  ? "Automatic retry submitted. This issue has been removed from your active queue."
+                  : "Automatic retry failed again. Please verify card details, contact your bank, or use a different payment method."}
+                <span className="ml-1 text-xs text-muted-foreground">({autoRetryResult.code})</span>
+              </div>
+            )}
+
+            {repeatedFailure && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-2 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                We still can&apos;t process automatic payment. Please switch to another method or contact support if this persists.
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Balance card */}
       <Card>
         <CardHeader className="pb-3">
@@ -241,6 +420,20 @@ export function BillingOverview({ onTabChange }: BillingOverviewProps) {
         confirmLabel="Pay Now"
         onConfirm={() => payMutation.mutate()}
         loading={payMutation.isPending}
+      />
+
+      <ConfirmDialog
+        open={retryOpen}
+        onOpenChange={setRetryOpen}
+        title="Confirm and Retry Charge"
+        description="We will retry your failed payment immediately using your current billing settings."
+        confirmLabel="Retry Charge"
+        onConfirm={() => {
+          if (!immediateIssue) return;
+          retryMutation.mutate(immediateIssue.incident_id);
+          setRetryOpen(false);
+        }}
+        loading={retryMutation.isPending}
       />
     </div>
   );
