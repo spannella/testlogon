@@ -75,6 +75,7 @@ from app.services.api_metering_policy import build_limit_denial_headers
 from app.routers.messaging import start_scheduled_messages_task
 from app.services.projects_reconcile import start_projects_reconcile_task
 from app.services.provider_oauth import validate_google_drive_mount_oauth_configuration
+from app.services.filemanager_mount_reconcile import start_filemgr_mount_reconcile_task
 from app.services.api_usage_entitlements import enforce_api_package_entitlement_pre_request
 
 
@@ -227,6 +228,7 @@ def create_app() -> FastAPI:
     app.include_router(vnc_sessions_router)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)
+    app.add_event_handler("startup", start_filemgr_mount_reconcile_task)
 
     return app
 

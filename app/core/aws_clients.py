@@ -150,3 +150,17 @@ def sqs_client():
         endpoint_url=endpoint_url,
         **_local_credentials_kwargs(endpoint_url),
     )
+
+
+def _secretsmanager_endpoint_url() -> Optional[str]:
+    return _resolve_endpoint_url(getattr(S, "secretsmanager_endpoint_url", ""), _aws_endpoint_url())
+
+
+def secretsmanager_client():
+    endpoint_url = _secretsmanager_endpoint_url()
+    return boto3.client(
+        "secretsmanager",
+        region_name=_aws_region(),
+        endpoint_url=endpoint_url,
+        **_local_credentials_kwargs(endpoint_url),
+    )

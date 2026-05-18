@@ -130,6 +130,59 @@ FILEMGR_OPERATION_LATENCY = Histogram(
     ["operation"],
     buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
 )
+FILEMGR_PROVIDER_OPERATION_TOTAL = Counter(
+    "filemgr_provider_operation_total",
+    "File manager operation counts segmented by provider/mount context",
+    ["operation", "provider", "mount_id", "mounted", "outcome", "error_class"],
+)
+FILEMGR_PROVIDER_OPERATION_LATENCY = Histogram(
+    "filemgr_provider_operation_latency_seconds",
+    "File manager operation latency segmented by provider/mount context",
+    ["operation", "provider", "mount_id", "mounted", "error_class"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+)
+FILEMGR_PROVIDER_ERRORS_TOTAL = Counter(
+    "filemgr_provider_errors_total",
+    "File manager provider errors segmented by provider/mount/error class",
+    ["operation", "provider", "mount_id", "error_class"],
+)
+FILEMGR_MOUNT_SECRET_ACCESS = Counter(
+    "filemgr_mount_secret_access_total",
+    "File manager mount credential secret access events",
+    ["action", "outcome"],
+)
+FILEMGR_ICLOUD_READ_CACHE = Counter(
+    "filemgr_icloud_read_cache_total",
+    "iCloud provider read cache outcomes",
+    ["result", "reason"],
+)
+
+FILEMGR_PROVIDER_AUTH_FAILURES = Counter(
+    "filemgr_provider_auth_failures_total",
+    "File manager provider authentication failures by provider/mount/reason",
+    ["provider", "mount_id", "reason"],
+)
+FILEMGR_MOUNT_ROLLOUT_DECISIONS = Counter(
+    "filemgr_mount_rollout_decisions_total",
+    "File manager iCloud mount rollout decisions",
+    ["provider", "environment", "mode", "cohort", "reason"],
+)
+FILEMGR_MOUNT_RECONCILE_RUNS = Counter(
+    "filemgr_mount_reconcile_runs_total",
+    "File manager mount metadata reconcile batch runs",
+    ["outcome", "dry_run"],
+)
+FILEMGR_MOUNT_RECONCILE_DRIFT_ITEMS = Counter(
+    "filemgr_mount_reconcile_drift_items_total",
+    "File manager mount metadata reconcile drift items by type",
+    ["kind", "dry_run"],
+)
+FILEMGR_MOUNT_RECONCILE_DURATION = Histogram(
+    "filemgr_mount_reconcile_duration_seconds",
+    "File manager mount metadata reconcile batch latency in seconds",
+    ["outcome", "dry_run"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60),
+)
 FILEMGR_BYTES = Counter(
     "filemgr_transfer_bytes_total",
     "File manager bytes transferred",
@@ -846,6 +899,94 @@ def set_app_info(name: str, version: str) -> None:
 
 def record_filemgr_operation_latency(operation: str, elapsed_seconds: float) -> None:
     FILEMGR_OPERATION_LATENCY.labels(operation=operation).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_filemgr_mount_secret_access(*, action: str, outcome: str) -> None:
+    FILEMGR_MOUNT_SECRET_ACCESS.labels(action=(action or "unknown").lower(), outcome=(outcome or "unknown").lower()).inc()
+
+
+def record_filemgr_provider_operation(
+    *,
+    operation: str,
+    provider: str,
+    mounted: bool,
+    elapsed_seconds: float,
+    outcome: str,
+    mount_id: str | None = None,
+    error_class: str = "none",
+) -> None:
+    op = (operation or "unknown").lower()
+    prov = (provider or "unknown").lower()
+    out = (outcome or "unknown").lower()
+    m = "true" if mounted else "false"
+    mid = (mount_id or "none").lower()
+    err = (error_class or "none").lower()
+    FILEMGR_PROVIDER_OPERATION_TOTAL.labels(operation=op, provider=prov, mount_id=mid, mounted=m, outcome=out, error_class=err).inc()
+    FILEMGR_PROVIDER_OPERATION_LATENCY.labels(operation=op, provider=prov, mount_id=mid, mounted=m, error_class=err).observe(max(0.0, float(elapsed_seconds)))
+    if out != "success" and err != "none":
+        FILEMGR_PROVIDER_ERRORS_TOTAL.labels(
+            operation=op,
+            provider=prov,
+            mount_id=mid,
+            error_class=err,
+        ).inc()
+
+
+def record_filemgr_provider_auth_failure(*, provider: str, mount_id: str | None = None, reason: str = "auth_failed") -> None:
+    FILEMGR_PROVIDER_AUTH_FAILURES.labels(
+        provider=(provider or "unknown").lower(),
+        mount_id=(mount_id or "none").lower(),
+        reason=(reason or "auth_failed").lower(),
+    ).inc()
+
+
+def record_filemgr_mount_rollout_decision(
+    *,
+    provider: str = "icloud",
+    environment: str = "unknown",
+    mode: str = "unknown",
+    cohort: str = "unknown",
+    reason: str = "unknown",
+) -> None:
+    FILEMGR_MOUNT_ROLLOUT_DECISIONS.labels(
+        provider=(provider or "unknown").lower(),
+        environment=(environment or "unknown").lower(),
+        mode=(mode or "unknown").lower(),
+        cohort=(cohort or "unknown").lower(),
+        reason=(reason or "unknown").lower(),
+    ).inc()
+
+
+def record_filemgr_mount_reconcile_batch(
+    *,
+    dry_run: bool,
+    elapsed_seconds: float,
+    outcome: str,
+) -> None:
+    out = (outcome or "unknown").lower()
+    run = "true" if dry_run else "false"
+    FILEMGR_MOUNT_RECONCILE_RUNS.labels(outcome=out, dry_run=run).inc()
+    FILEMGR_MOUNT_RECONCILE_DURATION.labels(outcome=out, dry_run=run).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_filemgr_mount_reconcile_drift(
+    *,
+    dry_run: bool,
+    missing_local: int = 0,
+    stale_local: int = 0,
+    mismatched: int = 0,
+) -> None:
+    run = "true" if dry_run else "false"
+    if missing_local > 0:
+        FILEMGR_MOUNT_RECONCILE_DRIFT_ITEMS.labels(kind="missing_local", dry_run=run).inc(float(missing_local))
+    if stale_local > 0:
+        FILEMGR_MOUNT_RECONCILE_DRIFT_ITEMS.labels(kind="stale_local", dry_run=run).inc(float(stale_local))
+    if mismatched > 0:
+        FILEMGR_MOUNT_RECONCILE_DRIFT_ITEMS.labels(kind="mismatched", dry_run=run).inc(float(mismatched))
+
+
+def record_filemgr_icloud_read_cache(*, result: str, reason: str = "none") -> None:
+    FILEMGR_ICLOUD_READ_CACHE.labels(result=(result or "unknown").lower(), reason=(reason or "none").lower()).inc()
 
 
 def record_filemgr_bytes(direction: str, operation: str, nbytes: int) -> None:

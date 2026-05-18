@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from app.core.aws_clients import ddb_resource, kms_client, sqs_client as aws_sqs_client
+from app.core.aws_clients import ddb_resource, kms_client, secretsmanager_client, sqs_client as aws_sqs_client
 from .settings import S
 
 ddb = ddb_resource()
 kms = kms_client()
+secretsmanager = secretsmanager_client()
 
 # Optional clients - import lazily / guarded so the server can run without extras installed.
 ses = None

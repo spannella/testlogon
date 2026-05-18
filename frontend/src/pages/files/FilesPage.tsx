@@ -11,9 +11,11 @@ import {
   ChevronDown,
   Lock,
   ShieldCheck,
+  Cloud,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -67,6 +69,11 @@ import {
   getSharedFileInfo,
   getUsageSummary,
   sharedPreviewUrl,
+  initiateICloudMount,
+  verifyICloudMount,
+  listMounts,
+  rotateICloudMount,
+  revokeICloudMount,
 } from "@/api/endpoints/files";
 import { FileTable } from "./FileTable";
 import { ImageEditorDialog } from "./ImageEditorDialog";
@@ -108,6 +115,54 @@ function warningLevel(percent: number): "none" | "warn" | "critical" {
   return "none";
 }
 
+function mountStatusLabel(status: string): string {
+  switch (status) {
+    case "reauth_required":
+      return "re-auth required";
+    default:
+      return status || "unknown";
+  }
+}
+
+function mountStatusVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
+  if (status === "active") return "default";
+  if (status === "degraded") return "secondary";
+  if (status === "reauth_required") return "destructive";
+  if (status === "revoked") return "outline";
+  return "outline";
+}
+
+function maskAppleId(value: string): string {
+  const raw = (value || "").trim();
+  if (!raw.includes("@")) return raw ? "••••" : "";
+  const [local, domain] = raw.split("@", 2);
+  const localMasked = local.length <= 2 ? `${local.charAt(0) || "•"}•` : `${local.slice(0, 2)}••••`;
+  return `${localMasked}@${domain}`;
+}
+
+function safeIcloudUiError(fallback: string): string {
+  // Keep messages generic so sensitive auth artifacts are never surfaced in UI errors.
+  return fallback;
+}
+
+function resolveMountForPath(
+  mounts: Array<{ mount_path: string; provider: string; status: string }> | undefined,
+  path: string,
+): { provider: string; mount_path: string } | null {
+  if (!mounts?.length) return null;
+  const normalized = path.endsWith("/") ? path : `${path}/`;
+  let best: { provider: string; mount_path: string } | null = null;
+  for (const mount of mounts) {
+    if (!["active", "degraded", "reauth_required"].includes(mount.status)) continue;
+    const mountPath = mount.mount_path.endsWith("/") ? mount.mount_path : `${mount.mount_path}/`;
+    if (normalized === mountPath || normalized.startsWith(mountPath)) {
+      if (!best || mountPath.length > best.mount_path.length) {
+        best = { provider: mount.provider, mount_path: mountPath };
+      }
+    }
+  }
+  return best;
+}
 
 export default function FilesPage() {
   const queryClient = useQueryClient();
@@ -145,6 +200,25 @@ export default function FilesPage() {
   const [shareTarget, setShareTarget] = React.useState<FileEntry | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<FileEntry | null>(null);
 
+  // iCloud onboarding wizard state
+  const [icloudWizardOpen, setIcloudWizardOpen] = React.useState(false);
+  const [icloudStep, setIcloudStep] = React.useState<"initiate" | "verify" | "done">("initiate");
+  const [icloudBusy, setIcloudBusy] = React.useState(false);
+  const [icloudError, setIcloudError] = React.useState<string | null>(null);
+  const [icloudStatusMessage, setIcloudStatusMessage] = React.useState<string | null>(null);
+  const [icloudMountPath, setIcloudMountPath] = React.useState("/icloud/");
+  const [icloudAppleId, setIcloudAppleId] = React.useState("");
+  const [icloudAuthMode, setIcloudAuthMode] = React.useState<"session_token" | "app_password">("session_token");
+  const [icloudAuthValue, setIcloudAuthValue] = React.useState("");
+  const [icloudDeviceLabel, setIcloudDeviceLabel] = React.useState("");
+  const [icloudOnboardingSessionId, setIcloudOnboardingSessionId] = React.useState("");
+  const [icloudMountId, setIcloudMountId] = React.useState("");
+  const [icloudMfaCode, setIcloudMfaCode] = React.useState("");
+  const [rotateMountId, setRotateMountId] = React.useState<string | null>(null);
+  const [rotateAuthMode, setRotateAuthMode] = React.useState<"session_token" | "app_password">("session_token");
+  const [rotateAuthValue, setRotateAuthValue] = React.useState("");
+  const [rotateDeviceLabel, setRotateDeviceLabel] = React.useState("");
+
   // Preview state
   const [previewContext, setPreviewContext] = React.useState<PreviewContext | null>(null);
 
@@ -177,6 +251,16 @@ export default function FilesPage() {
     queryKey: ["files-usage-summary"],
     queryFn: () => getUsageSummary(),
   });
+
+  const mountsQuery = useQuery({
+    queryKey: ["file-mounts"],
+    queryFn: () => listMounts(),
+  });
+
+  const providerForPath = React.useCallback((path: string) => {
+    return resolveMountForPath(mountsQuery.data, path)?.provider ?? null;
+  }, [mountsQuery.data]);
+  const currentPathProvider = React.useMemo(() => providerForPath(currentPath), [providerForPath, currentPath]);
 
   const displayItems: FileEntry[] = isSearching
     ? searchMode === "name"
@@ -256,6 +340,153 @@ export default function FilesPage() {
 
   const toggleSearchMode = () => {
     setSearchMode((m) => (m === "name" ? "content" : "name"));
+  };
+
+  const resetICloudWizard = React.useCallback(() => {
+    setIcloudStep("initiate");
+    setIcloudBusy(false);
+    setIcloudError(null);
+    setIcloudStatusMessage(null);
+    setIcloudMountPath("/icloud/");
+    setIcloudAppleId("");
+    setIcloudAuthMode("session_token");
+    setIcloudAuthValue("");
+    setIcloudDeviceLabel("");
+    setIcloudOnboardingSessionId("");
+    setIcloudMountId("");
+    setIcloudMfaCode("");
+  }, []);
+
+  const openICloudWizard = () => {
+    resetICloudWizard();
+    setIcloudWizardOpen(true);
+  };
+
+  const closeICloudWizard = (open: boolean) => {
+    setIcloudWizardOpen(open);
+    if (!open && !icloudBusy) {
+      resetICloudWizard();
+    }
+  };
+
+  const handleICloudInitiate = async () => {
+    setIcloudBusy(true);
+    setIcloudError(null);
+    setIcloudStatusMessage(null);
+    try {
+      const res = await initiateICloudMount({
+        mount_path: icloudMountPath,
+        apple_id: icloudAppleId,
+        auth_mode: icloudAuthMode,
+        auth_value: icloudAuthValue,
+        device_label: icloudDeviceLabel || null,
+      });
+      setIcloudOnboardingSessionId(res.onboarding_session_id);
+      setIcloudMountId(res.mount_id);
+      setIcloudStep("verify");
+      setIcloudStatusMessage("Session created. Complete verification to activate the mount.");
+      setIcloudAuthValue("");
+      setIcloudMfaCode("");
+    } catch (err) {
+      void err;
+      setIcloudError(safeIcloudUiError("Failed to initiate iCloud onboarding. Check your credentials and try again."));
+    } finally {
+      setIcloudBusy(false);
+    }
+  };
+
+  const handleICloudVerify = async () => {
+    setIcloudBusy(true);
+    setIcloudError(null);
+    setIcloudStatusMessage(null);
+    try {
+      const res = await verifyICloudMount({
+        onboarding_session_id: icloudOnboardingSessionId,
+        mfa_code: icloudMfaCode || undefined,
+      });
+      if (res.outcome === "active") {
+        setIcloudStep("done");
+        setIcloudStatusMessage("iCloud connected successfully. Mounted files are now available.");
+        setIcloudMfaCode("");
+        await queryClient.invalidateQueries({ queryKey: ["files"] });
+        return;
+      }
+      if (res.outcome === "mfa_required") {
+        setIcloudStep("verify");
+        setIcloudStatusMessage("Multi-factor authentication required. Enter the latest code and try again.");
+        return;
+      }
+      setIcloudError("Authentication failed. Reconnect and try again.");
+    } catch (err) {
+      void err;
+      setIcloudError(safeIcloudUiError("Failed to verify iCloud onboarding. Try again or reconnect the mount."));
+    } finally {
+      setIcloudBusy(false);
+    }
+  };
+
+  const rotateMountMut = useMutation({
+    mutationFn: (inp: { mountId: string; authMode: "session_token" | "app_password"; authValue: string; deviceLabel?: string }) =>
+      rotateICloudMount({
+        mount_id: inp.mountId,
+        auth_mode: inp.authMode,
+        auth_value: inp.authValue,
+        device_label: inp.deviceLabel || null,
+      }),
+    onMutate: async (inp) => {
+      await queryClient.cancelQueries({ queryKey: ["file-mounts"] });
+      const previous = queryClient.getQueryData(["file-mounts"]);
+      queryClient.setQueryData(["file-mounts"], (old: any) =>
+        Array.isArray(old)
+          ? old.map((m: any) => (m.mount_id === inp.mountId ? { ...m, status: "active" } : m))
+          : old,
+      );
+      return { previous };
+    },
+    onError: (_err, _inp, ctx) => {
+      if (ctx?.previous !== undefined) queryClient.setQueryData(["file-mounts"], ctx.previous);
+      toast.error("Failed to rotate iCloud credentials.");
+    },
+    onSuccess: () => {
+      toast.success("Credentials rotated.");
+      setRotateMountId(null);
+      setRotateAuthValue("");
+      setRotateDeviceLabel("");
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["file-mounts"] });
+    },
+  });
+
+  const revokeMountMut = useMutation({
+    mutationFn: (mountId: string) => revokeICloudMount({ mount_id: mountId }),
+    onMutate: async (mountId) => {
+      await queryClient.cancelQueries({ queryKey: ["file-mounts"] });
+      const previous = queryClient.getQueryData(["file-mounts"]);
+      queryClient.setQueryData(["file-mounts"], (old: any) =>
+        Array.isArray(old)
+          ? old.map((m: any) => (m.mount_id === mountId ? { ...m, status: "revoking" } : m))
+          : old,
+      );
+      return { previous };
+    },
+    onError: (_err, _mountId, ctx) => {
+      if (ctx?.previous !== undefined) queryClient.setQueryData(["file-mounts"], ctx.previous);
+      toast.error("Failed to disconnect mount.");
+    },
+    onSuccess: () => {
+      toast.success("Mount disconnected.");
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["file-mounts"] });
+    },
+  });
+
+  const openReconnectWizard = (mountPath: string) => {
+    openICloudWizard();
+    setIcloudMountPath(mountPath || "/icloud/");
+    setIcloudStep("initiate");
+    setIcloudStatusMessage("Reconnect your iCloud credentials to restore this mount.");
   };
 
   // ── Navigation ──────────────────────────────────────────────────
@@ -712,7 +943,15 @@ export default function FilesPage() {
                   className="shrink-0 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors"
                   onClick={() => handleBreadcrumb(seg.path)}
                 >
-                  {seg.label}
+                  <span className="inline-flex items-center gap-1">
+                    {seg.label}
+                    {providerForPath(seg.path) === "icloud" && (
+                      <Badge variant="secondary" className="px-1 py-0 text-[10px]" data-testid={`breadcrumb-provider-${seg.path}`}>
+                        <Cloud className="h-3 w-3" />
+                        iCloud
+                      </Badge>
+                    )}
+                  </span>
                 </button>
               </React.Fragment>
             ))}
@@ -729,6 +968,12 @@ export default function FilesPage() {
                 className="pl-9"
               />
             </div>
+            {currentPathProvider === "icloud" && (
+              <Badge variant="secondary" className="gap-1" data-testid="current-path-provider-badge">
+                <Cloud className="h-3 w-3" />
+                iCloud mounted path
+              </Badge>
+            )}
 
             {/* Search mode toggle */}
             <button
@@ -774,6 +1019,11 @@ export default function FilesPage() {
               )}
             </div>
 
+            <Button variant="outline" size="sm" onClick={openICloudWizard} data-testid="connect-icloud-button">
+              <Cloud className="h-4 w-4" />
+              <span className="hidden sm:inline ml-1">Connect iCloud</span>
+            </Button>
+
             <div className="flex-1" />
 
             {/* Upload dropdown */}
@@ -816,6 +1066,95 @@ export default function FilesPage() {
             </Button>
           </div>
 
+          <div className="rounded-lg border p-3" data-testid="mount-management-panel">
+            <div className="mb-2 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Connected mounts</h3>
+              <Button variant="ghost" size="sm" onClick={() => mountsQuery.refetch()} disabled={mountsQuery.isFetching}>Refresh</Button>
+            </div>
+            {mountsQuery.isLoading ? (
+              <div className="text-xs text-muted-foreground">Loading mounts…</div>
+            ) : (mountsQuery.data?.length ?? 0) === 0 ? (
+              <div className="text-xs text-muted-foreground">No mounts configured.</div>
+            ) : (
+              <div className="space-y-2">
+                {(mountsQuery.data ?? []).map((mount) => (
+                  <div key={mount.mount_id} className="rounded-md border p-2 text-xs" data-testid="mount-row">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono">{mount.mount_path}</span>
+                      <Badge variant={mountStatusVariant(mount.status)} data-testid={`mount-status-${mount.mount_id}`}>{mountStatusLabel(mount.status)}</Badge>
+                      <span className="text-muted-foreground">{mount.provider}</span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {mount.can_rotate && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setRotateMountId((cur) => (cur === mount.mount_id ? null : mount.mount_id))}
+                          data-testid={`mount-rotate-${mount.mount_id}`}
+                        >
+                          Rotate
+                        </Button>
+                      )}
+                      {mount.can_reconnect && (
+                        <Button size="sm" variant="outline" onClick={() => openReconnectWizard(mount.mount_path)} data-testid={`mount-reconnect-${mount.mount_id}`}>Reconnect</Button>
+                      )}
+                      {mount.can_disconnect && (
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => revokeMountMut.mutate(mount.mount_id)}
+                          disabled={revokeMountMut.isPending}
+                          data-testid={`mount-disconnect-${mount.mount_id}`}
+                        >
+                          Disconnect
+                        </Button>
+                      )}
+                    </div>
+                    {rotateMountId === mount.mount_id && (
+                      <div className="mt-2 grid gap-2 rounded-md border bg-muted/40 p-2">
+                        <Label htmlFor={`rotate-mode-${mount.mount_id}`}>Auth mode</Label>
+                        <select
+                          id={`rotate-mode-${mount.mount_id}`}
+                          className="w-full rounded-md border bg-background px-2 py-1"
+                          value={rotateAuthMode}
+                          onChange={(e) => setRotateAuthMode(e.target.value as "session_token" | "app_password")}
+                        >
+                          <option value="session_token">Session token</option>
+                          <option value="app_password">App password</option>
+                        </select>
+                        <Label htmlFor={`rotate-value-${mount.mount_id}`}>Credential</Label>
+                        <Input
+                          id={`rotate-value-${mount.mount_id}`}
+                          type="password"
+                          value={rotateAuthValue}
+                          onChange={(e) => setRotateAuthValue(e.target.value)}
+                          placeholder="Enter new credential"
+                        />
+                        <Label htmlFor={`rotate-device-${mount.mount_id}`}>Device label (optional)</Label>
+                        <Input
+                          id={`rotate-device-${mount.mount_id}`}
+                          value={rotateDeviceLabel}
+                          onChange={(e) => setRotateDeviceLabel(e.target.value)}
+                        />
+                        <div className="flex gap-2">
+                          <Button
+                            size="sm"
+                            onClick={() => rotateMountMut.mutate({ mountId: mount.mount_id, authMode: rotateAuthMode, authValue: rotateAuthValue, deviceLabel: rotateDeviceLabel })}
+                            disabled={rotateMountMut.isPending || !rotateAuthValue.trim()}
+                            data-testid={`mount-rotate-submit-${mount.mount_id}`}
+                          >
+                            Apply
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => { setRotateMountId(null); setRotateAuthValue(""); }}>Cancel</Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Bulk actions toolbar */}
           <BulkActions
             selectedKeys={selectedKeys}
@@ -850,6 +1189,7 @@ export default function FilesPage() {
                 onRename={(f) => { setRenameTarget(f); setRenameName(f.name); }}
                 onMove={handleMoveOpen}
                 onDelete={(f) => setDeleteTarget(f)}
+                pathProvider={providerForPath}
                 emptyState={
                   <EmptyState
                     icon={<FolderOpen className="h-6 w-6" />}
@@ -957,6 +1297,138 @@ export default function FilesPage() {
         onMove={handleMove}
         loading={moveLoading}
       />
+
+      <Dialog open={icloudWizardOpen} onOpenChange={closeICloudWizard}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Connect iCloud</DialogTitle>
+            <DialogDescription>
+              Securely mount your iCloud Drive under a folder in Files.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2" data-testid="icloud-onboarding-wizard">
+            {icloudStep === "initiate" && (
+              <>
+                <div className="space-y-1">
+                  <Label htmlFor="icloud-mount-path">Mount path</Label>
+                  <Input
+                    id="icloud-mount-path"
+                    value={icloudMountPath}
+                    onChange={(e) => setIcloudMountPath(e.target.value)}
+                    placeholder="/icloud/"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="icloud-apple-id">Apple ID</Label>
+                  <Input
+                    id="icloud-apple-id"
+                    type="email"
+                    value={icloudAppleId}
+                    onChange={(e) => setIcloudAppleId(e.target.value)}
+                    placeholder="name@example.com"
+                    autoComplete="username"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="icloud-auth-mode">Authentication mode</Label>
+                  <select
+                    id="icloud-auth-mode"
+                    className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                    value={icloudAuthMode}
+                    onChange={(e) => setIcloudAuthMode(e.target.value as "session_token" | "app_password")}
+                  >
+                    <option value="session_token">Session token</option>
+                    <option value="app_password">App password</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="icloud-auth-value">Credential</Label>
+                  <Input
+                    id="icloud-auth-value"
+                    type="password"
+                    value={icloudAuthValue}
+                    onChange={(e) => setIcloudAuthValue(e.target.value)}
+                    placeholder="Paste token or app password"
+                    autoComplete="current-password"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="icloud-device-label">Device label (optional)</Label>
+                  <Input
+                    id="icloud-device-label"
+                    value={icloudDeviceLabel}
+                    onChange={(e) => setIcloudDeviceLabel(e.target.value)}
+                    placeholder="My MacBook"
+                  />
+                </div>
+              </>
+            )}
+
+            {icloudStep === "verify" && (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  Complete verification for mount <span className="font-mono">{icloudMountId || "(pending)"}</span>
+                  {icloudAppleId ? <> using <span className="font-mono">{maskAppleId(icloudAppleId)}</span></> : null}.
+                </p>
+                <div className="space-y-1">
+                  <Label htmlFor="icloud-mfa-code">MFA / challenge code</Label>
+                  <Input
+                    id="icloud-mfa-code"
+                    type="password"
+                    value={icloudMfaCode}
+                    onChange={(e) => setIcloudMfaCode(e.target.value)}
+                    placeholder="Enter code if requested"
+                    autoComplete="one-time-code"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    If prompted by Apple, enter your latest MFA/challenge code to complete connection.
+                  </p>
+                </div>
+              </>
+            )}
+
+            {icloudStep === "done" && (
+              <p className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800" data-testid="icloud-onboarding-success">
+                iCloud mount is active. You can browse mounted paths from Files now.
+              </p>
+            )}
+
+            {icloudStatusMessage && (
+              <p className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+                {icloudStatusMessage}
+              </p>
+            )}
+            {icloudError && (
+              <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800" data-testid="icloud-onboarding-error">
+                {icloudError}
+              </p>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => closeICloudWizard(false)} disabled={icloudBusy}>Cancel</Button>
+            {icloudStep === "initiate" && (
+              <Button
+                onClick={() => void handleICloudInitiate()}
+                disabled={icloudBusy || !icloudAppleId.trim() || !icloudAuthValue.trim() || !icloudMountPath.trim()}
+              >
+                {icloudBusy ? "Starting…" : "Start onboarding"}
+              </Button>
+            )}
+            {icloudStep === "verify" && (
+              <Button onClick={() => void handleICloudVerify()} disabled={icloudBusy || !icloudOnboardingSessionId.trim()}>
+                {icloudBusy ? "Verifying…" : "Verify & connect"}
+              </Button>
+            )}
+            {icloudStep === "done" && (
+              <Button onClick={() => closeICloudWizard(false)}>
+                Done
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
 
       <Dialog open={passwordDialogOpen} onOpenChange={(open) => { if (!open) completePasswordDialog(null); }}>

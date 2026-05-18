@@ -197,4 +197,30 @@ describe("FileTable media previews", () => {
     await user.click(trigger);
     expect(screen.getByLabelText("Video hover preview")).toBeInTheDocument();
   });
+
+  it("shows iCloud provider badges for mounted nodes", () => {
+    setMediaCapabilities();
+    render(
+      <FileTable
+        data={[
+          { type: "folder", name: "icloud", path: "/icloud/" },
+          { type: "file", name: "doc.txt", path: "/docs/doc.txt", content_type: "text/plain" },
+        ]}
+        selectedKeys={new Set()}
+        onSelectionChange={() => {}}
+        onNavigate={() => {}}
+        onPreview={() => {}}
+        onDownload={() => {}}
+        onShare={() => {}}
+        onRename={() => {}}
+        onMove={() => {}}
+        onDelete={() => {}}
+        pathProvider={(path) => (path.startsWith("/icloud/") ? "icloud" : null)}
+      />,
+    );
+
+    expect(screen.getByTestId("provider-badge-/icloud/")).toBeInTheDocument();
+    expect(screen.queryByTestId("provider-badge-/docs/doc.txt")).not.toBeInTheDocument();
+  });
+
 });

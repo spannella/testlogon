@@ -12,6 +12,7 @@ class Settings:
     s3_endpoint_url: str = os.environ.get("S3_ENDPOINT_URL", "")
     cognito_endpoint_url: str = os.environ.get("COGNITO_ENDPOINT_URL", "")
     kms_endpoint_url: str = os.environ.get("KMS_ENDPOINT_URL", "")
+    secretsmanager_endpoint_url: str = os.environ.get("SECRETSMANAGER_ENDPOINT_URL", "")
     sqs_endpoint_url: str = os.environ.get("SQS_ENDPOINT_URL", "")
     s3_use_path_style: bool = os.environ.get("S3_USE_PATH_STYLE", "0") not in ("0", "false", "False")
 
@@ -473,6 +474,50 @@ class Settings:
 
     # File manager
     filemgr_table_name: str = os.environ.get("FILEMGR_TABLE", "")
+    filemgr_mounts_table_name: str = os.environ.get("FILEMGR_MOUNTS_TABLE_NAME", "filemgr_mounts")
+    filemgr_mount_secret_prefix: str = os.environ.get("FILEMGR_MOUNT_SECRET_PREFIX", "filemgr/mounts")
+    filemgr_mount_secret_kms_key_id: str = os.environ.get("FILEMGR_MOUNT_SECRET_KMS_KEY_ID", "")
+    filemgr_mount_secret_require_cmk: bool = os.environ.get("FILEMGR_MOUNT_SECRET_REQUIRE_CMK", "1") not in ("0", "false", "False")
+    filemgr_mount_initiate_max_per_window: int = int(os.environ.get("FILEMGR_MOUNT_INITIATE_MAX_PER_WINDOW", "5"))
+    filemgr_mount_initiate_window_seconds: int = int(os.environ.get("FILEMGR_MOUNT_INITIATE_WINDOW_SECONDS", "900"))
+    filemgr_mount_verify_max_per_window: int = int(os.environ.get("FILEMGR_MOUNT_VERIFY_MAX_PER_WINDOW", "10"))
+    filemgr_mount_verify_window_seconds: int = int(os.environ.get("FILEMGR_MOUNT_VERIFY_WINDOW_SECONDS", "900"))
+    filemgr_mount_rotate_max_per_window: int = int(os.environ.get("FILEMGR_MOUNT_ROTATE_MAX_PER_WINDOW", "6"))
+    filemgr_mount_rotate_window_seconds: int = int(os.environ.get("FILEMGR_MOUNT_ROTATE_WINDOW_SECONDS", "900"))
+    filemgr_mount_revoke_max_per_window: int = int(os.environ.get("FILEMGR_MOUNT_REVOKE_MAX_PER_WINDOW", "4"))
+    filemgr_mount_revoke_window_seconds: int = int(os.environ.get("FILEMGR_MOUNT_REVOKE_WINDOW_SECONDS", "900"))
+    filemgr_mount_verify_session_max_attempts: int = int(os.environ.get("FILEMGR_MOUNT_VERIFY_SESSION_MAX_ATTEMPTS", "5"))
+    filemgr_icloud_provider_enabled: bool = os.environ.get("FILEMGR_ICLOUD_PROVIDER_ENABLED", "0") == "1"
+    filemgr_icloud_read_only: bool = os.environ.get("FILEMGR_ICLOUD_READ_ONLY", "0") not in ("0", "false", "False")
+    filemgr_icloud_mount_enabled: bool = os.environ.get("FILEMGR_ICLOUD_MOUNT_ENABLED", "1") == "1"
+    filemgr_icloud_mount_rollout_mode: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_ROLLOUT_MODE", "ga")
+    filemgr_icloud_mount_environment: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_ENVIRONMENT", os.environ.get("ENVIRONMENT", "dev"))
+    filemgr_icloud_mount_rollout_mode_by_env: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_ROLLOUT_MODE_BY_ENV", "")
+    filemgr_icloud_mount_kill_switch: bool = os.environ.get("FILEMGR_ICLOUD_MOUNT_KILL_SWITCH", "0") == "1"
+    filemgr_icloud_mount_enabled_tenant_ids: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_ENABLED_TENANT_IDS", "")
+    filemgr_icloud_mount_disabled_tenant_ids: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_DISABLED_TENANT_IDS", "")
+    filemgr_icloud_mount_internal_user_subs: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_INTERNAL_USER_SUBS", "")
+    filemgr_icloud_mount_internal_tenant_ids: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_INTERNAL_TENANT_IDS", "")
+    filemgr_icloud_mount_beta_user_subs: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_BETA_USER_SUBS", "")
+    filemgr_icloud_mount_beta_tenant_ids: str = os.environ.get("FILEMGR_ICLOUD_MOUNT_BETA_TENANT_IDS", "")
+    filemgr_icloud_read_cache_enabled: bool = os.environ.get("FILEMGR_ICLOUD_READ_CACHE_ENABLED", "0") == "1"
+    filemgr_icloud_read_cache_ttl_seconds: int = int(os.environ.get("FILEMGR_ICLOUD_READ_CACHE_TTL_SECONDS", "120"))
+    filemgr_icloud_read_cache_min_bytes: int = int(os.environ.get("FILEMGR_ICLOUD_READ_CACHE_MIN_BYTES", str(1024 * 1024)))
+    filemgr_icloud_read_cache_freq_threshold: int = int(os.environ.get("FILEMGR_ICLOUD_READ_CACHE_FREQ_THRESHOLD", "3"))
+    filemgr_icloud_read_cache_max_entries: int = int(os.environ.get("FILEMGR_ICLOUD_READ_CACHE_MAX_ENTRIES", "256"))
+    filemgr_icloud_retry_max_attempts: int = int(os.environ.get("FILEMGR_ICLOUD_RETRY_MAX_ATTEMPTS", "3"))
+    filemgr_icloud_retry_base_seconds: float = float(os.environ.get("FILEMGR_ICLOUD_RETRY_BASE_SECONDS", "0.2"))
+    filemgr_icloud_retry_cap_seconds: float = float(os.environ.get("FILEMGR_ICLOUD_RETRY_CAP_SECONDS", "2.0"))
+    filemgr_mount_degraded_fail_threshold: int = int(os.environ.get("FILEMGR_MOUNT_DEGRADED_FAIL_THRESHOLD", "3"))
+    filemgr_mount_reauth_fail_threshold: int = int(os.environ.get("FILEMGR_MOUNT_REAUTH_FAIL_THRESHOLD", "2"))
+    filemgr_mount_unavailable_fail_threshold: int = int(os.environ.get("FILEMGR_MOUNT_UNAVAILABLE_FAIL_THRESHOLD", "6"))
+    filemgr_mount_recovery_success_threshold: int = int(os.environ.get("FILEMGR_MOUNT_RECOVERY_SUCCESS_THRESHOLD", "2"))
+    filemgr_mount_status_update_sla_seconds: int = int(os.environ.get("FILEMGR_MOUNT_STATUS_UPDATE_SLA_SECONDS", "30"))
+    filemgr_mount_reconcile_enabled: bool = os.environ.get("FILEMGR_MOUNT_RECONCILE_ENABLED", "false").lower() == "true"
+    filemgr_mount_reconcile_interval_seconds: int = int(os.environ.get("FILEMGR_MOUNT_RECONCILE_INTERVAL_SECONDS", "900"))
+    filemgr_mount_reconcile_scan_limit: int = int(os.environ.get("FILEMGR_MOUNT_RECONCILE_SCAN_LIMIT", "100"))
+    filemgr_mount_reconcile_local_page_limit: int = int(os.environ.get("FILEMGR_MOUNT_RECONCILE_LOCAL_PAGE_LIMIT", "200"))
+    filemgr_mount_reconcile_dry_run: bool = os.environ.get("FILEMGR_MOUNT_RECONCILE_DRY_RUN", "true").lower() == "true"
     projects_table_name: str = os.environ.get("PROJECTS_TABLE_NAME", "projects")
     signature_packets_table_name: str = os.environ.get("SIGNATURE_PACKETS_TABLE_NAME", "signature_packets")
     signature_packet_signers_table_name: str = os.environ.get(

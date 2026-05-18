@@ -1,0 +1,92 @@
+{
+  "title": "Filemanager Provider Health",
+  "description": "Provider operation volume/latency/error health segmented by provider and mount_id. Runbook: https://runbooks.example.internal/filemanager/provider-health",
+  "runbook_url": "https://runbooks.example.internal/filemanager/provider-health",
+  "panels": [
+    {
+      "title": "Operation volume by provider/mount",
+      "description": "Request throughput for mounted and default providers. Runbook: https://runbooks.example.internal/filemanager/provider-health#throughput",
+      "expr": "sum by (operation, provider, mount_id) (rate(filemgr_provider_operation_total[5m]))"
+    },
+    {
+      "title": "Provider latency p50 by operation/mount",
+      "description": "p50 latency trend segmented by provider and mount_id. Runbook: https://runbooks.example.internal/filemanager/provider-health#latency",
+      "expr": "histogram_quantile(0.50, sum by (le, operation, provider, mount_id) (rate(filemgr_provider_operation_latency_seconds_bucket[5m])))"
+    },
+    {
+      "title": "Provider latency p95 by operation/mount",
+      "description": "p95 latency trend segmented by provider and mount_id. Runbook: https://runbooks.example.internal/filemanager/provider-health#latency",
+      "expr": "histogram_quantile(0.95, sum by (le, operation, provider, mount_id) (rate(filemgr_provider_operation_latency_seconds_bucket[5m])))"
+    },
+    {
+      "title": "Provider error rate by class",
+      "description": "Failure ratio by provider/mount/error_class. Runbook: https://runbooks.example.internal/filemanager/provider-health#error-rates",
+      "expr": "sum by (provider, mount_id, error_class) (rate(filemgr_provider_errors_total[10m])) / clamp_min(sum by (provider, mount_id) (rate(filemgr_provider_operation_total[10m])), 1)"
+    },
+    {
+      "title": "Provider 5xx rate",
+      "description": "Server-side failure rate (error_class=server_error). Runbook: https://runbooks.example.internal/filemanager/provider-health#5xx",
+      "expr": "sum by (provider, mount_id) (rate(filemgr_provider_errors_total{error_class=\"server_error\"}[10m])) / clamp_min(sum by (provider, mount_id) (rate(filemgr_provider_operation_total[10m])), 1)"
+    },
+    {
+      "title": "Provider auth failures",
+      "description": "Authentication failures by provider/mount. Runbook: https://runbooks.example.internal/filemanager/provider-health#auth-failures",
+      "expr": "sum by (provider, mount_id, reason) (rate(filemgr_provider_auth_failures_total[10m]))"
+    },
+    {
+      "title": "iCloud rollout decisions by reason/cohort",
+      "description": "Feature-gate decisions segmented by reason, cohort, mode, and environment. Runbook: https://runbooks.example.internal/filemanager/provider-health#rollout-controls",
+      "expr": "sum by (reason, cohort, mode, environment) (rate(filemgr_mount_rollout_decisions_total{provider=\"icloud\"}[10m]))"
+    },
+    {
+      "title": "iCloud rollout deny ratio",
+      "description": "Ratio of denied rollout decisions (kill switch / denylist / allowlist miss / unknown mode). Runbook: https://runbooks.example.internal/filemanager/provider-health#rollout-controls",
+      "expr": "sum(rate(filemgr_mount_rollout_decisions_total{provider=\"icloud\", cohort=\"disabled\"}[10m])) / clamp_min(sum(rate(filemgr_mount_rollout_decisions_total{provider=\"icloud\"}[10m])), 1)"
+    },
+    {
+      "title": "Mount reconcile batch outcomes",
+      "description": "Batch reconcile run outcomes split by dry-run mode. Runbook: https://runbooks.example.internal/filemanager/provider-health#reconcile",
+      "expr": "sum by (outcome, dry_run) (rate(filemgr_mount_reconcile_runs_total[10m]))"
+    },
+    {
+      "title": "Mount reconcile drift items by type",
+      "description": "Detected metadata drift by item kind from mount reconcile jobs. Runbook: https://runbooks.example.internal/filemanager/provider-health#reconcile",
+      "expr": "sum by (kind, dry_run) (rate(filemgr_mount_reconcile_drift_items_total[10m]))"
+    },
+    {
+      "title": "Mount reconcile p95 duration",
+      "description": "p95 latency for mount reconcile batches. Runbook: https://runbooks.example.internal/filemanager/provider-health#reconcile",
+      "expr": "histogram_quantile(0.95, sum by (le, outcome, dry_run) (rate(filemgr_mount_reconcile_duration_seconds_bucket[10m])))"
+    }
+  ],
+  "alerts": [
+    {
+      "name": "FilemanagerProviderSustainedAuthFailures",
+      "severity": "warning",
+      "for": "15m",
+      "expr": "sum by (provider, mount_id) (rate(filemgr_provider_auth_failures_total[5m])) > 0.05",
+      "description": "Sustained auth failures detected. Runbook: https://runbooks.example.internal/filemanager/provider-health#auth-failures"
+    },
+    {
+      "name": "FilemanagerProviderHigh5xxRate",
+      "severity": "critical",
+      "for": "15m",
+      "expr": "(sum by (provider, mount_id) (rate(filemgr_provider_errors_total{error_class=\"server_error\"}[5m])) / clamp_min(sum by (provider, mount_id) (rate(filemgr_provider_operation_total[5m])), 1)) > 0.02",
+      "description": "Provider 5xx rate exceeds 2% for 15m. Runbook: https://runbooks.example.internal/filemanager/provider-health#5xx"
+    },
+    {
+      "name": "FilemanagerICloudRolloutDenySpike",
+      "severity": "warning",
+      "for": "15m",
+      "expr": "(sum(rate(filemgr_mount_rollout_decisions_total{provider=\"icloud\", cohort=\"disabled\"}[5m])) / clamp_min(sum(rate(filemgr_mount_rollout_decisions_total{provider=\"icloud\"}[5m])), 1)) > 0.2",
+      "description": "iCloud rollout deny ratio exceeded 20% for 15m. Runbook: https://runbooks.example.internal/filemanager/provider-health#rollout-controls"
+    },
+    {
+      "name": "FilemanagerMountReconcileErrorRate",
+      "severity": "warning",
+      "for": "15m",
+      "expr": "(sum(rate(filemgr_mount_reconcile_runs_total{outcome=\"error\"}[5m])) / clamp_min(sum(rate(filemgr_mount_reconcile_runs_total[5m])), 1)) > 0.1",
+      "description": "Mount reconcile error rate exceeded 10% for 15m. Runbook: https://runbooks.example.internal/filemanager/provider-health#reconcile"
+    }
+  ]
+}
