@@ -1,0 +1,43 @@
+{
+  "title": "Messaging Thread Ops",
+  "description": "Operational dashboard for thread promotion, query latency, and reconciliation anomalies.",
+  "panels": [
+    {
+      "title": "Promotion outcomes (5m rate)",
+      "expr": "sum by (stage, outcome) (rate(messaging_thread_promotion_events_total[5m]))"
+    },
+    {
+      "title": "Promotion retries by reason (5m rate)",
+      "expr": "sum by (reason) (rate(messaging_thread_promotion_retries_total[5m]))"
+    },
+    {
+      "title": "Thread query p95 latency",
+      "expr": "histogram_quantile(0.95, sum by (le) (rate(messaging_thread_query_latency_seconds_bucket{endpoint=\"list_thread_messages\",outcome=\"success\"}[10m])))"
+    },
+    {
+      "title": "Thread query non-success outcomes (5m rate)",
+      "expr": "sum by (outcome) (rate(messaging_thread_query_latency_seconds_count{endpoint=\"list_thread_messages\",outcome=~\"not_found|forbidden\"}[5m]))"
+    },
+    {
+      "title": "Reconciliation anomalies (15m rate)",
+      "expr": "sum by (reason) (rate(messaging_thread_reconciliation_anomalies_total[15m]))"
+    }
+  ],
+  "alerts": [
+    {
+      "name": "thread_promotion_failures",
+      "expr": "sum(rate(messaging_thread_promotion_events_total{stage=\"thread_record\",outcome=~\"failed_.*\"}[10m])) > 1.0",
+      "severity": "critical"
+    },
+    {
+      "name": "thread_query_latency_p95",
+      "expr": "histogram_quantile(0.95, sum by (le) (rate(messaging_thread_query_latency_seconds_bucket{endpoint=\"list_thread_messages\",outcome=\"success\"}[10m]))) > 0.75",
+      "severity": "critical"
+    },
+    {
+      "name": "thread_reconciliation_anomalies",
+      "expr": "sum(rate(messaging_thread_reconciliation_anomalies_total[15m])) > 0.2",
+      "severity": "critical"
+    }
+  ]
+}

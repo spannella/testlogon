@@ -487,3 +487,122 @@
 **Acceptance criteria:**
 - Pilot cohort meets sync latency and failure rate targets.
 - GA checklist is signed off by engineering, security, and support owners.
+### THR-001: Thread domain model and constants
+**Description:** Define the canonical thread domain contract in backend code (field names, thread states, and helper constants). Include clear semantics for `thread_id`, `thread_root_message_id`, and `parent_message_id` so all services and APIs use the same vocabulary.
+**Acceptance criteria:**
+- Thread linkage field semantics are documented in code comments and shared constants.
+- No duplicate ad-hoc field-name strings remain in core message/thread service paths.
+
+### THR-002: Create threads persistence schema
+**Description:** Add persistence schema for thread records with required fields (`id`, `conversation_id`, `root_message_id`, `created_at`, `created_by`) and query indexes needed by thread listing and lookup.
+**Acceptance criteria:**
+- A threads table/model exists and supports lookups by conversation and root message.
+- Schema is backward-compatible with existing environments and does not impact current message writes.
+
+### THR-003: Add message linkage fields and indexes
+**Description:** Ensure message records support nullable linkage fields (`thread_id`, `thread_root_message_id`, `parent_message_id`) and add indexes for conversation chronology, parent lookup, thread chronology, and root lookup.
+**Acceptance criteria:**
+- Message writes succeed when new linkage fields are absent.
+- Required indexes exist for `(conversation_id, created_at)`, `(parent_message_id)`, `(thread_id, created_at)`, and `(thread_root_message_id)` access patterns.
+
+### THR-004: Migration apply and rollback scripts
+**Description:** Implement migration scripts to create thread schema and add message indexes in existing environments, plus safe rollback behavior for the new thread table.
+**Acceptance criteria:**
+- Migration apply is idempotent and can run repeatedly without failure.
+- Rollback safely handles already-removed resources without failing.
+
+### THR-005: Reply write-path linkage plumbing
+**Description:** Update all message creation paths (text, media, forwards, system-supported reply paths) so reply targets set both compatibility and normalized linkage fields, preserving current behavior.
+**Acceptance criteria:**
+- All reply-capable send endpoints write `parent_message_id` consistently when replying.
+- Existing `reply_to_message_id` behavior remains intact for clients that still use it.
+
+### THR-006: Thread promotion service logic
+**Description:** Implement backend service logic to promote replies into a thread when either (a) more than one direct reply exists for the same root message or (b) a reply targets another reply.
+**Acceptance criteria:**
+- Promotion occurs automatically according to the defined rules.
+- A single, stable `thread_id` is assigned to all messages in the promoted subtree.
+
+### THR-007: Backfill and subtree reconciliation job
+**Description:** Create a repair/backfill job that scans conversation messages, identifies eligible historical reply trees, creates missing thread records, and links descendants consistently.
+**Acceptance criteria:**
+- Job is idempotent and can be resumed safely.
+- Running the job on already-correct data causes no destructive changes.
+
+### THR-008: Concurrency-safe thread creation
+**Description:** Add transaction/conditional-write protections so simultaneous replies cannot create duplicate threads or inconsistent linkage when promotion happens under race conditions.
+**Acceptance criteria:**
+- Competing promotion attempts for the same root produce exactly one thread.
+- Conflict/retry behavior is deterministic and covered by tests.
+
+### THR-009: Thread-aware read APIs
+**Description:** Extend backend APIs to expose thread metadata in conversation timelines and add endpoints/query modes to fetch thread messages efficiently.
+**Acceptance criteria:**
+- Timeline responses include thread summary metadata when applicable.
+- A thread fetch API returns ordered thread messages with pagination support.
+
+### THR-010: Thread validation and authorization
+**Description:** Add server-side validation to ensure thread and parent references are in the same conversation, target messages exist, and users are authorized to read/write in thread contexts.
+**Acceptance criteria:**
+- Invalid cross-conversation references are rejected with clear errors.
+- Authorization behavior matches existing conversation membership rules.
+
+### THR-011: Frontend thread entry points in timeline
+**Description:** Update message timeline UI to display thread indicators and entry points (e.g., “View thread”, reply counts, last activity) without regressing current message rendering.
+**Acceptance criteria:**
+- Messages with threads show a clear thread affordance and count.
+- Non-threaded messages render unchanged from current UX.
+
+### THR-012: Frontend thread panel/page implementation
+**Description:** Build the thread view UI (drawer, panel, or dedicated route) that shows thread history, participants, and reply composer tied to thread context.
+**Acceptance criteria:**
+- Users can open a thread from timeline and read all thread messages.
+- Sending from thread UI posts to the correct thread context.
+
+### THR-013: Reply composer behavior updates
+**Description:** Update composer interaction rules so reply-to-reply actions route into thread context, and direct replies correctly resolve parent/root/thread linkage in payloads.
+**Acceptance criteria:**
+- Reply-to-reply always attaches to the expected thread context.
+- Composer payloads include required linkage fields for backend processing.
+
+### THR-014: Notifications and unread semantics for threads
+**Description:** Define and implement notification/unread behavior for thread activity (root author, participants, followers/watchers if supported) and avoid duplicate alerts between timeline and thread surfaces.
+**Acceptance criteria:**
+- Thread events generate expected notifications without duplicates.
+- Unread counters remain consistent between conversation and thread views.
+
+### THR-015: API contract and type generation updates
+**Description:** Update OpenAPI/schema artifacts and frontend generated types to include thread fields and thread endpoints, preserving backward compatibility.
+**Acceptance criteria:**
+- API contract artifacts include all thread fields/endpoints.
+- Frontend type checks pass with updated contract types.
+
+### THR-016: Backend unit and integration test suite
+**Description:** Add comprehensive tests for schema behavior, promotion rules, linkage writes, API reads, auth validation, and failure scenarios.
+**Acceptance criteria:**
+- Tests cover no-promotion, second-reply promotion, and reply-to-reply promotion.
+- Negative tests cover invalid references, unauthorized access, and rollback paths.
+
+### THR-017: Concurrency and load test coverage
+**Description:** Add targeted concurrency tests and representative load scenarios to validate thread promotion correctness and performance under parallel message sends.
+**Acceptance criteria:**
+- Parallel reply tests confirm single-thread creation per root.
+- Performance baselines for thread queries are captured and within agreed thresholds.
+
+### THR-018: Frontend E2E thread scenarios
+**Description:** Add end-to-end tests validating timeline-to-thread navigation, thread creation triggers, reply-to-reply behavior, and cross-device/session consistency.
+**Acceptance criteria:**
+- E2E tests verify promotion behavior from user workflows.
+- Thread UI and timeline metadata remain consistent after refresh/reconnect.
+
+### THR-019: Observability and operational metrics
+**Description:** Add metrics, logs, and dashboards for thread creation, promotion outcomes, index query latency, and reconciliation anomalies.
+**Acceptance criteria:**
+- Metrics for promotions, failures, and retries are emitted.
+- Dashboard panels and alert thresholds are documented for operations.
+
+### THR-020: Feature flag, rollout, and deployment runbook
+**Description:** Introduce a controlled rollout plan (feature flags, staged enablement, rollback steps) and deployment checklist covering migrations, backfills, and monitoring gates.
+**Acceptance criteria:**
+- Feature flag controls thread behavior by environment/tenant cohort.
+- Runbook documents deploy order, verification checks, rollback steps, and post-deploy validation.

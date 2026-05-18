@@ -38,6 +38,7 @@ class Tables:
     contacts: Any
     message_visibility_overrides: Any
     conversation_pins: Any
+    message_threads: Any
     message_reports: Any
     message_report_context: Any
     content_reports: Any
@@ -94,6 +95,7 @@ T = Tables(
     contacts=ddb.Table(S.contacts_table_name),
     message_visibility_overrides=ddb.Table(S.message_visibility_overrides_table_name),
     conversation_pins=ddb.Table(S.conversation_pins_table_name),
+    message_threads=ddb.Table(S.message_threads_table_name),
     message_reports=ddb.Table(S.message_reports_table_name),
     message_report_context=ddb.Table(S.message_report_context_table_name),
     content_reports=ddb.Table(S.content_reports_table_name),

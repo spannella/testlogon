@@ -397,6 +397,10 @@ class Settings:
         "DDB_MESSAGE_REPORT_CONTEXT",
         "MessageReportContext",
     )
+    message_threads_table_name: str = os.environ.get(
+        "DDB_MESSAGE_THREADS",
+        "MessageThreads",
+    )
     content_reports_table_name: str = os.environ.get(
         "DDB_CONTENT_REPORTS",
         "ContentReports",

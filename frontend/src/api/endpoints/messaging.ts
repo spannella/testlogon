@@ -34,6 +34,7 @@ import type {
   ConversationPinsResp,
   ReportMessageReq,
   ReportMessageResp,
+  ThreadMessagesPage,
 } from "@/api/types";
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
 import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
@@ -86,6 +87,18 @@ export const getMessages = async (conversationId: string, cursor?: string) => {
   return {
     messages: rawMessages.map(adaptMessage),
     next_cursor,
+  };
+};
+
+export const getThreadMessages = async (threadId: string, cursor?: string, limit = 50): Promise<ThreadMessagesPage> => {
+  const res = await api.get<{ items: Message[]; next_cursor?: string | null; unread_count?: number }>(
+    `/messaging/threads/${threadId}/messages`,
+    { ...(cursor ? { cursor } : {}), limit: String(limit) },
+  );
+  return {
+    items: (res.items ?? []).map(adaptMessage),
+    next_cursor: res.next_cursor ?? null,
+    unread_count: typeof res.unread_count === "number" ? res.unread_count : undefined,
   };
 };
 

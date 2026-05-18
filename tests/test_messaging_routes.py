@@ -649,6 +649,40 @@ class TestMessagingRoutes(unittest.TestCase):
         self.assertEqual(payload["message"]["message_id"], "m_xyz")
         self.assertEqual(payload["message"]["text"], "Hello world")
         self.assertNotIn("encryption", payload["message"])
+        stored_item = tbl_msgs.put_item.call_args.kwargs["Item"]
+        self.assertNotIn("parent_message_id", stored_item)
+        self.assertNotIn("thread_id", stored_item)
+        self.assertNotIn("thread_root_message_id", stored_item)
+
+    def test_send_text_message_reply_sets_parent_linkage_and_keeps_reply_field(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        with (
+            patch.object(messaging, "now_ts", return_value=55),
+            patch.object(messaging, "new_id", return_value="xyz"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(
+                messaging,
+                "_build_reply_linkage_fields",
+                return_value={"reply_to_message_id": "m_parent", "parent_message_id": "m_parent"},
+            ),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "_meter_message_send"),
+            patch.object(messaging, "fanout_event_to_conversation"),
+        ):
+            resp = messaging.send_text_message(
+                "c1",
+                messaging.SendTextMessageIn(text="Hello world", reply_to_message_id="m_parent"),
+                user_id="u1",
+            )
+
+        self.assertEqual(resp.reply_to_message_id, "m_parent")
+        self.assertEqual(resp.parent_message_id, "m_parent")
+        stored_item = tbl_msgs.put_item.call_args.kwargs["Item"]
+        self.assertEqual(stored_item["reply_to_message_id"], "m_parent")
+        self.assertEqual(stored_item["parent_message_id"], "m_parent")
 
 
     def test_send_text_message_helpdesk_auto_claim_on_first_reply_when_enabled(self):
@@ -2006,6 +2040,7 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "new_id", return_value="img"),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
             patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "fanout_event_to_conversation"),
         ):
             resp = messaging.create_image_message(
                 "c1",
@@ -2014,6 +2049,41 @@ class TestMessagingRoutes(unittest.TestCase):
             )
         self.assertEqual(resp.message_id, "m_img")
         tbl_msgs.put_item.assert_called_once()
+        stored_item = tbl_msgs.put_item.call_args.kwargs["Item"]
+        self.assertNotIn("parent_message_id", stored_item)
+        self.assertNotIn("thread_id", stored_item)
+        self.assertNotIn("thread_root_message_id", stored_item)
+
+    def test_create_image_message_reply_sets_parent_linkage_and_keeps_reply_field(self):
+        tbl_msgs = Mock()
+        tbl_convos = Mock()
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "new_id", return_value="img"),
+            patch.object(
+                messaging,
+                "_build_reply_linkage_fields",
+                return_value={"reply_to_message_id": "m_parent", "parent_message_id": "m_parent"},
+            ),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "fanout_event_to_conversation"),
+            patch.object(messaging, "_meter_message_send"),
+            patch.object(messaging, "_meter_messaging_attachment_upload"),
+        ):
+            resp = messaging.create_image_message(
+                "c1",
+                messaging.CreateImageMessageIn(bucket="b", key="k", reply_to_message_id="m_parent"),
+                user_id="u1",
+            )
+
+        self.assertEqual(resp.reply_to_message_id, "m_parent")
+        self.assertEqual(resp.parent_message_id, "m_parent")
+        stored_item = tbl_msgs.put_item.call_args.kwargs["Item"]
+        self.assertEqual(stored_item["reply_to_message_id"], "m_parent")
+        self.assertEqual(stored_item["parent_message_id"], "m_parent")
 
 
 
@@ -2374,13 +2444,14 @@ class TestMessagingRoutes(unittest.TestCase):
         tbl_parts = Mock()
         tbl_parts.query.return_value = {"Items": [{"user_id": "u1"}, {"user_id": "u2"}]}
         tbl_consumption = Mock()
+        tbl_msgs = Mock()
         with (
             patch.object(messaging, "require_participant_active"),
             patch.object(messaging, "_enforce_message_send_quota_precheck"),
             patch.object(messaging, "now_ts", return_value=10),
             patch.object(messaging, "new_id", return_value="f1"),
             patch.object(messaging, "tbl_parts", tbl_parts),
-            patch.object(messaging, "tbl_msgs"),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
             patch.object(messaging, "tbl_convos"),
             patch.object(messaging, "tbl_msg_consumption", tbl_consumption),
             patch.object(messaging, "get_node", return_value={"type": "file", "path": "/doc.pdf", "name": "doc.pdf", "size": 1, "content_type": "application/pdf"}),
@@ -2398,6 +2469,45 @@ class TestMessagingRoutes(unittest.TestCase):
         self.assertIsNone(resp.media_kind)
         self.assertIsNone(resp.consumption_state)
         tbl_consumption.put_item.assert_not_called()
+        stored_item = tbl_msgs.put_item.call_args.kwargs["Item"]
+        self.assertNotIn("parent_message_id", stored_item)
+        self.assertNotIn("thread_id", stored_item)
+        self.assertNotIn("thread_root_message_id", stored_item)
+
+    def test_create_file_message_reply_sets_parent_linkage_and_keeps_reply_field(self):
+        tbl_parts = Mock()
+        tbl_parts.query.return_value = {"Items": [{"user_id": "u1"}, {"user_id": "u2"}]}
+        tbl_msgs = Mock()
+        with (
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_message_send_quota_precheck"),
+            patch.object(messaging, "now_ts", return_value=10),
+            patch.object(messaging, "new_id", return_value="f1"),
+            patch.object(
+                messaging,
+                "_build_reply_linkage_fields",
+                return_value={"reply_to_message_id": "m_parent", "parent_message_id": "m_parent"},
+            ),
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos"),
+            patch.object(messaging, "tbl_msg_consumption"),
+            patch.object(messaging, "get_node", return_value={"type": "file", "path": "/doc.pdf", "name": "doc.pdf", "size": 1, "content_type": "application/pdf"}),
+            patch.object(messaging, "_meter_message_send"),
+            patch.object(messaging, "audit_event"),
+            patch.object(messaging, "require_subscription_access"),
+        ):
+            resp = messaging.create_file_message(
+                "c1",
+                messaging.CreateFileMessageIn(path="/doc.pdf", kind="file", reply_to_message_id="m_parent"),
+                user_id="u1",
+            )
+
+        self.assertEqual(resp.reply_to_message_id, "m_parent")
+        self.assertEqual(resp.parent_message_id, "m_parent")
+        stored_item = tbl_msgs.put_item.call_args.kwargs["Item"]
+        self.assertEqual(stored_item["reply_to_message_id"], "m_parent")
+        self.assertEqual(stored_item["parent_message_id"], "m_parent")
 
     def test_consume_once_audio_interrupted_then_retry_succeeds(self):
         msg = {
@@ -2548,6 +2658,11 @@ class TestMessagingRoutes(unittest.TestCase):
                     },
                 ],
             ),
+            patch.object(
+                messaging,
+                "_build_reply_linkage_fields",
+                return_value={"reply_to_message_id": "m_parent", "parent_message_id": "m_parent"},
+            ),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
             patch.object(messaging, "tbl_edits", tbl_edits),
             patch.object(messaging, "_reaction_summaries", return_value=({}, [])),
@@ -2591,19 +2706,29 @@ class TestMessagingRoutes(unittest.TestCase):
                     "text": "hello",
                 },
             ),
+            patch.object(
+                messaging,
+                "_build_reply_linkage_fields",
+                return_value={"reply_to_message_id": "m_parent", "parent_message_id": "m_parent"},
+            ),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
             patch.object(messaging, "tbl_convos", tbl_convos),
             patch.object(messaging, "fanout_event_to_conversation") as fanout,
         ):
             resp = messaging.forward_message(
                 "c2",
-                messaging.ForwardMessageIn(source_conversation_id="c1", source_message_id="m1"),
+                messaging.ForwardMessageIn(source_conversation_id="c1", source_message_id="m1", reply_to_message_id="m_parent"),
                 user_id="u1",
             )
         self.assertEqual(resp.message_id, "m_fwd")
         self.assertEqual(resp.text, "hello")
         self.assertFalse(resp.is_encrypted)
+        self.assertEqual(resp.reply_to_message_id, "m_parent")
+        self.assertEqual(resp.parent_message_id, "m_parent")
         tbl_msgs.put_item.assert_called_once()
+        stored_item = tbl_msgs.put_item.call_args.kwargs["Item"]
+        self.assertEqual(stored_item["reply_to_message_id"], "m_parent")
+        self.assertEqual(stored_item["parent_message_id"], "m_parent")
         fanout.assert_called_once()
         payload = fanout.call_args.kwargs["payload"]
         self.assertEqual(payload["message"]["message_id"], "m_fwd")
