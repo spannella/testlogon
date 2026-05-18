@@ -153,3 +153,54 @@ describe("ComposeBar once-media toggles", () => {
     expect(revokeObjectUrlMock).toHaveBeenCalledWith(createdUrl);
   });
 });
+
+describe("ComposeBar lottery validation and submit states", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("keeps submit disabled when lottery total is not 100%", async () => {
+    const onSendText = vi.fn();
+    const onSendLottery = vi.fn();
+    renderWithClient(<ComposeBar onSendText={onSendText} onSendLottery={onSendLottery} />);
+
+    await userEvent.click(screen.getByLabelText(/Lottery message/i));
+    const percentInputs = screen.getAllByLabelText(/Weight percent/i);
+    expect(percentInputs.length).toBeGreaterThanOrEqual(2);
+    await userEvent.clear(percentInputs[0]!);
+    await userEvent.type(percentInputs[0]!, "40");
+
+    expect(screen.getByText(/Total must equal exactly 100.00%/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Send message/i)).toBeDisabled();
+    expect(onSendLottery).not.toHaveBeenCalled();
+  });
+
+  it("submits lottery payload when outcomes are valid and total is 100%", async () => {
+    const onSendText = vi.fn();
+    const onSendLottery = vi.fn();
+    renderWithClient(<ComposeBar onSendText={onSendText} onSendLottery={onSendLottery} />);
+
+    await userEvent.click(screen.getByLabelText(/Lottery message/i));
+
+    const textAreas = screen.getAllByPlaceholderText(/Text outcome content/i);
+    await userEvent.type(textAreas[0]!, "Winner text A");
+    await userEvent.type(textAreas[1]!, "Winner text B");
+
+    const sendButton = screen.getByLabelText(/Send message/i);
+    await waitFor(() => expect(sendButton).toBeEnabled());
+    await userEvent.click(sendButton);
+
+    expect(onSendLottery).toHaveBeenCalledTimes(1);
+    expect(onSendLottery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message_type: "lottery_dm",
+        lottery_config: expect.objectContaining({
+          outcomes: expect.arrayContaining([
+            expect.objectContaining({ payload_type: "text", text_content: "Winner text A" }),
+            expect.objectContaining({ payload_type: "text", text_content: "Winner text B" }),
+          ]),
+        }),
+      }),
+    );
+  });
+});

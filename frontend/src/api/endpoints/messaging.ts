@@ -15,6 +15,9 @@ import type {
   AddParticipantsReq,
   UpdateRoleReq,
   MessagingConfig,
+  CreateLotteryMessageReq,
+  LotteryMessage,
+  LotteryUnlockResp,
   ConversationGalleryResp,
   ConversationGalleryQuery,
   ConsumeAttachmentReq,
@@ -41,7 +44,7 @@ import type {
   UpdateConversationDraftReq,
 } from "@/api/types";
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
-import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
+import { isMessagingDmLotteryEnabled, isMessagingEncryptionEnabled } from "@/lib/featureFlags";
 import { encryptBytes } from "@/lib/messageEncryption";
 
 export const getConversations = async (cursor?: string) => {
@@ -192,6 +195,49 @@ export const sendTextMessage = async (conversationId: string, body: SendTextMess
 
 export const getMessagingConfig = () =>
   api.get<MessagingConfig>("/messaging/config");
+
+const lotteryConversationToken = (conversationId: string): string => {
+  const sanitized = conversationId.replace(/[^A-Za-z0-9._:-]/g, "");
+  const prefix = (sanitized.slice(0, 16) || "conv");
+  let hash = 2166136261;
+  for (let i = 0; i < conversationId.length; i += 1) {
+    hash ^= conversationId.charCodeAt(i);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return `${prefix}_${hash.toString(16).padStart(8, "0")}`;
+};
+
+export const createLotteryMessage = async (body: CreateLotteryMessageReq) => {
+  if (!isMessagingDmLotteryEnabled()) {
+    throw new Error("Lottery messages are disabled");
+  }
+  const conversationToken = lotteryConversationToken(body.conversation_id);
+  const randomPart = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const idempotencyKey = `lottery_create:${conversationToken}:${randomPart}`;
+  return api<LotteryMessage>("/messaging/messages/lottery", {
+    method: "POST",
+    headers: {
+      "Idempotency-Key": idempotencyKey,
+    },
+    body: JSON.stringify(body),
+  });
+};
+
+export const unlockLotteryMessage = async (messageId: string) => {
+  if (!isMessagingDmLotteryEnabled()) {
+    throw new Error("Lottery messages are disabled");
+  }
+  return api.post<LotteryUnlockResp>(`/messaging/messages/${messageId}/lottery/unlock`, {});
+};
+
+export const getLotteryMessage = async (messageId: string) => {
+  if (!isMessagingDmLotteryEnabled()) {
+    throw new Error("Lottery messages are disabled");
+  }
+  return api.get<LotteryMessage>(`/messaging/messages/${messageId}/lottery`);
+};
 
 const uploadToPresignedUrl = async (uploadUrl: string, file: File, contentType: string) => {
   const resp = await fetch(uploadUrl, {

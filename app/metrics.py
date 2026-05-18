@@ -521,6 +521,33 @@ NEWSFEED_SCHEDULE_LAST_RUN_UNIX = Gauge(
     "newsfeed_schedule_last_run_unix",
     "Unix timestamp of the most recent scheduler run heartbeat",
 )
+MESSAGING_LOTTERY_SENDS = Counter(
+    "messaging_lottery_sends_total",
+    "Lottery DM send outcomes by environment/client version",
+    ["environment", "client_version", "outcome"],
+)
+MESSAGING_LOTTERY_UNLOCK_ATTEMPTS = Counter(
+    "messaging_lottery_unlock_attempts_total",
+    "Lottery DM unlock attempts by environment/client version",
+    ["environment", "client_version"],
+)
+MESSAGING_LOTTERY_UNLOCK_RESULTS = Counter(
+    "messaging_lottery_unlock_results_total",
+    "Lottery DM unlock outcomes by environment/client version",
+    ["environment", "client_version", "outcome"],
+)
+MESSAGING_LOTTERY_UNLOCK_LATENCY = Histogram(
+    "messaging_lottery_unlock_latency_seconds",
+    "Lottery DM unlock API latency by outcome/environment/client version",
+    ["environment", "client_version", "outcome"],
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+)
+MESSAGING_LOTTERY_REVEAL_LATENCY = Histogram(
+    "messaging_lottery_reveal_latency_seconds",
+    "Lottery DM reveal latency (client reported or server fallback) by outcome/environment/client version",
+    ["environment", "client_version", "outcome"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+)
 USAGE_METERING_EVENTS = Counter(
     "usage_metering_events_total",
     "Usage metering event outcomes",
@@ -1543,10 +1570,46 @@ def record_messaging_thread_promotion_event(*, stage: str, outcome: str) -> None
     ).inc()
 
 
+def _metrics_env_label(environment: str | None) -> str:
+    env = (environment or _APP_ENV or "unknown").strip().lower()
+    return env or "unknown"
+
+
+def _metrics_client_version_label(client_version: str | None) -> str:
+    raw = (client_version or "unknown").strip().lower()
+    if not raw:
+        return "unknown"
+    # Keep cardinality under control while still retaining version usefulness.
+    return raw[:48]
+
+
+def record_messaging_lottery_send(*, outcome: str, client_version: str | None = None, environment: str | None = None) -> None:
+    MESSAGING_LOTTERY_SENDS.labels(
+        environment=_metrics_env_label(environment),
+        client_version=_metrics_client_version_label(client_version),
+        outcome=(outcome or "unknown").lower(),
+    ).inc()
+
+
 def record_mass_message_campaign_event(*, event: str, mode: str, outcome: str) -> None:
     MASS_MESSAGE_CAMPAIGN_EVENTS.labels(
         event=(event or "unknown").lower(),
         mode=(mode or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).inc()
+
+
+def record_messaging_lottery_unlock_attempt(*, client_version: str | None = None, environment: str | None = None) -> None:
+    MESSAGING_LOTTERY_UNLOCK_ATTEMPTS.labels(
+        environment=_metrics_env_label(environment),
+        client_version=_metrics_client_version_label(client_version),
+    ).inc()
+
+
+def record_messaging_lottery_unlock_result(*, outcome: str, client_version: str | None = None, environment: str | None = None) -> None:
+    MESSAGING_LOTTERY_UNLOCK_RESULTS.labels(
+        environment=_metrics_env_label(environment),
+        client_version=_metrics_client_version_label(client_version),
         outcome=(outcome or "unknown").lower(),
     ).inc()
 
@@ -1558,6 +1621,20 @@ def record_messaging_thread_promotion_retry(*, reason: str) -> None:
 def record_messaging_thread_query_latency(*, endpoint: str, outcome: str, elapsed_seconds: float) -> None:
     MESSAGING_THREAD_QUERY_LATENCY.labels(
         endpoint=(endpoint or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_messaging_lottery_unlock_latency(
+    *,
+    outcome: str,
+    elapsed_seconds: float,
+    client_version: str | None = None,
+    environment: str | None = None,
+) -> None:
+    MESSAGING_LOTTERY_UNLOCK_LATENCY.labels(
+        environment=_metrics_env_label(environment),
+        client_version=_metrics_client_version_label(client_version),
         outcome=(outcome or "unknown").lower(),
     ).observe(max(0.0, float(elapsed_seconds)))
 
@@ -1580,6 +1657,20 @@ def record_mass_message_destination_retry(*, mode: str, error_code: str) -> None
 def record_mass_message_worker_latency(*, mode: str, outcome: str, elapsed_seconds: float) -> None:
     MASS_MESSAGE_WORKER_LATENCY.labels(
         mode=(mode or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_messaging_lottery_reveal_latency(
+    *,
+    outcome: str,
+    elapsed_seconds: float,
+    client_version: str | None = None,
+    environment: str | None = None,
+) -> None:
+    MESSAGING_LOTTERY_REVEAL_LATENCY.labels(
+        environment=_metrics_env_label(environment),
+        client_version=_metrics_client_version_label(client_version),
         outcome=(outcome or "unknown").lower(),
     ).observe(max(0.0, float(elapsed_seconds)))
 
@@ -1655,7 +1746,6 @@ def record_newsfeed_schedule_run_duration(*, elapsed_seconds: float) -> None:
 
 def set_newsfeed_schedule_last_run(*, unix_seconds: float) -> None:
     NEWSFEED_SCHEDULE_LAST_RUN_UNIX.set(max(0.0, float(unix_seconds)))
-
 def record_project_count_delta(delta: int) -> None:
     global _PROJECT_COUNT_ESTIMATE
     _PROJECT_COUNT_ESTIMATE = max(0, _PROJECT_COUNT_ESTIMATE + int(delta))

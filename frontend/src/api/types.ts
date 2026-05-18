@@ -821,6 +821,20 @@ export interface Message {
   calendar_share?: CalendarShareAttachment;
   calendar_event?: CalendarEventAttachment;
   meeting_poll?: MeetingPollAttachment;
+  lottery?: {
+    message_type: "lottery_dm";
+    lock_state: "locked" | "unlocked";
+    selected_outcome?: LotterySelectedOutcome & {
+      media_metadata?: {
+        bucket?: string;
+        key?: string;
+        content_type?: string;
+        content_length?: number;
+        etag?: string | null;
+        last_modified?: number | null;
+      };
+    };
+  };
   preview?: LinkPreview;
   reply_to_message_id?: string;
   parent_message_id?: string;
@@ -2045,6 +2059,78 @@ export interface ChallengeResp {
 export interface MessagingConfig {
   messaging_encrypted_messages_enabled: boolean;
   messaging_gallery_enabled: boolean;
+  messaging_dm_lottery_enabled: boolean;
+  messaging_hide_controls_enabled?: boolean;
+  messaging_pins_enabled?: boolean;
+  messaging_reporting_enabled?: boolean;
+}
+
+export interface LotteryOutcomeInput {
+  outcome_id?: string;
+  display_label?: string;
+  weight_bps: number;
+  payload_type: "text" | "image" | "video";
+  text_content?: string;
+  media_asset_id?: string;
+}
+
+export interface LotteryConfigInput {
+  version?: string;
+  outcomes: LotteryOutcomeInput[];
+}
+
+export interface CreateLotteryMessageReq {
+  message_type?: "lottery_dm";
+  conversation_id: string;
+  lottery_config: LotteryConfigInput;
+}
+
+export interface LotteryOutcome {
+  outcome_id: string;
+  display_label?: string;
+  weight_bps: number;
+  payload_type: "text" | "image" | "video";
+  text_content?: string;
+  media_asset_id?: string;
+  media_metadata?: {
+    bucket?: string;
+    key?: string;
+    content_type?: string;
+    content_length?: number;
+    etag?: string | null;
+    last_modified?: number | null;
+  };
+}
+
+export interface LotteryConfig {
+  version: string;
+  outcomes: LotteryOutcome[];
+}
+
+export interface LotterySelectedOutcome {
+  outcome_id: string;
+  payload_type: "text" | "image" | "video";
+  text_content?: string;
+  media_asset_id?: string;
+}
+
+export interface LotteryMessage {
+  message_id: string;
+  conversation_id: string;
+  sender_id: string;
+  message_type: "lottery_dm";
+  lock_state: "locked" | "unlocked";
+  lottery_config: LotteryConfig;
+  selected_outcome?: LotterySelectedOutcome;
+  idempotent?: boolean;
+  created_at: number;
+}
+
+export interface LotteryUnlockResp {
+  message_id: string;
+  lock_state: "unlocked";
+  selected_outcome: LotterySelectedOutcome;
+  unlocked_at: number;
 }
 
 // ─── Projects ───────────────────────────────────────────────────

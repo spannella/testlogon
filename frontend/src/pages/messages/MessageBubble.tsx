@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye, EyeOff, CreditCard, Check, FileText, CalendarDays, CalendarCheck, Users, Flag } from "lucide-react";
+import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye, EyeOff, CreditCard, Check, FileText, CalendarDays, CalendarCheck, Users, Flag, Dices } from "lucide-react";
 import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -48,6 +48,7 @@ import {
   reportMessage,
   sendMessageTip,
   unlockMessage,
+  unlockLotteryMessage,
   getMeetingPoll,
   voteMeetingPoll,
   confirmMeetingPoll,
@@ -78,6 +79,27 @@ interface MessageBubbleProps {
   replyToMessage?: Message;
   viewedOnceIds?: Set<string>;
   onViewOnce?: (messageId: string) => void;
+}
+
+type LotteryRevealPhase = "idle" | "unlocking" | "revealing" | "revealed";
+
+function LotterySpinner({ phase, reducedMotion }: { phase: LotteryRevealPhase; reducedMotion: boolean }) {
+  if (phase === "idle") return null;
+  if (reducedMotion) {
+    return <Loader2 className="h-4 w-4 animate-spin" aria-hidden />;
+  }
+  return (
+    <div className="relative h-4 w-4" aria-hidden>
+      <div className={cn(
+        "absolute inset-0 rounded-full border-2 border-primary/30 border-t-primary",
+        phase === "unlocking" ? "animate-spin" : "",
+      )} />
+      <div className={cn(
+        "absolute inset-[3px] rounded-full bg-primary/70",
+        phase === "revealing" ? "animate-pulse" : "",
+      )} />
+    </div>
+  );
 }
 
 const onceLabel = (message: Message): string | undefined => {
@@ -123,6 +145,11 @@ const openBlobInEphemeralWindow = (blob: Blob) => {
   if (!opened) {
     URL.revokeObjectURL(objectUrl);
   }
+};
+
+const buildS3ObjectUrl = (bucket?: string, key?: string): string | undefined => {
+  if (!bucket || !key) return undefined;
+  return `https://${bucket}.s3.amazonaws.com/${encodeURIComponent(key).replace(/%2F/g, "/")}`;
 };
 
 function replyPreviewText(msg: Message): string {
@@ -309,6 +336,10 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   const [reportOpen, setReportOpen] = useState(false);
   const [reportServerError, setReportServerError] = useState<string | null>(null);
   const [reportTarget, setReportTarget] = useState<"message" | "attachment">("message");
+  const [lotteryRevealPhase, setLotteryRevealPhase] = useState<LotteryRevealPhase>("idle");
+  const [lotteryRevealError, setLotteryRevealError] = useState<string | null>(null);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
+  const revealTimerRef = useRef<number | null>(null);
 
   const viewOnceTextRevealed = viewedOnceIds?.has(message.message_id) ?? false;
 
@@ -443,6 +474,13 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
     },
     onError: () => toast.error("Failed to unlock message"),
   });
+  const unlockLotteryMut = useMutation({
+    mutationFn: () => unlockLotteryMessage(message.message_id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+      void queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+  });
 
   const tipMut = useMutation({
     mutationFn: () => {
@@ -488,6 +526,73 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
   }
 
   const isFileKind = message.kind === "file" || message.kind === "audio" || message.kind === "video";
+  const isLotteryMessage = message.lottery?.message_type === "lottery_dm";
+  const lotteryLockedForRecipient = !!(isLotteryMessage && message.lottery?.lock_state === "locked" && !isOwn);
+  const lotterySelectedOutcome = message.lottery?.selected_outcome;
+  const lotterySelectedMediaUrl = buildS3ObjectUrl(
+    message.lottery?.selected_outcome?.media_metadata?.bucket,
+    message.lottery?.selected_outcome?.media_metadata?.key,
+  );
+  const lotteryShowingTransition = lotteryRevealPhase === "unlocking" || lotteryRevealPhase === "revealing";
+  const showLotteryLockCard = lotteryLockedForRecipient || lotteryShowingTransition;
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => setPrefersReducedMotion(media.matches);
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    setLotteryRevealError(null);
+    setLotteryRevealPhase(message.lottery?.lock_state === "unlocked" ? "revealed" : "idle");
+    if (revealTimerRef.current) {
+      window.clearTimeout(revealTimerRef.current);
+      revealTimerRef.current = null;
+    }
+  }, [message.message_id, message.lottery?.lock_state]);
+
+  useEffect(() => () => {
+    if (revealTimerRef.current) {
+      window.clearTimeout(revealTimerRef.current);
+      revealTimerRef.current = null;
+    }
+  }, []);
+
+  const startLotteryReveal = () => {
+    if (prefersReducedMotion) {
+      setLotteryRevealPhase("revealed");
+      toast.success("Lottery unlocked!");
+      return;
+    }
+    setLotteryRevealPhase("revealing");
+    revealTimerRef.current = window.setTimeout(() => {
+      setLotteryRevealPhase("revealed");
+      toast.success("Lottery unlocked!");
+      revealTimerRef.current = null;
+    }, 850);
+  };
+
+  const handleUnlockLottery = async () => {
+    if (unlockLotteryMut.isPending) return;
+    setLotteryRevealError(null);
+    setLotteryRevealPhase("unlocking");
+    try {
+      await unlockLotteryMut.mutateAsync();
+      startLotteryReveal();
+    } catch (error) {
+      const fallback = "Unable to unlock lottery right now. Please retry.";
+      if (error instanceof ApiError && error.status === 429) {
+        setLotteryRevealError("Too many unlock attempts. Please wait a moment, then retry.");
+      } else if (error instanceof ApiError && error.message.trim()) {
+        setLotteryRevealError(error.message);
+      } else {
+        setLotteryRevealError(fallback);
+      }
+      setLotteryRevealPhase("idle");
+    }
+  };
 
   const handleDecrypt = async () => {
     if (!message.encryption || !decryptPassword || decrypting) return;
@@ -743,6 +848,106 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             <div className="flex items-center gap-1.5 rounded-lg bg-muted/50 px-3 py-2 text-xs text-muted-foreground italic">
               <EyeOff className="h-3.5 w-3.5 shrink-0" />
               This message has expired
+            </div>
+          ) : showLotteryLockCard ? (
+            <div className="space-y-2 rounded-lg border border-amber-300/70 bg-amber-50/60 px-3 py-2">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                <Lock className="h-3 w-3" />
+                Locked lottery
+              </div>
+              <p className="text-xs text-amber-900">
+                {lotteryRevealPhase === "unlocking"
+                  ? "Contacting server to unlock your lottery outcome…"
+                  : lotteryRevealPhase === "revealing"
+                  ? "Unlock complete. Revealing your outcome…"
+                  : "Unlock this lottery message to reveal your outcome."}
+              </p>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="h-7 px-2 text-xs"
+                onClick={() => void handleUnlockLottery()}
+                disabled={unlockLotteryMut.isPending || lotteryRevealPhase === "revealing"}
+              >
+                {lotteryRevealPhase === "unlocking" || lotteryRevealPhase === "revealing" ? (
+                  <>
+                    <span className="mr-1 inline-flex"><LotterySpinner phase={lotteryRevealPhase} reducedMotion={prefersReducedMotion} /></span>
+                    {lotteryRevealPhase === "revealing" ? "Revealing…" : "Unlocking…"}
+                  </>
+                ) : (
+                  <>
+                    <Dices className="mr-1 h-3 w-3" />
+                    Unlock outcome
+                  </>
+                )}
+              </Button>
+              {!prefersReducedMotion && lotteryRevealPhase === "revealing" && (
+                <p className="text-[10px] text-amber-800">Spinner animation is enabled. Outcome appears after a short reveal.</p>
+              )}
+              {prefersReducedMotion && lotteryRevealPhase === "unlocking" && (
+                <p className="text-[10px] text-amber-800">Reduced motion enabled: reveal animation is minimized.</p>
+              )}
+              {lotteryRevealError && (
+                <p className="text-[10px] text-amber-800">Unlock failed: {lotteryRevealError}. Your message is unchanged — please retry.</p>
+              )}
+            </div>
+          ) : isLotteryMessage ? (
+            <div className="space-y-1.5 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
+                <Dices className="h-3 w-3" />
+                {message.lottery?.lock_state === "locked" ? "Lottery (locked)" : "Lottery result"}
+              </div>
+              {message.lottery?.lock_state === "locked" ? (
+                <p className="text-xs text-muted-foreground">
+                  Waiting for recipient to unlock this lottery message.
+                </p>
+              ) : lotterySelectedOutcome ? (
+                <>
+                  <p className="text-xs font-medium">
+                    Outcome: {lotterySelectedOutcome.outcome_id}
+                  </p>
+                  {lotterySelectedOutcome.payload_type === "text" ? (
+                    lotterySelectedOutcome.text_content ? (
+                      <p className="whitespace-pre-wrap break-words text-sm">{lotterySelectedOutcome.text_content}</p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Text outcome selected (no text payload).</p>
+                    )
+                  ) : lotterySelectedOutcome.payload_type === "image" ? (
+                    lotterySelectedMediaUrl ? (
+                      <img
+                        src={lotterySelectedMediaUrl}
+                        alt="Lottery image outcome"
+                        className="mt-1 max-h-64 rounded-lg object-cover"
+                      />
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Image outcome selected{lotterySelectedOutcome.media_asset_id ? ` · Asset: ${lotterySelectedOutcome.media_asset_id}` : ""}.
+                      </p>
+                    )
+                  ) : lotterySelectedOutcome.payload_type === "video" ? (
+                    lotterySelectedMediaUrl ? (
+                      <video
+                        src={lotterySelectedMediaUrl}
+                        className="mt-1 max-h-64 w-full rounded-lg"
+                        controls
+                        playsInline
+                        preload="metadata"
+                      />
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Video outcome selected{lotterySelectedOutcome.media_asset_id ? ` · Asset: ${lotterySelectedOutcome.media_asset_id}` : ""}.
+                      </p>
+                    )
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      {lotterySelectedOutcome.payload_type.toUpperCase()} outcome selected
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">Outcome not available yet.</p>
+              )}
             </div>
           ) : message.lock_price_cents && !message.is_unlocked && !isOwn ? (
             // Recipient view: locked message — show paywall BEFORE any decrypt UI so that

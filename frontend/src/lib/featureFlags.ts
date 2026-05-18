@@ -28,6 +28,9 @@ export const isMessagingEncryptionEnabled = () =>
 export const messagingGalleryEnabled = toBool(env.VITE_MESSAGING_GALLERY_ENABLED, true);
 export const messagingGalleryKillSwitch = toBool(env.VITE_MESSAGING_GALLERY_KILL_SWITCH, false);
 export const isMessagingGalleryEnabled = () => messagingGalleryEnabled && !messagingGalleryKillSwitch;
+export const messagingDmLotteryEnabled = toBool(env.VITE_MESSAGING_DM_LOTTERY_ENABLED, false);
+export const messagingDmLotteryKillSwitch = toBool(env.VITE_MESSAGING_DM_LOTTERY_KILL_SWITCH, false);
+export const isMessagingDmLotteryEnabled = () => messagingDmLotteryEnabled && !messagingDmLotteryKillSwitch;
 export const messagingOnceMediaComposerEnabled = toBool(env.VITE_CLIENT_ONCE_MEDIA_COMPOSER_ENABLED, true);
 export const messagingOnceMediaImageEnabled = toBool(env.VITE_MESSAGING_ONCE_MEDIA_IMAGE_ENABLED, true);
 export const messagingOnceMediaVideoEnabled = toBool(env.VITE_MESSAGING_ONCE_MEDIA_VIDEO_ENABLED, true);

@@ -2471,3 +2471,122 @@
 **Acceptance criteria:**
 - SOP includes decision trees for support, billing, and engineering escalation.
 - Playbook links to dashboards, trace lookup steps, and incident runbook references.
+### LOT-221: Cross-service idempotency contract for lottery create
+**Description:** Align backend, frontend, and API docs on `Idempotency-Key` behavior for lottery creation (replay success vs conflict), including error-code compatibility and retry guidance.
+**Acceptance criteria:**
+- Contract docs and OpenAPI examples define replay and conflict semantics with concrete payloads.
+- Frontend and backend integration tests verify deterministic replay behavior across retries.
+
+### LOT-222: Unlock authorization hardening for membership drift
+**Description:** Enforce unlock denial when conversation membership changes between message load and unlock call, including deactivated/suspended participant scenarios.
+**Acceptance criteria:**
+- Unlock API rejects users who are no longer eligible participants at commit time.
+- Tests cover membership removal and suspension edge cases.
+
+### LOT-223: Deleted/redacted lottery message state model
+**Description:** Implement canonical fetch/timeline/unlock behavior for deleted, redacted, and moderation-hidden lottery messages.
+**Acceptance criteria:**
+- API responses are consistent for all message lifecycle states.
+- No hidden outcome payload data is exposed after moderation or deletion.
+
+### LOT-224: Strict payload-size and outcome-count guardrails
+**Description:** Add hard limits for lottery payload sizes, per-outcome media metadata size, and outcome-count upper bounds with deterministic validation codes.
+**Acceptance criteria:**
+- Oversized requests fail with specific validation issues and stable error codes.
+- Load tests confirm guardrails prevent pathological request amplification.
+
+### LOT-225: Replay-resistant unlock token strategy
+**Description:** Add replay-resistant controls for unlock requests (nonce/session binding or equivalent) to prevent cross-session token reuse abuse.
+**Acceptance criteria:**
+- Replay attempts are denied with explicit replay-related telemetry.
+- Security tests validate replay blocking across repeated request patterns.
+
+### LOT-226: Media safety gate before outcome reveal
+**Description:** Block image/video reveals unless asset safety checks (scan + policy) are complete and passing.
+**Acceptance criteria:**
+- Unsafe or pending-scan media outcomes are not revealed to recipients.
+- Metrics expose blocked reveal reasons for operations monitoring.
+
+### LOT-227: Transactional outbox for lottery audit and analytics events
+**Description:** Introduce outbox-backed event publication so create/unlock writes and audit/analytics emission remain consistent under partial failures.
+**Acceptance criteria:**
+- Create/unlock paths persist outbox records atomically with state transitions.
+- Dispatcher retries are idempotent and support dead-letter handling.
+
+### LOT-228: Historical telemetry backfill utility for lottery events
+**Description:** Build a backfill job to reconstruct lottery send/unlock metrics after telemetry outages.
+**Acceptance criteria:**
+- Backfill supports bounded time-window replay with reconciliation summary.
+- Running the job repeatedly for the same window does not double-count.
+
+### LOT-229: p99 latency SLOs and alert policies
+**Description:** Expand lottery monitoring from p95 to p99 SLOs for unlock and reveal latency and define paging thresholds.
+**Acceptance criteria:**
+- Dashboards include p50/p95/p99 panels segmented by environment and client version.
+- Alert rules fire on sustained p99 breaches with runbook links.
+
+### LOT-230: Multi-window burn-rate alerting for unlock reliability
+**Description:** Add fast-burn and slow-burn error-budget alerts for lottery unlock success-rate SLO.
+**Acceptance criteria:**
+- Burn-rate alerts are configured and validated in staging.
+- Incident runbook includes response actions per burn-rate severity.
+
+### LOT-231: Synthetic canary flow for create-unlock health
+**Description:** Implement scheduled synthetic probes that execute create and unlock paths end-to-end in each environment.
+**Acceptance criteria:**
+- Probe metrics include pass/fail status and traceable request identifiers.
+- Probe failures trigger actionable alerts with diagnostic context.
+
+### LOT-232: Client-version regression detector
+**Description:** Add automated detection and alert annotations when reliability regressions are concentrated in specific client versions.
+**Acceptance criteria:**
+- Alerts include top contributing client versions for recent failure spikes.
+- Dashboard supports side-by-side reliability comparisons by client version.
+
+### LOT-233: Read-path performance optimization for lottery projection
+**Description:** Reduce timeline fetch overhead caused by lottery projection and unlock lookup logic.
+**Acceptance criteria:**
+- Timeline p95 overhead from lottery features is within agreed performance budget.
+- Benchmark artifacts demonstrate before/after improvement.
+
+### LOT-234: Hot-partition mitigation under unlock burst traffic
+**Description:** Harden unlock storage patterns for high-concurrency bursts to avoid partition throttling and tail-latency spikes.
+**Acceptance criteria:**
+- Load testing at target QPS shows no sustained throttling-induced error spikes.
+- Correctness guarantees (single selected outcome per recipient) remain intact under stress.
+
+### LOT-235: Fault-injection and degraded-dependency resilience suite
+**Description:** Add chaos-style tests for storage throttling, delayed audit sinks, and metrics pipeline outages in lottery paths.
+**Acceptance criteria:**
+- Create/unlock correctness is preserved during simulated dependency failures.
+- Degraded-path behavior is documented and validated by automated tests.
+
+### LOT-236: Fraud/risk signal integration for unlock abuse patterns
+**Description:** Emit lottery-specific abuse signals (velocity spikes, repeated failures, suspicious clusters) to fraud detection pipelines.
+**Acceptance criteria:**
+- Fraud ingestion receives normalized lottery abuse events with schema docs.
+- At least one risk rule is configured using new signals.
+
+### LOT-237: Internal diagnostics for support and incident triage
+**Description:** Add restricted tooling/endpoints to inspect lottery lifecycle state and deterministic failure causes without direct DB access.
+**Acceptance criteria:**
+- Authorized support users can retrieve lifecycle state snapshots for a message.
+- Access is permission-scoped and audit logged.
+
+### LOT-238: Data retention and privacy deletion compliance for lottery records
+**Description:** Implement policy-driven retention purge and privacy deletion/redaction workflows for lottery config and unlock records.
+**Acceptance criteria:**
+- Retention job purges expired lottery records according to policy windows.
+- Privacy deletion workflows remove/redact relevant lottery data with audit trace.
+
+### LOT-239: Multi-device consistency and offline-recovery E2E coverage
+**Description:** Add E2E scenarios validating consistent reveal state across devices/sessions, including offline-to-online reconciliation.
+**Acceptance criteria:**
+- Revealed outcomes remain consistent across two active sessions for the same recipient.
+- Offline recovery tests confirm eventual consistent state after reconnect.
+
+### LOT-240: Kill-switch transition E2E and rollback drill automation
+**Description:** Add automated E2E and staging drill scripts for kill-switch toggles during active sessions and in-flight unlock attempts.
+**Acceptance criteria:**
+- Clients transition gracefully to disabled state with deterministic server responses.
+- Rollback drill artifacts are produced and linked in release checklist.

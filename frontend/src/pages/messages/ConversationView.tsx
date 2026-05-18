@@ -2,6 +2,7 @@ import * as React from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { ArrowLeft, Images, Users, Clock, MoreHorizontal, EyeOff, Pin } from "lucide-react";
 import { toast } from "sonner";
+import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,19 +16,20 @@ import {
   sendCalendarShareMessage,
   sendCalendarEventMessage,
   sendMeetingPollMessage,
+  createLotteryMessage,
   markRead,
   claimHelpdeskConversation,
 } from "@/api/endpoints/messaging";
 import { useAuthStore } from "@/stores/authStore";
 import { useOfflineStore } from "@/stores/offlineStore";
-import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq } from "@/api/types";
+import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq, CreateLotteryMessageReq } from "@/api/types";
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
 import { PresenceDot } from "./PresenceDot";
 import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 import { TypingIndicator, useTypingSignal } from "./TypingIndicator";
 import { ParticipantsPanel } from "./ParticipantsPanel";
-import { isMessagingGalleryEnabled } from "@/lib/featureFlags";
+import { isMessagingDmLotteryEnabled, isMessagingGalleryEnabled } from "@/lib/featureFlags";
 import { ConversationGallery } from "./ConversationGallery";
 import { ScheduledMessages } from "./ScheduledMessages";
 import { HiddenMessagesPanel } from "./HiddenMessagesPanel";
@@ -65,6 +67,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const [hiddenOpen, setHiddenOpen] = React.useState(false);
   const [pinsOpen, setPinsOpen] = React.useState(false);
   const galleryEnabled = isMessagingGalleryEnabled();
+  const dmLotteryEnabled = isMessagingDmLotteryEnabled();
   const [dismissedPinnedMessageId, setDismissedPinnedMessageId] = React.useState<string | null>(null);
   const [replyingTo, setReplyingTo] = React.useState<Message | null>(null);
   const [viewedOnceIds, setViewedOnceIds] = React.useState<Set<string>>(new Set());
@@ -404,6 +407,23 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     onError: () => toast.error("Failed to create poll"),
   });
 
+  const sendLottery = useMutation({
+    mutationFn: (params: Omit<CreateLotteryMessageReq, "conversation_id">) =>
+      createLotteryMessage({ ...params, conversation_id: convoId }),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      toast.success(data.idempotent ? "Lottery message already sent" : "Lottery message sent");
+    },
+    onError: (err: unknown) => {
+      if (err instanceof ApiError) {
+        toast.error(err.detail);
+        return;
+      }
+      toast.error("Failed to send lottery message");
+    },
+  });
+
   const claimMutation = useMutation({
     mutationFn: () => claimHelpdeskConversation(convoId),
     onSuccess: (data) => {
@@ -685,7 +705,8 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         onSendCalendarShare={(params) => sendCalendarShare.mutate(params)}
         onSendCalendarEvent={(params) => sendCalendarEvent.mutate(params)}
         onSendMeetingPoll={(params) => sendMeetingPoll.mutate(params)}
-        sending={sendText.isPending || sendImage.isPending || sendGallery.isPending || sendFileShare.isPending || sendCalendarShare.isPending || sendCalendarEvent.isPending || sendMeetingPoll.isPending}
+        onSendLottery={!isGroup && dmLotteryEnabled ? (params) => sendLottery.mutate(params) : undefined}
+        sending={sendText.isPending || sendImage.isPending || sendGallery.isPending || sendFileShare.isPending || sendCalendarShare.isPending || sendCalendarEvent.isPending || sendMeetingPoll.isPending || sendLottery.isPending}
         onKeystroke={onKeystroke}
         replyingTo={replyingTo}
         onCancelReply={() => setReplyingTo(null)}
