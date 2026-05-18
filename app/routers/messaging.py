@@ -23,7 +23,7 @@ from botocore.awsrequest import AWSRequest
 from botocore.exceptions import ClientError, NoCredentialsError
 import requests
 import snowballstemmer
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 from pydantic_core import PydanticCustomError
@@ -5399,12 +5399,12 @@ def patch_conversation_draft(
     return DraftEnvelope(draft=draft)
 
 
-@router.delete("/conversations/{conversation_id}/drafts/{draft_id}", status_code=204)
+@router.delete("/conversations/{conversation_id}/drafts/{draft_id}", status_code=204, response_class=Response)
 def delete_conversation_draft(
     conversation_id: str,
     draft_id: str,
     user_id: str = Depends(get_messaging_user_id),
-) -> None:
+):
     started_at = time.perf_counter()
     _require_messaging_drafts_enabled(user_id=user_id)
     require_participant_active(user_id, conversation_id)
