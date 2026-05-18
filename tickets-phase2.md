@@ -1151,3 +1151,146 @@
 **Acceptance criteria:**
 - Handbook contains deployment, rollback, reconciliation recovery, and incident response SOPs.
 - Staging drill outcomes are recorded with remediation follow-ups and owners.
+### MSGD-101: Autosave debounce core utility
+**Description:** Implement a reusable debounce utility in the draft hook layer for autosave scheduling and cancellation.
+**Acceptance criteria:**
+- Utility supports schedule, cancel, flush-now semantics.
+- Unit tests verify no duplicate invocation under rapid input.
+
+### MSGD-102: Composer autosave integration flag
+**Description:** Integrate autosave into `ComposeBar` behind a dedicated feature flag and configurable idle delay.
+**Acceptance criteria:**
+- Autosave triggers only when text changed and idle threshold elapsed.
+- Flag-off mode keeps current manual save behavior unchanged.
+
+### MSGD-103: Unsaved state indicator
+**Description:** Add composer UI state showing “Unsaved” vs “Saved” draft status.
+**Acceptance criteria:**
+- Indicator updates on manual save, autosave success, and send/clear.
+- Screen reader announcement is emitted on status changes.
+
+### MSGD-104: Route transition guard for unsaved text
+**Description:** Add confirmation dialog when leaving conversation with unsaved draft edits.
+**Acceptance criteria:**
+- Dialog appears only when unsaved delta exists.
+- Confirming leave preserves latest local snapshot.
+
+### MSGD-105: Browser unload protection
+**Description:** Persist unsaved composer text on tab close/refresh via unload lifecycle handling.
+**Acceptance criteria:**
+- Local draft snapshot is saved before unload when text is dirty.
+- No unload listener remains attached when drafts feature is disabled.
+
+### MSGD-106: Cross-tab draft event sync
+**Description:** Synchronize draft create/update/delete events across tabs using BroadcastChannel with storage fallback.
+**Acceptance criteria:**
+- Draft changes in one tab are reflected in another within a bounded delay.
+- Integration test validates cross-tab consistency.
+
+### MSGD-107: Reconnect-triggered draft refresh
+**Description:** On network reconnection, trigger bounded background refresh of conversation drafts.
+**Acceptance criteria:**
+- Exactly one refresh per reconnect event per active conversation.
+- Local unsent edits are never overwritten without conflict handling.
+
+### MSGD-108: Create endpoint idempotency persistence
+**Description:** Add backend idempotency record storage for draft `POST` to prevent duplicate creates on retries.
+**Acceptance criteria:**
+- Reusing same idempotency key returns original response.
+- Idempotency records are scoped by user+conversation and TTL-cleaned.
+
+### MSGD-109: Patch version precondition
+**Description:** Require version precondition for draft updates to detect stale concurrent writes.
+**Acceptance criteria:**
+- Stale updates return conflict response with stable error code.
+- Service and route tests cover stale and non-stale update paths.
+
+### MSGD-110: Conflict response contract documentation
+**Description:** Extend API contract and frontend types for conflict payloads and retry guidance.
+**Acceptance criteria:**
+- Docs include example 409/412 payloads and recovery semantics.
+- Frontend type definitions compile against updated contract.
+
+### MSGD-111: Conflict resolution composer flow
+**Description:** Add conflict resolution UI actions: keep local, use server, merge manually.
+**Acceptance criteria:**
+- User can complete each path without losing original local text.
+- UI tests cover all branches and resulting composer content.
+
+### MSGD-112: Mutation retry/backoff policy
+**Description:** Implement bounded exponential backoff for retryable draft mutation failures.
+**Acceptance criteria:**
+- Non-retryable classes (auth/validation) skip retries.
+- Retry attempts and terminal outcomes are observable.
+
+### MSGD-113: Draft API rate limiting
+**Description:** Add per-user/per-conversation rate limits for draft mutation endpoints.
+**Acceptance criteria:**
+- Exceeding limit returns structured 429 with retry metadata.
+- Prometheus counters include throttled request dimensions.
+
+### MSGD-114: Pagination cursor hardening
+**Description:** Validate and sign list cursors to prevent tampering and decode faults.
+**Acceptance criteria:**
+- Invalid cursor yields safe 400 error, never 500.
+- Tests cover tampered, expired, and malformed cursors.
+
+### MSGD-115: Performance benchmark for high-cardinality threads
+**Description:** Add benchmark harness for list/get latency under high draft counts.
+**Acceptance criteria:**
+- Benchmark reports p50/p95/p99 latency artifacts.
+- CI/perf job fails on configured regression threshold.
+
+### MSGD-116: Draft fallback SLO and alert policy
+**Description:** Define SLOs for availability/latency/fallback ratio with burn-rate alerts.
+**Acceptance criteria:**
+- SLO definitions are checked into repo with targets/windows.
+- Alert runbook maps each SLO breach to mitigation actions.
+
+### MSGD-117: Draft observability dashboard pack
+**Description:** Create dashboard panels for operation volume, error classes, fallback rates, and latency.
+**Acceptance criteria:**
+- Panels support environment and endpoint filtering.
+- Dashboard links directly to incident runbook sections.
+
+### MSGD-118: End-to-end tracing across draft lifecycle
+**Description:** Instrument traces from frontend action through API/router/service/storage spans.
+**Acceptance criteria:**
+- Trace graph includes correlation ID and phase timings.
+- No span attributes include raw draft content.
+
+### MSGD-119: Telemetry redaction CI guardrails
+**Description:** Add CI assertions to block raw draft text from logs/metrics/events/traces fixtures.
+**Acceptance criteria:**
+- CI fails on forbidden field/value patterns.
+- Allowlist exceptions require explicit review and justification.
+
+### MSGD-120: Security threat model refresh for drafts
+**Description:** Update threat model with replay, abuse, authz bypass, and data leakage scenarios.
+**Acceptance criteria:**
+- Model includes mitigations and owners for each threat.
+- Review outcomes tracked in security review docs.
+
+### MSGD-121: DSAR export integration for draft data
+**Description:** Include conversation-scoped draft records in user export workflow.
+**Acceptance criteria:**
+- Export includes only user-owned drafts.
+- Integration tests verify no cross-user leakage.
+
+### MSGD-122: Account deletion draft purge verification
+**Description:** Ensure deletion pipeline purges all user drafts and records verifiable completion.
+**Acceptance criteria:**
+- Purge job emits deleted-count metric and completion status.
+- Post-purge verifier confirms zero residual user drafts.
+
+### MSGD-123: Mobile draft lifecycle E2E suite
+**Description:** Expand Playwright coverage for save/load/remove/autosave on mobile viewports.
+**Acceptance criteria:**
+- Tests pass on iOS/Android-sized viewport matrix.
+- Keyboard/focus interactions are deterministic and non-flaky.
+
+### MSGD-124: Draft docs and QA matrix phase-2 refresh
+**Description:** Update API/developer/QA docs for autosave, conflicts, retries, and rate-limiting behaviors.
+**Acceptance criteria:**
+- Docs include sequence diagrams and error matrix for new flows.
+- QA matrix maps each phase-2 behavior to explicit test scenarios.

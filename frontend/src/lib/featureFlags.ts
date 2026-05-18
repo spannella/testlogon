@@ -38,6 +38,10 @@ export const isMessagingViewOnceImageEnabled = () => isMessagingOnceMediaCompose
 export const isMessagingViewOnceVideoEnabled = () => isMessagingOnceMediaComposerEnabled() && messagingOnceMediaVideoEnabled;
 export const isMessagingListenOnceAudioEnabled = () => isMessagingOnceMediaComposerEnabled() && messagingOnceMediaAudioEnabled;
 
+export const messagingDraftsEnabled = toBool(env.VITE_MESSAGING_DRAFTS_ENABLED, true);
+export const messagingDraftsKillSwitch = toBool(env.VITE_MESSAGING_DRAFTS_KILL_SWITCH, false);
+export const isMessagingDraftsEnabled = () => messagingDraftsEnabled && !messagingDraftsKillSwitch;
+
 
 export const devtoolsLogUiEnabled = toBool(env.VITE_ENABLE_DEVTOOLS_LOG_UI, false);
 export const isDevtoolsLogUiEnabled = () => devtoolsLogUiEnabled;

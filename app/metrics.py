@@ -405,6 +405,22 @@ MESSAGING_THREAD_RECONCILIATION_ANOMALIES = Counter(
     "Messaging thread reconciliation anomalies by reason",
     ["reason"],
 )
+MESSAGING_DRAFT_OPERATIONS = Counter(
+    "messaging_draft_operations_total",
+    "Messaging draft operation outcomes by operation/source/result",
+    ["operation", "source", "result"],
+)
+MESSAGING_DRAFT_LATENCY = Histogram(
+    "messaging_draft_operation_duration_seconds",
+    "Messaging draft operation latency by operation/source",
+    ["operation", "source"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+)
+MESSAGING_DRAFT_FALLBACKS = Counter(
+    "messaging_draft_fallback_total",
+    "Messaging draft fallback usage by reason",
+    ["reason"],
+)
 USAGE_METERING_EVENTS = Counter(
     "usage_metering_events_total",
     "Usage metering event outcomes",
@@ -1361,6 +1377,25 @@ def record_messaging_thread_invalid_cursor(*, endpoint: str, reason_category: st
 
 def record_messaging_thread_reconciliation_anomaly(*, reason: str) -> None:
     MESSAGING_THREAD_RECONCILIATION_ANOMALIES.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def record_messaging_draft_operation(*, operation: str, source: str, result: str) -> None:
+    MESSAGING_DRAFT_OPERATIONS.labels(
+        operation=(operation or "unknown").lower(),
+        source=(source or "unknown").lower(),
+        result=(result or "unknown").lower(),
+    ).inc()
+
+
+def record_messaging_draft_latency(*, operation: str, source: str, elapsed_seconds: float) -> None:
+    MESSAGING_DRAFT_LATENCY.labels(
+        operation=(operation or "unknown").lower(),
+        source=(source or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_messaging_draft_fallback(*, reason: str) -> None:
+    MESSAGING_DRAFT_FALLBACKS.labels(reason=(reason or "unknown").lower()).inc()
 
 
 def record_project_count_delta(delta: int) -> None:

@@ -42,6 +42,8 @@ from app.metrics import (
     record_messaging_gallery_cursor_page_depth,
     record_messaging_gallery_latency,
     record_messaging_gallery_request,
+    record_messaging_draft_latency,
+    record_messaging_draft_operation,
     record_messaging_message_control_action,
     record_messaging_report_validation_error,
     record_messaging_thread_promotion_event,
@@ -89,6 +91,15 @@ from app.services.messaging_threads_store import (
     create_message_thread_record,
     find_thread_for_root_message,
     get_message_thread_record,
+)
+from app.services.messaging_drafts import (
+    DraftNotFoundError,
+    DraftValidationError,
+    create_draft,
+    delete_draft,
+    get_draft,
+    list_drafts,
+    update_draft,
 )
 from app.services.usage_metering import (
     build_usage_event,
@@ -651,6 +662,37 @@ def _is_thread_promotion_enabled_for(*, user_id: str) -> bool:
         enabled_tenant_ids = _csv_env_set("MESSAGING_THREAD_PROMOTION_ENABLED_TENANT_IDS")
         return bool(tenant_id and tenant_id in enabled_tenant_ids)
     return False
+
+
+def _is_messaging_drafts_enabled_for(*, user_id: str) -> bool:
+    kill_switch = os.getenv("MESSAGING_DRAFTS_KILL_SWITCH", "0").strip().lower() in {"1", "true", "on", "yes"}
+    if kill_switch:
+        return False
+
+    mode = os.getenv("MESSAGING_DRAFTS_MODE", "enabled").strip().lower()
+    uid = str(user_id or "").strip()
+    if mode in {"enabled", "on", "true", "1"}:
+        return True
+    if mode in {"disabled", "off", "false", "0", ""}:
+        return False
+    if mode in {"internal", "pilot_internal"}:
+        tenant_id = _resolve_user_tenant_id(uid)
+        internal_tenant_ids = _csv_env_set("MESSAGING_DRAFTS_INTERNAL_TENANT_IDS", default="internal")
+        return bool(tenant_id and tenant_id in internal_tenant_ids)
+    if mode in {"selective", "allowlist"}:
+        enabled_user_ids = _csv_env_set("MESSAGING_DRAFTS_ENABLED_USER_IDS")
+        if uid in enabled_user_ids:
+            return True
+        tenant_id = _resolve_user_tenant_id(uid)
+        enabled_tenant_ids = _csv_env_set("MESSAGING_DRAFTS_ENABLED_TENANT_IDS")
+        return bool(tenant_id and tenant_id in enabled_tenant_ids)
+    return False
+
+
+def _require_messaging_drafts_enabled(*, user_id: str) -> None:
+    if not _is_messaging_drafts_enabled_for(user_id=user_id):
+        raise HTTPException(status_code=403, detail="Messaging drafts are not enabled for this environment or tenant")
+
 
 
 def _helpdesk_virtual_participant_id(group_id: str) -> str:
@@ -5199,6 +5241,180 @@ def _load_hidden_message_ids_for_user(conversation_id: str, user_id: str, messag
                 hidden.add(message_id)
 
     return hidden
+
+
+class DraftCreateIn(BaseModel):
+    text: str = Field(min_length=1, max_length=MESSAGE_TEXT_MAX_CHARS)
+    client_updated_at: int | None = Field(default=None, ge=0)
+
+
+class DraftPatchIn(BaseModel):
+    text: str = Field(min_length=1, max_length=MESSAGE_TEXT_MAX_CHARS)
+    client_updated_at: int | None = Field(default=None, ge=0)
+
+
+class DraftOut(BaseModel):
+    draft_id: str
+    conversation_id: str
+    owner_user_id: str
+    text: str
+    version: int
+    created_at: int
+    updated_at: int
+    client_updated_at: int | None = None
+    tenant_id: str | None = None
+
+
+class DraftEnvelope(BaseModel):
+    draft: DraftOut
+
+
+class DraftListOut(BaseModel):
+    items: List[DraftOut]
+    next_cursor: str | None = None
+
+
+def _decode_drafts_cursor(cursor: str | None) -> dict[str, Any] | None:
+    if not cursor:
+        return None
+    try:
+        return decode_cursor(cursor)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Invalid cursor") from exc
+
+
+def _encode_drafts_cursor(cursor: dict[str, Any] | None) -> str | None:
+    if not cursor:
+        return None
+    return encode_cursor(cursor)
+
+
+def _translate_draft_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, DraftValidationError):
+        return HTTPException(status_code=422, detail=str(exc))
+    if isinstance(exc, DraftNotFoundError):
+        return HTTPException(status_code=404, detail="Draft not found")
+    return HTTPException(status_code=500, detail="Draft operation failed")
+
+
+def _record_draft_endpoint_metrics(*, operation: str, source: str, result: str, started_at: float) -> None:
+    record_messaging_draft_operation(operation=operation, source=source, result=result)
+    record_messaging_draft_latency(
+        operation=operation,
+        source=source,
+        elapsed_seconds=max(0.0, time.perf_counter() - started_at),
+    )
+
+
+@router.get("/conversations/{conversation_id}/drafts", response_model=DraftListOut)
+def list_conversation_drafts(
+    conversation_id: str,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    cursor: str | None = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    started_at = time.perf_counter()
+    _require_messaging_drafts_enabled(user_id=user_id)
+    require_participant_active(user_id, conversation_id)
+    try:
+        result = list_drafts(
+            owner_user_id=user_id,
+            conversation_id=conversation_id,
+            limit=limit,
+            cursor=_decode_drafts_cursor(cursor),
+        )
+    except Exception as exc:
+        _record_draft_endpoint_metrics(operation="list", source="server", result="error", started_at=started_at)
+        raise _translate_draft_error(exc) from exc
+
+    _record_draft_endpoint_metrics(operation="list", source="server", result="success", started_at=started_at)
+    return DraftListOut(items=result.get("items", []), next_cursor=_encode_drafts_cursor(result.get("next_cursor")))
+
+
+@router.post("/conversations/{conversation_id}/drafts", response_model=DraftEnvelope, status_code=201)
+def create_conversation_draft(
+    conversation_id: str,
+    inp: DraftCreateIn,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
+    user_id: str = Depends(get_messaging_user_id),
+):
+    started_at = time.perf_counter()
+    del idempotency_key  # reserved for service-level idempotency store
+    _require_messaging_drafts_enabled(user_id=user_id)
+    require_participant_active(user_id, conversation_id)
+    try:
+        draft = create_draft(
+            owner_user_id=user_id,
+            conversation_id=conversation_id,
+            text=inp.text,
+            client_updated_at=inp.client_updated_at,
+        )
+    except Exception as exc:
+        _record_draft_endpoint_metrics(operation="create", source="server", result="error", started_at=started_at)
+        raise _translate_draft_error(exc) from exc
+    _record_draft_endpoint_metrics(operation="create", source="server", result="success", started_at=started_at)
+    return DraftEnvelope(draft=draft)
+
+
+@router.get("/conversations/{conversation_id}/drafts/{draft_id}", response_model=DraftEnvelope)
+def get_conversation_draft(
+    conversation_id: str,
+    draft_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    started_at = time.perf_counter()
+    _require_messaging_drafts_enabled(user_id=user_id)
+    require_participant_active(user_id, conversation_id)
+    try:
+        draft = get_draft(owner_user_id=user_id, conversation_id=conversation_id, draft_id=draft_id)
+    except Exception as exc:
+        _record_draft_endpoint_metrics(operation="get", source="server", result="error", started_at=started_at)
+        raise _translate_draft_error(exc) from exc
+    _record_draft_endpoint_metrics(operation="get", source="server", result="success", started_at=started_at)
+    return DraftEnvelope(draft=draft)
+
+
+@router.patch("/conversations/{conversation_id}/drafts/{draft_id}", response_model=DraftEnvelope)
+def patch_conversation_draft(
+    conversation_id: str,
+    draft_id: str,
+    inp: DraftPatchIn,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    started_at = time.perf_counter()
+    _require_messaging_drafts_enabled(user_id=user_id)
+    require_participant_active(user_id, conversation_id)
+    try:
+        draft = update_draft(
+            owner_user_id=user_id,
+            conversation_id=conversation_id,
+            draft_id=draft_id,
+            text=inp.text,
+            client_updated_at=inp.client_updated_at,
+        )
+    except Exception as exc:
+        _record_draft_endpoint_metrics(operation="update", source="server", result="error", started_at=started_at)
+        raise _translate_draft_error(exc) from exc
+    _record_draft_endpoint_metrics(operation="update", source="server", result="success", started_at=started_at)
+    return DraftEnvelope(draft=draft)
+
+
+@router.delete("/conversations/{conversation_id}/drafts/{draft_id}", status_code=204)
+def delete_conversation_draft(
+    conversation_id: str,
+    draft_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+) -> None:
+    started_at = time.perf_counter()
+    _require_messaging_drafts_enabled(user_id=user_id)
+    require_participant_active(user_id, conversation_id)
+    try:
+        delete_draft(owner_user_id=user_id, conversation_id=conversation_id, draft_id=draft_id)
+    except Exception as exc:
+        _record_draft_endpoint_metrics(operation="delete", source="server", result="error", started_at=started_at)
+        raise _translate_draft_error(exc) from exc
+    _record_draft_endpoint_metrics(operation="delete", source="server", result="success", started_at=started_at)
+    return None
 
 
 # -------------------------

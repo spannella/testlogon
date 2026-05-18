@@ -959,6 +959,33 @@ export interface SendFileShareReq {
   send_at?: number;
 }
 
+export interface ConversationDraft {
+  draft_id: string;
+  conversation_id: string;
+  owner_user_id: string;
+  text: string;
+  version: number;
+  created_at: number;
+  updated_at: number;
+  client_updated_at?: number;
+  tenant_id?: string;
+}
+
+export interface ConversationDraftListResp {
+  items: ConversationDraft[];
+  next_cursor?: string;
+}
+
+export interface CreateConversationDraftReq {
+  text: string;
+  client_updated_at?: number;
+}
+
+export interface UpdateConversationDraftReq {
+  text: string;
+  client_updated_at?: number;
+}
+
 export interface StartConversationReq {
   participant_ids: string[];
   type?: "dm" | "group";

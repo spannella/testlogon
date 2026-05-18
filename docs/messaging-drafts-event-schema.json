@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MessagingDraftAnalyticsEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event", "outcome", "source", "conversation_id_present", "at_ms"],
+  "properties": {
+    "event": {
+      "type": "string",
+      "enum": ["draft_save", "draft_load", "draft_remove", "draft_refresh", "draft_update", "draft_fallback"]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["success", "failure"]
+    },
+    "source": {
+      "type": "string",
+      "enum": ["server", "local"]
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "conversation_id_present": {
+      "type": "boolean"
+    },
+    "at_ms": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}
