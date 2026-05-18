@@ -80,7 +80,7 @@ export function EditPostDialog({
       setImageUrls(initialImageUrls ?? []);
       setEditorMode(initialBodyRich ? "rich" : "plain");
       setRichDoc(initialBodyRich ?? null);
-      setScheduleTimezone(initialScheduleTimezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+      setScheduleTimezone(initialScheduleTimezone ?? (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"));
       setScheduledInput(initialScheduledAtLocal ?? "");
       setScheduledAt(initialPublishAt ? new Date(initialPublishAt * 1000) : null);
     }
