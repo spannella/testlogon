@@ -1439,3 +1439,214 @@
 **Acceptance criteria:**
 - Suite reports throughput, saturation, and error-budget burn metrics.
 - Launch signoff requires meeting documented pass thresholds.
+# Mass Messaging — Phase 2 Follow-up Implementation Tickets
+
+### MSG-101: Replace thread kickoff with durable queue publish
+**Description:** Move campaign dispatch from in-process threads to durable queue enqueue so jobs survive API restarts.
+**Acceptance criteria:**
+- API only returns success after campaign enqueue metadata is durably persisted.
+- Enqueue failure leaves campaign in non-processing state with explicit error code.
+
+### MSG-102: Add dedicated queue consumer worker service
+**Description:** Implement standalone worker process to consume queued campaign jobs and run fanout outside API pods.
+**Acceptance criteria:**
+- Worker runtime can scale independently from API deployment.
+- Worker startup/readiness/health behavior is documented and test covered.
+
+### MSG-103: Add distributed campaign lease lock
+**Description:** Introduce campaign lease records so only one worker instance can process a campaign at a time.
+**Acceptance criteria:**
+- Concurrent workers cannot process the same campaign simultaneously.
+- Lease expiry and takeover behavior is validated by race-condition tests.
+
+### MSG-104: Implement worker heartbeat and stale recovery
+**Description:** Persist periodic worker heartbeat and requeue campaigns whose lease holder disappears.
+**Acceptance criteria:**
+- Stale in-progress campaigns are detected and requeued automatically.
+- Recovery logic guarantees already-sent destinations are not resent.
+
+### MSG-105: Add campaign cancellation endpoint
+**Description:** Provide API to cancel scheduled/pending/processing campaigns with deterministic transition rules.
+**Acceptance criteria:**
+- Cancellation prevents future destination sends after acknowledgment.
+- Response includes sent vs prevented destination counts.
+
+### MSG-106: Add replay endpoint for failed destinations
+**Description:** Support replaying failed destinations from completed campaigns without duplicating successful sends.
+**Acceptance criteria:**
+- Replay references source campaign in audit trail.
+- Replay path respects destination idempotency keys.
+
+### MSG-107: Add scheduled campaign edit window
+**Description:** Allow editing scheduled campaigns before lock-in while preserving immutable change history.
+**Acceptance criteria:**
+- Edit operations are blocked once campaign enters processing.
+- Audit events include before/after payload and schedule values.
+
+### MSG-108: Persist rate-limit counters in shared store
+**Description:** Replace in-memory create throttles with shared backend counters for multi-node correctness.
+**Acceptance criteria:**
+- Rate limits are enforced consistently across all API replicas.
+- Existing blocked error contracts remain backward compatible.
+
+### MSG-109: Add tenant-specific quota overrides
+**Description:** Support per-tenant configuration for campaigns/hour, destinations/campaign, and worker concurrency.
+**Acceptance criteria:**
+- Override precedence and defaults are deterministic and documented.
+- Effective quota source is exposed in admin diagnostics.
+
+### MSG-110: Add destination dedupe fingerprint checks
+**Description:** Persist campaign+destination+payload fingerprint to suppress duplicate send attempts.
+**Acceptance criteria:**
+- Duplicate attempts resolve to explicit no-op outcomes.
+- Deduplication behavior is validated in retry/recovery tests.
+
+### MSG-111: Add dead-letter queue for terminal failures
+**Description:** Route irrecoverable destination failures to DLQ with replay tooling.
+**Acceptance criteria:**
+- DLQ records include canonical error metadata and campaign references.
+- Replay from DLQ preserves idempotency guarantees.
+
+### MSG-112: Add retry jitter and retry budget policy
+**Description:** Introduce randomized backoff jitter and per-campaign retry budget caps.
+**Acceptance criteria:**
+- Retry intervals include jitter and are runtime configurable.
+- Processing halts retries when budget threshold is exceeded.
+
+### MSG-113: Add dependency circuit breaker controls
+**Description:** Add circuit-breaker handling for repeated downstream failures (DDB/archive/metering).
+**Acceptance criteria:**
+- Circuit open/half-open/closed states are observable via metrics.
+- Worker behavior during open circuit is deterministic and documented.
+
+### MSG-114: Add campaign max-runtime timeout guard
+**Description:** Enforce campaign processing timeout with controlled terminal status and reason code.
+**Acceptance criteria:**
+- Long-running campaigns transition to timeout terminal state.
+- Timeout reason is visible in API and audit records.
+
+### MSG-115: Add campaign list/search endpoint
+**Description:** Provide paginated campaign list API with filter/sort support for sender/status/mode/time range.
+**Acceptance criteria:**
+- Endpoint supports stable pagination and deterministic sorting.
+- OpenAPI docs include filter examples and response shape.
+
+### MSG-116: Add admin diagnostics endpoint
+**Description:** Expose privileged diagnostics for worker attempts, retries, failure buckets, and lease events.
+**Acceptance criteria:**
+- Endpoint enforces admin scope checks and audit logging.
+- Diagnostics payload is sufficient for triage without raw log scraping.
+
+### MSG-117: Expand structured audit lifecycle coverage
+**Description:** Emit structured audit events for every campaign lifecycle mutation and operator action.
+**Acceptance criteria:**
+- All state transitions emit a canonical audit event.
+- Audit schema compatibility is enforced by contract tests.
+
+### MSG-118: Harden payload redaction in logs
+**Description:** Enforce centralized redaction of campaign content across API/worker error paths.
+**Acceptance criteria:**
+- Message payload text never appears in plaintext logs.
+- Redaction behavior is covered by regression tests.
+
+### MSG-119: Add moderation/policy pre-check integration
+**Description:** Execute policy checks at create-time and pre-send time to block disallowed content.
+**Acceptance criteria:**
+- Policy failures return machine-readable codes and guidance.
+- Policy outcomes are emitted to audit and metrics streams.
+
+### MSG-120: Split campaign permission scopes
+**Description:** Add fine-grained scopes for create/read/cancel/replay/diagnostics operations.
+**Acceptance criteria:**
+- Route-level scope enforcement is consistent across all campaign endpoints.
+- Unauthorized access attempts are audit-logged and metrically counted.
+
+### MSG-121: Validate legal hold/export interoperability
+**Description:** Ensure campaign-originated messages are fully represented in legal-hold and export flows.
+**Acceptance criteria:**
+- Export payload includes campaign metadata and destination context.
+- Integration tests verify hold-on and hold-off scenarios.
+
+### MSG-122: Add queue lag and backlog age metrics
+**Description:** Emit queue-depth, lag, and backlog-age metrics keyed by tenant and mode.
+**Acceptance criteria:**
+- Dashboards display lag and age with environment dimensions.
+- Alerting thresholds can trigger directly from emitted series.
+
+### MSG-123: Add multi-window SLO burn-rate alerts
+**Description:** Define burn-rate alerts for destination failures and worker latency SLOs.
+**Acceptance criteria:**
+- Alerts include severity mapping for page vs ticket.
+- Alert annotations link to owner and runbook sections.
+
+### MSG-124: Add campaign anomaly detector jobs
+**Description:** Run periodic checks for stuck campaigns, retry spikes, and status/counter anomalies.
+**Acceptance criteria:**
+- Detector outputs machine-readable findings with severity.
+- Findings can trigger notifications/webhooks for ops workflows.
+
+### MSG-125: Add counter reconciliation repair job
+**Description:** Implement recompute/repair job that rebuilds campaign counters from destination truth.
+**Acceptance criteria:**
+- Job supports dry-run and apply modes.
+- Repair actions are idempotent and audit tracked.
+
+### MSG-126: Add queue-backed integration harness
+**Description:** Build integration tests for create→enqueue→worker→status flows using queue semantics.
+**Acceptance criteria:**
+- Harness covers immediate and scheduled campaigns.
+- Tests verify duplicate queue deliveries do not duplicate sends.
+
+### MSG-127: Add worker crash-recovery tests
+**Description:** Simulate worker termination mid-campaign and verify reprocessing correctness.
+**Acceptance criteria:**
+- Completed destinations are not resent after recovery.
+- Campaign reaches correct terminal status after restart.
+
+### MSG-128: Add high-volume load/performance suite
+**Description:** Benchmark throughput, latency, and retry amplification for campaigns with large destination counts.
+**Acceptance criteria:**
+- Suite reports throughput plus p95/p99 latencies.
+- Capacity thresholds and bottlenecks are documented.
+
+### MSG-129: Add chaos fault-injection tests
+**Description:** Inject DDB throttling/network/archive outages to validate retry and circuit-breaker behavior.
+**Acceptance criteria:**
+- Worker behavior under faults matches documented failure policy.
+- Recovery path avoids duplicate delivery side effects.
+
+### MSG-130: Add frontend real-time progress stream
+**Description:** Implement SSE/WebSocket campaign progress updates with automatic polling fallback.
+**Acceptance criteria:**
+- Active campaign progress updates in near real-time.
+- Polling fallback activates seamlessly when stream fails.
+
+### MSG-131: Virtualize large destination status tables
+**Description:** Optimize frontend rendering for campaigns with thousands of destinations.
+**Acceptance criteria:**
+- UI remains responsive for 5k+ destination rows.
+- Frontend tests validate virtualization behavior and pagination.
+
+### MSG-132: Add CSV bulk destination import UX
+**Description:** Allow destination import via CSV with dedupe preview and row-level validation errors.
+**Acceptance criteria:**
+- Invalid rows are surfaced before submission.
+- Imported rows merge safely with manual destination selection.
+
+### MSG-133: Run accessibility hardening pass
+**Description:** Improve keyboard navigation, ARIA semantics, and screen-reader support in mass-message UI.
+**Acceptance criteria:**
+- Automated accessibility checks pass for compose/status flows.
+- Keyboard-only e2e coverage is added for primary actions.
+
+### MSG-134: Expand operational runbook with drills
+**Description:** Add response playbooks for queue outages, stuck campaigns, replay operations, and rollback.
+**Acceptance criteria:**
+- Runbook includes command-level remediation procedures.
+- Drill evidence captures outcomes and owners.
+
+### MSG-135: Add release gate automation for rollout readiness
+**Description:** Create pre-rollout gate that validates schema, queue health, worker health, alerts, and smoke flow.
+**Acceptance criteria:**
+- Gate fails fast on missing readiness prerequisites.
+- Output includes actionable remediation instructions.

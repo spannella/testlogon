@@ -282,6 +282,36 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(
+            _resolve_table_name(S.mass_message_campaigns_table_name, "MassMessageCampaigns"),
+            "campaign_id",
+            gsi=[
+                {
+                    "index_name": "BySenderCreatedAt",
+                    "partition_key": "sender_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByStatusSendAt",
+                    "partition_key": "status",
+                    "sort_key": "send_at",
+                },
+            ],
+            attr_types={"created_at": "N", "send_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.mass_message_campaign_destinations_table_name, "MassMessageCampaignDestinations"),
+            "campaign_id",
+            "conversation_id",
+            gsi=[
+                {
+                    "index_name": "ByCampaignStateUpdatedAt",
+                    "partition_key": "campaign_state",
+                    "sort_key": "updated_at",
+                },
+            ],
+            attr_types={"updated_at": "N"},
+        ),
+        TableDef(
             _resolve_table_name(S.message_report_context_table_name, "MessageReportContext"),
             "report_id",
             "message_id",

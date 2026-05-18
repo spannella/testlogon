@@ -1,0 +1,35 @@
+groups:
+  - name: messaging-mass-campaign-health
+    rules:
+      - alert: MessagingMassCampaignHighFailureRate
+        expr: |
+          (
+            sum(rate(messaging_mass_destination_outcomes_total{outcome="failed"}[5m]))
+            /
+            clamp_min(sum(rate(messaging_mass_destination_outcomes_total[5m])), 1e-9)
+          ) > 0.20
+        for: 10m
+        labels:
+          severity: page
+          service: messaging
+          component: mass_campaigns
+        annotations:
+          summary: "Mass messaging destination failure ratio above 20% for 10m"
+          description: "Mass campaign delivery quality is degraded; investigate destination errors and dependencies."
+          runbook: "docs/mass-message-operations-runbook.md"
+
+      - alert: MessagingMassCampaignWorkerLagP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, mode) (rate(messaging_mass_worker_latency_seconds_bucket[10m]))
+          ) > 30
+        for: 15m
+        labels:
+          severity: ticket
+          service: messaging
+          component: mass_campaigns
+        annotations:
+          summary: "Mass messaging worker p95 latency above 30s for 15m"
+          description: "Fanout workers are lagging; check worker capacity, retry storms, and downstream dependencies."
+          runbook: "docs/mass-message-operations-runbook.md"

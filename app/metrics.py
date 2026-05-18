@@ -421,6 +421,32 @@ MESSAGING_DRAFT_FALLBACKS = Counter(
     "Messaging draft fallback usage by reason",
     ["reason"],
 )
+MASS_MESSAGE_CAMPAIGN_EVENTS = Counter(
+    "messaging_mass_campaign_events_total",
+    "Mass messaging campaign lifecycle events",
+    ["event", "mode", "outcome"],
+)
+MASS_MESSAGE_DESTINATION_OUTCOMES = Counter(
+    "messaging_mass_destination_outcomes_total",
+    "Mass messaging destination outcomes by mode and canonical error code",
+    ["mode", "outcome", "error_code"],
+)
+MASS_MESSAGE_DESTINATION_RETRIES = Counter(
+    "messaging_mass_destination_retries_total",
+    "Mass messaging destination retry attempts by mode and canonical error code",
+    ["mode", "error_code"],
+)
+MASS_MESSAGE_WORKER_LATENCY = Histogram(
+    "messaging_mass_worker_latency_seconds",
+    "Mass messaging worker run latency by mode and outcome",
+    ["mode", "outcome"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120),
+)
+MASS_MESSAGE_LIMIT_EVENTS = Counter(
+    "messaging_mass_limit_events_total",
+    "Mass messaging abuse/rate-limit evaluations",
+    ["scope", "limit_name", "outcome"],
+)
 USAGE_METERING_EVENTS = Counter(
     "usage_metering_events_total",
     "Usage metering event outcomes",
@@ -1357,6 +1383,14 @@ def record_messaging_thread_promotion_event(*, stage: str, outcome: str) -> None
     ).inc()
 
 
+def record_mass_message_campaign_event(*, event: str, mode: str, outcome: str) -> None:
+    MASS_MESSAGE_CAMPAIGN_EVENTS.labels(
+        event=(event or "unknown").lower(),
+        mode=(mode or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).inc()
+
+
 def record_messaging_thread_promotion_retry(*, reason: str) -> None:
     MESSAGING_THREAD_PROMOTION_RETRIES.labels(reason=(reason or "unknown").lower()).inc()
 
@@ -1364,6 +1398,28 @@ def record_messaging_thread_promotion_retry(*, reason: str) -> None:
 def record_messaging_thread_query_latency(*, endpoint: str, outcome: str, elapsed_seconds: float) -> None:
     MESSAGING_THREAD_QUERY_LATENCY.labels(
         endpoint=(endpoint or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_mass_message_destination_outcome(*, mode: str, outcome: str, error_code: str = "none") -> None:
+    MASS_MESSAGE_DESTINATION_OUTCOMES.labels(
+        mode=(mode or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+        error_code=(error_code or "none").lower(),
+    ).inc()
+
+
+def record_mass_message_destination_retry(*, mode: str, error_code: str) -> None:
+    MASS_MESSAGE_DESTINATION_RETRIES.labels(
+        mode=(mode or "unknown").lower(),
+        error_code=(error_code or "unknown").lower(),
+    ).inc()
+
+
+def record_mass_message_worker_latency(*, mode: str, outcome: str, elapsed_seconds: float) -> None:
+    MASS_MESSAGE_WORKER_LATENCY.labels(
+        mode=(mode or "unknown").lower(),
         outcome=(outcome or "unknown").lower(),
     ).observe(max(0.0, float(elapsed_seconds)))
 
@@ -1396,6 +1452,15 @@ def record_messaging_draft_latency(*, operation: str, source: str, elapsed_secon
 
 def record_messaging_draft_fallback(*, reason: str) -> None:
     MESSAGING_DRAFT_FALLBACKS.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def record_mass_message_limit_event(*, scope: str, limit_name: str, outcome: str) -> None:
+    MASS_MESSAGE_LIMIT_EVENTS.labels(
+        scope=(scope or "unknown").lower(),
+        limit_name=(limit_name or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).inc()
+
 
 
 def record_project_count_delta(delta: int) -> None:

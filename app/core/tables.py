@@ -40,6 +40,8 @@ class Tables:
     conversation_pins: Any
     message_threads: Any
     message_reports: Any
+    mass_message_campaigns: Any
+    mass_message_campaign_destinations: Any
     message_report_context: Any
     content_reports: Any
     moderation_tickets: Any
@@ -97,6 +99,8 @@ T = Tables(
     conversation_pins=ddb.Table(S.conversation_pins_table_name),
     message_threads=ddb.Table(S.message_threads_table_name),
     message_reports=ddb.Table(S.message_reports_table_name),
+    mass_message_campaigns=ddb.Table(S.mass_message_campaigns_table_name),
+    mass_message_campaign_destinations=ddb.Table(S.mass_message_campaign_destinations_table_name),
     message_report_context=ddb.Table(S.message_report_context_table_name),
     content_reports=ddb.Table(S.content_reports_table_name),
     moderation_tickets=ddb.Table(S.moderation_tickets_table_name),

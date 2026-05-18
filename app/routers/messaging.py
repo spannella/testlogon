@@ -3,12 +3,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import logging
 import os
 import hashlib
 import hmac
 import re
+import threading
 import time
 import uuid
 from html.parser import HTMLParser
@@ -39,6 +42,11 @@ from app.metrics import (
     record_helpdesk_no_agents_notice,
     record_helpdesk_time_to_first_claim_ms,
     record_messaging_archive_export_outcome,
+    record_mass_message_campaign_event,
+    record_mass_message_destination_outcome,
+    record_mass_message_destination_retry,
+    record_mass_message_limit_event,
+    record_mass_message_worker_latency,
     record_messaging_gallery_cursor_page_depth,
     record_messaging_gallery_latency,
     record_messaging_gallery_request,
@@ -100,6 +108,33 @@ from app.services.messaging_drafts import (
     get_draft,
     list_drafts,
     update_draft,
+)
+from app.models_mass_message import (
+    MassMessageCancelCampaignResponse,
+    MassMessageCampaignListResponse,
+    MassMessageCampaignSummary,
+    MassMessageCampaignDetailResponse,
+    MassMessageCreateCampaignRequest,
+    MassMessageCreateCampaignResponse,
+    MassMessageRejectedDestination,
+)
+from app.services.mass_message_campaigns import (
+    apply_destination_counter_delta,
+    create_or_get_campaign as create_or_get_mass_campaign_record,
+    get_campaign as get_mass_campaign_record,
+    list_campaigns_for_sender,
+    list_due_scheduled_campaigns as list_due_scheduled_mass_campaigns,
+    set_campaign_submission_result,
+    update_campaign_status as update_mass_campaign_status,
+)
+from app.services.mass_message_campaign_destinations import upsert_destination as upsert_mass_destination
+from app.services.mass_message_campaign_destinations import list_destinations_page as list_mass_destinations_page
+from app.services.mass_message_destination_contract import (
+    DESTINATION_ERROR_AUTHORIZATION,
+    DESTINATION_ERROR_CONVERSATION_MISSING,
+    DESTINATION_ERROR_POLICY_BLOCKED,
+    DESTINATION_ERROR_TRANSIENT_INFRA,
+    DESTINATION_ERROR_UNKNOWN,
 )
 from app.services.usage_metering import (
     build_usage_event,
@@ -195,10 +230,906 @@ tbl_msg_consumption = ddb.Table(DDB_MESSAGE_CONSUMPTION)
 router = APIRouter(prefix="/messaging", tags=["messaging"])
 logger = logging.getLogger(__name__)
 
+_MASS_MESSAGE_RATE_LOCK = threading.Lock()
+_MASS_MESSAGE_USER_CREATE_TS: dict[str, deque[int]] = defaultdict(deque)
+_MASS_MESSAGE_TENANT_CREATE_TS: dict[str, deque[int]] = defaultdict(deque)
+_MASS_MESSAGE_ACTIVE_WORKERS = 0
+
 
 require_legal_hold_admin = require_admin_scope("content_moderation")
 require_compliance_query_admin = require_admin_scope("content_moderation")
 require_compliance_export_admin = require_admin_scope("content_moderation")
+
+
+def _mass_message_payload_hash(*, kind: str, text: str) -> str:
+    payload = json.dumps({"kind": kind, "text": text}, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _messaging_mass_send_enabled() -> bool:
+    enabled = os.getenv(
+        "MESSAGING_MASS_SEND_ENABLED",
+        "true" if getattr(S, "messaging_mass_send_enabled", True) else "false",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    kill_switch = os.getenv(
+        "MESSAGING_MASS_SEND_KILL_SWITCH",
+        "true" if getattr(S, "messaging_mass_send_kill_switch", False) else "false",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    return enabled and not kill_switch
+
+
+def _mass_message_tenant_for_user(user_id: str) -> str:
+    _ = user_id
+    return "default"
+
+
+def _mass_message_limits_config() -> dict[str, int]:
+    return {
+        "campaigns_per_user_per_hour": max(0, int(getattr(S, "messaging_mass_send_campaigns_per_user_per_hour", 20))),
+        "campaigns_per_tenant_per_hour": max(0, int(getattr(S, "messaging_mass_send_campaigns_per_tenant_per_hour", 500))),
+        "max_destinations_per_campaign": max(1, int(getattr(S, "messaging_mass_send_max_destinations_per_campaign", 100))),
+        "max_concurrent_workers": max(1, int(getattr(S, "messaging_mass_send_max_concurrent_workers", 8))),
+    }
+
+
+def _trim_mass_message_rate_window(bucket: deque[int], *, now_ts: int, window_seconds: int) -> None:
+    threshold = now_ts - window_seconds
+    while bucket and bucket[0] <= threshold:
+        bucket.popleft()
+
+
+def _enforce_mass_message_create_limits(*, user_id: str, mode: str, destination_count: int) -> None:
+    limits = _mass_message_limits_config()
+    if destination_count > limits["max_destinations_per_campaign"]:
+        record_mass_message_limit_event(scope="campaign", limit_name="destinations_per_campaign", outcome="blocked")
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "mass_send_destinations_limit_exceeded",
+                "message": f"Campaign exceeds destination cap ({limits['max_destinations_per_campaign']}).",
+                "limit": limits["max_destinations_per_campaign"],
+                "provided": destination_count,
+            },
+        )
+    record_mass_message_limit_event(scope="campaign", limit_name="destinations_per_campaign", outcome="allowed")
+
+    tenant_id = _mass_message_tenant_for_user(user_id)
+    now = now_ts()
+    window_seconds = 3600
+    with _MASS_MESSAGE_RATE_LOCK:
+        user_bucket = _MASS_MESSAGE_USER_CREATE_TS[user_id]
+        tenant_bucket = _MASS_MESSAGE_TENANT_CREATE_TS[tenant_id]
+        _trim_mass_message_rate_window(user_bucket, now_ts=now, window_seconds=window_seconds)
+        _trim_mass_message_rate_window(tenant_bucket, now_ts=now, window_seconds=window_seconds)
+
+        user_limit = limits["campaigns_per_user_per_hour"]
+        if user_limit > 0 and len(user_bucket) >= user_limit:
+            record_mass_message_limit_event(scope="user", limit_name="campaigns_per_hour", outcome="blocked")
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "mass_send_user_rate_limited",
+                    "message": "Campaign creation rate limit exceeded for this user.",
+                    "limit": user_limit,
+                    "window_seconds": window_seconds,
+                },
+            )
+        record_mass_message_limit_event(scope="user", limit_name="campaigns_per_hour", outcome="allowed")
+
+        tenant_limit = limits["campaigns_per_tenant_per_hour"]
+        if tenant_limit > 0 and len(tenant_bucket) >= tenant_limit:
+            record_mass_message_limit_event(scope="tenant", limit_name="campaigns_per_hour", outcome="blocked")
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "mass_send_tenant_rate_limited",
+                    "message": "Campaign creation rate limit exceeded for this tenant.",
+                    "limit": tenant_limit,
+                    "window_seconds": window_seconds,
+                },
+            )
+        record_mass_message_limit_event(scope="tenant", limit_name="campaigns_per_hour", outcome="allowed")
+
+        if mode == "immediate":
+            worker_limit = limits["max_concurrent_workers"]
+            if _MASS_MESSAGE_ACTIVE_WORKERS >= worker_limit:
+                record_mass_message_limit_event(scope="worker", limit_name="concurrent_workers", outcome="blocked")
+                raise HTTPException(
+                    status_code=429,
+                    detail={
+                        "code": "mass_send_worker_capacity_exceeded",
+                        "message": "Too many concurrent mass messaging workers.",
+                        "limit": worker_limit,
+                    },
+                )
+            record_mass_message_limit_event(scope="worker", limit_name="concurrent_workers", outcome="allowed")
+
+
+def _record_mass_message_campaign_created(*, user_id: str) -> None:
+    tenant_id = _mass_message_tenant_for_user(user_id)
+    now = now_ts()
+    with _MASS_MESSAGE_RATE_LOCK:
+        _MASS_MESSAGE_USER_CREATE_TS[user_id].append(now)
+        _MASS_MESSAGE_TENANT_CREATE_TS[tenant_id].append(now)
+
+
+def _reserve_mass_message_worker_slot() -> bool:
+    limits = _mass_message_limits_config()
+    with _MASS_MESSAGE_RATE_LOCK:
+        global _MASS_MESSAGE_ACTIVE_WORKERS
+        if _MASS_MESSAGE_ACTIVE_WORKERS >= limits["max_concurrent_workers"]:
+            record_mass_message_limit_event(scope="worker", limit_name="concurrent_workers", outcome="blocked")
+            return False
+        _MASS_MESSAGE_ACTIVE_WORKERS += 1
+        record_mass_message_limit_event(scope="worker", limit_name="concurrent_workers", outcome="allowed")
+        return True
+
+
+def _release_mass_message_worker_slot() -> None:
+    with _MASS_MESSAGE_RATE_LOCK:
+        global _MASS_MESSAGE_ACTIVE_WORKERS
+        _MASS_MESSAGE_ACTIVE_WORKERS = max(0, _MASS_MESSAGE_ACTIVE_WORKERS - 1)
+
+
+def _run_mass_message_worker_with_slot(*, campaign_id: str) -> None:
+    try:
+        run_mass_message_immediate_worker(campaign_id=campaign_id)
+    finally:
+        _release_mass_message_worker_slot()
+
+
+def _kickoff_mass_message_dispatch(*, campaign_id: str, mode: str) -> None:
+    if not _messaging_mass_send_enabled():
+        logger.warning(
+            "messaging.mass_message_dispatch_skipped_feature_flag_disabled",
+            extra={"campaign_id": campaign_id, "mode": mode},
+        )
+        return
+    if mode == "immediate":
+        if not _reserve_mass_message_worker_slot():
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "mass_send_worker_capacity_exceeded",
+                    "message": "Too many concurrent mass messaging workers.",
+                    "limit": _mass_message_limits_config()["max_concurrent_workers"],
+                },
+            )
+        threading.Thread(
+            target=_run_mass_message_worker_with_slot,
+            kwargs={"campaign_id": campaign_id},
+            daemon=True,
+            name=f"mass-message-worker-{campaign_id}",
+        ).start()
+    logger.info(
+        "messaging.mass_message_dispatch_requested",
+        extra={"campaign_id": campaign_id, "mode": mode},
+    )
+
+
+def _cancel_pending_mass_destinations(*, campaign_id: str) -> int:
+    cancelled = 0
+    pagination_key: dict[str, Any] | None = None
+    while True:
+        rows, pagination_key = list_mass_destinations_page(
+            campaign_id=campaign_id,
+            limit=500,
+            start_key=pagination_key,
+        )
+        for row in rows:
+            if str(row.get("state") or "") != "pending":
+                continue
+            conversation_id = str(row.get("conversation_id") or "")
+            if not conversation_id:
+                continue
+            try:
+                upsert_mass_destination(
+                    campaign_id=campaign_id,
+                    conversation_id=conversation_id,
+                    state="cancelled",
+                    message_id=None,
+                    error_code=None,
+                )
+                apply_destination_counter_delta(
+                    campaign_id=campaign_id,
+                    to_state="cancelled",
+                    from_state="pending",
+                )
+                cancelled += 1
+            except ValueError:
+                continue
+        if not pagination_key:
+            break
+    return cancelled
+
+
+def _is_mass_message_destination_supported(conversation: dict) -> bool:
+    return str(conversation.get("type") or "").lower() in {"dm", "group"}
+
+
+def _classify_mass_destination_error(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        if exc.status_code in {401, 403}:
+            return DESTINATION_ERROR_AUTHORIZATION
+        if exc.status_code == 404:
+            return DESTINATION_ERROR_CONVERSATION_MISSING
+        if exc.status_code in {400, 409, 422}:
+            return DESTINATION_ERROR_POLICY_BLOCKED
+    if isinstance(exc, (TimeoutError, ConnectionError)):
+        return DESTINATION_ERROR_TRANSIENT_INFRA
+    if isinstance(exc, ValueError) and str(exc) == "campaign_payload_invalid":
+        return DESTINATION_ERROR_UNKNOWN
+    return DESTINATION_ERROR_TRANSIENT_INFRA
+
+
+def _is_retryable_mass_destination_error(error_code: str) -> bool:
+    return error_code in {DESTINATION_ERROR_TRANSIENT_INFRA}
+
+
+def _mass_destination_retry_limits() -> tuple[int, float, float]:
+    max_attempts = max(1, min(int(os.getenv("MASS_MESSAGE_MAX_RETRY_ATTEMPTS", "3")), 10))
+    base_backoff = max(0.01, float(os.getenv("MASS_MESSAGE_RETRY_BASE_SECONDS", "0.25")))
+    max_backoff = max(base_backoff, float(os.getenv("MASS_MESSAGE_RETRY_MAX_SECONDS", "4.0")))
+    return max_attempts, base_backoff, max_backoff
+
+
+def _retry_backoff_seconds(*, attempt_number: int, base_backoff: float, max_backoff: float) -> float:
+    return min(max_backoff, base_backoff * (2 ** max(0, attempt_number - 1)))
+
+
+def _process_mass_message_destination(*, campaign: dict[str, Any], destination: dict[str, Any]) -> dict[str, Any]:
+    campaign_id = str(campaign.get("campaign_id") or "")
+    conversation_id = str(destination.get("conversation_id") or "")
+    sender_id = str(campaign.get("sender_id") or "")
+    message_text = str(campaign.get("content_text") or "")
+    message_kind = str(campaign.get("content_kind") or "text")
+    if message_kind != "text" or not message_text:
+        raise ValueError("campaign_payload_invalid")
+
+    convo = _get_conversation_or_404(conversation_id)
+    _enforce_helpdesk_send_constraints(conversation_id=conversation_id, convo=convo, user_id=sender_id, req=None)
+    require_participant_active(sender_id, conversation_id)
+    participants = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id)).get("Items", [])
+
+    ts = now_ts()
+    mid = "m_" + new_id()
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": sender_id,
+        "created_at": ts,
+        "kind": "text",
+        "text": message_text,
+        "is_encrypted": False,
+        "reactions": {},
+        "mass_campaign_id": campaign_id,
+    }
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+    tbl_msgs.put_item(Item=item)
+    _sync_gallery_index_message(item)
+
+    _send_mass_message_destination(
+        conversation_id=conversation_id,
+        sender_id=sender_id,
+        message_id=mid,
+        created_at=ts,
+        message_item=item,
+        participants=participants,
+        preview_text=message_text[:140],
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=sender_id,
+        event_type="message.sent",
+        payload={
+            "mutation": "send",
+            "scheduled": False,
+            "campaign_id": campaign_id,
+            "message": _serialize_message_event_payload(item, sender_id),
+        },
+    )
+    _meter_message_send(user_id=sender_id, conversation_id=conversation_id, message_id=mid)
+    return {"state": "sent", "message_id": mid, "error_code": None}
+
+
+def _process_mass_message_destination_with_retry(
+    *,
+    campaign: dict[str, Any],
+    destination: dict[str, Any],
+    max_attempts: int,
+    base_backoff: float,
+    max_backoff: float,
+    mode: str = "immediate",
+) -> dict[str, Any]:
+    last_error_code = DESTINATION_ERROR_TRANSIENT_INFRA
+    campaign_id = str(campaign.get("campaign_id") or "")
+    for attempt in range(1, max_attempts + 1):
+        if not _messaging_mass_send_enabled():
+            return {
+                "state": "failed",
+                "message_id": None,
+                "error_code": DESTINATION_ERROR_POLICY_BLOCKED,
+                "attempts": attempt,
+            }
+        latest_campaign = get_mass_campaign_record(campaign_id) if campaign_id else None
+        if latest_campaign and str(latest_campaign.get("status") or "") == "cancelled":
+            return {
+                "state": "cancelled",
+                "message_id": None,
+                "error_code": None,
+                "attempts": attempt,
+            }
+        try:
+            result = _process_mass_message_destination(campaign=campaign, destination=destination)
+            result["attempts"] = attempt
+            return result
+        except Exception as exc:
+            last_error_code = _classify_mass_destination_error(exc)
+            if attempt >= max_attempts or not _is_retryable_mass_destination_error(last_error_code):
+                return {"state": "failed", "message_id": None, "error_code": last_error_code, "attempts": attempt}
+            record_mass_message_destination_retry(mode=mode, error_code=last_error_code)
+            time.sleep(_retry_backoff_seconds(attempt_number=attempt, base_backoff=base_backoff, max_backoff=max_backoff))
+
+    return {"state": "failed", "message_id": None, "error_code": last_error_code, "attempts": max_attempts}
+
+
+def run_mass_message_immediate_worker(*, campaign_id: str, max_concurrency: int = 8) -> dict[str, int]:
+    started = time.perf_counter()
+    if not _messaging_mass_send_enabled():
+        record_mass_message_worker_latency(mode="immediate", outcome="disabled", elapsed_seconds=time.perf_counter() - started)
+        return {"processed": 0, "sent": 0, "failed": 0}
+    campaign = get_mass_campaign_record(campaign_id)
+    if not campaign:
+        raise ValueError("campaign_not_found")
+    mode = str(campaign.get("mode") or "immediate")
+    sender_id = str(campaign.get("sender_id") or "")
+
+    sent_count = 0
+    failed_count = 0
+    cancelled_count = 0
+    max_attempts, base_backoff, max_backoff = _mass_destination_retry_limits()
+    processed_count = 0
+    pagination_key: dict[str, Any] | None = None
+    worker_started = False
+    with ThreadPoolExecutor(max_workers=max(1, min(int(max_concurrency), 32))) as executor:
+        while True:
+            latest_campaign = get_mass_campaign_record(campaign_id) or {}
+            if str(latest_campaign.get("status") or "") == "cancelled":
+                break
+            page_rows, pagination_key = list_mass_destinations_page(
+                campaign_id=campaign_id,
+                limit=500,
+                start_key=pagination_key,
+            )
+            pending = [row for row in page_rows if row.get("state") == "pending"]
+            if pending and not worker_started:
+                worker_started = True
+                try:
+                    update_mass_campaign_status(
+                        campaign_id=campaign_id,
+                        next_status="processing",
+                        expected_status=str(campaign.get("status") or "pending"),
+                    )
+                except Exception:
+                    pass
+            if not pending:
+                if not pagination_key:
+                    break
+                continue
+
+            processed_count += len(pending)
+            future_to_destination = {
+                executor.submit(
+                    _process_mass_message_destination_with_retry,
+                    campaign=campaign,
+                    destination=destination,
+                    max_attempts=max_attempts,
+                    base_backoff=base_backoff,
+                    max_backoff=max_backoff,
+                    mode=mode,
+                ): destination
+                for destination in pending
+            }
+            for future in as_completed(future_to_destination):
+                destination = future_to_destination[future]
+                conversation_id = str(destination.get("conversation_id") or "")
+                from_state = str(destination.get("state") or "pending")
+                try:
+                    result = future.result()
+                    if result.get("state") == "sent":
+                        sent_count += 1
+                        upsert_mass_destination(
+                            campaign_id=campaign_id,
+                            conversation_id=conversation_id,
+                            state="sent",
+                            message_id=result.get("message_id"),
+                            error_code=None,
+                        )
+                        apply_destination_counter_delta(campaign_id=campaign_id, to_state="sent", from_state=from_state)
+                        record_mass_message_destination_outcome(mode=mode, outcome="sent", error_code="none")
+                    elif result.get("state") == "cancelled":
+                        cancelled_count += 1
+                        upsert_mass_destination(
+                            campaign_id=campaign_id,
+                            conversation_id=conversation_id,
+                            state="cancelled",
+                            message_id=None,
+                            error_code=None,
+                        )
+                        apply_destination_counter_delta(campaign_id=campaign_id, to_state="cancelled", from_state=from_state)
+                        record_mass_message_destination_outcome(mode=mode, outcome="cancelled", error_code="none")
+                    else:
+                        failed_count += 1
+                        upsert_mass_destination(
+                            campaign_id=campaign_id,
+                            conversation_id=conversation_id,
+                            state="failed",
+                            message_id=None,
+                            error_code=str(result.get("error_code") or DESTINATION_ERROR_UNKNOWN),
+                        )
+                        apply_destination_counter_delta(campaign_id=campaign_id, to_state="failed", from_state=from_state)
+                        record_mass_message_destination_outcome(
+                            mode=mode,
+                            outcome="failed",
+                            error_code=str(result.get("error_code") or DESTINATION_ERROR_UNKNOWN),
+                        )
+                except Exception as exc:
+                    failed_count += 1
+                    classified_error = _classify_mass_destination_error(exc)
+                    upsert_mass_destination(
+                        campaign_id=campaign_id,
+                        conversation_id=conversation_id,
+                        state="failed",
+                        message_id=None,
+                        error_code=classified_error,
+                    )
+                    apply_destination_counter_delta(campaign_id=campaign_id, to_state="failed", from_state=from_state)
+                    record_mass_message_destination_outcome(mode=mode, outcome="failed", error_code=classified_error)
+            if not pagination_key:
+                break
+
+    if processed_count == 0:
+        record_mass_message_worker_latency(mode=mode, outcome="noop", elapsed_seconds=time.perf_counter() - started)
+        return {"processed": 0, "sent": 0, "failed": 0}
+
+    if cancelled_count > 0 and sent_count == 0 and failed_count == 0:
+        worker_outcome = "cancelled"
+    else:
+        worker_outcome = "success" if failed_count == 0 else "partial_failure"
+    try:
+        latest = get_mass_campaign_record(campaign_id) or {}
+        current_status = str(latest.get("status") or "processing")
+        if current_status in {"pending", "processing"}:
+            update_mass_campaign_status(campaign_id=campaign_id, next_status="completed", expected_status=current_status)
+            record_mass_message_campaign_event(event="complete", mode=mode, outcome=worker_outcome)
+    except Exception:
+        worker_outcome = "completion_update_error"
+    audit_event(
+        "messaging_mass_campaign_completed",
+        sender_id,
+        None,
+        outcome=worker_outcome,
+        campaign_id=campaign_id,
+        mode=mode,
+        processed=processed_count,
+        sent=sent_count,
+        failed=failed_count,
+        cancelled=cancelled_count,
+    )
+    record_mass_message_worker_latency(mode=mode, outcome=worker_outcome, elapsed_seconds=time.perf_counter() - started)
+    return {"processed": processed_count, "sent": sent_count, "failed": failed_count}
+
+
+def dispatch_due_scheduled_mass_campaigns(*, now_ts_value: int | None = None, limit: int = 100) -> dict[str, int]:
+    """Scan due scheduled campaigns and enqueue immediate worker processing."""
+    if not _messaging_mass_send_enabled():
+        return {"scanned": 0, "claimed": 0, "skipped": 0}
+    due = list_due_scheduled_mass_campaigns(now_ts=now_ts_value, limit=limit)
+    scanned = len(due)
+    claimed = 0
+    skipped = 0
+
+    for campaign in due:
+        campaign_id = str(campaign.get("campaign_id") or "")
+        if not campaign_id:
+            skipped += 1
+            continue
+        try:
+            update_mass_campaign_status(
+                campaign_id=campaign_id,
+                next_status="processing",
+                expected_status="scheduled",
+            )
+        except Exception:
+            skipped += 1
+            continue
+
+        if not _reserve_mass_message_worker_slot():
+            record_mass_message_limit_event(scope="worker", limit_name="concurrent_workers", outcome="rollback")
+            try:
+                update_mass_campaign_status(
+                    campaign_id=campaign_id,
+                    next_status="scheduled",
+                    expected_status="processing",
+                )
+            except Exception:
+                # Best-effort rollback: if this fails, later reconciliation/ops checks
+                # will flag the stuck processing campaign.
+                pass
+            skipped += 1
+            continue
+        worker_thread = threading.Thread(
+            target=_run_mass_message_worker_with_slot,
+            kwargs={"campaign_id": campaign_id},
+            daemon=True,
+            name=f"mass-message-scheduled-worker-{campaign_id}",
+        )
+        try:
+            worker_thread.start()
+            claimed += 1
+        except Exception:
+            _release_mass_message_worker_slot()
+            record_mass_message_limit_event(scope="worker", limit_name="concurrent_workers", outcome="start_failure")
+            try:
+                update_mass_campaign_status(
+                    campaign_id=campaign_id,
+                    next_status="scheduled",
+                    expected_status="processing",
+                )
+            except Exception:
+                pass
+            skipped += 1
+
+    return {"scanned": scanned, "claimed": claimed, "skipped": skipped}
+
+
+@router.post("/mass-messages", response_model=MassMessageCreateCampaignResponse, status_code=201)
+def create_mass_message_campaign(
+    req: MassMessageCreateCampaignRequest,
+    user_id: str = Depends(get_authenticated_user_sub),
+) -> MassMessageCreateCampaignResponse:
+    if not _messaging_mass_send_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "mass_send_disabled",
+                "message": "Mass messaging create is disabled",
+            },
+        )
+    _enforce_mass_message_create_limits(
+        user_id=user_id,
+        mode=req.mode,
+        destination_count=len(req.conversation_ids),
+    )
+    accepted: list[str] = []
+    rejected: list[MassMessageRejectedDestination] = []
+
+    for conversation_id in req.conversation_ids:
+        convo = tbl_convos.get_item(Key={"conversation_id": conversation_id}).get("Item")
+        if not convo:
+            rejected.append(
+                MassMessageRejectedDestination(
+                    conversation_id=conversation_id,
+                    reason="conversation_not_found",
+                )
+            )
+            continue
+        if not _is_mass_message_destination_supported(convo):
+            rejected.append(
+                MassMessageRejectedDestination(
+                    conversation_id=conversation_id,
+                    reason="unsupported_conversation_type",
+                )
+            )
+            continue
+        participant = get_participant_any(user_id, conversation_id)
+        if not participant or participant.get("status") != "active":
+            rejected.append(
+                MassMessageRejectedDestination(
+                    conversation_id=conversation_id,
+                    reason="not_active_participant",
+                )
+            )
+            continue
+        accepted.append(conversation_id)
+
+    if not accepted:
+        raise HTTPException(400, "No eligible destinations")
+
+    payload_hash = _mass_message_payload_hash(kind=req.content.kind, text=req.content.text)
+    campaign, created_new = create_or_get_mass_campaign_record(
+        sender_id=user_id,
+        mode=req.mode,
+        payload_hash=payload_hash,
+        send_at=req.send_at,
+        idempotency_key=req.idempotency_key,
+        content_kind=req.content.kind,
+        content_text=req.content.text,
+    )
+    campaign_id = str(campaign["campaign_id"])
+
+    if created_new:
+        _record_mass_message_campaign_created(user_id=user_id)
+        record_mass_message_campaign_event(event="create", mode=req.mode, outcome="success")
+        for conversation_id in accepted:
+            upsert_mass_destination(
+                campaign_id=campaign_id,
+                conversation_id=conversation_id,
+                state="pending",
+            )
+            apply_destination_counter_delta(
+                campaign_id=campaign_id,
+                to_state="pending",
+                from_state=None,
+            )
+        set_campaign_submission_result(
+            campaign_id=campaign_id,
+            accepted_conversation_ids=accepted,
+            rejected=[item.model_dump() for item in rejected],
+        )
+    else:
+        record_mass_message_campaign_event(event="create", mode=req.mode, outcome="idempotent_replay")
+    audit_event(
+        "messaging_mass_campaign_submitted",
+        user_id,
+        None,
+        outcome="success",
+        campaign_id=campaign_id,
+        mode=req.mode,
+        accepted_count=len(accepted),
+        rejected_count=len(rejected),
+        created_new=created_new,
+    )
+
+    latest_campaign = get_mass_campaign_record(campaign_id) or campaign
+    _kickoff_mass_message_dispatch(campaign_id=campaign_id, mode=req.mode)
+    accepted_for_response = list(latest_campaign.get("accepted_conversation_ids") or accepted)
+    rejected_for_response = latest_campaign.get("rejected_destinations") or [item.model_dump() for item in rejected]
+    rejected_models = [MassMessageRejectedDestination(**item) for item in rejected_for_response]
+
+    return MassMessageCreateCampaignResponse(
+        campaign_id=campaign_id,
+        mode=str(latest_campaign.get("mode", req.mode)),
+        status=str(latest_campaign.get("status", campaign.get("status", "pending"))),
+        send_at=latest_campaign.get("send_at"),
+        accepted_count=len(accepted_for_response),
+        accepted_conversation_ids=accepted_for_response,
+        rejected=rejected_models,
+        counters={
+            "total": int(latest_campaign.get("total", 0) or 0),
+            "queued": int(latest_campaign.get("queued", 0) or 0),
+            "sent": int(latest_campaign.get("sent", 0) or 0),
+            "failed": int(latest_campaign.get("failed", 0) or 0),
+            "cancelled": int(latest_campaign.get("cancelled", 0) or 0),
+        },
+        created_at=int(latest_campaign.get("created_at", campaign.get("created_at", now_ts()))),
+        updated_at=int(latest_campaign.get("updated_at", campaign.get("updated_at", now_ts()))),
+    )
+
+
+@router.get("/mass-messages", response_model=MassMessageCampaignListResponse)
+def list_mass_message_campaigns(
+    limit: int = Query(25, ge=1, le=200),
+    cursor: str | None = Query(default=None, max_length=2048),
+    status: str | None = Query(default=None),
+    mode: str | None = Query(default=None),
+    user_id: str = Depends(get_authenticated_user_sub),
+) -> MassMessageCampaignListResponse:
+    if cursor is not None and not isinstance(cursor, str):
+        cursor = None
+    if status is not None and not isinstance(status, str):
+        status = None
+    if mode is not None and not isinstance(mode, str):
+        mode = None
+
+    decoded_cursor = decode_cursor(cursor)
+    if cursor and decoded_cursor is None:
+        raise HTTPException(status_code=400, detail="Invalid cursor")
+    if decoded_cursor and str(decoded_cursor.get("sender_id") or "") != user_id:
+        raise HTTPException(status_code=400, detail="Invalid cursor")
+    if decoded_cursor:
+        try:
+            created_at_cursor = int(decoded_cursor.get("created_at", 0) or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Invalid cursor")
+        if not decoded_cursor.get("campaign_id") or created_at_cursor <= 0:
+            raise HTTPException(status_code=400, detail="Invalid cursor")
+
+    normalized_status = str(status or "").strip().lower() or None
+    allowed_statuses = {"pending", "scheduled", "processing", "completed", "failed", "cancelled"}
+    if normalized_status and normalized_status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail="Invalid status filter")
+
+    normalized_mode = str(mode or "").strip().lower() or None
+    if normalized_mode and normalized_mode not in {"immediate", "scheduled"}:
+        raise HTTPException(status_code=400, detail="Invalid mode filter")
+
+    filtered: list[MassMessageCampaignSummary] = []
+    scan_key = decoded_cursor
+    resume_key: dict[str, Any] | None = None
+    has_more = False
+    seen_cursor_tokens: set[str] = set()
+    seen_campaign_ids: set[str] = set()
+    while len(filtered) < limit:
+        if scan_key is not None:
+            token = encode_cursor(scan_key)
+            if token in seen_cursor_tokens:
+                break
+            if token is not None:
+                seen_cursor_tokens.add(token)
+        campaigns, next_key = list_campaigns_for_sender(
+            sender_id=user_id,
+            limit=min(200, max(limit, 25)),
+            start_key=scan_key,
+        )
+        for idx, campaign in enumerate(campaigns):
+            campaign_status = str(campaign.get("status") or "pending")
+            campaign_mode = str(campaign.get("mode") or "immediate")
+            campaign_id = str(campaign.get("campaign_id") or "")
+            if not campaign_id or campaign_id in seen_campaign_ids:
+                continue
+            if normalized_status and campaign_status != normalized_status:
+                continue
+            if normalized_mode and campaign_mode != normalized_mode:
+                continue
+            filtered.append(
+                MassMessageCampaignSummary(
+                    campaign_id=campaign_id,
+                    mode=campaign_mode,  # type: ignore[arg-type]
+                    status=campaign_status,  # type: ignore[arg-type]
+                    send_at=campaign.get("send_at"),
+                    counters={
+                        "total": int(campaign.get("total", 0) or 0),
+                        "queued": int(campaign.get("queued", 0) or 0),
+                        "sent": int(campaign.get("sent", 0) or 0),
+                        "failed": int(campaign.get("failed", 0) or 0),
+                        "cancelled": int(campaign.get("cancelled", 0) or 0),
+                    },
+                    created_at=int(campaign.get("created_at", now_ts())),
+                    updated_at=int(campaign.get("updated_at", now_ts())),
+                )
+            )
+            if len(filtered) >= limit:
+                has_more = idx < len(campaigns) - 1 or bool(next_key)
+                resume_key = {
+                    "campaign_id": campaign_id,
+                    "sender_id": str(campaign.get("sender_id") or user_id),
+                    "created_at": int(campaign.get("created_at", 0) or 0),
+                }
+                break
+            seen_campaign_ids.add(campaign_id)
+        if len(filtered) >= limit:
+            break
+        if not next_key:
+            has_more = False
+            resume_key = None
+            break
+        if next_key == scan_key:
+            has_more = True
+            resume_key = next_key
+            break
+        scan_key = next_key
+
+    next_cursor = encode_cursor(resume_key if has_more else None)
+    return MassMessageCampaignListResponse(items=filtered, next_cursor=next_cursor)
+
+
+@router.get("/mass-messages/{campaign_id}", response_model=MassMessageCampaignDetailResponse)
+def get_mass_message_campaign(
+    campaign_id: str,
+    limit: int = Query(100, ge=1, le=500),
+    cursor: str | None = Query(default=None, max_length=2048),
+    user_id: str = Depends(get_authenticated_user_sub),
+) -> MassMessageCampaignDetailResponse:
+    if cursor is not None and not isinstance(cursor, str):
+        cursor = None
+
+    campaign = get_mass_campaign_record(campaign_id)
+    if not campaign:
+        raise HTTPException(404, "Campaign not found")
+
+    if str(campaign.get("sender_id") or "") != user_id:
+        # Return 404 to avoid leaking campaign existence/details.
+        raise HTTPException(404, "Campaign not found")
+
+    decoded_cursor = decode_cursor(cursor)
+    if cursor and decoded_cursor is None:
+        raise HTTPException(status_code=400, detail="Invalid cursor")
+    if decoded_cursor and (
+        str(decoded_cursor.get("campaign_id") or "") != campaign_id
+        or not decoded_cursor.get("conversation_id")
+    ):
+        raise HTTPException(status_code=400, detail="Invalid cursor")
+
+    destinations, next_key = list_mass_destinations_page(
+        campaign_id=campaign_id,
+        limit=limit,
+        start_key=decoded_cursor,
+    )
+    return MassMessageCampaignDetailResponse(
+        campaign_id=campaign_id,
+        sender_id=str(campaign.get("sender_id")),
+        mode=str(campaign.get("mode", "immediate")),
+        status=str(campaign.get("status", "pending")),
+        send_at=campaign.get("send_at"),
+        counters={
+            "total": int(campaign.get("total", 0) or 0),
+            "queued": int(campaign.get("queued", 0) or 0),
+            "sent": int(campaign.get("sent", 0) or 0),
+            "failed": int(campaign.get("failed", 0) or 0),
+            "cancelled": int(campaign.get("cancelled", 0) or 0),
+        },
+        destinations=destinations,
+        next_cursor=encode_cursor(next_key),
+        created_at=int(campaign.get("created_at", now_ts())),
+        updated_at=int(campaign.get("updated_at", now_ts())),
+    )
+
+
+@router.post("/mass-messages/{campaign_id}/cancel", response_model=MassMessageCancelCampaignResponse)
+def cancel_mass_message_campaign(
+    campaign_id: str,
+    user_id: str = Depends(get_authenticated_user_sub),
+) -> MassMessageCancelCampaignResponse:
+    campaign = get_mass_campaign_record(campaign_id)
+    if not campaign:
+        raise HTTPException(404, "Campaign not found")
+    if str(campaign.get("sender_id") or "") != user_id:
+        raise HTTPException(404, "Campaign not found")
+
+    current_status = str(campaign.get("status") or "pending")
+    cancelled_destinations = 0
+    if current_status in {"completed", "failed", "cancelled"}:
+        record_mass_message_campaign_event(
+            event="cancel",
+            mode=str(campaign.get("mode") or "immediate"),
+            outcome="noop_terminal",
+        )
+    else:
+        try:
+            updated = update_mass_campaign_status(
+                campaign_id=campaign_id,
+                next_status="cancelled",
+                expected_status=current_status,
+            )
+            campaign = updated or campaign
+            cancelled_destinations = _cancel_pending_mass_destinations(campaign_id=campaign_id)
+            campaign = get_mass_campaign_record(campaign_id) or campaign
+            record_mass_message_campaign_event(event="cancel", mode=str(campaign.get("mode") or "immediate"), outcome="success")
+            audit_event(
+                "messaging_mass_campaign_cancelled",
+                user_id,
+                None,
+                outcome="success",
+                campaign_id=campaign_id,
+                cancelled_destinations=cancelled_destinations,
+            )
+        except ValueError:
+            record_mass_message_campaign_event(
+                event="cancel",
+                mode=str(campaign.get("mode") or "immediate"),
+                outcome="race",
+            )
+            campaign = get_mass_campaign_record(campaign_id) or campaign
+
+    return MassMessageCancelCampaignResponse(
+        campaign_id=campaign_id,
+        status=str(campaign.get("status") or current_status),
+        cancelled_destinations=cancelled_destinations,
+        counters={
+            "total": int(campaign.get("total", 0) or 0),
+            "queued": int(campaign.get("queued", 0) or 0),
+            "sent": int(campaign.get("sent", 0) or 0),
+            "failed": int(campaign.get("failed", 0) or 0),
+            "cancelled": int(campaign.get("cancelled", 0) or 0),
+        },
+        updated_at=int(campaign.get("updated_at", now_ts())),
+    )
 
 
 async def require_legal_hold_operator(user: AuthenticatedUser = Depends(get_authenticated_user), request: Request = None) -> AuthenticatedUser:
@@ -1120,6 +2051,7 @@ class MessagingConfigOut(BaseModel):
     messaging_hide_controls_enabled: bool
     messaging_pins_enabled: bool
     messaging_reporting_enabled: bool
+    messaging_mass_send_enabled: bool
 
 
 class ParticipantOut(BaseModel):
@@ -3372,6 +4304,86 @@ def _record_delivery_receipts(conversation_id: str, message_id: str, sender_id: 
                     "read_at": 0,
                 }
             )
+
+
+def _send_single_destination_message(
+    *,
+    conversation_id: str,
+    sender_id: str,
+    message_id: str,
+    created_at: int,
+    message_item: dict[str, Any],
+    participants: Sequence[dict],
+    is_scheduled: bool,
+    preview_text: str,
+    search_text: str | None = None,
+    search_kind: str | None = None,
+    consumption_policy: str = CONSUMPTION_POLICY_NONE,
+    media_kind: str | None = None,
+) -> None:
+    """Apply single-destination send side effects shared by API sends and mass fanout workers."""
+    if is_scheduled:
+        return
+
+    _bump_unread_counts(conversation_id, sender_id, participants)
+    _record_delivery_receipts(conversation_id, message_id, sender_id, participants)
+
+    if search_text is not None and search_kind:
+        index_message_search(conversation_id, message_id, sender_id, created_at, search_text, kind=search_kind)
+
+    if consumption_policy != CONSUMPTION_POLICY_NONE and media_kind:
+        _put_message_consumption_records(
+            conversation_id=conversation_id,
+            message_id=message_id,
+            sender_id=sender_id,
+            participants=participants,
+            consumption_policy=consumption_policy,
+            media_kind=media_kind,
+            created_at=created_at,
+        )
+
+    tbl_convos.update_item(
+        Key={"conversation_id": conversation_id},
+        UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+        ExpressionAttributeValues={":ts": created_at, ":p": preview_text, ":mid": message_id},
+    )
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=sender_id,
+        event_type="message:new",
+        payload={
+            "message_id": message_id,
+            "created_at": created_at,
+            "message": _serialize_message_event_payload(message_item, sender_id),
+        },
+        respect_mute=False,
+    )
+
+
+def _send_mass_message_destination(
+    *,
+    conversation_id: str,
+    sender_id: str,
+    message_id: str,
+    created_at: int,
+    message_item: dict[str, Any],
+    participants: Sequence[dict],
+    preview_text: str,
+) -> None:
+    """Worker-facing shim for mass fanout destinations using shared single-send helper."""
+    _send_single_destination_message(
+        conversation_id=conversation_id,
+        sender_id=sender_id,
+        message_id=message_id,
+        created_at=created_at,
+        message_item=message_item,
+        participants=participants,
+        is_scheduled=False,
+        preview_text=preview_text,
+        search_text=str(message_item.get("text") or "") if message_item.get("kind") == "text" else None,
+        search_kind="text" if message_item.get("kind") == "text" else None,
+    )
 
 
 def _ensure_can_revoke_message(user_id: str, conversation_id: str, message_item: dict) -> None:
@@ -6274,19 +7286,19 @@ def send_text_message(
     tbl_msgs.put_item(Item=item)
     _sync_gallery_index_message(item)
 
-    if not is_scheduled:
-        # Only deliver immediately if not scheduled
-        _bump_unread_counts(conversation_id, user_id, participants)
-        _record_delivery_receipts(conversation_id, mid, user_id, participants)
-        if not is_encrypted:
-            index_message_search(conversation_id, mid, user_id, ts, message_text, kind="text")
-
-        preview_text = "[Encrypted message]" if is_encrypted else message_text[:140]
-        tbl_convos.update_item(
-            Key={"conversation_id": conversation_id},
-            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
-            ExpressionAttributeValues={":ts": ts, ":p": preview_text, ":mid": mid},
-        )
+    preview_text = "[Encrypted message]" if is_encrypted else message_text[:140]
+    _send_single_destination_message(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        message_id=mid,
+        created_at=ts,
+        message_item=item,
+        participants=participants,
+        is_scheduled=is_scheduled,
+        preview_text=preview_text,
+        search_text=message_text if not is_encrypted else None,
+        search_kind="text" if not is_encrypted else None,
+    )
 
     message = MessageOut(
         conversation_id=conversation_id,
@@ -6524,37 +7536,19 @@ def create_image_message(
     tbl_msgs.put_item(Item=item)
     _sync_gallery_index_message(item)
 
-    if not is_scheduled_img:
-        _bump_unread_counts(conversation_id, user_id, participants)
-        _record_delivery_receipts(conversation_id, mid, user_id, participants)
-        _put_message_consumption_records(
-            conversation_id=conversation_id,
-            message_id=mid,
-            sender_id=user_id,
-            participants=participants,
-            consumption_policy=inp.consumption_policy,
-            media_kind="image",
-            created_at=ts,
-        )
-
-        _preview = inp.caption or ("[file]" if inp.kind == "file" else "[video]" if inp.kind == "video" else "[image]")
-        tbl_convos.update_item(
-            Key={"conversation_id": conversation_id},
-            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
-            ExpressionAttributeValues={":ts": ts, ":p": _preview, ":mid": mid},
-        )
-
-        _fanout_new_message_event(
-            conversation_id=conversation_id,
-            sender_id=user_id,
-            message_item=item,
-            payload={
-                "message_id": mid,
-                "created_at": ts,
-                "message": _serialize_message_event_payload(item, user_id),
-            },
-            respect_mute=False,
-        )
+    _preview = inp.caption or ("[file]" if inp.kind == "file" else "[video]" if inp.kind == "video" else "[image]")
+    _send_single_destination_message(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        message_id=mid,
+        created_at=ts,
+        message_item=item,
+        participants=participants,
+        is_scheduled=is_scheduled_img,
+        preview_text=_preview,
+        consumption_policy=inp.consumption_policy,
+        media_kind="image",
+    )
 
     message = MessageOut(
         conversation_id=conversation_id,
@@ -6750,28 +7744,17 @@ def create_gallery_message(
 
     tbl_msgs.put_item(Item=item)
 
-    if not is_scheduled_gal:
-        _bump_unread_counts(conversation_id, user_id, participants)
-        _record_delivery_receipts(conversation_id, mid, user_id, participants)
-
-        _preview = inp.text or f"[Gallery: {len(inp.free_images)} free + {len(inp.locked_images)} locked]"
-        tbl_convos.update_item(
-            Key={"conversation_id": conversation_id},
-            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
-            ExpressionAttributeValues={":ts": ts, ":p": _preview, ":mid": mid},
-        )
-
-        _fanout_new_message_event(
-            conversation_id=conversation_id,
-            sender_id=user_id,
-            message_item=item,
-            payload={
-                "message_id": mid,
-                "created_at": ts,
-                "message": _serialize_message_event_payload(item, user_id),
-            },
-            respect_mute=False,
-        )
+    _preview = inp.text or f"[Gallery: {len(inp.free_images)} free + {len(inp.locked_images)} locked]"
+    _send_single_destination_message(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        message_id=mid,
+        created_at=ts,
+        message_item=item,
+        participants=participants,
+        is_scheduled=is_scheduled_gal,
+        preview_text=_preview,
+    )
 
     # Build response: sender always sees all images
     free_imgs_out = [_project_gallery_image(img.model_dump()) for img in inp.free_images]
@@ -9757,6 +10740,7 @@ def messaging_config(user_id: str = Depends(get_messaging_user_id)):
         messaging_hide_controls_enabled=_messaging_hide_controls_enabled(),
         messaging_pins_enabled=_messaging_pins_enabled(),
         messaging_reporting_enabled=_messaging_reporting_enabled(),
+        messaging_mass_send_enabled=_messaging_mass_send_enabled(),
     )
 
 

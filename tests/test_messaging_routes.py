@@ -834,6 +834,18 @@ class TestMessagingRoutes(unittest.TestCase):
             resp = messaging.messaging_config(user_id="user-1")
         self.assertFalse(resp.messaging_gallery_enabled)
 
+    def test_messaging_config_reflects_mass_send_kill_switch(self):
+        with patch.dict(
+            os.environ,
+            {
+                "MESSAGING_MASS_SEND_ENABLED": "1",
+                "MESSAGING_MASS_SEND_KILL_SWITCH": "1",
+            },
+            clear=False,
+        ):
+            resp = messaging.messaging_config(user_id="user-1")
+        self.assertFalse(resp.messaging_mass_send_enabled)
+
 
     def test_plaintext_send_works_when_encryption_feature_flag_off(self):
         tbl_msgs = Mock()
