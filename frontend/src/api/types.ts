@@ -424,6 +424,16 @@ export interface Profile {
   cover_photo_url?: string;
 }
 
+export type ProfileViewAudience = "owner" | "member" | "public";
+
+export interface CrossUserProfileResp {
+  identifier: string;
+  canonical_identifier?: string;
+  user_sub: string;
+  audience: ProfileViewAudience;
+  profile: Profile;
+}
+
 // ─── Addresses ───────────────────────────────────────────────────
 
 export interface AddressIn {

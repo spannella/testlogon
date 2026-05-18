@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Optional
 from fastapi import HTTPException
 
 from app.core.time import now_ts
@@ -184,6 +185,44 @@ def rate_limit_password_recovery(user_sub: str, ip: str, action: str) -> None:
         raise HTTPException(429, "Too many recovery attempts; try again later")
     if not _bucket_limit(_ip_user(ip), sid, S.login_attempt_max_per_window, S.login_attempt_window_seconds):
         raise HTTPException(429, "Too many recovery attempts; try again later")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, str(default))
+    try:
+        return max(1, int(raw))
+    except Exception:
+        return max(1, int(default))
+
+
+def rate_limit_profile_lookup(requester_user_sub: Optional[str], ip: str) -> None:
+    window_seconds = _env_int("PROFILE_LOOKUP_RATE_LIMIT_WINDOW_SECONDS", 60)
+    auth_max = _env_int("PROFILE_LOOKUP_RATE_LIMIT_AUTH_MAX", 120)
+    anon_max = _env_int("PROFILE_LOOKUP_RATE_LIMIT_ANON_MAX", 30)
+
+    if requester_user_sub:
+        if not _bucket_limit(requester_user_sub, "rl#profile_lookup#auth", auth_max, window_seconds):
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "profile_lookup_rate_limited",
+                    "tier": "authenticated",
+                    "retry_after_seconds": window_seconds,
+                },
+                headers={"Retry-After": str(window_seconds)},
+            )
+        return
+
+    if not _bucket_limit(_ip_user(ip), "rl#profile_lookup#anon", anon_max, window_seconds):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "profile_lookup_rate_limited",
+                "tier": "anonymous",
+                "retry_after_seconds": window_seconds,
+            },
+            headers={"Retry-After": str(window_seconds)},
+        )
 
 def _lockout_key(user_sub: str, action: str) -> str:
     return f"lockout#{action}"

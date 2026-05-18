@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { UserProfileLink } from "@/components/shared/UserProfileLink";
 import { useAuthStore } from "@/stores/authStore";
 
 const POLL_MS = 15000;
@@ -215,7 +216,12 @@ export default function TicketSpaceDetailPage() {
                       {members.map((member) => (
                         <div key={member.member_sub} className="flex items-center justify-between rounded border p-2 text-sm">
                           <div className="min-w-0">
-                            <div className="truncate font-medium">{member.member_sub}</div>
+                            <UserProfileLink
+                              userId={member.member_sub}
+                              displayName={member.member_sub}
+                              className="truncate font-medium hover:underline"
+                              ariaLabel={`Open ${member.member_sub} profile`}
+                            />
                             <div className="text-xs text-muted-foreground">role {member.role} • updated {fmt(member.updated_at)}</div>
                           </div>
                           <Button
@@ -295,10 +301,27 @@ export default function TicketSpaceDetailPage() {
                     <div className="space-y-1">
                       <div className="font-medium">{selected.subject}</div>
                       <div className="text-xs text-muted-foreground">
-                        {selected.ticket_id} • owner {selected.owner_sub} • updated {fmt(selected.updated_at)}
+                        {selected.ticket_id} • owner{" "}
+                        <UserProfileLink
+                          userId={selected.owner_sub}
+                          displayName={selected.owner_sub}
+                          className="font-medium hover:underline"
+                          ariaLabel={`Open ${selected.owner_sub} profile`}
+                        />{" "}
+                        • updated {fmt(selected.updated_at)}
                       </div>
                       <div className="text-xs text-muted-foreground">
-                        status {selected.status} • assigned {selected.assigned_to_sub || "unassigned"}
+                        status {selected.status} • assigned{" "}
+                        {selected.assigned_to_sub ? (
+                          <UserProfileLink
+                            userId={selected.assigned_to_sub}
+                            displayName={selected.assigned_to_sub}
+                            className="font-medium hover:underline"
+                            ariaLabel={`Open ${selected.assigned_to_sub} profile`}
+                          />
+                        ) : (
+                          "unassigned"
+                        )}
                       </div>
                     </div>
 
@@ -331,7 +354,15 @@ export default function TicketSpaceDetailPage() {
                     <div className="space-y-2 rounded-md border p-2 max-h-72 overflow-auto">
                       {(selected.messages || []).map((m) => (
                         <div key={m.message_id} className="rounded border p-2 text-sm">
-                          <div className="text-xs text-muted-foreground">{m.sender_sub} • {fmt(m.created_at)}</div>
+                          <div className="text-xs text-muted-foreground">
+                            <UserProfileLink
+                              userId={m.sender_sub}
+                              displayName={m.sender_sub}
+                              className="font-medium hover:underline"
+                              ariaLabel={`Open ${m.sender_sub} profile`}
+                            />{" "}
+                            • {fmt(m.created_at)}
+                          </div>
                           <div>{m.body}</div>
                         </div>
                       ))}

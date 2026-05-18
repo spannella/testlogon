@@ -24,6 +24,7 @@ import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendC
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
 import { PresenceDot } from "./PresenceDot";
+import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 import { TypingIndicator, useTypingSignal } from "./TypingIndicator";
 import { ParticipantsPanel } from "./ParticipantsPanel";
 import { isMessagingGalleryEnabled } from "@/lib/featureFlags";
@@ -428,6 +429,9 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const dmPartner = !isGroup
     ? conversation.participants.find((p) => p.user_id !== userId)
     : undefined;
+  const dmPartnerProfilePath = dmPartner
+    ? resolveCanonicalProfilePath({ userId: dmPartner.user_id, displayName: dmPartner.display_name })
+    : null;
 
   const latestPinnedMessageId = conversation.latest_pinned_message_id;
   const latestPinnedAt = conversation.latest_pinned_at;
@@ -465,18 +469,42 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
           </Button>
         )}
         <div className="relative">
-          <Avatar className="h-9 w-9">
-            {dmPartner?.profile_photo_url && (
-              <AvatarImage src={dmPartner.profile_photo_url} alt={dmPartner.display_name ?? dmPartner.user_id} />
-            )}
-            <AvatarFallback className="text-xs">
-              {title.slice(0, 2).toUpperCase()}
-            </AvatarFallback>
-          </Avatar>
+          {dmPartner && dmPartnerProfilePath ? (
+            <a
+              href={dmPartnerProfilePath}
+              aria-label={`Open ${dmPartner.display_name ?? dmPartner.user_id} profile`}
+              className="block rounded-full hover:opacity-90"
+            >
+              <Avatar className="h-9 w-9">
+                {dmPartner.profile_photo_url && (
+                  <AvatarImage src={dmPartner.profile_photo_url} alt={dmPartner.display_name ?? dmPartner.user_id} />
+                )}
+                <AvatarFallback className="text-xs">
+                  {title.slice(0, 2).toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+            </a>
+          ) : (
+            <Avatar className="h-9 w-9">
+              <AvatarFallback className="text-xs">
+                {title.slice(0, 2).toUpperCase()}
+              </AvatarFallback>
+            </Avatar>
+          )}
           {dmPartner && <PresenceDot userId={dmPartner.user_id} />}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold">{title}</p>
+          {dmPartner && dmPartnerProfilePath ? (
+            <a
+              href={dmPartnerProfilePath}
+              className="truncate text-sm font-semibold hover:underline"
+              aria-label={`Open ${dmPartner.display_name ?? dmPartner.user_id} profile`}
+            >
+              {dmPartner.display_name ?? dmPartner.user_id}
+            </a>
+          ) : (
+            <p className="truncate text-sm font-semibold">{title}</p>
+          )}
           {isGroup && (
             <p className="flex items-center gap-1 text-xs text-muted-foreground">
               <Users className="h-3 w-3" />

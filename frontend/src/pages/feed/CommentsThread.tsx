@@ -24,6 +24,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { ApiError } from "@/api/client";
 import type { FeedComment } from "@/api/types";
 import { TipDialog } from "./TipDialog";
+import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 import { MarkdownComposer, type EditorMode, type RichDoc, richDocToPlain, buildContentPayload } from "./MarkdownComposer";
 import { RichContentRenderer } from "./RichContentRenderer";
 
@@ -174,6 +175,7 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
   const [editRichDoc, setEditRichDoc] = useState<RichDoc | null>((comment.body_rich as RichDoc | undefined) ?? null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [tipOpen, setTipOpen] = useState(false);
+  const authorProfilePath = resolveCanonicalProfilePath({ userId: comment.author_id, displayName: comment.author_id });
   const [reportOpen, setReportOpen] = useState(false);
   const [reportServerError, setReportServerError] = useState<string | null>(null);
 
@@ -258,14 +260,26 @@ function CommentRow({ comment, postId, isOwn }: CommentRowProps) {
   return (
     <>
       <div className="group flex gap-2">
-        <Avatar className="h-6 w-6 shrink-0">
-          <AvatarFallback className="text-[10px]">
-            {comment.author_id.slice(0, 2).toUpperCase()}
-          </AvatarFallback>
-        </Avatar>
+        <a
+          href={authorProfilePath ?? "#"}
+          aria-label={`Open ${comment.author_id} profile`}
+          className="shrink-0 rounded-full hover:opacity-90"
+        >
+          <Avatar className="h-6 w-6 shrink-0">
+            <AvatarFallback className="text-[10px]">
+              {comment.author_id.slice(0, 2).toUpperCase()}
+            </AvatarFallback>
+          </Avatar>
+        </a>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5">
-            <span className="text-xs font-medium">{comment.author_id}</span>
+            <a
+              href={authorProfilePath ?? "#"}
+              aria-label={`Open ${comment.author_id} profile`}
+              className="text-xs font-medium hover:underline"
+            >
+              {comment.author_id}
+            </a>
             <span className="text-[10px] text-muted-foreground">
               {new Date(comment.created_at).toLocaleDateString()}
             </span>

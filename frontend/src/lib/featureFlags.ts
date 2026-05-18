@@ -53,6 +53,8 @@ export const newsfeedDraftsKillSwitch = toBool(env.VITE_NEWSFEED_DRAFTS_KILL_SWI
 export const isNewsfeedDraftsEnabled = () => newsfeedDraftsEnabled && !newsfeedDraftsKillSwitch;
 export const newsfeedSchedulingUiEnabled = toBool(env.VITE_NEWSFEED_SCHEDULING_UI_ENABLED, true);
 
+export const canonicalProfileNavigationEnabled = toBool(env.VITE_CANONICAL_PROFILE_NAVIGATION_ENABLED, false);
+export const isCanonicalProfileNavigationEnabled = () => canonicalProfileNavigationEnabled;
 
 export const vncRemoteDesktopEnabled = toBool(env.VITE_VNC_REMOTE_DESKTOP_ENABLED, true);
 export const vncRemoteDesktopKillSwitch = toBool(env.VITE_VNC_REMOTE_DESKTOP_KILL_SWITCH, false);

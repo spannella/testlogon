@@ -27,6 +27,7 @@ import { TipDialog } from "./TipDialog";
 import { SharePostDialog } from "./SharePostDialog";
 import { FilePreview } from "@/pages/files/FilePreview";
 import { ReportContentModal, type ReportContentPayload } from "@/components/shared/ReportContentModal";
+import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 import type { FeedPost, PaymentMethod, PostFileAttachment } from "@/api/types";
 import type { FileEntry } from "@/api/types";
 
@@ -246,6 +247,7 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
 
   const isLocked = !!post.unlock_price_cents && !post.unlocked;
   const initials = post.author_id.slice(0, 2).toUpperCase();
+  const authorProfilePath = resolveCanonicalProfilePath({ userId: post.author_id, displayName: post.author_id });
 
   const REACTION_EMOJIS = ["👍", "❤️", "😂", "🔥", "😮"];
 
@@ -302,11 +304,23 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
       <CardContent className="p-4">
         {/* Author header */}
         <div className="flex items-center gap-3">
-          <Avatar className="h-9 w-9">
-            <AvatarFallback className="text-xs">{initials}</AvatarFallback>
-          </Avatar>
+          <a
+            href={authorProfilePath ?? "#"}
+            aria-label={`Open ${post.author_id} profile`}
+            className="rounded-full hover:opacity-90"
+          >
+            <Avatar className="h-9 w-9">
+              <AvatarFallback className="text-xs">{initials}</AvatarFallback>
+            </Avatar>
+          </a>
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">{post.author_id}</p>
+            <a
+              href={authorProfilePath ?? "#"}
+              aria-label={`Open ${post.author_id} profile`}
+              className="text-sm font-medium hover:underline"
+            >
+              {post.author_id}
+            </a>
             <p className="text-[10px] text-muted-foreground">
               {formatRelative(post.created_at)}
               {post.updated_at && (

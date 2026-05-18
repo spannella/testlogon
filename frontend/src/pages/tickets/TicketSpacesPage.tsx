@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { UserProfileLink } from "@/components/shared/UserProfileLink";
 
 function fmt(ts?: number | null): string {
   if (!ts) return "—";
@@ -108,7 +109,14 @@ function SpaceRow({ space }: { space: TicketSpace }) {
         <Badge variant="outline">{space.visibility}</Badge>
       </div>
       <div className="mt-1 text-xs text-muted-foreground">
-        {space.space_id} • owner {space.owner_sub} • updated {fmt(space.updated_at)}
+        {space.space_id} • owner{" "}
+        <UserProfileLink
+          userId={space.owner_sub}
+          displayName={space.owner_sub}
+          className="font-medium hover:underline"
+          ariaLabel={`Open ${space.owner_sub} profile`}
+        />{" "}
+        • updated {fmt(space.updated_at)}
       </div>
       <div className="mt-2">
         <Button asChild size="sm" variant="outline">

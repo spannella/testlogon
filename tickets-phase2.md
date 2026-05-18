@@ -1891,3 +1891,134 @@
 **Acceptance criteria:**
 - Monthly review template includes lag, error, DLQ, and quota trends.
 - Action items from each review are tracked with owners and due dates.
+### UPR-101: Canonical link coverage inventory and gap closure
+**Description:** Build an inventory of all UI identity surfaces and close remaining gaps where canonical profile links are not used.
+**Acceptance criteria:**
+- Inventory lists each surface, owner, and migration status.
+- All non-exempt surfaces use canonical profile links or have an approved exception.
+
+### UPR-102: Alerts and notification center canonical-link integration
+**Description:** Add canonical profile links for actor identities in alerts list rows and notification detail drawers.
+**Acceptance criteria:**
+- Actor names/avatars route to `/u/:identifier` when the flag is enabled.
+- Existing alert actions (acknowledge, dismiss, bulk operations) continue to work.
+
+### UPR-103: Helpdesk and moderation timeline identity linking
+**Description:** Wire canonical profile links into helpdesk and moderation timeline participant chips.
+**Acceptance criteria:**
+- Timeline participant identities link to canonical profile routes.
+- Assignment/escalation/reply flows pass regression tests.
+
+### UPR-104: Identifier normalization conformance suite
+**Description:** Create a shared fixture-driven conformance suite for identifier normalization across frontend and backend.
+**Acceptance criteria:**
+- Frontend and backend produce identical normalized values for all fixtures.
+- CI fails on normalization drift.
+
+### UPR-105: Alias collision handling and remediation workflow
+**Description:** Harden alias uniqueness enforcement and document operator remediation for existing collisions.
+**Acceptance criteria:**
+- Conflicting alias updates fail with deterministic error codes.
+- Runbook includes safe remediation and rollback procedures.
+
+### UPR-106: Canonical redirect consistency and caching policy
+**Description:** Standardize redirect behavior from legacy/non-canonical aliases and define cache headers.
+**Acceptance criteria:**
+- Non-canonical aliases resolve to canonical route with consistent redirect semantics.
+- Redirect cache policy is documented and covered by tests.
+
+### UPR-107: Profile lookup schema compatibility gate
+**Description:** Add versioned compatibility checks to prevent unapproved breaking changes in profile lookup responses.
+**Acceptance criteria:**
+- Contract tests validate owner/member/public payload shapes.
+- Breaking schema changes require explicit version bump and approval.
+
+### UPR-108: Privacy-leak property-based fuzz testing
+**Description:** Expand property-based tests for audience filtering with sparse, malformed, and adversarial payloads.
+**Acceptance criteria:**
+- Tests verify private fields do not leak to unauthorized audiences.
+- Failure output provides minimized reproducible counterexamples.
+
+### UPR-109: Frontend profile cache invalidation completeness
+**Description:** Ensure every profile mutation path invalidates canonical lookup cache and stale ETag state.
+**Acceptance criteria:**
+- Cache invalidation hooks exist for all profile mutation actions.
+- Integration tests confirm stale data is not shown after updates.
+
+### UPR-110: Backend lookup hot-path optimization
+**Description:** Add request coalescing and bounded caching for repeated profile lookups under load.
+**Acceptance criteria:**
+- Cache/coalescing respects discoverability and profile update invalidation.
+- Load test results show reduced datastore read amplification.
+
+### UPR-111: Conditional request failure-mode hardening
+**Description:** Harden conditional-fetch behavior for 304-without-cache, weak ETag mismatches, and transient network failures.
+**Acceptance criteria:**
+- Client retry/fallback behavior is bounded and idempotent.
+- Unit tests cover all identified conditional request edge cases.
+
+### UPR-112: Audience-segmented observability dashboards
+**Description:** Add owner/member/public breakdown panels for latency, error, suppression, and rate-limit outcomes.
+**Acceptance criteria:**
+- Dashboard includes audience-segmented trends and percentile charts.
+- Alerts define audience-aware burn-rate thresholds.
+
+### UPR-113: Structured-log redaction guardrails
+**Description:** Enforce that profile lookup logs and traces never include restricted profile field values.
+**Acceptance criteria:**
+- Automated checks fail on prohibited keys/values in logs.
+- Redaction policy and review cadence are documented.
+
+### UPR-114: Enumeration spray detection and adaptive throttling
+**Description:** Implement detectors for high-rate identifier spray patterns and attach adaptive throttling responses.
+**Acceptance criteria:**
+- Detector emits low-noise, severity-scored security events.
+- Adaptive throttling responses are validated in staging.
+
+### UPR-115: Distributed probing correlation across network cohorts
+**Description:** Detect coordinated probing across IPs/subnets/accounts that bypass per-IP limits.
+**Acceptance criteria:**
+- Correlation logic identifies distributed abuse patterns.
+- On-call playbook links containment, escalation, and rollback steps.
+
+### UPR-116: Timing side-channel regression gate
+**Description:** Add statistical timing tests to prevent distinguishable behavior between unknown and suppressed identifiers.
+**Acceptance criteria:**
+- Timing harness reports confidence intervals and effect-size metrics.
+- Release gate fails when timing leakage exceeds threshold.
+
+### UPR-117: Concurrent discoverability transition resilience
+**Description:** Validate lookup behavior during concurrent profile state transitions (active, hidden, deactivated, deleted).
+**Acceptance criteria:**
+- Concurrency tests cover in-flight transition race scenarios.
+- Responses remain policy-compliant and non-enumerating.
+
+### UPR-118: Unified stale-link and suppressed-profile UX
+**Description:** Build a shared UX component for stale link, suppressed profile, and unavailable profile states.
+**Acceptance criteria:**
+- All profile-entry modules use the shared UX treatment.
+- UX copy is privacy-reviewed and localization-ready.
+
+### UPR-119: Mobile and accessibility E2E expansion
+**Description:** Expand E2E coverage for mobile breakpoints, keyboard navigation, and screen-reader semantics for profile journeys.
+**Acceptance criteria:**
+- E2E suite covers messaging, contacts, feed, calendar, tickets, and alerts on mobile.
+- Accessibility checks pass with no critical/high findings.
+
+### UPR-120: Full matrix E2E for audience × flags × discoverability
+**Description:** Add matrix-driven end-to-end tests spanning audience types, feature flag states, and discoverability outcomes.
+**Acceptance criteria:**
+- Matrix asserts routing, suppression behavior, and field visibility expectations.
+- CI artifacts include trace/video/screenshots for failures.
+
+### UPR-121: Rollout automation, canary guardrails, and one-command rollback
+**Description:** Automate phased rollout promotion with guardrails and implement an idempotent rollback command.
+**Acceptance criteria:**
+- Canary promotion halts automatically on SLO/security guardrail violations.
+- Rollback command disables rollout flags and verifies post-rollback health checks.
+
+### UPR-122: Production readiness documentation and evidence bundle
+**Description:** Finalize launch docs and automate evidence bundle generation for security, privacy, reliability, and support readiness.
+**Acceptance criteria:**
+- Runbooks, threat model deltas, and support SOPs are complete and linked.
+- Evidence bundle includes tests, approvals, dashboards, and open-risk decision log.

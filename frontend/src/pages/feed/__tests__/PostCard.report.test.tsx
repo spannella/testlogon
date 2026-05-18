@@ -73,4 +73,13 @@ describe("PostCard media reporting", () => {
       });
     });
   });
+
+  it("renders author profile links to canonical route", () => {
+    renderCard();
+    const links = screen.getAllByRole("link", { name: /open author2 profile/i });
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link).toHaveAttribute("href", "/u/author2");
+    }
+  });
 });

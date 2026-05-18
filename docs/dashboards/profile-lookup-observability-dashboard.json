@@ -1,0 +1,54 @@
+{
+  "title": "Profile Lookup Observability",
+  "timezone": "browser",
+  "panels": [
+    {
+      "title": "Lookup outcomes by audience",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(profile_lookup_events_total[5m])) by (audience, result)",
+          "legendFormat": "{{audience}}/{{result}}"
+        }
+      ]
+    },
+    {
+      "title": "Denied lookups by suppression reason",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(profile_lookup_events_total{result=\"denied\"}[5m])) by (suppression_reason)",
+          "legendFormat": "{{suppression_reason}}"
+        }
+      ]
+    },
+    {
+      "title": "Not-found rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(profile_lookup_events_total{result=\"not_found\"}[5m]))",
+          "legendFormat": "not_found rps"
+        }
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 5, "color": "yellow"},
+        {"op": "gt", "value": 20, "color": "red"}
+      ]
+    },
+    {
+      "title": "Profile lookup latency p95",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(profile_lookup_latency_seconds_bucket[5m])) by (le, audience, result))",
+          "legendFormat": "p95 {{audience}}/{{result}}"
+        }
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 0.5, "color": "yellow"},
+        {"op": "gt", "value": 1.5, "color": "red"}
+      ]
+    }
+  ]
+}

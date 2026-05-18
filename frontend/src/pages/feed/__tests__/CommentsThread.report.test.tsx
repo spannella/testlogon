@@ -74,4 +74,13 @@ describe("CommentsThread report", () => {
       });
     });
   });
+
+  it("renders comment author profile links to canonical route", async () => {
+    renderThread();
+    const links = await screen.findAllByRole("link", { name: /open author2 profile/i });
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link).toHaveAttribute("href", "/u/author2");
+    }
+  });
 });

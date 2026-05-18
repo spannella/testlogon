@@ -127,4 +127,13 @@ describe("ConversationView message controls UX", () => {
       expect(screen.queryByRole("button", { name: "View all pins" })).not.toBeInTheDocument();
     });
   });
+
+  it("renders canonical profile links for DM partner in header", async () => {
+    renderView();
+    const links = await screen.findAllByRole("link", { name: /open u2 profile/i });
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link).toHaveAttribute("href", "/u/u2");
+    }
+  });
 });
