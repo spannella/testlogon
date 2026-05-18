@@ -1095,6 +1095,8 @@ def list_files(
             key=lambda x: (x["type"] != "folder", x.get("size") or 0, (x.get("name") or "").lower()),
             reverse=not scan_forward,
         )
+    next_payload_ddb = {"mode": "ddb", "key": next_cursor} if next_cursor else None
+    return {"path": folder, "items": out, "cursor": _encode_cursor(next_payload_ddb)}
 
 
 @router.get("/info")
