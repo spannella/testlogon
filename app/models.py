@@ -947,6 +947,112 @@ class CalendarUpdateIn(BaseModel):
     buffer_after_minutes: int | None = None
 
 
+class AppleCalendarConnectIn(BaseModel):
+    username: str = Field(min_length=3, max_length=320)
+    app_specific_password: str = Field(min_length=1, max_length=256)
+
+
+class AppleCalendarConnectionOut(BaseModel):
+    connection_id: str
+    provider: str
+    user_sub: str
+    status: str
+    credential_ref: str
+    credential_validation_status: str
+    credential_last_validated_at: str | None = None
+    credential_rotated_at: str | None = None
+    created_at: str
+    updated_at: str
+    has_secret: bool
+
+
+class AppleCalendarStatusOut(BaseModel):
+    provider: str = "apple_caldav"
+    connection_state: Literal["connected", "degraded", "disconnected"]
+    is_connected: bool
+    connection_id: str | None = None
+    credential_validation_status: str | None = None
+    last_successful_sync_at: str | None = None
+    last_error_snapshot: Dict[str, Any] | None = None
+    selected_calendar_count: int = 0
+    conflict_count: int = 0
+    recent_conflicts: List[Dict[str, Any]] = Field(default_factory=list)
+    updated_at: str | None = None
+
+
+class AppleCalendarSelectionIn(BaseModel):
+    external_calendar_id: str = Field(min_length=1, max_length=512)
+    sync_enabled: bool = True
+    sync_direction: Literal["read_only", "two_way"] = "two_way"
+    timezone: str | None = Field(default=None, max_length=64)
+
+
+class AppleCalendarSelectionUpdateIn(BaseModel):
+    calendars: List[AppleCalendarSelectionIn] = Field(default_factory=list)
+
+
+class AppleCalendarExternalCalendarOut(BaseModel):
+    external_calendar_id: str
+    calendar_url: str
+    display_name: str
+    sync_enabled: bool = False
+    sync_direction: Literal["read_only", "two_way"] = "two_way"
+    timezone: str | None = None
+
+
+class AppleCalendarInitialImportIn(BaseModel):
+    external_calendar_ids: List[str] = Field(default_factory=list)
+    lookback_days: int | None = Field(default=None, ge=0, le=3650)
+    lookahead_days: int | None = Field(default=None, ge=0, le=3650)
+
+
+class AppleCalendarImportRunOut(BaseModel):
+    run_id: str
+    connection_id: str
+    external_calendar_id: str
+    run_type: str
+    status: str
+    started_at: str
+    historical_window_start: str
+    historical_window_end: str
+
+
+class AppleCalendarSyncNowOut(BaseModel):
+    triggered_calendar_count: int
+    success_count: int
+    failure_count: int
+    results: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class AdminAppleCalendarTroubleshootOut(BaseModel):
+    user_sub: str
+    connection: Dict[str, Any] | None = None
+    status: Dict[str, Any] | None = None
+    selected_calendars: List[Dict[str, Any]] = Field(default_factory=list)
+    run_history: List[Dict[str, Any]] = Field(default_factory=list)
+    dead_letters: List[Dict[str, Any]] = Field(default_factory=list)
+    recent_conflicts: List[Dict[str, Any]] = Field(default_factory=list)
+    recommendations: List[str] = Field(default_factory=list)
+
+
+class AdminAppleCalendarRelinkIn(BaseModel):
+    user_sub: str = Field(min_length=1, max_length=128)
+    external_calendar_id: str = Field(min_length=1, max_length=512)
+    remote_uid: str = Field(min_length=1, max_length=512)
+    internal_event_id: str = Field(min_length=1, max_length=512)
+    resource_url: str | None = Field(default=None, max_length=2048)
+    etag: str | None = Field(default=None, max_length=512)
+
+
+class AdminAppleCalendarRelinkOut(BaseModel):
+    updated_existing: bool
+    link: Dict[str, Any]
+
+
+class AdminAppleCalendarRepairSyncIn(BaseModel):
+    user_sub: str = Field(min_length=1, max_length=128)
+
+
 class EventOccurrenceOverrideIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=5000)

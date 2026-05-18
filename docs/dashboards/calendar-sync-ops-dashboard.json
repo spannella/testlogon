@@ -1,0 +1,74 @@
+{
+  "title": "Calendar Sync Ops Health",
+  "timezone": "browser",
+  "panels": [
+    {
+      "title": "Run Success Rate (5m)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(calendar_sync_runs_total{outcome=\"success\"}[5m])) / clamp_min(sum(rate(calendar_sync_runs_total[5m])), 1e-9)",
+          "legendFormat": "success_rate"
+        }
+      ],
+      "thresholds": [
+        {"op": "lt", "value": 0.995, "color": "yellow"},
+        {"op": "lt", "value": 0.98, "color": "red"}
+      ]
+    },
+    {
+      "title": "Sync Latency p95",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(calendar_sync_latency_seconds_bucket{operation=\"pull\",outcome=\"success\"}[5m])) by (le))",
+          "legendFormat": "pull p95"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(calendar_sync_latency_seconds_bucket{operation=\"push\",outcome=~\"success|conflict\"}[5m])) by (le))",
+          "legendFormat": "push p95"
+        }
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 5, "color": "yellow"},
+        {"op": "gt", "value": 15, "color": "red"}
+      ]
+    },
+    {
+      "title": "Conflict Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(calendar_sync_conflicts_total[5m])) / clamp_min(sum(rate(calendar_sync_runs_total{mode=\"push\"}[5m])), 1e-9)",
+          "legendFormat": "conflicts_per_push"
+        }
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 0.02, "color": "yellow"},
+        {"op": "gt", "value": 0.1, "color": "red"}
+      ]
+    },
+    {
+      "title": "Queue Backlog (Push Outbox Due)",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "max(calendar_sync_queue_backlog{queue=\"push_outbox_due\"})", "legendFormat": "backlog"}
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 50, "color": "yellow"},
+        {"op": "gt", "value": 200, "color": "red"}
+      ]
+    },
+    {
+      "title": "Auth Failures",
+      "type": "timeseries",
+      "targets": [
+        {"expr": "sum(rate(calendar_sync_auth_failures_total[5m])) by (provider)", "legendFormat": "{{provider}}"}
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 0.02, "color": "yellow"},
+        {"op": "gt", "value": 0.1, "color": "red"}
+      ]
+    }
+  ]
+}

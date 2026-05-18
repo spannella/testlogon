@@ -10,6 +10,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.core.settings import S
 from app.core.tables import T
 from app.models import (
+    AppleCalendarConnectIn,
+    AppleCalendarConnectionOut,
+    AppleCalendarExternalCalendarOut,
+    AppleCalendarImportRunOut,
+    AppleCalendarInitialImportIn,
+    AppleCalendarSyncNowOut,
+    AppleCalendarSelectionUpdateIn,
+    AppleCalendarStatusOut,
     BookingLinkCreateIn,
     BookingLinkOut,
     BookingRequestIn,
@@ -40,6 +48,17 @@ from app.models import (
     RecurrenceRule,
     TeamAvailabilityIn,
 )
+from app.services.calendar_integrations.base import CalendarIntegrationError, CalendarIntegrationErrorCode
+from app.services.calendar_integrations.credentials import upsert_apple_caldav_credential
+from app.services.calendar_integrations.credentials import get_apple_caldav_status
+from app.services.calendar_integrations.credentials import disconnect_apple_caldav_credential
+from app.services.calendar_integrations.credentials import (
+    enqueue_apple_caldav_initial_import,
+    list_apple_caldav_calendars,
+    select_apple_caldav_calendars,
+    trigger_apple_caldav_sync_now,
+)
+from app.services.calendar_integrations.registry import get_provider_services
 from app.services.alerts import audit_event
 from app.services.google_calendar_flags import (
     is_google_calendar_sync_enabled_for_user,
@@ -68,6 +87,98 @@ except ImportError:  # pragma: no cover - fallback for older Python
 router = APIRouter(prefix="/ui", tags=["calendar"])
 public_router = APIRouter(prefix="/booking", tags=["booking"])
 public_event_router = APIRouter(prefix="/calendar/public", tags=["calendar_public"])
+integration_router = APIRouter(prefix="/calendar/integrations/apple", tags=["calendar_integrations"])
+
+
+def _map_calendar_integration_error(exc: CalendarIntegrationError) -> HTTPException:
+    if exc.code == CalendarIntegrationErrorCode.AUTH:
+        return HTTPException(status_code=401, detail=exc.detail)
+    if exc.code == CalendarIntegrationErrorCode.PROTOCOL:
+        return HTTPException(status_code=503, detail=exc.detail)
+    if exc.code == CalendarIntegrationErrorCode.NETWORK:
+        return HTTPException(status_code=502, detail=exc.detail)
+    return HTTPException(status_code=500, detail=exc.detail)
+
+
+@integration_router.post("/connect", response_model=AppleCalendarConnectionOut)
+async def connect_apple_calendar(
+    body: AppleCalendarConnectIn,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    provider_services = get_provider_services("apple_caldav")
+    if provider_services is None:
+        raise HTTPException(status_code=503, detail="Apple CalDAV provider not available")
+
+    try:
+        provider_services.connection.validate_credentials(username=body.username, secret=body.app_specific_password)
+    except CalendarIntegrationError as exc:
+        raise _map_calendar_integration_error(exc) from exc
+
+    connected = upsert_apple_caldav_credential(
+        user_sub=ctx["user_sub"],
+        username=body.username,
+        app_specific_password=body.app_specific_password,
+        credential_validation_status="valid",
+    )
+    return AppleCalendarConnectionOut(**connected)
+
+
+@integration_router.get("/status", response_model=AppleCalendarStatusOut)
+async def apple_calendar_status(
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    status = get_apple_caldav_status(user_sub=ctx["user_sub"])
+    return AppleCalendarStatusOut(**status)
+
+
+@integration_router.post("/disconnect", response_model=AppleCalendarConnectionOut)
+async def apple_calendar_disconnect(
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    disconnected = disconnect_apple_caldav_credential(user_sub=ctx["user_sub"])
+    return AppleCalendarConnectionOut(**disconnected)
+
+
+@integration_router.get("/calendars", response_model=List[AppleCalendarExternalCalendarOut])
+async def list_apple_calendars(
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    calendars = list_apple_caldav_calendars(user_sub=ctx["user_sub"])
+    return [AppleCalendarExternalCalendarOut(**it) for it in calendars]
+
+
+@integration_router.post("/calendars/select", response_model=List[AppleCalendarExternalCalendarOut])
+async def select_apple_calendars(
+    body: AppleCalendarSelectionUpdateIn,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    selected = select_apple_caldav_calendars(
+        user_sub=ctx["user_sub"],
+        calendars=[c.model_dump() for c in body.calendars],
+    )
+    return [AppleCalendarExternalCalendarOut(**it) for it in selected]
+
+
+@integration_router.post("/import/initial", response_model=List[AppleCalendarImportRunOut])
+async def start_apple_initial_import(
+    body: AppleCalendarInitialImportIn,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    runs = enqueue_apple_caldav_initial_import(
+        user_sub=ctx["user_sub"],
+        external_calendar_ids=body.external_calendar_ids,
+        lookback_days=body.lookback_days,
+        lookahead_days=body.lookahead_days,
+    )
+    return [AppleCalendarImportRunOut(**it) for it in runs]
+
+
+@integration_router.post("/sync/now", response_model=AppleCalendarSyncNowOut)
+async def sync_apple_now(
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    out = trigger_apple_caldav_sync_now(user_sub=ctx["user_sub"])
+    return AppleCalendarSyncNowOut(**out)
 
 
 def _require_zoneinfo() -> None:

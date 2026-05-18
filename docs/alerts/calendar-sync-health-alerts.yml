@@ -1,0 +1,29 @@
+groups:
+  - name: calendar-sync-health
+    rules:
+      - alert: CalendarSyncSustainedAuthFailures
+        expr: sum(rate(calendar_sync_auth_failures_total[5m])) by (provider) > 0.1
+        for: 15m
+        labels:
+          severity: page
+          service: calendar
+          component: apple_caldav
+        annotations:
+          summary: "Calendar sync auth failures sustained"
+          description: "Apple/CalDAV auth failures are sustained above 0.1/s for 15m. Check credential validity and provider auth health."
+
+      - alert: CalendarSyncHighErrorRate
+        expr: |
+          (
+            sum(rate(calendar_sync_runs_total{outcome="error"}[5m]))
+            /
+            clamp_min(sum(rate(calendar_sync_runs_total[5m])), 1e-9)
+          ) > 0.05
+        for: 15m
+        labels:
+          severity: page
+          service: calendar
+          component: apple_caldav
+        annotations:
+          summary: "Calendar sync error rate above 5%"
+          description: "Sustained elevated error rate in calendar sync runs. Investigate provider/API issues and queue health."

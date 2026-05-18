@@ -493,3 +493,303 @@
 **Acceptance criteria:**
 - System behavior under faults is measured against defined recovery objectives.
 - Tests verify no duplicate writes and bounded recovery lag after restoration.
+
+### CAL-101: Implement production sync-token REPORT client
+**Description:** Replace placeholder incremental pull path with RFC 6578 `sync-collection` REPORT requests and robust response parsing.
+**Acceptance criteria:**
+- Pull uses persisted sync-token values for incremental fetch.
+- Parser emits created/updated/deleted resources with deterministic UID mapping.
+
+### CAL-102: Add sync-token reset recovery automation
+**Description:** Handle token invalidation responses by transparently resetting sync state and entering fallback sync mode.
+**Acceptance criteria:**
+- 409/410/invalid-token responses trigger automated recovery flow.
+- Run metadata includes fallback reason and recovered state details.
+
+### CAL-103: Add ctag-based no-op optimization
+**Description:** Skip expensive pull scans when ctag has not changed.
+**Acceptance criteria:**
+- Unchanged ctag exits early with no-op outcome.
+- Changed ctag triggers deep scan and persists updated ctag.
+
+### CAL-104: Add chunked pull pagination
+**Description:** Process remote resources in bounded batches to control memory/latency on large calendars.
+**Acceptance criteria:**
+- Pull processes resources in configurable batch sizes.
+- Large-calendar imports complete without memory spikes.
+
+### CAL-105: Add resumable pull checkpoints
+**Description:** Persist progress checkpoints so interrupted pull runs can continue from last known point.
+**Acceptance criteria:**
+- Interrupted pull resumes from latest checkpoint.
+- Resume flow is idempotent and avoids duplicate writes.
+
+### CAL-106: Implement real CalDAV PUT for upsert
+**Description:** Replace scaffolded push write with actual conditional PUT behavior.
+**Acceptance criteria:**
+- Create uses `If-None-Match`; update uses `If-Match` when etag exists.
+- Response etag/resource URL updates are persisted to links.
+
+### CAL-107: Implement real CalDAV DELETE semantics
+**Description:** Replace scaffolded delete with conditional DELETE handling.
+**Acceptance criteria:**
+- DELETE honors etag preconditions when known.
+- 404/410 are treated as idempotent successful deletes.
+
+### CAL-108: Persist pulled entities in internal event store
+**Description:** Replace placeholder internal ID generation with durable event persistence.
+**Acceptance criteria:**
+- Pulled creates/updates persist to internal calendar event table.
+- Event links always reference existing internal IDs.
+
+### CAL-109: Implement internal soft-delete policy for remote deletes
+**Description:** Apply configurable cancel/archive semantics when remote deletions are observed.
+**Acceptance criteria:**
+- Policy is configurable and environment-aware.
+- Delete behavior is covered in integration tests.
+
+### CAL-110: Support detached recurrence instance mapping
+**Description:** Handle RECURRENCE-ID overrides/deletes as first-class sync entities.
+**Acceptance criteria:**
+- Detached instances persist with parent-series association.
+- Instance delete does not remove parent recurrence series.
+
+### CAL-111: Expand recurrence compatibility coverage
+**Description:** Improve import/export parity for supported recurrence rule fields.
+**Acceptance criteria:**
+- Supported RRULE components round-trip without semantic drift.
+- Unsupported RRULE fields generate structured parse errors.
+
+### CAL-112: Add all-day + DST edge-case fixtures
+**Description:** Add explicit timezone boundary fixtures for all-day and DST transitions.
+**Acceptance criteria:**
+- All-day date integrity is preserved across timezone conversions.
+- DST transition tests pass for pull and push serializers.
+
+### CAL-113: Add per-connection runtime budget guard
+**Description:** Bound sync execution time per connection and defer remaining work.
+**Acceptance criteria:**
+- Runs exceeding budget checkpoint and reschedule continuation.
+- Low-volume connections are not starved by large tenants.
+
+### CAL-114: Add adaptive polling/backoff policy
+**Description:** Dynamically tune polling intervals using connection health and error history.
+**Acceptance criteria:**
+- Poll intervals increase during sustained errors and recover on stability.
+- Poll state changes are observable in metrics/logs.
+
+### CAL-115: Add outbox per-connection throughput caps
+**Description:** Introduce fair-share limits and jitter for outbound push queue processing.
+**Acceptance criteria:**
+- Outbox enforces per-connection push limits.
+- Throughput smoothing reduces burst-induced retry storms.
+
+### CAL-116: Add dead-letter replay support endpoint
+**Description:** Allow authorized operators to replay dead-lettered push items.
+**Acceptance criteria:**
+- Replay endpoint is role-gated and audit logged.
+- Replay path is idempotent and preserves traceability.
+
+### CAL-117: Add sync-now idempotency keys
+**Description:** Protect manual sync trigger against duplicated requests.
+**Acceptance criteria:**
+- Duplicate idempotency keys return existing run reference.
+- Duplicate execution is prevented server-side.
+
+### CAL-118: Add explicit connection health model
+**Description:** Compute and persist health states (healthy/degraded/unhealthy/quarantined).
+**Acceptance criteria:**
+- Health transitions follow deterministic rules.
+- Health state is surfaced in user and admin APIs.
+
+### CAL-119: Add automatic quarantine policy
+**Description:** Quarantine connections with repeated terminal failures to protect global reliability.
+**Acceptance criteria:**
+- Quarantine threshold is configurable per environment.
+- Admin override/unquarantine actions are available and audited.
+
+### CAL-120: Add tenant-aware remote call rate limiting
+**Description:** Enforce fairness limits for outbound CalDAV calls.
+**Acceptance criteria:**
+- One noisy tenant cannot saturate shared sync capacity.
+- Rate-limit outcomes are recorded in metrics/logs.
+
+### CAL-121: Add credential-age lifecycle policy
+**Description:** Track credential age and enforce rotation signals for stale secrets.
+**Acceptance criteria:**
+- Status includes credential age and rotation warnings.
+- Alerts trigger for credentials exceeding policy threshold.
+
+### CAL-122: Add secret re-encryption maintenance job
+**Description:** Support key policy/version rotations without plaintext exposure.
+**Acceptance criteria:**
+- Re-encryption job is resumable and auditable.
+- Secret material is never persisted unencrypted.
+
+### CAL-123: Expand redaction policy enforcement
+**Description:** Harden redaction for logs, audits, and diagnostics exports.
+**Acceptance criteria:**
+- Sensitive fields (auth headers, secrets, attendee identifiers) are always redacted.
+- Redaction regression tests fail on leakage.
+
+### CAL-124: Add redirect-safe SSRF protections
+**Description:** Block unsafe redirect chains and private-target resolution during outbound requests.
+**Acceptance criteria:**
+- Redirects to private/loopback/link-local targets are denied.
+- DNS rebinding + redirect edge cases are covered in tests.
+
+### CAL-125: Add TLS failure classification telemetry
+**Description:** Distinguish cert-expired/hostname-mismatch/trust-chain failures for operator triage.
+**Acceptance criteria:**
+- TLS failure class is recorded in run diagnostics.
+- User-safe error message and admin-actionable detail are separated.
+
+### CAL-126: Add end-to-end correlation IDs
+**Description:** Thread correlation IDs across scheduler, pull/push, outbox, and admin diagnostics.
+**Acceptance criteria:**
+- Correlation IDs appear in logs/run records/audit rows.
+- Admin tools can retrieve run timelines by correlation ID.
+
+### CAL-127: Reduce metrics cardinality risk
+**Description:** Refactor labels to bounded dimensions suitable for Prometheus at scale.
+**Acceptance criteria:**
+- Unbounded identifiers are removed from metric labels.
+- Dashboards and alerts are updated to new label model.
+
+### CAL-128: Add sync phase latency dashboards
+**Description:** Track p50/p95/p99 latency by fetch/parse/reconcile/write phases.
+**Acceptance criteria:**
+- Dashboards show phase-level latency by outcome.
+- Alerting is configured for p95 latency regressions.
+
+### CAL-129: Add burn-rate SLO alerts
+**Description:** Introduce multi-window burn-rate alerts for sync success SLO.
+**Acceptance criteria:**
+- Fast and slow burn windows are configured.
+- Alert annotations include links to triage runbook sections.
+
+### CAL-130: Add stale-connection freshness alerts
+**Description:** Alert when successful sync freshness exceeds configured SLA window.
+**Acceptance criteria:**
+- Freshness threshold is configurable by environment/tier.
+- Alert payload includes last-success timestamp and failure context.
+
+### CAL-131: Extend status API diagnostics
+**Description:** Add last-failure categories, retry counters, and next-action hints to status response.
+**Acceptance criteria:**
+- Status response includes actionable troubleshooting fields.
+- Contract tests enforce backward-compatible schema changes.
+
+### CAL-132: Add admin sync-state reset operation
+**Description:** Allow targeted reset of per-calendar sync token/ctag for recovery.
+**Acceptance criteria:**
+- Operation is permission-checked and audited.
+- Next run enters deterministic bootstrap mode.
+
+### CAL-133: Publish integration API reference docs
+**Description:** Document lifecycle APIs (connect, discover, select, import, sync-now, disconnect, admin tools).
+**Acceptance criteria:**
+- Docs include request/response examples and error taxonomy.
+- Retry/idempotency behavior is explicitly documented.
+
+### CAL-134: Publish operator conflict runbook
+**Description:** Add decision tree for etag conflicts, dead letters, and replay failure handling.
+**Acceptance criteria:**
+- Runbook maps symptoms to concrete remediation steps.
+- Escalation checklist and evidence requirements are defined.
+
+### CAL-135: Add deployment preflight validation command
+**Description:** Validate schema, indexes, flags, and secret dependencies before rollout.
+**Acceptance criteria:**
+- Preflight fails fast with actionable remediation output.
+- Deploy pipeline can gate on preflight result.
+
+### CAL-136: Add automated canary rollout orchestration
+**Description:** Manage progressive cohort rollout with automated guardrail checks.
+**Acceptance criteria:**
+- Cohort percentages are configurable and observable.
+- Rollout auto-pauses on alert/SLO breaches.
+
+### CAL-137: Add migration verification + rollback drills
+**Description:** Validate migration invariants and exercise rollback in staging.
+**Acceptance criteria:**
+- Post-migration invariants are automatically checked.
+- Rollback drill runbook is executed and validated.
+
+### CAL-138: Add deterministic staging E2E harness
+**Description:** Build stable E2E suite using mock CalDAV fixtures for full lifecycle paths.
+**Acceptance criteria:**
+- E2E covers connect/import/pull/push/delete/recovery scenarios.
+- Suite runs in CI without external iCloud dependencies.
+
+### CAL-139: Add chaos testing for transient failures
+**Description:** Inject timeout/5xx/reset/malformed payload scenarios into sync flows.
+**Acceptance criteria:**
+- Retry/backoff/dead-letter behavior is validated under chaos faults.
+- Chaos tests confirm no duplicate link corruption.
+
+### CAL-140: Add scale validation for high-volume calendars
+**Description:** Expand load testing to large event sets and mixed pull/push traffic.
+**Acceptance criteria:**
+- Reports include throughput, queue depth, latency, and failure percentiles.
+- Performance regression thresholds are enforced in CI gates.
+
+### CAL-141: Add drift detection job
+**Description:** Periodically detect divergence across remote state, event links, and internal event store.
+**Acceptance criteria:**
+- Drift classes include orphan links, stale etags, and missing internal records.
+- Drift results can be consumed by automated repair workflows.
+
+### CAL-142: Add orphan-link repair job
+**Description:** Build idempotent repair workflow for invalid/missing internal event references.
+**Acceptance criteria:**
+- Repair supports relink, recreate, or tombstone actions.
+- All repair actions are audit logged.
+
+### CAL-143: Add retention policy enforcement job
+**Description:** Enforce retention/archival rules for sync runs, conflicts, and dead-letter artifacts.
+**Acceptance criteria:**
+- Expired artifacts are purged or archived according to policy.
+- Compliance exceptions are configurable and documented.
+
+### CAL-144: Add redacted support diagnostics export
+**Description:** Generate downloadable incident bundles with sanitized operational context.
+**Acceptance criteria:**
+- Bundle generation is permission-gated and audited.
+- Bundle includes run timeline, health snapshots, and redacted errors.
+
+### CAL-145: Improve end-user troubleshooting UI
+**Description:** Add state-specific remediation guidance in calendar integration settings.
+**Acceptance criteria:**
+- UI provides clear next steps for common failure states.
+- Guidance links to public support documentation.
+
+### CAL-146: Add admin safe-mode (pull-only) control
+**Description:** Allow temporary push suppression while preserving pull visibility.
+**Acceptance criteria:**
+- Safe mode toggles are per-connection and audit logged.
+- Scheduler/outbox immediately respect safe mode.
+
+### CAL-147: Add rollout cohort operations dashboard
+**Description:** Build canary/beta/GA cohort dashboards for success, freshness, conflicts, and dead letters.
+**Acceptance criteria:**
+- Dashboard breaks down key SLO indicators by rollout cohort.
+- Operators can quickly identify highest-risk cohorts.
+
+### CAL-148: Add mixed-version compatibility matrix
+**Description:** Validate rolling deploy behavior across old/new worker versions.
+**Acceptance criteria:**
+- Mixed-version tests pass for pull, push, scheduler, and outbox paths.
+- Compatibility constraints are documented for releases.
+
+### CAL-149: Add disaster-recovery restore drills
+**Description:** Script and validate restoration of integration tables/secrets in staging.
+**Acceptance criteria:**
+- Restore drill meets defined RPO/RTO objectives.
+- Post-restore checks confirm sync system readiness.
+
+### CAL-150: Add GA readiness sign-off workflow
+**Description:** Define measurable go-live gates across reliability, security, support, and rollback readiness.
+**Acceptance criteria:**
+- Scorecard includes explicit metrics and owner approvals.
+- GA enablement requires completed sign-off and rollback plan reference.
