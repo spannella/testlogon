@@ -461,6 +461,16 @@ def test_ticket_status_changed_alert_targets_owner():
     assert set(recipients) == {"user-1"}
 
 
+def test_ticket_status_change_triggers_incident_sync_hook():
+    user_client = _build_client(_user("user-1", Role.USER))
+    created = user_client.post("/tickets", json={"subject": "Status sync", "description": "d"}).json()["ticket"]
+    admin_client = _build_client(_user("admin-1", Role.ADMIN))
+    with patch("app.routers.tickets.sync_incident_from_ticket") as sync_hook:
+        resp = admin_client.post(f"/tickets/{created['ticket_id']}/status", json={"status": "done"})
+    assert resp.status_code == 200
+    sync_hook.assert_called_once()
+
+
 def test_space_entity_and_owner_membership_persisted():
     space = STORE.create_space(owner_sub="user-1", name="Ops board", visibility="shared")
 

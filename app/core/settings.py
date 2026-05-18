@@ -243,6 +243,8 @@ class Settings:
     paypal_client_id: str = os.environ.get("PAYPAL_CLIENT_ID", "")
     paypal_client_secret: str = os.environ.get("PAYPAL_CLIENT_SECRET", "")
     paypal_webhook_id: str = os.environ.get("PAYPAL_WEBHOOK_ID", "")
+    paypal_webhook_tolerance_seconds: int = int(os.environ.get("PAYPAL_WEBHOOK_TOLERANCE_SECONDS", "300"))
+    paypal_webhook_signature_secret: str = os.environ.get("PAYPAL_WEBHOOK_SIGNATURE_SECRET", "")
     paypal_plan_map: str = os.environ.get("PAYPAL_PLAN_MAP", "")
     paypal_mock_enabled: bool = os.environ.get("PAYPAL_MOCK_ENABLED", "0") == "1"
     # Stripe
@@ -254,6 +256,27 @@ class Settings:
     stripe_success_url: str = os.environ.get("STRIPE_SUCCESS_URL", "")
     stripe_cancel_url: str = os.environ.get("STRIPE_CANCEL_URL", "")
     billing_table_name: str = os.environ.get("BILLING_TABLE_NAME", "billing")
+    payment_incidents_table_name: str = os.environ.get("PAYMENT_INCIDENTS_TABLE_NAME", "payment_incidents")
+    payment_incident_events_table_name: str = os.environ.get("PAYMENT_INCIDENT_EVENTS_TABLE_NAME", "payment_incident_events")
+    payment_dispute_evidence_table_name: str = os.environ.get("PAYMENT_DISPUTE_EVIDENCE_TABLE_NAME", "payment_dispute_evidence")
+    payment_retry_attempts_table_name: str = os.environ.get("PAYMENT_RETRY_ATTEMPTS_TABLE_NAME", "payment_retry_attempts")
+    payment_incident_ticket_links_table_name: str = os.environ.get(
+        "PAYMENT_INCIDENT_TICKET_LINKS_TABLE_NAME",
+        "payment_incident_ticket_links",
+    )
+    payment_incidents_rollout_enabled: bool = os.environ.get("PAYMENT_INCIDENTS_ROLLOUT_ENABLED", "1") not in ("0", "false", "False")
+    payment_incidents_rollout_providers: str = os.environ.get("PAYMENT_INCIDENTS_ROLLOUT_PROVIDERS", "stripe,paypal,ccbill")
+    payment_incidents_shadow_mode: bool = os.environ.get("PAYMENT_INCIDENTS_SHADOW_MODE", "0") not in ("0", "false", "False")
+    payment_incidents_shadow_providers: str = os.environ.get("PAYMENT_INCIDENTS_SHADOW_PROVIDERS", "")
+    payment_incidents_shadow_audit_sample_limit: int = int(os.environ.get("PAYMENT_INCIDENTS_SHADOW_AUDIT_SAMPLE_LIMIT", "25"))
+    payment_incidents_webhook_max_body_bytes: int = int(os.environ.get("PAYMENT_INCIDENTS_WEBHOOK_MAX_BODY_BYTES", "262144"))
+    payment_incidents_webhook_allowed_content_types: str = os.environ.get("PAYMENT_INCIDENTS_WEBHOOK_ALLOWED_CONTENT_TYPES", "application/json")
+    payment_incidents_webhook_max_signature_bytes: int = int(os.environ.get("PAYMENT_INCIDENTS_WEBHOOK_MAX_SIGNATURE_BYTES", "2048"))
+    payment_incidents_webhook_max_events: int = int(os.environ.get("PAYMENT_INCIDENTS_WEBHOOK_MAX_EVENTS", "200"))
+    payment_incidents_webhook_require_signature: bool = os.environ.get("PAYMENT_INCIDENTS_WEBHOOK_REQUIRE_SIGNATURE", "1") not in ("0", "false", "False")
+    payment_incidents_webhook_replay_ttl_seconds: int = int(os.environ.get("PAYMENT_INCIDENTS_WEBHOOK_REPLAY_TTL_SECONDS", "300"))
+    payment_incidents_webhook_replay_cache_size: int = int(os.environ.get("PAYMENT_INCIDENTS_WEBHOOK_REPLAY_CACHE_SIZE", "5000"))
+    payment_incidents_backfill_apply_enabled: bool = os.environ.get("PAYMENT_INCIDENTS_BACKFILL_APPLY_ENABLED", "0") not in ("0", "false", "False")
     account_state_table_name: str = os.environ.get("ACCOUNT_STATE_TABLE_NAME", "account_state")
     billing_reconcile_enabled: bool = os.environ.get("BILLING_RECONCILE_ENABLED", "false").lower() == "true"
     billing_reconcile_interval_seconds: int = int(os.environ.get("BILLING_RECONCILE_INTERVAL_SECONDS", "900"))

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   canAccessGeneralAdminControls,
   canAccessModerationBoard,
+  canAccessPaymentIncidentQueue,
   canSeeRootRoleManagement,
   getAdminProfileFromAccessToken,
   getRoleFromAccessToken,
@@ -50,8 +51,6 @@ describe("adminCapabilities", () => {
     expect(canSeeRootRoleManagement(tokenFor({ role: "admin" }))).toBe(false);
     expect(canSeeRootRoleManagement(tokenFor({ role: "user" }))).toBe(false);
   });
-});
-
 
   it("gates moderation board visibility", () => {
     expect(canAccessModerationBoard(tokenFor({ role: "root" }))).toBe(true);
@@ -64,3 +63,16 @@ describe("adminCapabilities", () => {
     ).toBe(false);
     expect(canAccessModerationBoard(tokenFor({ role: "user" }))).toBe(false);
   });
+
+  it("gates payment incident queue visibility", () => {
+    expect(canAccessPaymentIncidentQueue(tokenFor({ role: "root" }))).toBe(true);
+    expect(canAccessPaymentIncidentQueue(tokenFor({ role: "admin" }))).toBe(true);
+    expect(
+      canAccessPaymentIncidentQueue(tokenFor({ role: "admin", admin_profile: { type: "scoped", scopes: ["billing_support"] } })),
+    ).toBe(true);
+    expect(
+      canAccessPaymentIncidentQueue(tokenFor({ role: "admin", admin_profile: { type: "scoped", scopes: ["content_moderation"] } })),
+    ).toBe(false);
+    expect(canAccessPaymentIncidentQueue(tokenFor({ role: "user" }))).toBe(false);
+  });
+});

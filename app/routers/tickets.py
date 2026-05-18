@@ -11,6 +11,8 @@ from app.core.tables import T
 from app.services.alerts import audit_event
 from app.services.sessions import require_ui_session
 from app.services.tickets import STORE, TicketStateError
+from app.services.payment_incidents_store import DynamoPaymentIncidentRepository
+from app.services.payment_incident_ticket_sync import sync_incident_from_ticket
 
 router = APIRouter(prefix="/tickets", tags=["tickets"])
 
@@ -312,5 +314,6 @@ def set_ticket_status(
         assert updated is not None
     except TicketStateError as exc:
         raise HTTPException(status_code=_ticket_state_http_status(exc), detail=_ticket_state_error(exc)) from exc
+    sync_incident_from_ticket(DynamoPaymentIncidentRepository(), ticket_id=ticket_id, ticket_status=body.status)
     _emit_ticket_alerts("ticket_status_changed", recipients=[ticket["owner_sub"]], actor_sub=user.sub, request=request, ticket_id=ticket_id, ticket_subject=ticket.get("subject", ""), status=body.status)
     return _wrap_ticket(updated)

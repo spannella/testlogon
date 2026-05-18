@@ -237,3 +237,116 @@
 **Acceptance criteria:**
 - Report includes mandatory readiness sections with pass/fail state.
 - Release pipeline blocks promotion when required checks fail.
+### PDM-101: Provider adapter conformance test harness
+**Description:** Build a shared conformance harness that each provider adapter must pass (verify, parse, retry, response-submit, and error mapping).
+**Acceptance criteria:**
+- Harness runs against Stripe/PayPal/CCBill adapters in CI.
+- Failing conformance blocks adapter changes from merging.
+
+### PDM-102: Webhook failure DLQ ingestion
+**Description:** Persist all non-recoverable webhook failures into a dedicated DLQ table with canonical failure taxonomy.
+**Acceptance criteria:**
+- Verification/parse/transition terminal failures are captured with provider and reason code.
+- DLQ schema includes replay metadata and source payload reference.
+
+### PDM-103: Replay worker with shard-aware throttling
+**Description:** Implement DLQ replay worker with shard-aware rate limits and exponential backoff to avoid provider/API overload.
+**Acceptance criteria:**
+- Replay throughput and backoff behavior are configurable per provider.
+- Worker reports replay success/failure/skip counts per shard.
+
+### PDM-104: Replay dry-run diff endpoint
+**Description:** Add admin API to preview replay impact (state transition diffs) without mutating incident records.
+**Acceptance criteria:**
+- Dry-run returns deterministic before/after transition preview.
+- Apply mode requires explicit confirmation token and privileged scope.
+
+### PDM-105: Incident-store consistency auditor
+**Description:** Add scheduled auditor to verify incident/event/evidence/retry/ticket-link referential consistency.
+**Acceptance criteria:**
+- Auditor emits machine-readable inconsistency report with severity.
+- Critical inconsistencies raise alerts and create remediation tasks.
+
+### PDM-106: Queue query path optimization
+**Description:** Optimize queue filtering/sorting query paths and indexes for large-volume tenants.
+**Acceptance criteria:**
+- p95 and p99 list latency improvements are measured against baseline.
+- Query correctness remains unchanged for all existing filters.
+
+### PDM-107: Cursor token integrity signing
+**Description:** Sign admin queue cursor tokens to prevent tampering and enforce token expiration semantics.
+**Acceptance criteria:**
+- Invalid or expired cursors are rejected with documented error codes.
+- Token signing keys are rotatable without downtime.
+
+### PDM-108: Retry race-condition locking
+**Description:** Add lock/lease semantics around retry operations to prevent concurrent duplicate retry attempts.
+**Acceptance criteria:**
+- Concurrent retry requests result in single-winner execution.
+- Loser requests receive deterministic retry-in-progress response.
+
+### PDM-109: Provider outage fallback policy
+**Description:** Add provider health-aware fallback behavior for retry and response-submit APIs when upstream is degraded.
+**Acceptance criteria:**
+- APIs return user-safe fallback responses with actionable reason codes.
+- Fallback decisions are logged with provider health snapshot metadata.
+
+### PDM-110: Evidence object checksum verification
+**Description:** Record and verify cryptographic checksums for evidence uploads to detect corruption or tampering.
+**Acceptance criteria:**
+- Upload pipeline stores checksum and verifies on read/submit.
+- Checksum mismatch marks evidence unusable and raises alert.
+
+### PDM-111: Evidence access audit trail hardening
+**Description:** Capture immutable audit events for every evidence read/download/submit action with actor and context.
+**Acceptance criteria:**
+- Audit events include actor identity, scope, incident ID, and action outcome.
+- Audit logs are queryable by incident and actor for investigations.
+
+### PDM-112: Scoped RBAC matrix enforcement tests
+**Description:** Add comprehensive authorization matrix tests for all payment-incident admin/customer routes.
+**Acceptance criteria:**
+- Tests cover allowed/denied behavior for each role and scope combination.
+- CI fails on any route missing explicit auth expectations.
+
+### PDM-113: Metrics cardinality budget enforcement
+**Description:** Add runtime safeguards and CI checks to prevent unbounded payment-incident metrics label cardinality.
+**Acceptance criteria:**
+- Dynamic labels are normalized/capped under configured budgets.
+- Budget violations emit warnings and fail metrics-contract checks.
+
+### PDM-114: Alert routing policy by provider/severity
+**Description:** Define explicit alert routing and escalation policy for payment incidents by provider and severity.
+**Acceptance criteria:**
+- Alerts route to provider-specific on-call targets with override support.
+- Escalation policy is tested for duplicate suppression and re-page intervals.
+
+### PDM-115: Lifecycle SLO scoreboard automation
+**Description:** Automate SLO scoreboard generation for ingest success, transition latency, replay backlog, and recovery outcomes.
+**Acceptance criteria:**
+- Scoreboard updates on schedule and exports machine-readable status.
+- SLO breaches include links to impacted providers/incidents.
+
+### PDM-116: API error catalog and client handling guide
+**Description:** Publish complete payment-incident API error catalog with recommended client handling strategies.
+**Acceptance criteria:**
+- Catalog includes code, HTTP status, semantics, retryability, and UX guidance.
+- Contract tests verify server responses match documented error codes.
+
+### PDM-117: Runbook drill orchestration pipeline
+**Description:** Create repeatable drill automation for webhook outage, replay backlog surge, and ticket-sync drift scenarios.
+**Acceptance criteria:**
+- Drill pipeline captures timeline, commands, outputs, and pass/fail rubric.
+- Drill artifacts are retained and linked in operational runbooks.
+
+### PDM-118: Provider sandbox negative-path E2E expansion
+**Description:** Expand sandbox E2E matrix with negative-path scenarios (invalid signatures, out-of-order events, retry failures).
+**Acceptance criteria:**
+- Matrix covers at least one critical negative path per provider feature family.
+- Failures include deterministic repro details and classification tags.
+
+### PDM-119: Deployment canary and rollback gate
+**Description:** Add pre-production canary checks and automatic rollback gates for payment-incident deployments.
+**Acceptance criteria:**
+- Canary validates webhook health, queue latency, and DLQ growth before promotion.
+- Rollback is auto-triggered when critical gate thresholds are breached.

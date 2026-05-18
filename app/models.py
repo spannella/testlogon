@@ -1229,6 +1229,46 @@ class WalletWithdrawReq(BaseModel):
     amount_cents: int = Field(ge=100)  # minimum $1.00
 
 
+class PaymentIncidentEvidenceUploadReq(BaseModel):
+    summary: Optional[str] = Field(default=None, max_length=2_000)
+    evidence_items: List[Dict[str, Any]] = Field(default_factory=list)
+    file_refs: List[str] = Field(default_factory=list)
+
+    @field_validator("summary")
+    @classmethod
+    def _normalize_summary(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("file_refs")
+    @classmethod
+    def _normalize_file_refs(cls, value: List[str]) -> List[str]:
+        out: List[str] = []
+        for ref in value or []:
+            cleaned = str(ref or "").strip()
+            if cleaned:
+                out.append(cleaned)
+        return out
+
+
+class PaymentIncidentSubmitResponseReq(BaseModel):
+    response_summary: str = Field(min_length=1, max_length=4_000)
+    rationale: Optional[str] = Field(default=None, max_length=4_000)
+    event_type: str = Field(default="admin.submit_response", min_length=1, max_length=128)
+
+    @field_validator("response_summary", "rationale")
+    @classmethod
+    def _trim_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if cleaned == "":
+            return None
+        return cleaned
+
+
 class AccountStatusReq(BaseModel):
     reason: Optional[str] = None
 

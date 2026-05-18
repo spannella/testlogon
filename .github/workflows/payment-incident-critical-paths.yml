@@ -1,0 +1,63 @@
+name: Payment Incident Critical Paths
+
+on:
+  pull_request:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  payment-incident-backend-matrix:
+    name: payment-incident-backend-matrix (required)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          pip install pytest pytest-asyncio
+
+      - name: Run payment incident integration/e2e matrix
+        run: |
+          pytest -q \
+            tests/test_payment_incident_e2e_matrix.py \
+            tests/test_payment_incident_providers.py \
+            tests/test_payment_incident_stripe_adapter.py \
+            tests/test_payment_incident_paypal_adapter.py \
+            tests/test_payment_incident_ccbill_adapter.py
+
+  payment-incident-frontend-e2e:
+    name: payment-incident-frontend-e2e (required)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run payment incident UX suites
+        run: |
+          npx vitest run \
+            src/pages/admin/__tests__/PaymentIncidentQueuePage.test.tsx \
+            src/pages/admin/__tests__/PaymentIncidentQueuePage.e2e.test.tsx \
+            src/pages/billing/__tests__/BillingOverview.paymentIssues.test.tsx \
+            src/pages/billing/__tests__/BillingOverview.paymentIssues.e2e.test.tsx

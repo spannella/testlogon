@@ -93,3 +93,31 @@ export const depositToWallet = (body: WalletDepositReq) =>
 
 export const withdrawFromWallet = (body: WalletWithdrawReq) =>
   api.post<{ ok: boolean; wallet_balance_cents: number }>("/ui/billing/wallet/withdraw", body);
+
+export interface PaymentIssue {
+  incident_id: string;
+  incident_type: string;
+  status: string;
+  provider?: string;
+  amount?: string;
+  currency?: string;
+  requires_customer_action?: boolean;
+  customer_action_type?: string | null;
+  retry_attempts?: Array<Record<string, unknown>>;
+}
+
+export const getPaymentIssues = (limit = 50) =>
+  api.get<{ items: PaymentIssue[]; count: number }>("/ui/billing/payment-issues", { limit: String(limit) });
+
+export const confirmAndRetryCharge = (issueId: string) =>
+  api.post<{ ok: boolean; code: string; message: string }>(`/ui/billing/payment-issues/${issueId}/confirm-and-retry`, {});
+
+export const retryAutomaticPayment = (issueId: string) =>
+  api.post<{ ok: boolean; code: string; message: string }>(`/ui/billing/payment-issues/${issueId}/retry-automatic-payment`, {});
+
+export const setDefaultAndRetryAutomaticPayment = (paymentMethodId: string, issueId: string) =>
+  api.post<{ ok: boolean; code: string; message: string }>(
+    `/ui/billing/payment-methods/${paymentMethodId}/set-default-and-retry`,
+    {},
+    { incident_id: issueId },
+  );

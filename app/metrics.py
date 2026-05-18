@@ -541,6 +541,53 @@ PROVIDER_FAILURE_ALERTS = Counter(
     "Provider repeated-failure alert triggers",
     ["provider"],
 )
+PAYMENT_INCIDENT_EVENTS = Counter(
+    "payment_incident_events_total",
+    "Payment incident lifecycle events by provider/type/status/outcome",
+    ["provider", "incident_type", "event", "status", "outcome"],
+)
+PAYMENT_INCIDENT_RESPONSE_LATENCY = Histogram(
+    "payment_incident_response_latency_seconds",
+    "Latency from incident creation to dispute response submission",
+    ["provider", "incident_type"],
+    buckets=(60, 300, 900, 1800, 3600, 7200, 14400, 28800, 43200, 86400, 172800, 604800),
+)
+PAYMENT_INCIDENT_RESPONSE_SLA_BREACHES = Counter(
+    "payment_incident_response_sla_breaches_total",
+    "Dispute response submissions that breached response_due_at SLA",
+    ["provider", "incident_type"],
+)
+PAYMENT_INCIDENT_RECOVERY_LATENCY = Histogram(
+    "payment_incident_recovery_latency_seconds",
+    "Latency from payment failure incident creation to retry_succeeded",
+    ["provider"],
+    buckets=(60, 300, 900, 1800, 3600, 7200, 14400, 28800, 43200, 86400, 172800, 604800),
+)
+PAYMENT_INCIDENT_RETRY_ATTEMPTS = Counter(
+    "payment_incident_retry_attempts_total",
+    "Payment incident retry attempts by provider/action/outcome/code",
+    ["provider", "action", "outcome", "code"],
+)
+PAYMENT_INCIDENT_TICKET_LATENCY = Histogram(
+    "payment_incident_ticket_latency_seconds",
+    "Ticket lifecycle latency for payment incidents",
+    ["provider", "metric"],
+    buckets=(60, 300, 900, 1800, 3600, 7200, 14400, 28800, 43200, 86400, 172800, 604800),
+)
+PAYMENT_INCIDENT_WEBHOOK_OUTCOMES = Counter(
+    "payment_incident_webhook_outcomes_total",
+    "Payment incident webhook verification/processing outcomes",
+    ["provider", "outcome", "reason"],
+)
+PAYMENT_INCIDENT_WEBHOOK_REPLAY_EVENTS = Counter(
+    "payment_incident_webhook_replay_events_total",
+    "Replay cache check/mark/reject events for payment incident webhooks",
+    ["provider", "event"],
+)
+PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE_ENTRIES = Gauge(
+    "payment_incident_webhook_replay_cache_entries",
+    "Current in-process payment incident webhook replay cache entries",
+)
 
 ENTITLEMENT_CHECKS = Counter(
     "entitlement_checks_total",
@@ -1226,6 +1273,75 @@ def record_provider_failure_streak(provider: str, streak: int) -> None:
 
 def record_provider_failure_alert(provider: str) -> None:
     PROVIDER_FAILURE_ALERTS.labels(provider=(provider or "unknown").lower()).inc()
+
+
+def record_payment_incident_event(*, provider: str, incident_type: str, event: str, status: str, outcome: str = "ok") -> None:
+    PAYMENT_INCIDENT_EVENTS.labels(
+        provider=(provider or "unknown").lower(),
+        incident_type=(incident_type or "unknown").lower(),
+        event=(event or "unknown").lower(),
+        status=(status or "unknown").lower(),
+        outcome=(outcome or "ok").lower(),
+    ).inc()
+
+
+def record_payment_incident_response_latency(*, provider: str, incident_type: str, elapsed_seconds: float) -> None:
+    if elapsed_seconds < 0:
+        return
+    PAYMENT_INCIDENT_RESPONSE_LATENCY.labels(
+        provider=(provider or "unknown").lower(),
+        incident_type=(incident_type or "unknown").lower(),
+    ).observe(elapsed_seconds)
+
+
+def record_payment_incident_response_sla_breach(*, provider: str, incident_type: str) -> None:
+    PAYMENT_INCIDENT_RESPONSE_SLA_BREACHES.labels(
+        provider=(provider or "unknown").lower(),
+        incident_type=(incident_type or "unknown").lower(),
+    ).inc()
+
+
+def record_payment_incident_recovery_latency(*, provider: str, elapsed_seconds: float) -> None:
+    if elapsed_seconds < 0:
+        return
+    PAYMENT_INCIDENT_RECOVERY_LATENCY.labels(provider=(provider or "unknown").lower()).observe(elapsed_seconds)
+
+
+def record_payment_incident_retry_attempt(*, provider: str, action: str, outcome: str, code: str = "none") -> None:
+    PAYMENT_INCIDENT_RETRY_ATTEMPTS.labels(
+        provider=(provider or "unknown").lower(),
+        action=(action or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+        code=(code or "none").lower(),
+    ).inc()
+
+
+def record_payment_incident_ticket_latency(*, provider: str, metric: str, elapsed_seconds: float) -> None:
+    if elapsed_seconds < 0:
+        return
+    PAYMENT_INCIDENT_TICKET_LATENCY.labels(
+        provider=(provider or "unknown").lower(),
+        metric=(metric or "unknown").lower(),
+    ).observe(elapsed_seconds)
+
+
+def record_payment_incident_webhook_outcome(*, provider: str, outcome: str, reason: str = "none") -> None:
+    PAYMENT_INCIDENT_WEBHOOK_OUTCOMES.labels(
+        provider=(provider or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+        reason=(reason or "none").lower(),
+    ).inc()
+
+
+def record_payment_incident_webhook_replay_event(*, provider: str, event: str) -> None:
+    PAYMENT_INCIDENT_WEBHOOK_REPLAY_EVENTS.labels(
+        provider=(provider or "unknown").lower(),
+        event=(event or "unknown").lower(),
+    ).inc()
+
+
+def set_payment_incident_webhook_replay_cache_entries(*, entries: int) -> None:
+    PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE_ENTRIES.set(max(0, int(entries)))
 
 
 def record_vnc_session_event(*, action: str, outcome: str, target_id: str = "unknown", error_code: str = "none") -> None:

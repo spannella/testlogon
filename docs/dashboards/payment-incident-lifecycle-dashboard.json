@@ -1,0 +1,106 @@
+{
+  "title": "Payment Incident Lifecycle Ops",
+  "uid": "payment-incident-lifecycle-ops",
+  "tags": [
+    "billing",
+    "payment_incidents",
+    "pdm-017"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Dispute volume by provider (opened/evidence required)",
+      "targets": [
+        {
+          "expr": "sum by (provider, status) (rate(payment_incident_events_total{incident_type=~\"dispute|chargeback\",event=\"transition\",status=~\"opened|evidence_required\"}[10m]))",
+          "legendFormat": "{{provider}} {{status}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Dispute outcomes by provider",
+      "targets": [
+        {
+          "expr": "sum by (provider, outcome) (rate(payment_incident_events_total{incident_type=~\"dispute|chargeback\",event=\"outcome\"}[30m]))",
+          "legendFormat": "{{provider}} {{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Dispute response p95 latency (seconds)",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, provider) (rate(payment_incident_response_latency_seconds_bucket[30m])))",
+          "legendFormat": "{{provider}} p95"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Dispute response SLA breaches",
+      "targets": [
+        {
+          "expr": "sum by (provider) (increase(payment_incident_response_sla_breaches_total[24h]))",
+          "legendFormat": "{{provider}} breaches/24h"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Payment recovery rate by provider (24h)",
+      "targets": [
+        {
+          "expr": "sum by (provider) (increase(payment_incident_events_total{incident_type=\"payment_failure\",event=\"transition\",status=\"retry_succeeded\"}[24h])) / clamp_min(sum by (provider) (increase(payment_incident_events_total{incident_type=\"payment_failure\",event=\"created\"}[24h])), 1)",
+          "legendFormat": "{{provider}} recovery_rate"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Retry success rate by provider and code (24h)",
+      "targets": [
+        {
+          "expr": "sum by (provider, code) (increase(payment_incident_retry_attempts_total{outcome=\"success\"}[24h])) / clamp_min(sum by (provider, code) (increase(payment_incident_retry_attempts_total[24h])), 1)",
+          "legendFormat": "{{provider}} {{code}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Payment recovery p95 latency (seconds)",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, provider) (rate(payment_incident_recovery_latency_seconds_bucket[30m])))",
+          "legendFormat": "{{provider}} p95"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Ticket MTTA/MTTR p95 (seconds)",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, provider, metric) (rate(payment_incident_ticket_latency_seconds_bucket[1h])))",
+          "legendFormat": "{{provider}} {{metric}} p95"
+        }
+      ]
+    }
+  ],
+  "annotations": {
+    "list": []
+  }
+}
