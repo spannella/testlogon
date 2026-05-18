@@ -11,11 +11,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Literal, Optional, Set, Tuple
 
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from starlette.responses import StreamingResponse
 
 from app.core.aws import ddb
@@ -50,6 +50,23 @@ logger = logging.getLogger(__name__)
 
 def _emit_newsfeed_content_metric(event: str, **fields: Any) -> None:
     logger.info("newsfeed content metric", extra={"event": event, **fields})
+
+
+def _emit_newsfeed_draft_metric(
+    event: str,
+    *,
+    outcome: Literal["success", "fail"],
+    source: Literal["backend", "frontend"] = "backend",
+    reason_code: Optional[str] = None,
+    **fields: Any,
+) -> None:
+    payload = {"event": event, "outcome": outcome, "source": source, **fields}
+    if reason_code:
+        payload["reason_code"] = reason_code
+    if outcome == "success":
+        logger.info("newsfeed draft lifecycle metric", extra=payload)
+    else:
+        logger.warning("newsfeed draft lifecycle metric", extra=payload)
 
 
 def _emit_newsfeed_content_reject(reason_code: str, *, source: str, body_format: Optional[str] = None) -> None:
@@ -106,6 +123,136 @@ def _newsfeed_post_quota_error(*, period_id: str, limit_count: int, used_count: 
             "remaining_count": remaining_count,
         },
     )
+
+
+def _draft_retention_days() -> int:
+    raw = int(getattr(S, "newsfeed_draft_retention_days", 0) or 0)
+    return max(0, min(raw, 3650))
+
+
+def _draft_max_per_user() -> int:
+    raw = int(getattr(S, "newsfeed_draft_max_per_user", 50) or 50)
+    return max(1, min(raw, 1000))
+
+
+def _draft_max_payload_bytes() -> int:
+    raw = int(getattr(S, "newsfeed_draft_max_payload_bytes", 65536) or 65536)
+    return max(1024, min(raw, 1_048_576))
+
+
+def _draft_quota_bypass_user_ids() -> Set[str]:
+    raw = str(getattr(S, "newsfeed_draft_quota_bypass_user_ids", "") or "")
+    return {token.strip() for token in raw.split(",") if token.strip()}
+
+
+def _drafts_enabled_user_ids() -> Set[str]:
+    raw = str(getattr(S, "newsfeed_drafts_enabled_user_ids", "") or "")
+    return {token.strip() for token in raw.split(",") if token.strip()}
+
+
+def _drafts_disabled_user_ids() -> Set[str]:
+    raw = str(getattr(S, "newsfeed_drafts_disabled_user_ids", "") or "")
+    return {token.strip() for token in raw.split(",") if token.strip()}
+
+
+def _is_drafts_feature_enabled_for_user(user_id: str) -> bool:
+    if user_id in _drafts_enabled_user_ids():
+        return True
+    if user_id in _drafts_disabled_user_ids():
+        return False
+    return bool(getattr(S, "newsfeed_drafts_enabled", True))
+
+
+def _ensure_drafts_feature_enabled(user_id: str) -> None:
+    if _is_drafts_feature_enabled_for_user(user_id):
+        return
+    raise HTTPException(status_code=404, detail="Drafts feature is disabled")
+
+
+def _draft_quota_error(*, limit_count: int, used_count: int) -> HTTPException:
+    remaining_count = max(0, int(limit_count) - int(used_count))
+    return HTTPException(
+        status_code=403,
+        detail={
+            "code": "newsfeed_draft_quota_exceeded",
+            "message": "newsfeed draft quota exceeded",
+            "quota_type": "newsfeed_draft",
+            "limit_count": int(limit_count),
+            "used_count": int(used_count),
+            "remaining_count": remaining_count,
+        },
+    )
+
+
+def _draft_payload_too_large_error(*, max_payload_bytes: int, payload_bytes: int) -> HTTPException:
+    return HTTPException(
+        status_code=413,
+        detail={
+            "code": "newsfeed_draft_payload_too_large",
+            "message": "newsfeed draft payload exceeds max size",
+            "max_payload_bytes": int(max_payload_bytes),
+            "payload_bytes": int(payload_bytes),
+        },
+    )
+
+
+def _draft_conflict_error(*, expected_updated_at: str, actual_updated_at: Optional[str]) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": "newsfeed_draft_version_conflict",
+            "message": "draft has changed since last read",
+            "expected_updated_at": expected_updated_at,
+            "actual_updated_at": actual_updated_at,
+        },
+    )
+
+
+def _enforce_draft_expected_updated_at(
+    *,
+    expected_updated_at: Optional[str],
+    existing_item: Dict[str, Any],
+) -> None:
+    if not expected_updated_at:
+        return
+    actual_updated_at = str(existing_item.get("updated_at") or "")
+    if actual_updated_at != expected_updated_at:
+        raise _draft_conflict_error(
+            expected_updated_at=expected_updated_at,
+            actual_updated_at=actual_updated_at or None,
+        )
+
+
+def _draft_payload_bytes(payload: Dict[str, Any]) -> int:
+    return len(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+
+
+def _maybe_draft_ttl_epoch(updated_at_iso: str) -> Optional[int]:
+    retention_days = _draft_retention_days()
+    if retention_days <= 0:
+        return None
+    dt = datetime.fromisoformat(updated_at_iso)
+    return int(dt.timestamp()) + (retention_days * 86400)
+
+
+def _enforce_draft_payload_size(payload: Dict[str, Any]) -> None:
+    payload_bytes = _draft_payload_bytes(payload)
+    max_payload_bytes = _draft_max_payload_bytes()
+    if payload_bytes > max_payload_bytes:
+        raise _draft_payload_too_large_error(max_payload_bytes=max_payload_bytes, payload_bytes=payload_bytes)
+
+
+def _enforce_draft_count_quota(user_id: str) -> None:
+    if user_id in _draft_quota_bypass_user_ids():
+        return
+    limit_count = _draft_max_per_user()
+    q = ddb_query(
+        **build_draft_list_query(user_id=user_id, cursor=None, limit=limit_count + 1),
+        ProjectionExpression="draft_id",
+    )
+    used_count = len(q.get("Items") or [])
+    if used_count >= limit_count:
+        raise _draft_quota_error(limit_count=limit_count, used_count=used_count)
 
 
 def _parse_newsfeed_post_warning_thresholds() -> List[int]:
@@ -326,6 +473,71 @@ def pk_unlock(user_id: str) -> str:
 
 def pk_like(user_id: str) -> str:
     return f"LIKE#{user_id}"
+
+
+def sk_draft(draft_id: str) -> str:
+    return f"DRAFT#{draft_id}"
+
+
+def gsi_drafts_pk(user_id: str) -> str:
+    return f"DRAFTS#{user_id}"
+
+
+def gsi_drafts_sk(updated_at: str, draft_id: str) -> str:
+    return f"{updated_at}#DRAFT#{draft_id}"
+
+
+def drafts_index_name() -> str:
+    return str(getattr(S, "newsfeed_drafts_index_name", "GSI4"))
+
+
+def build_draft_item(
+    *,
+    user_id: str,
+    draft_id: str,
+    payload: Dict[str, Any],
+    created_at: Optional[str] = None,
+    updated_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    created = created_at or now_iso()
+    updated = updated_at or created
+    item = {
+        "pk": pk_user(user_id),
+        "sk": sk_draft(draft_id),
+        "entity_type": "draft_post",
+        "status": "draft",
+        "draft_id": draft_id,
+        "author_id": user_id,
+        "created_at": created,
+        "updated_at": updated,
+        "payload": payload,
+        # Draft list index (descending by setting ScanIndexForward=False)
+        "GSI4PK": gsi_drafts_pk(user_id),
+        "GSI4SK": gsi_drafts_sk(updated, draft_id),
+    }
+    ttl_epoch = _maybe_draft_ttl_epoch(updated)
+    if ttl_epoch is not None:
+        item["ttl_epoch"] = ttl_epoch
+    return item
+
+
+def build_draft_list_query(
+    *,
+    user_id: str,
+    cursor: Optional[str],
+    limit: int = 20,
+) -> Dict[str, Any]:
+    query: Dict[str, Any] = {
+        "IndexName": drafts_index_name(),
+        "KeyConditionExpression": "GSI4PK = :pk",
+        "ExpressionAttributeValues": {":pk": gsi_drafts_pk(user_id)},
+        "Limit": max(1, min(int(limit), 100)),
+        "ScanIndexForward": False,
+    }
+    eks = decode_cursor_or_400(cursor)
+    if eks:
+        query["ExclusiveStartKey"] = eks
+    return query
 
 
 # -----------------------------
@@ -792,6 +1004,126 @@ class EditPostRequest(ContentFieldsMixin):
     image_urls: Optional[List[str]] = None
 
 
+class DraftPostResponse(BaseModel):
+    draft_id: str
+    author_id: str
+    created_at: str
+    updated_at: str
+    body: Optional[str] = None
+    body_plain: Optional[str] = None
+    body_markdown: Optional[str] = None
+    body_rich: Optional[Dict[str, Any]] = None
+    body_format: Optional[BodyFormat] = None
+    body_version: int = 1
+    image_urls: List[str] = Field(default_factory=list)
+    file_paths: List[str] = Field(default_factory=list)
+    unlock_price_cents: Optional[int] = Field(default=None, ge=0)
+
+
+class CreateDraftPostRequest(ContentFieldsMixin):
+    image_urls: List[str] = Field(default_factory=list)
+    file_paths: List[str] = Field(default_factory=list)
+    unlock_price_cents: Optional[int] = Field(default=None, ge=0)
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "body": "Legacy plain draft",
+                    "image_urls": ["https://cdn.example.com/image-1.jpg"],
+                    "file_paths": ["/docs/contracts.pdf"],
+                },
+                {
+                    "body_plain": "Hello draft",
+                    "body_markdown": "# Hello draft",
+                    "body_format": "markdown",
+                    "body_version": 1,
+                    "unlock_price_cents": 299,
+                },
+                {
+                    "body_plain": "Hello rich draft",
+                    "body_rich": {
+                        "type": "doc",
+                        "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Hello rich draft"}]}],
+                    },
+                    "body_format": "rich",
+                    "body_version": 1,
+                },
+            ]
+        }
+    }
+
+
+class UpdateDraftPostRequest(BaseModel):
+    body: Optional[str] = None
+    body_plain: Optional[str] = None
+    body_markdown: Optional[str] = None
+    body_rich: Optional[Dict[str, Any]] = None
+    body_format: Optional[BodyFormat] = None
+    body_version: Optional[int] = Field(default=1, ge=1)
+    image_urls: Optional[List[str]] = None
+    file_paths: Optional[List[str]] = None
+    unlock_price_cents: Optional[int] = Field(default=None, ge=0)
+    expected_updated_at: Optional[str] = None
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "body_plain": "Updated plain draft body",
+                    "image_urls": ["https://cdn.example.com/updated-image.jpg"],
+                },
+                {
+                    "body_plain": "Updated markdown draft",
+                    "body_markdown": "## Updated markdown draft",
+                    "body_format": "markdown",
+                    "unlock_price_cents": 499,
+                },
+                {
+                    "body_plain": "Updated rich draft",
+                    "body_rich": {
+                        "type": "doc",
+                        "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Updated rich draft"}]}],
+                    },
+                    "body_format": "rich",
+                },
+            ]
+        }
+    }
+
+
+class ListDraftPostsResponse(BaseModel):
+    items: List[DraftPostResponse] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "items": [
+                        {
+                            "draft_id": "dft_123",
+                            "author_id": "user_123",
+                            "created_at": "2026-04-04T00:00:00Z",
+                            "updated_at": "2026-04-04T00:10:00Z",
+                            "body_plain": "Saved draft body",
+                            "body_format": "plain",
+                            "image_urls": ["https://cdn.example.com/image-1.jpg"],
+                            "file_paths": ["/docs/contract.pdf"],
+                        }
+                    ],
+                    "next_cursor": "eyJwayI6ICJ..."
+                }
+            ]
+        }
+    }
+
+
+class PublishDraftPostRequest(BaseModel):
+    keep_copy: bool = False
+    expected_updated_at: Optional[str] = None
+
+
 class PresignUploadRequest(BaseModel):
     filename: str
     content_type: str
@@ -827,6 +1159,13 @@ class ContentRenderTelemetryRequest(BaseModel):
     reason: Literal["unsupported_format", "render_exception"]
     body_format: Optional[str] = None
     surface: Literal["post", "comment", "unknown"] = "unknown"
+
+
+class DraftLifecycleTelemetryRequest(BaseModel):
+    event: Literal["save_success", "save_fail", "load_success", "load_fail", "delete_success", "delete_fail", "publish_from_draft"]
+    outcome: Literal["success", "fail"]
+    reason_code: Optional[str] = Field(default=None, max_length=120)
+    surface: Literal["composer", "unknown"] = "composer"
 
 
 # -----------------------------
@@ -1180,6 +1519,159 @@ def has_unlocked(user_id: str, post_id: str) -> bool:
     return bool(it and it.get("unlocked") is True)
 
 
+def _dedupe_strs(values: List[str]) -> List[str]:
+    seen: Set[str] = set()
+    out: List[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _validate_and_normalize_draft_image_urls(*, user_id: str, image_urls: List[str]) -> List[str]:
+    normalized: List[str] = []
+    for idx, raw in enumerate(image_urls):
+        if not isinstance(raw, str):
+            raise ValueError(f"invalid_draft_payload: image_urls[{idx}] must be a string")
+        url = raw.strip()
+        if not url:
+            raise ValueError(f"invalid_draft_payload: image_urls[{idx}] cannot be empty")
+        if len(url) > 2048:
+            raise ValueError(f"invalid_draft_payload: image_urls[{idx}] exceeds max length (2048)")
+        if url.startswith("/uploads/object"):
+            parsed = urlparse(url)
+            query = parse_qs(parsed.query or "")
+            s3_key = ((query.get("s3_key") or [""])[0] or "").strip()
+            if not s3_key:
+                raise ValueError(f"invalid_draft_payload: image_urls[{idx}] missing s3_key")
+            owner_prefix = f"uploads/{user_id}/"
+            if not s3_key.startswith(owner_prefix):
+                raise ValueError(
+                    f"invalid_draft_payload: image_urls[{idx}] must reference an upload owned by the current user"
+                )
+            normalized.append(url)
+            continue
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError(
+                f"invalid_draft_payload: image_urls[{idx}] must be an https URL or an /uploads/object URL"
+            )
+        normalized.append(url)
+    return _dedupe_strs(normalized)[:10]
+
+
+def _validate_and_normalize_draft_file_paths(*, user_id: str, file_paths: List[str]) -> List[str]:
+    normalized: List[str] = []
+    for idx, raw in enumerate(file_paths):
+        if not isinstance(raw, str):
+            raise ValueError(f"invalid_draft_payload: file_paths[{idx}] must be a string")
+        if not raw.strip():
+            raise ValueError(f"invalid_draft_payload: file_paths[{idx}] cannot be empty")
+        try:
+            clean = norm_path(raw, is_folder=False)
+            get_node(user_id, clean)
+        except HTTPException as exc:
+            if exc.status_code in {400, 403, 404}:
+                raise ValueError(
+                    f"invalid_draft_payload: file_paths[{idx}] must reference an existing file owned by the current user"
+                ) from exc
+            raise
+        normalized.append(clean)
+    return _dedupe_strs(normalized)[:5]
+
+
+def _validate_and_normalize_unlock_price(unlock_price_cents: Optional[int]) -> Optional[int]:
+    if unlock_price_cents is None:
+        return None
+    cents = int(unlock_price_cents)
+    if cents <= 0:
+        raise ValueError("invalid_draft_payload: unlock_price_cents must be greater than zero when provided")
+    if cents > 10_000_000:
+        raise ValueError("invalid_draft_payload: unlock_price_cents exceeds max allowed value")
+    return cents
+
+
+def _validate_and_normalize_draft_payload(*, user_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = dict(payload)
+    normalized["image_urls"] = _validate_and_normalize_draft_image_urls(
+        user_id=user_id,
+        image_urls=list(normalized.get("image_urls") or []),
+    )
+    normalized["file_paths"] = _validate_and_normalize_draft_file_paths(
+        user_id=user_id,
+        file_paths=list(normalized.get("file_paths") or []),
+    )
+    normalized["unlock_price_cents"] = _validate_and_normalize_unlock_price(
+        normalized.get("unlock_price_cents")
+    )
+    return normalized
+
+
+def _build_file_attachments_for_post(*, user_id: str, file_paths: List[str]) -> List[Dict[str, Any]]:
+    attachments: List[Dict[str, Any]] = []
+    for idx, fp in enumerate(file_paths[:5]):
+        try:
+            node_path = norm_path(fp, is_folder=False)
+            node = get_node(user_id, node_path)
+        except HTTPException as exc:
+            if exc.status_code in {400, 403, 404}:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid attachment reference at file_paths[{idx}]: file is missing or not accessible",
+                ) from exc
+            raise
+        attachments.append({
+            "path": node_path,
+            "name": node.get("name") or node_path.rsplit("/", 1)[-1],
+            "content_type": node.get("content_type"),
+            "size": int(node["size"]) if node.get("size") is not None else None,
+            "owner": user_id,
+        })
+    return attachments
+
+
+def _draft_payload_from_create(*, user_id: str, req: CreateDraftPostRequest) -> Dict[str, Any]:
+    content = _content_from_payload(req)
+    payload = {
+        **content,
+        "image_urls": list(req.image_urls or []),
+        "file_paths": list(req.file_paths or []),
+        "unlock_price_cents": req.unlock_price_cents,
+    }
+    return _validate_and_normalize_draft_payload(user_id=user_id, payload=payload)
+
+
+def _draft_item_to_response(item: Dict[str, Any]) -> DraftPostResponse:
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    return DraftPostResponse(
+        draft_id=str(item.get("draft_id") or ""),
+        author_id=str(item.get("author_id") or ""),
+        created_at=str(item.get("created_at") or ""),
+        updated_at=str(item.get("updated_at") or item.get("created_at") or ""),
+        body=payload.get("body"),
+        body_plain=payload.get("body_plain"),
+        body_markdown=payload.get("body_markdown"),
+        body_rich=payload.get("body_rich"),
+        body_format=payload.get("body_format"),
+        body_version=int(payload.get("body_version") or 1),
+        image_urls=list(payload.get("image_urls") or []),
+        file_paths=list(payload.get("file_paths") or []),
+        unlock_price_cents=payload.get("unlock_price_cents"),
+    )
+
+
+def _get_draft_or_404(*, user_id: str, draft_id: str) -> Dict[str, Any]:
+    item = ddb_get_item({"pk": pk_user(user_id), "sk": sk_draft(draft_id)})
+    if not item or item.get("entity_type") != "draft_post":
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if item.get("author_id") != user_id:
+        # defensive: if key schema ever changes, keep ownership checks explicit
+        raise HTTPException(status_code=404, detail="Draft not found")
+    return item
+
+
 # -----------------------------
 # Uploads (multipart POST + GET proxy)
 # -----------------------------
@@ -1264,6 +1756,154 @@ def refollow(req: UnfollowRequest, user_id: UserIdDep):
 # -----------------------------
 # Posts
 # -----------------------------
+@router.post("/posts/drafts", response_model=DraftPostResponse)
+def create_draft_post(req: CreateDraftPostRequest, user_id: UserIdDep):
+    _ensure_drafts_feature_enabled(user_id)
+    try:
+        _enforce_draft_count_quota(user_id)
+        draft_id = new_id("draft")
+        payload = _draft_payload_from_create(user_id=user_id, req=req)
+        _enforce_draft_payload_size(payload)
+        item = build_draft_item(user_id=user_id, draft_id=draft_id, payload=payload)
+        ddb_put_item(item)
+        _emit_newsfeed_draft_metric("save_success", outcome="success", operation="create")
+        return _draft_item_to_response(item)
+    except ValueError as exc:
+        _emit_newsfeed_draft_metric("save_fail", outcome="fail", operation="create", reason_code="validation_error")
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except HTTPException as exc:
+        _emit_newsfeed_draft_metric("save_fail", outcome="fail", operation="create", reason_code=f"http_{exc.status_code}")
+        raise
+
+
+@router.get("/posts/drafts", response_model=ListDraftPostsResponse)
+def list_draft_posts(
+    user_id: UserIdDep,
+    cursor: Optional[str] = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    _ensure_drafts_feature_enabled(user_id)
+    query = build_draft_list_query(user_id=user_id, cursor=cursor, limit=limit)
+    resp = ddb_query(**query)
+    items = [_draft_item_to_response(it) for it in (resp.get("Items") or []) if it.get("entity_type") == "draft_post"]
+    return ListDraftPostsResponse(items=items, next_cursor=encode_cursor(resp.get("LastEvaluatedKey")))
+
+
+@router.get("/posts/drafts/{draft_id}", response_model=DraftPostResponse)
+def get_draft_post(draft_id: str, user_id: UserIdDep):
+    _ensure_drafts_feature_enabled(user_id)
+    try:
+        item = _get_draft_or_404(user_id=user_id, draft_id=draft_id)
+        _emit_newsfeed_draft_metric("load_success", outcome="success")
+        return _draft_item_to_response(item)
+    except HTTPException as exc:
+        _emit_newsfeed_draft_metric("load_fail", outcome="fail", reason_code=f"http_{exc.status_code}")
+        raise
+
+
+@router.patch("/posts/drafts/{draft_id}", response_model=DraftPostResponse)
+def update_draft_post(draft_id: str, req: UpdateDraftPostRequest, user_id: UserIdDep):
+    _ensure_drafts_feature_enabled(user_id)
+    try:
+        existing = _get_draft_or_404(user_id=user_id, draft_id=draft_id)
+        _enforce_draft_expected_updated_at(
+            expected_updated_at=req.expected_updated_at,
+            existing_item=existing,
+        )
+        current_payload = existing.get("payload") if isinstance(existing.get("payload"), dict) else {}
+
+        patch = req.model_dump(exclude_unset=True, exclude={"expected_updated_at"})
+        merged: Dict[str, Any] = {**current_payload, **patch}
+
+        # Validate merged content with create validator for parity with publish content rules.
+        CreateDraftPostRequest(**merged)
+
+        merged = _validate_and_normalize_draft_payload(user_id=user_id, payload=merged)
+        _enforce_draft_payload_size(merged)
+
+        updated_at = now_iso()
+        item = build_draft_item(
+            user_id=user_id,
+            draft_id=draft_id,
+            payload=merged,
+            created_at=str(existing.get("created_at") or updated_at),
+            updated_at=updated_at,
+        )
+        ddb_put_item(item)
+        _emit_newsfeed_draft_metric("save_success", outcome="success", operation="update")
+        return _draft_item_to_response(item)
+    except ValueError as exc:
+        _emit_newsfeed_draft_metric("save_fail", outcome="fail", operation="update", reason_code="validation_error")
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except HTTPException as exc:
+        _emit_newsfeed_draft_metric("save_fail", outcome="fail", operation="update", reason_code=f"http_{exc.status_code}")
+        raise
+
+
+@router.delete("/posts/drafts/{draft_id}")
+def delete_draft_post(
+    draft_id: str,
+    user_id: UserIdDep,
+    expected_updated_at: Optional[str] = Query(default=None),
+):
+    _ensure_drafts_feature_enabled(user_id)
+    try:
+        existing = _get_draft_or_404(user_id=user_id, draft_id=draft_id)
+        _enforce_draft_expected_updated_at(
+            expected_updated_at=expected_updated_at,
+            existing_item=existing,
+        )
+        ddb_delete_item({"pk": pk_user(user_id), "sk": sk_draft(draft_id)})
+        _emit_newsfeed_draft_metric("delete_success", outcome="success")
+        return {"ok": True}
+    except HTTPException as exc:
+        _emit_newsfeed_draft_metric("delete_fail", outcome="fail", reason_code=f"http_{exc.status_code}")
+        raise
+
+
+@router.post("/posts/drafts/{draft_id}/publish", response_model=PostResponse)
+def publish_draft_post(
+    draft_id: str,
+    req: PublishDraftPostRequest,
+    user_id: UserIdDep,
+):
+    _ensure_drafts_feature_enabled(user_id)
+    try:
+        draft_item = _get_draft_or_404(user_id=user_id, draft_id=draft_id)
+        _enforce_draft_expected_updated_at(
+            expected_updated_at=req.expected_updated_at,
+            existing_item=draft_item,
+        )
+        payload = draft_item.get("payload") if isinstance(draft_item.get("payload"), dict) else {}
+        if not payload:
+            raise HTTPException(status_code=422, detail="Draft payload is empty")
+
+        payload = _validate_and_normalize_draft_payload(user_id=user_id, payload=payload)
+    except ValueError as exc:
+        _emit_newsfeed_draft_metric("publish_from_draft", outcome="fail", reason_code="attachment_validation_error")
+        raise HTTPException(status_code=422, detail=f"Invalid draft attachment reference: {exc}") from exc
+    except HTTPException as exc:
+        _emit_newsfeed_draft_metric("publish_from_draft", outcome="fail", reason_code=f"http_{exc.status_code}")
+        raise
+
+    try:
+        post_req = CreatePostRequest(**payload)
+    except ValidationError as exc:
+        _emit_newsfeed_draft_metric("publish_from_draft", outcome="fail", reason_code="payload_validation_error")
+        raise HTTPException(status_code=422, detail=f"Invalid draft payload: {exc.errors()}") from exc
+
+    published = create_post(post_req, user_id)
+    _emit_newsfeed_draft_metric("publish_from_draft", outcome="success")
+
+    if not req.keep_copy:
+        try:
+            ddb_delete_item({"pk": pk_user(user_id), "sk": sk_draft(draft_id)})
+        except Exception:
+            logger.exception("draft cleanup failed after publish", extra={"user_id": user_id, "draft_id": draft_id})
+
+    return published
+
+
 @router.post("/posts", response_model=PostResponse)
 def create_post(req: CreatePostRequest, user_id: UserIdDep):
     _enforce_newsfeed_post_quota_precheck(user_id=user_id)
@@ -1276,17 +1916,7 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
     _emit_newsfeed_content_metric("create_post", surface="post", body_format=content.get("body_format", "plain"))
 
     # Validate and collect file attachment metadata (max 5)
-    file_attachments = []
-    for fp in req.file_paths[:5]:
-        node_path = norm_path(fp, is_folder=False)
-        node = get_node(user_id, node_path)  # raises 404 if not found or not owned
-        file_attachments.append({
-            "path": node_path,
-            "name": node.get("name") or node_path.rsplit("/", 1)[-1],
-            "content_type": node.get("content_type"),
-            "size": int(node["size"]) if node.get("size") is not None else None,
-            "owner": user_id,
-        })
+    file_attachments = _build_file_attachments_for_post(user_id=user_id, file_paths=req.file_paths)
 
     post_item = {
         "pk": pk_post(post_id),
@@ -2179,6 +2809,19 @@ def list_notifications(
 @router.post("/telemetry/content-render")
 def content_render_telemetry(req: ContentRenderTelemetryRequest, user_id: UserIdDep):
     _emit_newsfeed_content_reject(req.reason, source="renderer", body_format=req.body_format)
+    return {"ok": True}
+
+
+@router.post("/telemetry/draft-lifecycle")
+def draft_lifecycle_telemetry(req: DraftLifecycleTelemetryRequest, user_id: UserIdDep):
+    _ensure_drafts_feature_enabled(user_id)
+    _emit_newsfeed_draft_metric(
+        req.event,
+        outcome=req.outcome,
+        source="frontend",
+        reason_code=req.reason_code,
+        surface=req.surface,
+    )
     return {"ok": True}
 
 

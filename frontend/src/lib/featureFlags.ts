@@ -48,6 +48,9 @@ export const isDevtoolsLogUiEnabled = () => devtoolsLogUiEnabled;
 
 export const newsfeedMarkdownEnabled = toBool(env.VITE_NEWSFEED_MARKDOWN_ENABLED, false);
 export const newsfeedRichtextEnabled = toBool(env.VITE_NEWSFEED_RICHTEXT_ENABLED, false);
+export const newsfeedDraftsEnabled = toBool(env.VITE_NEWSFEED_DRAFTS_ENABLED, true);
+export const newsfeedDraftsKillSwitch = toBool(env.VITE_NEWSFEED_DRAFTS_KILL_SWITCH, false);
+export const isNewsfeedDraftsEnabled = () => newsfeedDraftsEnabled && !newsfeedDraftsKillSwitch;
 
 
 export const vncRemoteDesktopEnabled = toBool(env.VITE_VNC_REMOTE_DESKTOP_ENABLED, true);

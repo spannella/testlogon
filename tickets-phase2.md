@@ -1294,3 +1294,148 @@
 **Acceptance criteria:**
 - Docs include sequence diagrams and error matrix for new flows.
 - QA matrix maps each phase-2 behavior to explicit test scenarios.
+# Newsfeed Drafts — Phase 2 Backlog (Production Readiness)
+
+### NFD-101: Add idempotency key support for draft create
+**Description:** Implement idempotency-key handling for draft creation to make client retries safe during network instability.
+**Acceptance criteria:**
+- Replayed create requests with identical key/payload return the same draft identity.
+- Reused keys with conflicting payloads fail with deterministic conflict errors.
+
+### NFD-102: Add idempotency key support for draft update
+**Description:** Extend idempotency handling to draft updates so autosave retries do not produce divergent state.
+**Acceptance criteria:**
+- Replayed update requests with same key/payload return stable responses.
+- Metrics differentiate idempotent replay from true version-conflict failures.
+
+### NFD-103: Add draft read-after-write consistency checks
+**Description:** Add integration tests validating immediate list/get consistency after create/update/delete operations across pagination boundaries.
+**Acceptance criteria:**
+- Tests verify no stale reads in common read-after-write paths.
+- Regression suite catches duplicate/missing items after rapid mutations.
+
+### NFD-104: Add publish transaction rollback hardening
+**Description:** Harden publish-from-draft flow to guarantee deterministic behavior on partial failure between post creation and draft cleanup.
+**Acceptance criteria:**
+- keep-copy and delete-copy modes are explicitly validated under injected failures.
+- Failure telemetry reports stage-specific error codes for triage.
+
+### NFD-105: Add attachment reconciliation preflight API
+**Description:** Implement a draft preflight endpoint that validates attachment ownership/existence and returns remediation details.
+**Acceptance criteria:**
+- Endpoint returns per-reference status and remediation hints.
+- Composer can invoke preflight without losing unsaved editor state.
+
+### NFD-106: Add orphaned draft attachment cleanup worker
+**Description:** Introduce scheduled cleanup for attachment objects no longer referenced by active drafts or published posts.
+**Acceptance criteria:**
+- Worker emits scanned/deleted/skipped/failure counters.
+- Safety windows prevent deleting recently uploaded or still-referenced objects.
+
+### NFD-107: Add quota race-condition stress tests
+**Description:** Add concurrency stress coverage for create/update/delete operations to validate quota accounting under contention.
+**Acceptance criteria:**
+- Quota is never exceeded under concurrent mutation races.
+- Quota error payload values remain accurate and stable.
+
+### NFD-108: Add retention boundary + clock skew integration tests
+**Description:** Build time-travel tests for retention expiration with simulated clock skew across API callers and backend.
+**Acceptance criteria:**
+- Expiry semantics are correct at exact boundary timestamps.
+- Skew scenarios do not cause premature expiration or ghost retrieval.
+
+### NFD-109: Add pagination token tamper-resistance tests
+**Description:** Expand pagination tests to include token tampering, replay, and invalid-shape handling.
+**Acceptance criteria:**
+- Tampered tokens are rejected with deterministic typed errors.
+- Legitimate pagination traversal remains duplicate-free and gap-free.
+
+### NFD-110: Add high-cardinality account performance benchmarks
+**Description:** Benchmark draft list/get/update for large draft counts and near-limit payload sizes.
+**Acceptance criteria:**
+- Benchmark report includes p50/p95/p99 latency and read/write cost indicators.
+- Performance thresholds are enforced in perf CI jobs.
+
+### NFD-111: Add autosave circuit-breaker policy
+**Description:** Add adaptive circuit-breaker behavior to autosave to prevent retry storms during backend degradation.
+**Acceptance criteria:**
+- Autosave pauses after configurable transient-failure threshold.
+- Recovery resumes safely without duplicate writes or stale overwrites.
+
+### NFD-112: Add offline mutation queue and replay ordering
+**Description:** Implement offline queueing for draft mutations with deterministic replay order on reconnect.
+**Acceptance criteria:**
+- Offline edits replay in-order and preserve user-intended final content.
+- Replay conflicts surface clear merge/retry guidance in UI.
+
+### NFD-113: Add cross-device conflict end-to-end scenario
+**Description:** Add E2E tests for multi-session editing where one client becomes stale and must recover.
+**Acceptance criteria:**
+- Test validates conflict response and guided recovery flow.
+- Final server draft reflects explicit user conflict resolution.
+
+### NFD-114: Add publish parity differential suite
+**Description:** Create differential tests comparing direct post publish and publish-from-draft outputs across content permutations.
+**Acceptance criteria:**
+- Assertions cover format fields, attachment metadata, lock settings, and visibility.
+- Any intentional parity deviations are documented and asserted.
+
+### NFD-115: Add telemetry schema governance + versioning
+**Description:** Enforce versioned telemetry contracts for draft lifecycle events across client and server emitters.
+**Acceptance criteria:**
+- Invalid event shapes are rejected or normalized with diagnostics.
+- Schema/version drift triggers CI failures with actionable output.
+
+### NFD-116: Add production observability dashboard pack
+**Description:** Build dashboards for draft funnel conversion, conflict rates, retry behavior, and top failure reasons.
+**Acceptance criteria:**
+- Dashboards support cohort/flag dimensions for rollout analysis.
+- Ownership, runbook links, and maintenance expectations are documented.
+
+### NFD-117: Add SLOs and alert routing for drafts
+**Description:** Define draft subsystem SLOs and configure alerts for latency, error rate, and telemetry ingestion health.
+**Acceptance criteria:**
+- SLO targets and alert thresholds are codified in monitoring config.
+- Alerts link to remediation runbooks and escalation paths.
+
+### NFD-118: Add security fuzzing for draft payload parser
+**Description:** Add fuzz corpus for rich-text structures, encoded URL edge cases, and boundary-size payload fragments.
+**Acceptance criteria:**
+- Fuzz suite runs in CI and fails on parser/validator regressions.
+- Error responses avoid leaking sensitive internals.
+
+### NFD-119: Add cross-tenant authorization regression matrix
+**Description:** Expand route-level negative tests to ensure drafts cannot be read/updated/deleted/published across account boundaries.
+**Acceptance criteria:**
+- Unauthorized access attempts consistently fail with non-disclosing errors.
+- Denied requests produce zero write side effects.
+
+### NFD-120: Add structured audit logging for draft lifecycle actions
+**Description:** Emit structured audit events for create/update/delete/publish actions with actor/resource/outcome metadata.
+**Acceptance criteria:**
+- Audit events include stable fields required for investigations.
+- Sensitive content fields are redacted in all audit sinks.
+
+### NFD-121: Add API error-code handbook for drafts
+**Description:** Publish a versioned draft error-code reference with retry semantics and client handling recommendations.
+**Acceptance criteria:**
+- Handbook includes all draft route-specific errors and sample responses.
+- Each error documents retryability and expected UX handling.
+
+### NFD-122: Add rollout automation guardrails
+**Description:** Add pre-deploy checks for draft feature flags, cohort config, kill-switch readiness, and rollback gating.
+**Acceptance criteria:**
+- Misconfigured rollout settings block promotion.
+- Rollback checklist is executable and linked from deployment docs.
+
+### NFD-123: Add incident response runbook + tabletop checklist
+**Description:** Create operations runbooks for quota spikes, conflict surges, publish failures, and telemetry drops.
+**Acceptance criteria:**
+- Runbook includes concrete queries/commands and decision trees.
+- Tabletop drill checklist is documented for on-call readiness.
+
+### NFD-124: Add launch-readiness load and soak testing suite
+**Description:** Define and automate normal/burst/soak traffic tests for draft CRUD and publish-from-draft paths.
+**Acceptance criteria:**
+- Suite reports throughput, saturation, and error-budget burn metrics.
+- Launch signoff requires meeting documented pass thresholds.

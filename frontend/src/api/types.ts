@@ -1765,6 +1765,52 @@ export interface EditCommentReq {
   body_version?: number;
 }
 
+export interface DraftPost {
+  draft_id: string;
+  author_id: string;
+  created_at: string;
+  updated_at: string;
+  body?: string;
+  body_plain?: string;
+  body_markdown?: string;
+  body_rich?: Record<string, unknown>;
+  body_format?: "plain" | "markdown" | "rich";
+  body_version?: number;
+  image_urls?: string[];
+  file_paths?: string[];
+  unlock_price_cents?: number;
+}
+
+export interface CreateDraftPostReq {
+  body?: string;
+  body_plain?: string;
+  body_markdown?: string;
+  body_rich?: Record<string, unknown>;
+  body_format?: "plain" | "markdown" | "rich";
+  body_version?: number;
+  image_urls?: string[];
+  file_paths?: string[];
+  unlock_price_cents?: number;
+}
+
+export interface UpdateDraftPostReq {
+  body?: string;
+  body_plain?: string;
+  body_markdown?: string;
+  body_rich?: Record<string, unknown>;
+  body_format?: "plain" | "markdown" | "rich";
+  body_version?: number;
+  image_urls?: string[];
+  file_paths?: string[];
+  unlock_price_cents?: number;
+  expected_updated_at?: string;
+}
+
+export interface ListDraftPostsResp {
+  items: DraftPost[];
+  next_cursor?: string;
+}
+
 export interface HidePostReq {
   post_id: string;
 }

@@ -8,6 +8,10 @@ import type {
   EditCommentReq,
   HidePostReq,
   TipReq,
+  DraftPost,
+  CreateDraftPostReq,
+  UpdateDraftPostReq,
+  ListDraftPostsResp,
 } from "@/api/types";
 
 export const getFeed = (cursor?: string) =>
@@ -98,6 +102,33 @@ export const removePostReaction = (postId: string, emoji: string) =>
 export const feedSseUrl = "/sse";
 
 
+
+
+// ── Draft CRUD ──────────────────────────────────────────────────
+
+export const createDraftPost = (body: CreateDraftPostReq) =>
+  api.post<DraftPost>("/posts/drafts", body);
+
+export const listDraftPosts = (cursor?: string, limit?: number) =>
+  api.get<ListDraftPostsResp>("/posts/drafts", {
+    ...(cursor ? { cursor } : {}),
+    ...(typeof limit === "number" ? { limit: String(limit) } : {}),
+  });
+
+export const getDraftPost = (draftId: string) =>
+  api.get<DraftPost>(`/posts/drafts/${draftId}`);
+
+export const updateDraftPost = (draftId: string, body: UpdateDraftPostReq) =>
+  api.patch<DraftPost>(`/posts/drafts/${draftId}`, body);
+
+export const deleteDraftPost = (draftId: string, expectedUpdatedAt?: string) =>
+  api.del<{ ok: boolean }>(`/posts/drafts/${draftId}`, expectedUpdatedAt ? { expected_updated_at: expectedUpdatedAt } : undefined);
+
+export const publishDraftPost = (draftId: string, keepCopy = false, expectedUpdatedAt?: string) =>
+  api.post<FeedPost>(`/posts/drafts/${draftId}/publish`, {
+    keep_copy: keepCopy,
+    ...(expectedUpdatedAt ? { expected_updated_at: expectedUpdatedAt } : {}),
+  });
 export interface ReportFeedContentReq {
   content_type: "feed_post" | "feed_comment" | "feed_media";
   content_id: string;
