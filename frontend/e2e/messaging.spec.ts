@@ -222,6 +222,44 @@ test.describe("2. Conversation list", () => {
   });
 });
 
+test.describe("2b. Messaging profile links", () => {
+  test("Authenticated user can open canonical profile from conversation list (desktop)", async ({ browser }) => {
+    const page = await browser.newPage({ viewport: { width: 1366, height: 900 } });
+    await gotoMessages(page, ALICE_ID);
+
+    const profileLink = page.locator("[aria-label*='Open'][aria-label*='profile']").first();
+    await expect(profileLink).toBeVisible({ timeout: 8000 });
+    await profileLink.click();
+
+    await expect(page).toHaveURL(/\/u\//, { timeout: 8000 });
+    await page.close();
+  });
+
+  test("Authenticated user can open canonical profile from conversation header (mobile)", async ({ browser }) => {
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    await gotoMessages(page, ALICE_ID);
+
+    const convoBtn = page.locator("button").filter({ hasText: /e2e.*bob|E2E Bob|bob/i }).first();
+    await expect(convoBtn).toBeVisible({ timeout: 8000 });
+    await convoBtn.click();
+    await expect(page.locator("textarea").last()).toBeVisible({ timeout: 8000 });
+
+    const headerProfileLink = page.locator("a[aria-label*='Open'][aria-label*='profile']").first();
+    await expect(headerProfileLink).toBeVisible({ timeout: 8000 });
+    await headerProfileLink.click();
+
+    await expect(page).toHaveURL(/\/u\//, { timeout: 8000 });
+    await page.close();
+  });
+
+  test("Unauthenticated user is redirected to login before messaging profile links are available", async ({ page }) => {
+    await page.goto(`${BASE}/messages`, { waitUntil: "load" });
+    await page.waitForTimeout(500);
+    await expect(page).toHaveURL(/\/login/);
+    await expect(page.locator("[aria-label*='Open'][aria-label*='profile']")).toHaveCount(0);
+  });
+});
+
 // ─── 3. Compose bar features ──────────────────────────────────────────────────
 
 test.describe("3. Compose bar features", () => {

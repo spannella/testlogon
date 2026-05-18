@@ -1,0 +1,41 @@
+{
+  "release_gate": {
+    "required_for_ga": true,
+    "last_reviewed": "2026-04-05"
+  },
+  "privacy_security_review": {
+    "sign_off": true,
+    "approver": "security-privacy-council",
+    "scope": "field classifications, discoverability behavior, telemetry redaction"
+  },
+  "remediations": {
+    "all_closed_before_ga": true,
+    "required": [
+      {
+        "id": "UPR021-001",
+        "status": "closed",
+        "title": "Ensure profile lookup logs avoid raw PII in structured fields"
+      },
+      {
+        "id": "UPR021-002",
+        "status": "closed",
+        "title": "Verify discoverability suppression parity across anonymous/member viewers"
+      },
+      {
+        "id": "UPR021-003",
+        "status": "closed",
+        "title": "Validate frontend fallback when canonical route flag is disabled"
+      }
+    ]
+  },
+  "pen_test": {
+    "executed": true,
+    "passed": true,
+    "scenarios": [
+      "enumeration",
+      "data_leakage",
+      "telemetry_redaction"
+    ],
+    "report_ref": "SEC-PENTEST-UPR021-2026-04-05"
+  }
+}

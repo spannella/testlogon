@@ -169,7 +169,7 @@ async function gotoContacts(page: Page) {
 
 /** Locator for a contact's name paragraph in the contact list. */
 function bobContactRow(page: Page) {
-  return page.locator("p").filter({ hasText: "E2E Bob" });
+  return page.locator('a[href*="/u/"]').filter({ hasText: "E2E Bob" }).first();
 }
 
 // ─── 30. Contacts page — navigation and empty state ────────────────────────────
@@ -278,6 +278,41 @@ test.describe("31. Add contact via 'Add Contact' dialog", () => {
     expect(bob!.display_name).toBe("E2E Bob");
     expect(bob!.is_favorite).toBe(false);
     expect(bob!.is_blocked).toBe(false);
+  });
+});
+
+test.describe("31b. Contact identity links to canonical profile", () => {
+  let page: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    cleanupAliceContacts();
+    seedBobProfile();
+    page = await browser.newPage();
+    await injectAuth(page, ALICE_ID);
+    await apiContactsPost(page, BOB_ID);
+    await gotoContacts(page);
+  });
+
+  test.afterAll(async () => {
+    cleanupAliceContacts();
+    await page?.close();
+  });
+
+  test("contact list name navigates to canonical profile route for authenticated viewer", async () => {
+    const profileLink = bobContactRow(page);
+    await expect(profileLink).toBeVisible({ timeout: 8_000 });
+    await profileLink.click();
+
+    await expect(page).toHaveURL(/\/u\//, { timeout: 8_000 });
+    await expect(page.getByText(/Audience: member/i)).toBeVisible({ timeout: 8_000 });
+  });
+
+  test("unauthenticated viewer sees public profile rendering on canonical route", async ({ browser }) => {
+    const anon = await browser.newPage();
+    await anon.goto(`${BASE}/u/${encodeURIComponent(BOB_ID)}`, { waitUntil: "load" });
+    await expect(anon.getByText(/Audience: public/i)).toBeVisible({ timeout: 8_000 });
+    await expect(anon.getByRole("button", { name: /sign in to view more/i })).toBeVisible({ timeout: 8_000 });
+    await anon.close();
   });
 });
 

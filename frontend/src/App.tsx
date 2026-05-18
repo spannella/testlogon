@@ -5,7 +5,7 @@ import { Loader2 } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/layout/AppShell";
 import { ErrorPage } from "@/components/shared/ErrorPage";
-import { isVncRemoteDesktopEnabled } from "@/lib/featureFlags";
+import { isCanonicalProfileNavigationEnabled, isVncRemoteDesktopEnabled } from "@/lib/featureFlags";
 
 // ─── Lazy-loaded pages (code-split per route) ───────────────────
 const Login = lazy(() => import("@/pages/Login"));
@@ -44,6 +44,7 @@ const RemoteDesktopPage = lazy(() => import("@/pages/remote/RemoteDesktopPage"))
 const SigningPage = lazy(() => import("@/pages/signing/SigningPage"));
 const QuestionnaireBuilderPage = lazy(() => import("@/pages/questionnaires/QuestionnaireBuilderPage"));
 const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/QuestionnaireRespondentPage"));
+const PublicUserProfilePage = lazy(() => import("@/pages/profile/PublicUserProfilePage"));
 
 function PageSpinner() {
   return (
@@ -55,6 +56,7 @@ function PageSpinner() {
 
 export default function App() {
   const showVncRemoteDesktop = isVncRemoteDesktopEnabled();
+  const showCanonicalProfileRoute = isCanonicalProfileNavigationEnabled();
 
   return (
     <Suspense fallback={<PageSpinner />}>
@@ -64,6 +66,7 @@ export default function App() {
         <Route path="/register" element={<Register />} />
         <Route path="/password-recovery" element={<PasswordRecovery />} />
         <Route path="/magic-link-verify" element={<MagicLinkVerify />} />
+        {showCanonicalProfileRoute && <Route path="/u/:identifier" element={<PublicUserProfilePage />} />}
         <Route path="/event/:calendarId/:eventId" element={<PublicEventPage />} />
         <Route path="/questionnaires/published/:publishedSlug/respond" element={<QuestionnaireRespondentPage />} />
 

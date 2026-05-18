@@ -591,6 +591,22 @@ ADMIN_SCOPE_DENIED = Counter(
     "Denied admin scope authorization checks by route, required scope, and profile type",
     ["route", "required_scope", "admin_profile_type"],
 )
+PROFILE_LOOKUP_EVENTS = Counter(
+    "profile_lookup_events_total",
+    "Profile lookup outcomes by audience/result/suppression reason",
+    ["audience", "result", "suppression_reason"],
+)
+PROFILE_LOOKUP_LATENCY = Histogram(
+    "profile_lookup_latency_seconds",
+    "Profile lookup request latency by audience/result",
+    ["audience", "result"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
+)
+PROFILE_LOOKUP_IDENTIFIER_RESOLUTION = Counter(
+    "profile_lookup_identifier_resolution_total",
+    "Profile identifier resolution outcomes by resolution source and outcome",
+    ["source", "outcome"],
+)
 ONCE_MEDIA_SEND_EVENTS = Counter(
     "messaging_once_media_send_total",
     "Once-media send events by media kind/policy and rollout cohort",
@@ -993,6 +1009,30 @@ def record_helpdesk_no_agents_notice(outcome: str) -> None:
 
 def record_helpdesk_time_to_first_claim_ms(elapsed_ms: float) -> None:
     HELPDESK_TIME_TO_FIRST_CLAIM_MS.observe(max(0.0, float(elapsed_ms)))
+
+
+def record_profile_lookup(*, audience: str, result: str, suppression_reason: str, elapsed_seconds: float) -> None:
+    normalized_audience = (audience or "unknown").lower()
+    normalized_result = (result or "unknown").lower()
+    normalized_reason = (suppression_reason or "none").lower()
+    PROFILE_LOOKUP_EVENTS.labels(
+        audience=normalized_audience,
+        result=normalized_result,
+        suppression_reason=normalized_reason,
+    ).inc()
+    PROFILE_LOOKUP_LATENCY.labels(
+        audience=normalized_audience,
+        result=normalized_result,
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_profile_lookup_identifier_resolution(*, source: str, outcome: str) -> None:
+    normalized_source = (source or "unknown").lower()
+    normalized_outcome = (outcome or "unknown").lower()
+    PROFILE_LOOKUP_IDENTIFIER_RESOLUTION.labels(
+        source=normalized_source,
+        outcome=normalized_outcome,
+    ).inc()
 
 
 def record_entitlement_check(*, product_family: str, outcome: str, reason: str = "") -> None:

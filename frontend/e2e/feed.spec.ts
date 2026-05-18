@@ -269,6 +269,51 @@ test.describe("2. Feed page structure", () => {
   });
 });
 
+test.describe("2b. Feed author profile navigation", () => {
+  let page: Page;
+  let postId = "";
+  const marker = `E2E feed profile link ${Date.now()}`;
+
+  test.beforeAll(async ({ browser }) => {
+    page = await browser.newPage();
+    await injectAuth(page, ALICE_ID);
+
+    const postResp = await feedPost(page, "/posts", { body: marker }, BOB_ID);
+    expect(postResp.ok()).toBe(true);
+    const created = await postResp.json() as { post_id: string };
+    postId = created.post_id;
+
+    const commentResp = await feedPost(page, `/posts/${postId}/comments`, { body: `Comment on ${marker}` }, ALICE_ID);
+    expect(commentResp.ok()).toBe(true);
+
+    await gotoFeed(page, ALICE_ID);
+  });
+
+  test.afterAll(async () => {
+    if (postId) {
+      try { await feedDelete(page, `/posts/${postId}`, BOB_ID); } catch { /* best-effort cleanup */ }
+    }
+    await page?.close();
+  });
+
+  test("authenticated viewer can navigate from feed author identity to canonical profile", async () => {
+    await expect(page.getByText(marker)).toBeVisible({ timeout: 8000 });
+    const authorLink = page.locator(`a[aria-label=\"Open ${BOB_ID} profile\"]`).first();
+    await expect(authorLink).toBeVisible({ timeout: 8000 });
+    await authorLink.click();
+    await expect(page).toHaveURL(/\/u\//, { timeout: 8000 });
+    await expect(page.getByText(/Audience: member/i)).toBeVisible({ timeout: 8000 });
+  });
+
+  test("unauthenticated viewer sees public profile rendering on canonical route", async ({ browser }) => {
+    const anon = await browser.newPage();
+    await anon.goto(`${BASE}/u/${encodeURIComponent(BOB_ID)}`, { waitUntil: "load" });
+    await expect(anon.getByText(/Audience: public/i)).toBeVisible({ timeout: 8000 });
+    await expect(anon.getByRole("button", { name: /sign in to view more/i })).toBeVisible({ timeout: 8000 });
+    await anon.close();
+  });
+});
+
 // ─── 3. Create a post (UI) ────────────────────────────────────────────────────
 
 test.describe("3. Create post via UI", () => {

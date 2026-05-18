@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Search, Plus, MessageSquare, Users } from "lucide-react";
 import { Input } from "@/components/ui/input";
@@ -19,6 +20,7 @@ import type { Conversation, Message, UserSearchResult } from "@/api/types";
 import { PresenceDot } from "./PresenceDot";
 import { UserSearch } from "./UserSearch";
 import { useAuthStore } from "@/stores/authStore";
+import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 
 interface ConversationListProps {
   activeId?: string;
@@ -26,6 +28,7 @@ interface ConversationListProps {
 }
 
 export function ConversationList({ activeId, onSelect }: ConversationListProps) {
+  const navigate = useNavigate();
   const [search, setSearch] = React.useState("");
   const [newConvoOpen, setNewConvoOpen] = React.useState(false);
   const [isGroupMode, setIsGroupMode] = React.useState(false);
@@ -136,6 +139,11 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
               const lastMsg = convo.last_message;
               const unread = (convo.unread_count ?? 0) > 0;
 
+              const other = convo.type === "dm" ? convo.participants.find((p) => p.user_id !== userId) : undefined;
+              const profilePath = other
+                ? resolveCanonicalProfilePath({ userId: other.user_id, displayName: other.display_name })
+                : null;
+
               return (
                 <button
                   key={convo.conversation_id}
@@ -148,15 +156,18 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
                   onClick={() => onSelect(convo)}
                 >
                   <div className="relative shrink-0">
-                    {(() => {
-                      const other = convo.type === "dm" ? convo.participants.find((p) => p.user_id !== userId) : undefined;
-                      return (
-                        <Avatar className="h-10 w-10">
-                          {other?.profile_photo_url && <AvatarImage src={other.profile_photo_url} alt={other.display_name ?? other.user_id} />}
-                          <AvatarFallback className="text-xs">{initials}</AvatarFallback>
-                        </Avatar>
-                      );
-                    })()}
+                    <Avatar
+                      className={cn("h-10 w-10", profilePath ? "cursor-pointer hover:ring-2 hover:ring-primary/30" : "")}
+                      role={profilePath ? "link" : undefined}
+                      aria-label={profilePath && other ? `Open ${other.display_name ?? other.user_id} profile` : undefined}
+                      onClick={profilePath ? (e) => {
+                        e.stopPropagation();
+                        navigate(profilePath);
+                      } : undefined}
+                    >
+                      {other?.profile_photo_url && <AvatarImage src={other.profile_photo_url} alt={other.display_name ?? other.user_id} />}
+                      <AvatarFallback className="text-xs">{initials}</AvatarFallback>
+                    </Avatar>
                     {convo.type === "dm" && (() => {
                       const other = convo.participants.find((p) => p.user_id !== userId);
                       return other ? <PresenceDot userId={other.user_id} /> : null;
@@ -164,7 +175,19 @@ export function ConversationList({ activeId, onSelect }: ConversationListProps) 
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-2">
-                      <span className={cn("truncate text-sm", unread ? "font-semibold" : "font-medium")}>
+                      <span
+                        className={cn(
+                          "truncate text-sm",
+                          unread ? "font-semibold" : "font-medium",
+                          profilePath ? "cursor-pointer hover:underline" : undefined,
+                        )}
+                        role={profilePath ? "link" : undefined}
+                        aria-label={profilePath && other ? `Open ${other.display_name ?? other.user_id} profile` : undefined}
+                        onClick={profilePath ? (e) => {
+                          e.stopPropagation();
+                          navigate(profilePath);
+                        } : undefined}
+                      >
                         {name}
                       </span>
                       {lastMsg && (

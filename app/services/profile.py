@@ -10,6 +10,7 @@ from app.core.normalize import normalize_email, normalize_phone
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
+from app.services.profile_discoverability import get_profile_discoverability_state
 from app.services.filemanager import upload_profile_photo
 
 PROFILE_FIELDS = (
@@ -29,6 +30,34 @@ PROFILE_FIELDS = (
     "profile_photo_url",
     "cover_photo_url",
 )
+
+
+PROFILE_VISIBILITY_LEVELS = ("public", "member", "private")
+PROFILE_AUDIENCES = ("owner", "member", "public")
+PROFILE_READ_NOT_FOUND_DETAIL = "Profile not found"
+
+PROFILE_FIELD_VISIBILITY = {
+    "display_name": "public",
+    "first_name": "member",
+    "middle_name": "member",
+    "last_name": "member",
+    "title": "public",
+    "description": "public",
+    "birthday": "private",
+    "gender": "private",
+    "location": "public",
+    "displayed_email": "private",
+    "displayed_telephone_number": "private",
+    "mailing_address": "private",
+    "languages": "member",
+    "profile_photo_url": "public",
+    "cover_photo_url": "public",
+}
+
+if set(PROFILE_FIELD_VISIBILITY.keys()) != set(PROFILE_FIELDS):
+    raise RuntimeError("PROFILE_FIELD_VISIBILITY must classify every PROFILE_FIELDS entry")
+if any(level not in PROFILE_VISIBILITY_LEVELS for level in PROFILE_FIELD_VISIBILITY.values()):
+    raise RuntimeError("PROFILE_FIELD_VISIBILITY contains invalid visibility levels")
 
 ALLOWED_GENDERS = {
     "male",
@@ -185,6 +214,39 @@ def get_profile(user_sub: str) -> Dict[str, Any]:
     merged = empty_profile()
     merged.update(profile)
     return merged
+
+
+def resolve_profile_audience(*, requester_user_sub: Optional[str], target_user_sub: str) -> str:
+    if requester_user_sub and requester_user_sub == target_user_sub:
+        return "owner"
+    if requester_user_sub:
+        return "member"
+    return "public"
+
+
+def filter_profile_by_audience(profile: Dict[str, Any], *, audience: str) -> Dict[str, Any]:
+    if audience not in PROFILE_AUDIENCES:
+        raise ValueError(f"invalid profile audience: {audience}")
+    if audience == "owner":
+        return dict(profile)
+
+    allowed_levels = {"public", "member"} if audience == "member" else {"public"}
+    filtered = empty_profile()
+    for field in PROFILE_FIELDS:
+        if PROFILE_FIELD_VISIBILITY[field] in allowed_levels:
+            filtered[field] = profile.get(field)
+    return filtered
+
+
+def get_profile_for_requester(*, target_user_sub: str, requester_user_sub: Optional[str]) -> Dict[str, Any]:
+    audience = resolve_profile_audience(requester_user_sub=requester_user_sub, target_user_sub=target_user_sub)
+    discoverability = get_profile_discoverability_state(target_user_sub).get("discoverability_status", "active")
+    if discoverability == "deleted":
+        raise HTTPException(status_code=404, detail=PROFILE_READ_NOT_FOUND_DETAIL)
+    if discoverability in {"hidden", "deactivated"} and audience != "owner":
+        raise HTTPException(status_code=404, detail=PROFILE_READ_NOT_FOUND_DETAIL)
+    profile = get_profile(target_user_sub)
+    return filter_profile_by_audience(profile, audience=audience)
 
 
 def get_profile_identity(user_sub: str) -> Dict[str, Optional[str]]:

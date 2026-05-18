@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { UserProfileLink } from "@/components/shared/UserProfileLink";
 import { useAuthStore } from "@/stores/authStore";
 import { getRoleFromAccessToken } from "@/lib/adminCapabilities";
 import {
@@ -244,8 +245,28 @@ export default function TicketsPage() {
               <>
                 <div className="flex flex-wrap gap-2 text-xs">
                   <Badge variant="secondary">{selectedTicket.status}</Badge>
-                  <span>Owner: {selectedTicket.owner_sub}</span>
-                  <span>Assigned: {selectedTicket.assigned_admin_sub || "unassigned"}</span>
+                  <span>
+                    Owner:{" "}
+                    <UserProfileLink
+                      userId={selectedTicket.owner_sub}
+                      displayName={selectedTicket.owner_sub}
+                      className="font-medium hover:underline"
+                      ariaLabel={`Open ${selectedTicket.owner_sub} profile`}
+                    />
+                  </span>
+                  <span>
+                    Assigned:{" "}
+                    {selectedTicket.assigned_admin_sub ? (
+                      <UserProfileLink
+                        userId={selectedTicket.assigned_admin_sub}
+                        displayName={selectedTicket.assigned_admin_sub}
+                        className="font-medium hover:underline"
+                        ariaLabel={`Open ${selectedTicket.assigned_admin_sub} profile`}
+                      />
+                    ) : (
+                      "unassigned"
+                    )}
+                  </span>
                   <span>Updated: {fmt(selectedTicket.updated_at)}</span>
                 </div>
 
@@ -265,7 +286,16 @@ export default function TicketsPage() {
                 <div className="max-h-[240px] space-y-2 overflow-auto rounded-md border p-3">
                   {selectedTicket.messages.map((m) => (
                     <div key={m.message_id} className="rounded bg-muted/40 p-2 text-sm">
-                      <div className="mb-1 text-xs text-muted-foreground">{m.sender_role} • {m.sender_sub} • {fmt(m.created_at)}</div>
+                      <div className="mb-1 text-xs text-muted-foreground">
+                        {m.sender_role} •{" "}
+                        <UserProfileLink
+                          userId={m.sender_sub}
+                          displayName={m.sender_sub}
+                          className="font-medium hover:underline"
+                          ariaLabel={`Open ${m.sender_sub} profile`}
+                        />{" "}
+                        • {fmt(m.created_at)}
+                      </div>
                       <div>{m.body}</div>
                     </div>
                   ))}

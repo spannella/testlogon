@@ -1145,3 +1145,178 @@
 **Acceptance criteria:**
 - All P0/P1 tickets complete with passing tests and monitoring in place.
 - Product, engineering, and operations sign off on GA release decision.
+### UPR-001: Finalize profile visibility policy and ownership
+**Description:**
+Create and ratify the canonical visibility policy for `owner`, `member`, and `public` audiences. Confirm field-level classifications and decision ownership (backend/product/privacy/security), including exception handling and escalation path.
+**Acceptance criteria:**
+- Visibility matrix is documented with all profile fields and approved by backend, product, and privacy.
+- Policy defines which team owns future classification changes.
+- Policy defines response behavior for hidden/deactivated/deleted users and account-enumeration safeguards.
+
+### UPR-002: Add account discoverability state model
+**Description:**
+Define and persist user discoverability states used by profile lookup (`active`, `hidden`, `deactivated`, `deleted`) with deterministic defaults for legacy records.
+**Acceptance criteria:**
+- State model is represented in backend domain code with explicit enums/constants.
+- Backward compatibility behavior is defined for records missing state.
+- Unit tests verify normalization of valid, missing, and malformed states.
+
+### UPR-003: Add migration/backfill for discoverability state
+**Description:**
+Add a migration/backfill script to initialize discoverability/account-state records for existing users and emit a report.
+**Acceptance criteria:**
+- Script supports dry-run and apply modes.
+- Script writes a machine-readable report (counts by state, skipped, errors).
+- Re-running the script is idempotent.
+
+### UPR-004: Build canonical profile read service with audience filtering
+**Description:**
+Implement a backend service function that returns profile data filtered by audience (`owner`, `member`, `public`) using the visibility matrix.
+**Acceptance criteria:**
+- Service accepts requester context + target user and returns filtered profile payload.
+- `private` fields are never returned to `member` or `public` audiences.
+- Unit tests cover all audience combinations and representative fields from each visibility class.
+
+### UPR-005: Enforce hidden/deactivated/deleted suppression in profile reads
+**Description:**
+Apply discoverability policy checks in canonical profile reads before field filtering.
+**Acceptance criteria:**
+- Hidden/deactivated users return policy-defined errors to non-owners.
+- Deleted users are non-discoverable for all audiences.
+- Tests verify suppression behavior for owner/member/public requesters.
+
+### UPR-006: Introduce public/member profile API endpoint(s)
+**Description:**
+Expose profile-read API(s) for cross-user access (e.g., `/ui/profiles/{identifier}`), with audience inferred from auth/session.
+**Acceptance criteria:**
+- Endpoint supports lookup by canonical identifier (username or user id, per product decision).
+- Response shape is stable and documented.
+- Endpoint returns correct status codes for not found, suppressed users, and success.
+
+### UPR-007: Add anti-enumeration and rate limiting for profile lookup
+**Description:**
+Protect profile lookup APIs against user enumeration and abuse by applying rate limits and standardized error behavior.
+**Acceptance criteria:**
+- Rate limits are enforced for anonymous and authenticated traffic tiers.
+- Non-discoverable/suppressed targets follow standardized non-leaky responses.
+- Security tests validate abuse controls and error consistency.
+
+### UPR-008: Instrument profile visibility and lookup metrics
+**Description:**
+Add observability for profile lookups and filtering outcomes (audience, result type, suppression reason).
+**Acceptance criteria:**
+- Metrics include success/denied/not-found counts and p95 latency.
+- Logs include request correlation and suppression reason codes (no PII leakage).
+- Dashboard panels and alerts are added for elevated 4xx/5xx/error-rate anomalies.
+
+### UPR-009: Define frontend API contracts and types for public/member profile views
+**Description:**
+Add/extend frontend typed API clients and response models for canonical cross-user profile reads.
+**Acceptance criteria:**
+- New endpoint contract types are added to frontend API type definitions.
+- Client methods include auth-aware fetch behavior and error mapping.
+- Unit tests cover response parsing and error mapping.
+
+### UPR-010: Add canonical user profile route
+**Description:**
+Add a single canonical route (e.g., `/u/:username`) for viewing other users’ profiles from all feature surfaces.
+**Acceptance criteria:**
+- Route resolves and fetches target user profile via new API.
+- Route handles loading, not-found, and suppressed-user states.
+- Navigation preserves browser back behavior and deep-linking works directly.
+
+### UPR-011: Build public profile preview UI
+**Description:**
+Implement unauthenticated preview UI that renders only public-safe fields and includes member conversion CTA.
+**Acceptance criteria:**
+- Preview view renders only `public` fields from API response.
+- Member-only actions are hidden/disabled for anonymous users.
+- UX includes “Sign in to view more” pathway and is responsive/mobile-safe.
+
+### UPR-012: Build authenticated member profile view for non-owner profile pages
+**Description:**
+Implement authenticated viewer experience for other users’ profiles (member-level fields and actions allowed by policy).
+**Acceptance criteria:**
+- Member view displays member-eligible fields and hides owner-private fields.
+- Action surfaces (e.g., message/contact/follow) respect entitlement/auth checks.
+- Component tests verify conditional rendering by view type.
+
+### UPR-013: Add shared UserProfileLink component
+**Description:**
+Create a reusable link component that resolves canonical profile route and user identity rendering for avatar/name links.
+**Acceptance criteria:**
+- Shared component supports user id/username inputs and fallback label behavior.
+- Existing modules can adopt component without per-module routing logic duplication.
+- Unit tests cover route generation and accessibility attributes.
+
+### UPR-014: Integrate profile links in Messaging
+**Description:**
+Wire participant avatar/name links in messaging surfaces to canonical profile route.
+**Acceptance criteria:**
+- Conversation list and thread header names/avatars navigate to user profile.
+- Navigation works on desktop and mobile layouts.
+- E2E tests cover authenticated and unauthenticated link behavior where applicable.
+
+### UPR-015: Integrate profile links in Contacts
+**Description:**
+Wire contacts list/detail user identity elements to canonical profile route.
+**Acceptance criteria:**
+- Contact card/list entries navigate to profile route.
+- Existing contact operations continue working after integration.
+- E2E tests cover navigation and rendering of member/public views.
+
+### UPR-016: Integrate profile links in Newsfeed
+**Description:**
+Wire feed author identity elements (post/comment) to canonical profile route.
+**Acceptance criteria:**
+- Author name/avatar clicks open canonical profile.
+- Feed interaction performance regressions are within agreed thresholds.
+- E2E tests validate feed-to-profile navigation for both auth states.
+
+### UPR-017: Integrate profile links in Calendar and Ticket Manager
+**Description:**
+Wire user identity elements in calendar participants/assignees and ticket manager owners/assignees/reporters to canonical profile route.
+**Acceptance criteria:**
+- Calendar and ticket manager identity links route correctly.
+- No regressions in existing assignment/participant workflows.
+- E2E tests validate route transitions from both modules.
+
+### UPR-018: Add backend integration tests for audience filtering + suppression
+**Description:**
+Add integration tests for new profile endpoint(s), covering owner/member/public audiences and discoverability states.
+**Acceptance criteria:**
+- Tests verify returned field sets for each audience level.
+- Tests verify hidden/deactivated/deleted behavior and status codes.
+- Tests verify anonymous access only receives public fields.
+
+### UPR-019: Add frontend E2E coverage for cross-module profile navigation
+**Description:**
+Add end-to-end tests that validate profile navigation from all target modules and correct view rendering per auth state.
+**Acceptance criteria:**
+- E2E coverage includes messaging, contacts, newsfeed, calendar, and ticket manager entry points.
+- Deep-link to canonical profile URL renders correct page when logged out/logged in.
+- Test suite includes accessibility smoke checks for profile page states.
+
+### UPR-020: Backward compatibility and rollout feature flags
+**Description:**
+Add feature flags for canonical profile route and public preview behavior to support staged rollout and rollback.
+**Acceptance criteria:**
+- Flags can independently enable API filtering and frontend navigation.
+- Safe default keeps existing behavior unchanged when flags are off.
+- Rollout playbook documents stage gates and rollback criteria.
+
+### UPR-021: Data privacy and security review completion
+**Description:**
+Execute formal privacy/security review of field classifications, discoverability behavior, and telemetry redaction.
+**Acceptance criteria:**
+- Privacy/security review sign-off is recorded.
+- Any required remediations are tracked and closed before GA.
+- Pen-test or security checklist includes enumeration and data leakage scenarios.
+
+### UPR-022: Deployment runbook and post-release validation
+**Description:**
+Create deployment plan covering migration order, feature-flag enablement, canary checks, and post-release verification.
+**Acceptance criteria:**
+- Runbook defines ordered steps: migration/backfill, backend deploy, frontend deploy, flag enablement.
+- Includes post-release checks for key metrics, logs, and error budgets.
+- Includes rollback steps and owner on-call responsibilities.

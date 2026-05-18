@@ -1,0 +1,40 @@
+groups:
+  - name: profile-lookup-observability
+    rules:
+      - alert: ProfileLookupHighErrorRatio
+        expr: |
+          (
+            sum(rate(profile_lookup_events_total{result="error"}[5m]))
+            /
+            clamp_min(sum(rate(profile_lookup_events_total[5m])), 1e-9)
+          ) > 0.05
+        for: 10m
+        labels:
+          severity: page
+          service: profile
+          component: lookup_api
+        annotations:
+          summary: "Profile lookup error ratio above 5% for 10m"
+          description: "Profile lookup reliability degraded; inspect router/service errors and downstream dependencies."
+
+      - alert: ProfileLookupDeniedBurst
+        expr: sum(rate(profile_lookup_events_total{result="denied"}[5m])) > 15
+        for: 5m
+        labels:
+          severity: warning
+          service: profile
+          component: lookup_api
+        annotations:
+          summary: "Profile lookup denied rate is elevated"
+          description: "Denied lookups (suppression/rate-limit) are elevated; investigate abuse patterns and suppression spikes."
+
+      - alert: ProfileLookupNotFoundBurst
+        expr: sum(rate(profile_lookup_events_total{result="not_found"}[5m])) > 20
+        for: 10m
+        labels:
+          severity: warning
+          service: profile
+          component: lookup_api
+        annotations:
+          summary: "Profile lookup not-found rate is elevated"
+          description: "Potential enumeration or invalid-link spike detected in profile lookup traffic."

@@ -36,6 +36,7 @@ import { findOrCreateDm, sendFileShareMessage, sendCalendarShareMessage } from "
 import { createModerationReport } from "@/api/endpoints/moderation";
 import type { ContactEntry, FileEntry, SendCalendarShareReq } from "@/api/types";
 import { ReportContentModal, type ReportContentPayload } from "@/components/shared/ReportContentModal";
+import { UserProfileLink } from "@/components/shared/UserProfileLink";
 
 import { UserSearch } from "@/pages/messages/UserSearch";
 import { FilePickerDialog } from "@/pages/messages/FilePickerDialog";
@@ -44,26 +45,42 @@ import { CalendarPickerDialog } from "@/pages/messages/CalendarPickerDialog";
 // ── Avatar ─────────────────────────────────────────────────────────────────
 
 function ContactAvatar({ contact, onOpenPhoto }: { contact: ContactEntry; onOpenPhoto: () => void }) {
+  const profileAriaLabel = `Open ${contact.display_name} profile`;
   if (contact.profile_photo_url) {
     return (
-      <button
-        type="button"
-        onClick={onOpenPhoto}
-        className="shrink-0"
-        aria-label={`Open ${contact.display_name} profile photo`}
-      >
-        <img
-          src={contact.profile_photo_url}
-          alt={contact.display_name}
-          className="h-9 w-9 rounded-full object-cover"
-        />
-      </button>
+      <div className="relative shrink-0">
+        <UserProfileLink
+          userId={contact.contact_id}
+          displayName={contact.display_name}
+          className="block rounded-full"
+          ariaLabel={profileAriaLabel}
+        >
+          <img
+            src={contact.profile_photo_url}
+            alt={contact.display_name}
+            className="h-9 w-9 rounded-full object-cover"
+          />
+        </UserProfileLink>
+        <button
+          type="button"
+          onClick={onOpenPhoto}
+          className="absolute -right-1 -top-1 rounded-full border bg-background px-1 text-[10px] leading-4 shadow-sm"
+          aria-label={`Open ${contact.display_name} profile photo`}
+        >
+          👁
+        </button>
+      </div>
     );
   }
   return (
-    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-muted shrink-0">
+    <UserProfileLink
+      userId={contact.contact_id}
+      displayName={contact.display_name}
+      className="flex h-9 w-9 items-center justify-center rounded-full bg-muted shrink-0"
+      ariaLabel={profileAriaLabel}
+    >
       <User className="h-4 w-4 text-muted-foreground" />
-    </div>
+    </UserProfileLink>
   );
 }
 
@@ -107,7 +124,11 @@ function ContactRow({
       <ContactAvatar contact={contact} onOpenPhoto={onOpenPhoto} />
 
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium">{contact.display_name}</p>
+        <UserProfileLink
+          userId={contact.contact_id}
+          displayName={contact.display_name}
+          className="truncate text-sm font-medium"
+        />
       </div>
 
       {/* Quick actions */}
@@ -440,7 +461,18 @@ export default function ContactsPage() {
       >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{profilePhotoContact?.display_name ?? "Profile photo"}</DialogTitle>
+            <DialogTitle>
+              {profilePhotoContact ? (
+                <UserProfileLink
+                  userId={profilePhotoContact.contact_id}
+                  displayName={profilePhotoContact.display_name}
+                  className="hover:underline"
+                  ariaLabel={`Open ${profilePhotoContact.display_name} profile`}
+                />
+              ) : (
+                "Profile photo"
+              )}
+            </DialogTitle>
             <DialogDescription>View and report this profile photo.</DialogDescription>
           </DialogHeader>
           {profilePhotoContact?.profile_photo_url ? (

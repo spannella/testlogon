@@ -16,6 +16,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { UserProfileLink } from "@/components/shared/UserProfileLink";
 import { getCalendars, getCalendarShares, shareCalendar, removeCalendarShare } from "@/api/endpoints/calendar";
 import type { Calendar, CalendarShare } from "@/api/types";
 
@@ -173,7 +174,12 @@ export function CalendarSharing() {
                   {share.user_sub.slice(0, 2)}
                 </div>
                 <div>
-                  <p className="text-sm font-medium">{share.user_sub}</p>
+                  <UserProfileLink
+                    userId={share.user_sub}
+                    displayName={share.user_sub}
+                    className="text-sm font-medium hover:underline"
+                    ariaLabel={`Open ${share.user_sub} profile`}
+                  />
                   <p className="text-xs text-muted-foreground">
                     Added {new Date(share.created_at_utc).toLocaleDateString()}
                   </p>
