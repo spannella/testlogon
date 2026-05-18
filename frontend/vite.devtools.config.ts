@@ -38,6 +38,7 @@ export default defineConfig({
       "/internal": "http://localhost:8000",
     },
   },
+  cacheDir: "node_modules/.vite-devtools",
   build: {
     outDir: "dist-devtools",
     rollupOptions: {
