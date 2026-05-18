@@ -1372,6 +1372,9 @@ export interface CalendarEvent {
   exdates_utc?: string[];
   recurrence_overrides?: Record<string, OccurrenceOverrideIn>;
   created_at_utc: string;
+  sync_state?: string;
+  sync_conflict_reason?: string;
+  sync_conflict_detected_at_utc?: string;
 }
 
 export interface EventsPage {
@@ -1437,6 +1440,82 @@ export interface AvailabilityReq {
   calendar_ids: string[];
   start_utc: string;
   end_utc: string;
+}
+
+export interface GoogleCalendarIntegrationStatus {
+  provider: "google";
+  sync_enabled: boolean;
+  writeback_enabled: boolean;
+  rollout_mode: "all" | "cohort" | "off";
+  rollout_percent: number;
+  in_rollout_cohort: boolean;
+  connection_active: boolean;
+  sync_health: string;
+  last_sync_status: string;
+  last_sync_at_utc: string;
+  reauth_required: boolean;
+}
+
+export interface GoogleCalendarConnectStart {
+  provider: "google";
+  authorization_url: string;
+  state: string;
+  nonce: string;
+  expires_at_utc: string;
+}
+
+export interface GoogleCalendarConnectCallback {
+  provider: "google";
+  connection_id: string;
+  account_email: string;
+  linked: boolean;
+  updated_at_utc: string;
+}
+
+export interface GoogleCalendarDisconnect {
+  provider: "google";
+  connection_id: string;
+  account_email: string;
+  active: boolean;
+  revoked: boolean;
+  revoke_status: string;
+  disconnected_at_utc: string;
+}
+
+export interface GoogleCalendarProviderCalendar {
+  google_calendar_id: string;
+  summary: string;
+  access_role?: string | null;
+  primary: boolean;
+  mapped_internal_calendar_id?: string | null;
+}
+
+export interface GoogleCalendarProviderCalendars {
+  calendars: GoogleCalendarProviderCalendar[];
+}
+
+export interface GoogleCalendarMappingCreateIn {
+  internal_calendar_id: string;
+  google_calendar_id: string;
+}
+
+export interface GoogleCalendarMapping {
+  mapping_id: string;
+  provider: "google";
+  user_sub: string;
+  internal_calendar_id: string;
+  google_calendar_id: string;
+  active: boolean;
+  created_at_utc: string;
+  updated_at_utc: string;
+  unmapped_at_utc: string;
+}
+
+export interface GoogleCalendarSyncRun {
+  accepted: boolean;
+  mode: "incremental" | "full";
+  rate_limited: boolean;
+  metrics: Record<string, unknown>;
 }
 
 // ─── Shopping Cart ───────────────────────────────────────────────

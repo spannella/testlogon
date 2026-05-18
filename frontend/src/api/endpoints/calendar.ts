@@ -18,6 +18,14 @@ import type {
   OccurrenceOverrideIn,
   BookingReserveReq,
   CalendarEventAttachment,
+  GoogleCalendarIntegrationStatus,
+  GoogleCalendarConnectStart,
+  GoogleCalendarConnectCallback,
+  GoogleCalendarDisconnect,
+  GoogleCalendarProviderCalendars,
+  GoogleCalendarMappingCreateIn,
+  GoogleCalendarMapping,
+  GoogleCalendarSyncRun,
 } from "@/api/types";
 
 // ─── Calendars ───────────────────────────────────────────────────
@@ -157,3 +165,24 @@ export const getPublicIcalUrl = (calendarId: string, eventId: string): string =>
 
 export const downloadIcalUrl = (calendarId: string, eventId: string): string =>
   `/ui/calendars/${calendarId}/events/${eventId}/ical`;
+
+export const getGoogleCalendarIntegrationStatus = () =>
+  api.get<GoogleCalendarIntegrationStatus>("/ui/calendar/integrations/google/status");
+
+export const startGoogleCalendarConnect = () =>
+  api.post<GoogleCalendarConnectStart>("/ui/calendar/integrations/google/connect/start", {});
+
+export const completeGoogleCalendarConnect = (code: string, state: string) =>
+  api.get<GoogleCalendarConnectCallback>("/ui/calendar/integrations/google/connect/callback", { code, state });
+
+export const disconnectGoogleCalendar = (connectionId?: string) =>
+  api.post<GoogleCalendarDisconnect>("/ui/calendar/integrations/google/disconnect", {}, connectionId ? { connection_id: connectionId } : undefined);
+
+export const getGoogleCalendarProviderCalendars = () =>
+  api.get<GoogleCalendarProviderCalendars>("/ui/calendar/integrations/google/calendars");
+
+export const createGoogleCalendarMapping = (body: GoogleCalendarMappingCreateIn) =>
+  api.post<GoogleCalendarMapping>("/ui/calendar/integrations/google/mappings", body);
+
+export const runGoogleCalendarSync = (mode: "incremental" | "full" = "incremental") =>
+  api.post<GoogleCalendarSyncRun>("/ui/calendar/integrations/google/sync/run", {}, { mode });

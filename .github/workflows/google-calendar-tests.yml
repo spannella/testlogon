@@ -1,0 +1,52 @@
+name: google-calendar-tests
+
+on:
+  pull_request:
+    paths:
+      - "app/services/google_calendar_*"
+      - "app/routers/calendar.py"
+      - "tests/test_google_calendar_*"
+      - "tests/fixtures/google_calendar/**"
+      - "frontend/e2e/calendar-messaging.spec.ts"
+      - "frontend/src/pages/calendar/**"
+      - "frontend/src/api/endpoints/calendar*"
+  push:
+    branches: [ main ]
+    paths:
+      - "app/services/google_calendar_*"
+      - "app/routers/calendar.py"
+      - "tests/test_google_calendar_*"
+      - "tests/fixtures/google_calendar/**"
+
+jobs:
+  backend-google-calendar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run google calendar regression suite
+        run: |
+          pytest -q tests/test_google_calendar_*.py tests/test_calendar_routes.py tests/test_google_calendar_integration_flows.py tests/test_google_calendar_e2e_journey.py
+
+  frontend-google-calendar-e2e:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install frontend deps
+        run: npm ci
+      - name: Install Playwright
+        run: npx playwright install --with-deps chromium
+      - name: Run calendar e2e
+        run: npx playwright test e2e/calendar-messaging.spec.ts

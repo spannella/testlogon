@@ -350,3 +350,146 @@
 **Acceptance criteria:**
 - Canary validates webhook health, queue latency, and DLQ growth before promotion.
 - Rollback is auto-triggered when critical gate thresholds are breached.
+### GCAL-201: Webhook endpoint for Google push notifications
+**Description:** Implement a secure webhook endpoint to receive Google Calendar channel notifications and route them into tenant-scoped incremental sync triggers.
+**Acceptance criteria:**
+- Webhook endpoint accepts Google channel notifications and maps them to the correct tenant connection.
+- Invalid or unrecognized channel notifications are rejected and audited.
+
+### GCAL-202: Channel token verification and replay defense
+**Description:** Add signed channel token validation and replay-window checks for incoming webhook requests to prevent spoofing and replay attacks.
+**Acceptance criteria:**
+- Requests with missing/invalid channel token are rejected with structured security audit events.
+- Duplicate notifications within replay window are ignored idempotently.
+
+### GCAL-203: Watch channel lifecycle manager
+**Description:** Build a lifecycle manager to create, renew, and clean up Google watch channels per mapped calendar.
+**Acceptance criteria:**
+- Channels are renewed before expiration with configurable lead time.
+- Expired or invalid channels are recreated automatically and tracked in metrics.
+
+### GCAL-204: Per-calendar sync scheduling priorities
+**Description:** Add configurable scheduling priorities across mapped calendars so critical calendars receive lower-latency sync execution.
+**Acceptance criteria:**
+- Priority can be configured per mapping without code deployment.
+- Scheduler consistently executes higher-priority calendars first under load.
+
+### GCAL-205: Bootstrap import checkpoint resume
+**Description:** Make first-time full import resumable with durable checkpoints to recover from worker crashes mid-import.
+**Acceptance criteria:**
+- Interrupted imports resume from last successful page/checkpoint.
+- Resume flow avoids duplicate event materialization and duplicate mappings.
+
+### GCAL-206: Recurring series split and merge handling
+**Description:** Extend sync transform logic for recurring event split/merge operations (e.g., “this and following”) with lineage-safe mapping.
+**Acceptance criteria:**
+- Split/merge operations preserve recurrence integrity after round-trip sync.
+- Tests cover parent/child mapping consistency across updates and deletes.
+
+### GCAL-207: Timezone and DST regression pack
+**Description:** Introduce dedicated timezone/DST edge-case fixtures and automated regression tests for all-day and timed events.
+**Acceptance criteria:**
+- Events crossing DST boundaries retain intended local times after sync.
+- Fixture suite covers at least three timezone families and DST transitions.
+
+### GCAL-208: Outbound mutation coalescing window
+**Description:** Add short-window coalescing for rapid consecutive local mutations to reduce redundant provider writes.
+**Acceptance criteria:**
+- Multiple updates to the same event within window collapse into one outbound action.
+- Final provider state matches latest local event version.
+
+### GCAL-209: Backpressure controls for outbound queue
+**Description:** Implement backpressure controls and adaptive concurrency for outbound workers based on retry rates and quota signals.
+**Acceptance criteria:**
+- Worker concurrency scales down automatically during quota pressure.
+- Queue lag and dropped/deferred work are exposed in metrics.
+
+### GCAL-210: Sync freshness SLO dashboard primitives
+**Description:** Add metrics and labels required to compute sync freshness SLOs per tenant, connection, and calendar mapping.
+**Acceptance criteria:**
+- Freshness lag metric is emitted for inbound and outbound pipelines.
+- Dashboards can filter and alert by tenant and mapping.
+
+### GCAL-211: Burn-rate alert rules for integration SLOs
+**Description:** Define and implement burn-rate alerting for sync freshness and failure-rate objectives.
+**Acceptance criteria:**
+- Alerts support fast-burn and slow-burn windows.
+- Alert payload includes tenant, connection, and flow context.
+
+### GCAL-212: Dead-letter taxonomy normalization
+**Description:** Normalize DLQ error categories and reason codes across inbound and outbound sync processors.
+**Acceptance criteria:**
+- Each DLQ item includes standardized error class, reason code, and retry recommendation.
+- Existing DLQ inspection tooling can filter by normalized taxonomy.
+
+### GCAL-213: Safe bulk DLQ replay orchestration
+**Description:** Implement controlled bulk replay orchestration with dry-run mode, tenant quotas, and circuit breaker protection.
+**Acceptance criteria:**
+- Replay can execute in dry-run and apply modes with summary output.
+- Replay halts automatically when failure-rate threshold is exceeded.
+
+### GCAL-214: Strict token access authorization checks
+**Description:** Enforce service-role and tenant-bound authorization checks before token decrypt/use in all integration flows.
+**Acceptance criteria:**
+- Unauthorized token access attempts fail closed and are audited.
+- Integration tests verify tenant isolation around token operations.
+
+### GCAL-215: Envelope key rotation migration runner
+**Description:** Build a resumable background runner to rotate encrypted token payloads to a new KMS key version.
+**Acceptance criteria:**
+- Rotation supports pause/resume and idempotent retries.
+- Migration report includes processed, migrated, skipped, and failed counts.
+
+### GCAL-216: Telemetry sensitive-data guardrails
+**Description:** Add centralized telemetry guardrails that block sensitive Google token/calendar content from logs, traces, and metrics labels.
+**Acceptance criteria:**
+- Guardrail middleware redacts or rejects sensitive fields before emission.
+- Automated tests fail on known secret leakage patterns.
+
+### GCAL-217: Conflict resolution policy engine
+**Description:** Add tenant-configurable conflict policies (app-wins, provider-wins, manual-review) used consistently by outbound and inbound flows.
+**Acceptance criteria:**
+- Policy selection is persisted per tenant and applied at runtime.
+- Conflict decisions include explicit resolution source and rationale.
+
+### GCAL-218: Manual conflict triage queue API
+**Description:** Implement API support for manual conflict triage, assignment, resolution notes, and resolution SLA tracking.
+**Acceptance criteria:**
+- Operators can list/filter/assign/resolve conflicts via API.
+- Queue supports pagination, age filters, and assignee filters.
+
+### GCAL-219: End-to-end trace correlation propagation
+**Description:** Propagate a single correlation ID from API request through queue jobs, provider calls, and webhook processing.
+**Acceptance criteria:**
+- End-to-end flow is traceable with one correlation ID across services.
+- Correlation fields are present in structured logs and audit events.
+
+### GCAL-220: Multi-tenant fairness scheduler for backfills
+**Description:** Implement weighted fairness in scheduling to prevent large-tenant backfills from starving incremental sync work for others.
+**Acceptance criteria:**
+- Scheduler enforces tenant fairness constraints under sustained load.
+- Observability exposes wait time by tenant and job class.
+
+### GCAL-221: Integration incident runbook consolidation
+**Description:** Consolidate operational docs into incident-oriented runbooks with triage, mitigation, rollback, and validation steps.
+**Acceptance criteria:**
+- Runbooks cover auth failures, lag spikes, DLQ growth, and webhook failures.
+- Diagnostics endpoints and alerts link directly to relevant runbook sections.
+
+### GCAL-222: Deployment preflight and rollback automation
+**Description:** Add deployment preflight checks and automated rollback hooks tied to core integration health indicators.
+**Acceptance criteria:**
+- Rollout blocks when preflight checks fail required health thresholds.
+- Rollback can be triggered automatically and records an audit trail.
+
+### GCAL-223: Full tenant lifecycle e2e scenario suite
+**Description:** Build deterministic end-to-end scenarios covering connect, import, edit both systems, conflicts, disconnect, reconnect, and recovery.
+**Acceptance criteria:**
+- E2E suite runs in CI with deterministic fixtures/mocks.
+- Failing runs output timeline/state artifacts for diagnosis.
+
+### GCAL-224: Chaos and outage resilience test matrix
+**Description:** Add chaos tests for provider outages, network partitions, queue delays, and worker restarts to validate eventual consistency.
+**Acceptance criteria:**
+- System behavior under faults is measured against defined recovery objectives.
+- Tests verify no duplicate writes and bounded recovery lag after restoration.

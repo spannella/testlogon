@@ -1,0 +1,15 @@
+{
+  "name": "incremental_sync_token_invalid_fallback_to_full",
+  "calendar_mapping": {
+    "internal_calendar_id": "cal-1",
+    "google_calendar_id": "gcal-1",
+    "active": true
+  },
+  "incremental_error": {
+    "status_code": 400,
+    "detail": {
+      "provider_status_code": 410,
+      "message": "Sync token is invalid, full sync required"
+    }
+  }
+}

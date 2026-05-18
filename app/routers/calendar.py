@@ -7,6 +7,7 @@ from typing import Annotated, Any, Dict, Iterable, List
 from boto3.dynamodb.conditions import Attr, Key
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.core.settings import S
 from app.core.tables import T
 from app.models import (
     BookingLinkCreateIn,
@@ -22,6 +23,15 @@ from app.models import (
     EventConflictPreviewOut,
     EventsPageOut,
     EventCreateIn,
+    GoogleCalendarConnectCallbackOut,
+    GoogleCalendarConnectStartOut,
+    GoogleCalendarDisconnectOut,
+    GoogleCalendarIntegrationStatusOut,
+    GoogleCalendarMappingCreateIn,
+    GoogleCalendarMappingOut,
+    GoogleCalendarProviderCalendarsOut,
+    GoogleCalendarProviderCalendarOut,
+    GoogleCalendarSyncRunOut,
     EventOccurrenceOverrideIn,
     EventOut,
     EventUpdateIn,
@@ -31,6 +41,23 @@ from app.models import (
     TeamAvailabilityIn,
 )
 from app.services.alerts import audit_event
+from app.services.google_calendar_flags import (
+    is_google_calendar_sync_enabled_for_user,
+    is_google_calendar_writeback_enabled_for_user,
+    require_google_calendar_sync_enabled_for_user,
+    rollout_mode,
+    rollout_percent,
+)
+from app.services.google_calendar_event_mappings import get_event_mapping
+from app.services.google_calendar_client import list_google_calendars
+from app.services.google_calendar_connections import get_calendar_provider_connection
+from app.services.google_calendar_mappings import create_calendar_provider_mapping, list_calendar_provider_mappings
+from app.services.google_calendar_oauth import create_connect_start_state, handle_connect_callback, handle_disconnect
+from app.services.google_calendar_outbound_jobs import enqueue_google_calendar_outbound_sync_job
+from app.services.google_calendar_sync_full_import import run_google_calendar_full_import_job
+from app.services.google_calendar_sync_incremental import run_google_calendar_incremental_sync_job
+from app.services.google_calendar_audit import emit_google_calendar_audit_event
+from app.services.rate_limit import rate_limit_admin_action
 from app.services.sessions import require_ui_session
 
 try:
@@ -838,7 +865,23 @@ def _intersect_intervals(
     return result
 
 
-def _event_out(item: Dict[str, Any], calendar_id: str) -> EventOut:
+def _event_out(item: Dict[str, Any], calendar_id: str, user_sub: str | None = None) -> EventOut:
+    sync_state = None
+    sync_conflict_reason = None
+    sync_conflict_detected_at_utc = None
+    if user_sub:
+        try:
+            mapping = get_event_mapping(
+                user_sub=user_sub,
+                internal_calendar_id=calendar_id,
+                internal_event_id=str(item.get("event_id") or ""),
+                include_inactive=True,
+            )
+            sync_state = str(mapping.get("sync_state") or "ok")
+            sync_conflict_reason = str(mapping.get("conflict_reason") or "") or None
+            sync_conflict_detected_at_utc = str(mapping.get("conflict_detected_at_utc") or "") or None
+        except HTTPException:
+            pass
     return EventOut(
         event_id=item["event_id"],
         calendar_id=calendar_id,
@@ -858,6 +901,9 @@ def _event_out(item: Dict[str, Any], calendar_id: str) -> EventOut:
         exdates_utc=item.get("exdates_utc"),
         recurrence_overrides=item.get("recurrence_overrides"),
         created_at_utc=item.get("created_at_utc", ""),
+        sync_state=sync_state,
+        sync_conflict_reason=sync_conflict_reason,
+        sync_conflict_detected_at_utc=sync_conflict_detected_at_utc,
     )
 
 
@@ -972,6 +1018,228 @@ async def list_calendars(ctx: Dict[str, str] = Depends(require_ui_session)):
     return result
 
 
+@router.post("/calendar/integrations/google/connect/start", response_model=GoogleCalendarConnectStartOut)
+async def google_calendar_connect_start(ctx: Dict[str, str] = Depends(require_ui_session)):
+    user_sub = str(ctx.get("user_sub") or "")
+    require_google_calendar_sync_enabled_for_user(user_sub)
+    out = create_connect_start_state(user_sub=user_sub)
+    emit_google_calendar_audit_event(
+        event="google_calendar_connect_start",
+        actor_user_sub=user_sub,
+        outcome="success",
+        target_type="connection",
+        target_id="oauth_state",
+        oauth_state=out.get("state"),
+    )
+    return GoogleCalendarConnectStartOut(**out)
+
+
+@router.get("/calendar/integrations/google/connect/callback", response_model=GoogleCalendarConnectCallbackOut)
+async def google_calendar_connect_callback(
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    user_sub = str(ctx.get("user_sub") or "")
+    require_google_calendar_sync_enabled_for_user(user_sub)
+
+    if error:
+        emit_google_calendar_audit_event(
+            event="google_calendar_connect_callback",
+            actor_user_sub=user_sub,
+            outcome="failure",
+            target_type="connection",
+            target_id="oauth_callback",
+            reason="authorization_denied",
+        )
+        raise HTTPException(status_code=400, detail="google authorization was denied")
+    if not code or not state:
+        emit_google_calendar_audit_event(
+            event="google_calendar_connect_callback",
+            actor_user_sub=user_sub,
+            outcome="failure",
+            target_type="connection",
+            target_id="oauth_callback",
+            reason="missing_callback_params",
+        )
+        raise HTTPException(status_code=400, detail="missing oauth callback parameters")
+    try:
+        out = handle_connect_callback(user_sub=user_sub, state=state, code=code)
+    except HTTPException:
+        emit_google_calendar_audit_event(
+            event="google_calendar_connect_callback",
+            actor_user_sub=user_sub,
+            outcome="failure",
+            target_type="connection",
+            target_id="oauth_callback",
+            reason="callback_processing_failed",
+        )
+        raise
+    emit_google_calendar_audit_event(
+        event="google_calendar_connect_callback",
+        actor_user_sub=user_sub,
+        outcome="success",
+        target_type="connection",
+        target_id=str(out.get("connection_id") or "google-primary"),
+        account_email=str(out.get("account_email") or ""),
+    )
+    return GoogleCalendarConnectCallbackOut(**out)
+
+
+@router.post("/calendar/integrations/google/disconnect", response_model=GoogleCalendarDisconnectOut)
+async def google_calendar_disconnect(
+    connection_id: str | None = Query(default=None),
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    user_sub = str(ctx.get("user_sub") or "")
+    require_google_calendar_sync_enabled_for_user(user_sub)
+    resolved_connection_id = connection_id or str(getattr(S, "google_calendar_connection_default_id", "google-primary") or "google-primary")
+    try:
+        out = handle_disconnect(user_sub=user_sub, connection_id=resolved_connection_id)
+    except HTTPException:
+        emit_google_calendar_audit_event(
+            event="google_calendar_disconnect",
+            actor_user_sub=user_sub,
+            outcome="failure",
+            target_type="connection",
+            target_id=resolved_connection_id,
+        )
+        raise
+    emit_google_calendar_audit_event(
+        event="google_calendar_disconnect",
+        actor_user_sub=user_sub,
+        outcome="success",
+        target_type="connection",
+        target_id=resolved_connection_id,
+        revoked=bool(out.get("revoked")),
+        revoke_status=str(out.get("revoke_status") or ""),
+    )
+    return GoogleCalendarDisconnectOut(**out)
+
+
+@router.get("/calendar/integrations/google/status", response_model=GoogleCalendarIntegrationStatusOut)
+async def google_calendar_integration_status(ctx: Dict[str, str] = Depends(require_ui_session)):
+    user_sub = str(ctx.get("user_sub") or "")
+    require_google_calendar_sync_enabled_for_user(user_sub)
+    connection_id = str(getattr(S, "google_calendar_connection_default_id", "google-primary") or "google-primary")
+    connection = None
+    try:
+        connection = get_calendar_provider_connection(
+            user_sub=user_sub,
+            connection_id=connection_id,
+            include_tokens=False,
+            include_inactive=True,
+        )
+    except HTTPException:
+        connection = None
+    return GoogleCalendarIntegrationStatusOut(
+        sync_enabled=True,
+        writeback_enabled=is_google_calendar_writeback_enabled_for_user(user_sub),
+        rollout_mode=rollout_mode(),
+        rollout_percent=rollout_percent(),
+        in_rollout_cohort=is_google_calendar_sync_enabled_for_user(user_sub),
+        connection_active=bool((connection or {}).get("active", False)),
+        sync_health=str((connection or {}).get("sync_health") or "unknown"),
+        last_sync_status=str((connection or {}).get("last_sync_status") or "never_synced"),
+        last_sync_at_utc=str((connection or {}).get("last_sync_at_utc") or ""),
+        reauth_required=bool((connection or {}).get("reauth_required", False)),
+    )
+
+
+@router.get("/calendar/integrations/google/calendars", response_model=GoogleCalendarProviderCalendarsOut)
+async def google_calendar_provider_calendars(ctx: Dict[str, str] = Depends(require_ui_session)):
+    user_sub = str(ctx.get("user_sub") or "")
+    require_google_calendar_sync_enabled_for_user(user_sub)
+    connection_id = str(getattr(S, "google_calendar_connection_default_id", "google-primary") or "google-primary")
+    provider = list_google_calendars(user_sub=user_sub, connection_id=connection_id)
+    mappings = list_calendar_provider_mappings(user_sub=user_sub, include_inactive=False)
+    mapped_by_google = {
+        str(m.get("google_calendar_id") or ""): str(m.get("internal_calendar_id") or "")
+        for m in mappings
+        if bool(m.get("active", True))
+    }
+    out = []
+    for item in provider.get("items") or []:
+        gcal_id = str(item.get("id") or "")
+        out.append(
+            GoogleCalendarProviderCalendarOut(
+                google_calendar_id=gcal_id,
+                summary=str(item.get("summary") or item.get("id") or ""),
+                access_role=str(item.get("accessRole") or ""),
+                primary=bool(item.get("primary", False)),
+                mapped_internal_calendar_id=mapped_by_google.get(gcal_id),
+            )
+        )
+    return GoogleCalendarProviderCalendarsOut(calendars=out)
+
+
+@router.post("/calendar/integrations/google/mappings", response_model=GoogleCalendarMappingOut)
+async def google_calendar_create_mapping(
+    body: GoogleCalendarMappingCreateIn,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    user_sub = str(ctx.get("user_sub") or "")
+    require_google_calendar_sync_enabled_for_user(user_sub)
+    created = create_calendar_provider_mapping(
+        user_sub=user_sub,
+        internal_calendar_id=body.internal_calendar_id,
+        google_calendar_id=body.google_calendar_id,
+    )
+    return GoogleCalendarMappingOut(**created)
+
+
+@router.post("/calendar/integrations/google/sync/run", response_model=GoogleCalendarSyncRunOut)
+async def google_calendar_manual_sync_run(
+    mode: str = Query(default="incremental"),
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    user_sub = str(ctx.get("user_sub") or "")
+    require_google_calendar_sync_enabled_for_user(user_sub)
+    # Reuse existing privileged-action limiter to prevent abuse.
+    rate_limit_admin_action(user_sub, "google_calendar_sync_run")
+
+    connection_id = str(getattr(S, "google_calendar_connection_default_id", "google-primary") or "google-primary")
+    resolved_mode = "full" if str(mode).lower().strip() == "full" else "incremental"
+    try:
+        if resolved_mode == "full":
+            metrics = run_google_calendar_full_import_job(user_sub=user_sub, connection_id=connection_id)
+        else:
+            metrics = run_google_calendar_incremental_sync_job(user_sub=user_sub, connection_id=connection_id)
+    except HTTPException as exc:
+        emit_google_calendar_audit_event(
+            event="google_calendar_manual_sync_run",
+            actor_user_sub=user_sub,
+            outcome="failure",
+            target_type="connection",
+            target_id=connection_id,
+            mode=resolved_mode,
+            reason=str(exc.detail),
+        )
+        raise
+    audit_event(
+        "google_calendar_manual_sync_run",
+        user_sub,
+        None,
+        outcome="success",
+        mode=resolved_mode,
+        connection_id=connection_id,
+        processed=int(metrics.get("calendars_processed") or 0),
+        errors=int(metrics.get("errors") or 0),
+    )
+    emit_google_calendar_audit_event(
+        event="google_calendar_manual_sync_run",
+        actor_user_sub=user_sub,
+        outcome="success",
+        target_type="connection",
+        target_id=connection_id,
+        mode=resolved_mode,
+        processed=int(metrics.get("calendars_processed") or 0),
+        errors=int(metrics.get("errors") or 0),
+    )
+    return GoogleCalendarSyncRunOut(accepted=True, mode=resolved_mode, rate_limited=False, metrics=metrics)
+
+
 @router.post("/calendars/{calendar_id}/shares", response_model=CalendarShareOut)
 async def share_calendar(
     calendar_id: str,
@@ -1083,7 +1351,7 @@ async def preview_event_conflicts(
         requested_start_utc=iso_utc(requested_start),
         requested_end_utc=iso_utc(requested_end),
         timezone=normalized["timezone"],
-        conflicts=[_event_out(item, calendar_id) for item in conflicts],
+        conflicts=[_event_out(item, calendar_id, user_sub=ctx["user_sub"]) for item in conflicts],
     )
 
 
@@ -1126,7 +1394,7 @@ async def exclude_event_occurrence(
         exdates.append(occ_key)
     updated = {**item, "exdates_utc": sorted(set(exdates))}
     T.calendar.put_item(Item=updated)
-    return _event_out(updated, calendar_id)
+    return _event_out(updated, calendar_id, user_sub=ctx["user_sub"])
 
 
 @router.post("/calendars/{calendar_id}/events/{event_id}/occurrences/{occurrence_start}/override", response_model=EventOut)
@@ -1144,7 +1412,7 @@ async def override_event_occurrence(
     overrides[occ_key] = _normalize_occurrence_override(item.get("timezone", "UTC"), body)
     updated = {**item, "recurrence_overrides": overrides}
     T.calendar.put_item(Item=updated)
-    return _event_out(updated, calendar_id)
+    return _event_out(updated, calendar_id, user_sub=ctx["user_sub"])
 
 
 @router.delete("/calendars/{calendar_id}/events/{event_id}/occurrences/{occurrence_start}", response_model=EventOut)
@@ -1165,7 +1433,7 @@ async def clear_event_occurrence_exception(
         overrides.pop(occ_key, None)
     updated = {**item, "exdates_utc": exdates or None, "recurrence_overrides": overrides or None}
     T.calendar.put_item(Item=updated)
-    return _event_out(updated, calendar_id)
+    return _event_out(updated, calendar_id, user_sub=ctx["user_sub"])
 
 
 @router.post("/calendars/{calendar_id}/events", response_model=EventOut)
@@ -1203,6 +1471,7 @@ async def create_event(
         "exdates_utc": exdates,
         "recurrence_overrides": overrides,
         "created_at_utc": now,
+        "updated_at_utc": now,
         **normalized,
     }
     T.calendar.put_item(Item=item)
@@ -1221,26 +1490,16 @@ async def create_event(
         all_day_date=normalized["all_day_date"],
         status=status,
     )
-    return EventOut(
-        event_id=event_id,
-        calendar_id=calendar_id,
-        name=body.name,
-        description=body.description,
-        timezone=normalized["timezone"],
-        start_utc=normalized["start_utc"],
-        end_utc=normalized["end_utc"],
-        all_day=normalized["all_day"],
-        all_day_date=normalized["all_day_date"],
-        attendees=body.attendees,
-        booking_enabled=body.booking_enabled,
-        approval_required=body.approval_required,
-        status=status,
-        category=body.category,
-        recurrence_rule=recurrence_rule,
-        exdates_utc=exdates,
-        recurrence_overrides=overrides,
-        created_at_utc=now,
+    enqueue_google_calendar_outbound_sync_job(
+        owner_user_sub=str(meta.get("owner_user_sub") or ctx["user_sub"]),
+        actor_user_sub=ctx["user_sub"],
+        action="create",
+        internal_calendar_id=calendar_id,
+        internal_event_id=event_id,
+        event_snapshot=item,
+        source="calendar_event_create",
     )
+    return _event_out(item, calendar_id, user_sub=ctx["user_sub"])
 
 
 @router.post("/calendars/{calendar_id}/booking_links", response_model=BookingLinkOut)
@@ -1333,7 +1592,7 @@ async def list_events(
             expanded.extend(_expand_event_occurrences(item, start_dt, end_dt))
         items = expanded
     return EventsPageOut(
-        events=[_event_out(item, calendar_id) for item in items],
+        events=[_event_out(item, calendar_id, user_sub=ctx["user_sub"]) for item in items],
         next_cursor=next_cursor,
     )
 
@@ -1377,6 +1636,7 @@ async def update_calendar(
         "buffer_before_minutes": buffer_before,
         "buffer_after_minutes": buffer_after,
     }
+    updated["updated_at_utc"] = iso_utc(utc_now())
     T.calendar.put_item(Item=updated)
     return CalendarOut(
         calendar_id=calendar_id,
@@ -1464,7 +1724,16 @@ async def update_event(
         all_day_date=updated.get("all_day_date"),
         status=updated.get("status", "busy"),
     )
-    return _event_out(updated, calendar_id)
+    enqueue_google_calendar_outbound_sync_job(
+        owner_user_sub=str(meta.get("owner_user_sub") or ctx["user_sub"]),
+        actor_user_sub=ctx["user_sub"],
+        action="update",
+        internal_calendar_id=calendar_id,
+        internal_event_id=event_id,
+        event_snapshot=updated,
+        source="calendar_event_update",
+    )
+    return _event_out(updated, calendar_id, user_sub=ctx["user_sub"])
 
 
 @router.delete("/calendars/{calendar_id}/events/{event_id}")
@@ -1473,7 +1742,7 @@ async def delete_event(
     event_id: str,
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
-    _load_calendar_access(calendar_id, ctx["user_sub"], write=True)
+    meta = _load_calendar_access(calendar_id, ctx["user_sub"], write=True)
     item = _load_event(calendar_id, event_id)
     T.calendar.delete_item(Key={"calendar_id": calendar_id, "sk": _event_key(event_id)})
     audit_event(
@@ -1490,6 +1759,25 @@ async def delete_event(
         all_day=item.get("all_day", False),
         all_day_date=item.get("all_day_date"),
         status=item.get("status", "busy"),
+    )
+    delete_snapshot = {
+        "event_id": event_id,
+        "calendar_id": calendar_id,
+        "status": item.get("status", "busy"),
+        "start_utc": item.get("start_utc"),
+        "end_utc": item.get("end_utc"),
+        "all_day": item.get("all_day", False),
+        "all_day_date": item.get("all_day_date"),
+        "updated_at_utc": iso_utc(utc_now()),
+    }
+    enqueue_google_calendar_outbound_sync_job(
+        owner_user_sub=str(meta.get("owner_user_sub") or ctx["user_sub"]),
+        actor_user_sub=ctx["user_sub"],
+        action="delete",
+        internal_calendar_id=calendar_id,
+        internal_event_id=event_id,
+        event_snapshot=delete_snapshot,
+        source="calendar_event_delete",
     )
     return {"ok": True}
 
@@ -1641,7 +1929,7 @@ async def reserve_booking_slot(link_id: str, body: BookingRequestIn):
             booking_link_id=link_id,
             event_id=event_id,
         )
-    return _event_out(item, meta["calendar_id"])
+    return _event_out(item, meta["calendar_id"], user_sub=ctx["user_sub"])
 
 
 # ─── iCal helper ─────────────────────────────────────────────────

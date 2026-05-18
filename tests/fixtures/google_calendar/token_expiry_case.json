@@ -1,0 +1,12 @@
+{
+  "name": "token_expiry_refresh_before_request",
+  "connection": {
+    "token_payload": {
+      "access_token": "expired-access",
+      "expires_at_utc": "2020-01-01T00:00:00Z"
+    }
+  },
+  "refresh_result": {
+    "access_token": "fresh-access"
+  }
+}
