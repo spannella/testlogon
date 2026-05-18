@@ -906,6 +906,32 @@ CALENDAR_SYNC_AUTH_FAILURES = Counter(
     "Calendar integration authentication failures",
     ["provider"],
 )
+BROADCAST_PROVISION_LATENCY = Histogram(
+    "broadcast_provision_latency_seconds",
+    "Broadcast provisioning latency in seconds",
+    ["provider", "result"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120),
+)
+BROADCAST_SESSION_ACTIONS = Counter(
+    "broadcast_session_actions_total",
+    "Broadcast start/stop outcomes by provider/action/result",
+    ["provider", "action", "result"],
+)
+BROADCAST_INPUT_LOSS_EVENTS = Counter(
+    "broadcast_input_loss_total",
+    "Broadcast input loss detections by provider/reason",
+    ["provider", "reason"],
+)
+BROADCAST_OUTPUT_ERRORS = Counter(
+    "broadcast_output_errors_total",
+    "Broadcast output error detections by provider/reason",
+    ["provider", "reason"],
+)
+BROADCAST_DRIFT_INCIDENTS = Counter(
+    "broadcast_drift_incidents_total",
+    "Broadcast drift and stale incidents by provider/type",
+    ["provider", "incident_type"],
+)
 
 ENTITLEMENT_CHECKS = Counter(
     "entitlement_checks_total",
@@ -2143,6 +2169,42 @@ def record_vnc_bridge_failure(*, target_id: str, error_code: str) -> None:
     VNC_BRIDGE_FAILURES.labels(
         target_id=(target_id or "unknown").lower(),
         error_code=(error_code or "unknown").lower(),
+    ).inc()
+
+
+def record_broadcast_provision_latency(*, provider: str, result: str, elapsed_seconds: float) -> None:
+    BROADCAST_PROVISION_LATENCY.labels(
+        provider=(provider or "unknown").lower(),
+        result=(result or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_broadcast_session_action(*, provider: str, action: str, result: str) -> None:
+    BROADCAST_SESSION_ACTIONS.labels(
+        provider=(provider or "unknown").lower(),
+        action=(action or "unknown").lower(),
+        result=(result or "unknown").lower(),
+    ).inc()
+
+
+def record_broadcast_input_loss(*, provider: str, reason: str) -> None:
+    BROADCAST_INPUT_LOSS_EVENTS.labels(
+        provider=(provider or "unknown").lower(),
+        reason=(reason or "unknown").lower(),
+    ).inc()
+
+
+def record_broadcast_output_error(*, provider: str, reason: str) -> None:
+    BROADCAST_OUTPUT_ERRORS.labels(
+        provider=(provider or "unknown").lower(),
+        reason=(reason or "unknown").lower(),
+    ).inc()
+
+
+def record_broadcast_drift_incident(*, provider: str, incident_type: str) -> None:
+    BROADCAST_DRIFT_INCIDENTS.labels(
+        provider=(provider or "unknown").lower(),
+        incident_type=(incident_type or "unknown").lower(),
     ).inc()
 
 def metrics_endpoint() -> Response:

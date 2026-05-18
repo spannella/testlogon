@@ -431,6 +431,49 @@ class Settings:
     contacts_table_name: str = os.environ.get("DDB_CONTACTS_TABLE", "Contacts")
 
     # Messaging
+    broadcast_profiles_table_name: str = os.environ.get("DDB_BROADCAST_PROFILES", "BroadcastProfiles")
+    broadcast_sessions_table_name: str = os.environ.get("DDB_BROADCAST_SESSIONS", "BroadcastSessions")
+    broadcast_outputs_table_name: str = os.environ.get("DDB_BROADCAST_OUTPUTS", "BroadcastOutputs")
+    broadcast_session_transitions_table_name: str = os.environ.get(
+        "DDB_BROADCAST_SESSION_TRANSITIONS",
+        "BroadcastSessionTransitions",
+    )
+    broadcast_action_audit_table_name: str = os.environ.get(
+        "DDB_BROADCAST_ACTION_AUDIT",
+        "BroadcastActionAudit",
+    )
+    broadcast_secrets_backend: str = os.environ.get("BROADCAST_SECRETS_BACKEND", "secrets_manager")
+    broadcast_secret_rotation_interval_seconds: int = int(
+        os.environ.get("BROADCAST_SECRET_ROTATION_INTERVAL_SECONDS", "86400")
+    )
+    broadcast_provider: str = os.environ.get("BROADCAST_PROVIDER", "local")
+    broadcast_local_drm_token_secret: str = os.environ.get("BROADCAST_LOCAL_DRM_TOKEN_SECRET", "local-drm-secret")
+    broadcast_local_drm_static_token: str = os.environ.get("BROADCAST_LOCAL_DRM_STATIC_TOKEN", "dev-token")
+    broadcast_local_drm_key_root: str = os.environ.get("BROADCAST_LOCAL_DRM_KEY_ROOT", "tmp/broadcast-hls/keys")
+    broadcast_local_archive_bucket: str = os.environ.get("BROADCAST_LOCAL_ARCHIVE_BUCKET", "broadcast-archive")
+    broadcast_local_archive_prefix: str = os.environ.get("BROADCAST_LOCAL_ARCHIVE_PREFIX", "sessions")
+    broadcast_local_cache_public_base_url: str = os.environ.get("BROADCAST_LOCAL_CACHE_PUBLIC_BASE_URL", "http://localhost:8090").rstrip("/")
+    broadcast_local_cache_token_secret: str = os.environ.get("BROADCAST_LOCAL_CACHE_TOKEN_SECRET", "local-cache-secret")
+    broadcast_local_cache_token_ttl_seconds: int = int(os.environ.get("BROADCAST_LOCAL_CACHE_TOKEN_TTL_SECONDS", "600"))
+    broadcast_devtools_enabled: bool = os.environ.get("BROADCAST_DEVTOOLS_ENABLED", os.environ.get("DEV_MODE", "1")) not in ("0", "false", "False")
+    broadcast_local_hls_root: str = os.environ.get("BROADCAST_LOCAL_HLS_ROOT", "tmp/broadcast-hls")
+    broadcast_local_archive_root: str = os.environ.get("BROADCAST_LOCAL_ARCHIVE_ROOT", "tmp/broadcast-archive")
+    broadcast_local_ffmpeg_log_path: str = os.environ.get("BROADCAST_LOCAL_FFMPEG_LOG_PATH", "tmp/broadcast-logs/ffmpeg-worker.log")
+    broadcast_archive_bucket: str = os.environ.get("BROADCAST_ARCHIVE_BUCKET", "broadcast-archive")
+    broadcast_archive_prefix_root: str = os.environ.get("BROADCAST_ARCHIVE_PREFIX_ROOT", "sessions")
+    broadcast_archive_retention_days: int = int(os.environ.get("BROADCAST_ARCHIVE_RETENTION_DAYS", "30"))
+    broadcast_cloudfront_domain: str = os.environ.get("BROADCAST_CLOUDFRONT_DOMAIN", "")
+    broadcast_cloudfront_signing_secret: str = os.environ.get("BROADCAST_CLOUDFRONT_SIGNING_SECRET", "dev-cloudfront-secret")
+    broadcast_cloudfront_token_ttl_seconds: int = int(os.environ.get("BROADCAST_CLOUDFRONT_TOKEN_TTL_SECONDS", "600"))
+    broadcast_cloudfront_cache_policy_id: str = os.environ.get("BROADCAST_CLOUDFRONT_CACHE_POLICY_ID", "managed-caching-optimized")
+    broadcast_cloudfront_response_headers_policy_id: str = os.environ.get("BROADCAST_CLOUDFRONT_RESPONSE_HEADERS_POLICY_ID", "managed-security-headers")
+    broadcast_cloudfront_waf_acl_arn: str = os.environ.get("BROADCAST_CLOUDFRONT_WAF_ACL_ARN", "")
+    broadcast_cloudfront_geo_allowlist: str = os.environ.get("BROADCAST_CLOUDFRONT_GEO_ALLOWLIST", "")
+    broadcast_reconciler_enabled: bool = os.environ.get("BROADCAST_RECONCILER_ENABLED", "1") not in ("0", "false", "False")
+    broadcast_reconciler_interval_seconds: int = int(os.environ.get("BROADCAST_RECONCILER_INTERVAL_SECONDS", "30"))
+    broadcast_drift_sla_seconds: int = int(os.environ.get("BROADCAST_DRIFT_SLA_SECONDS", "120"))
+    broadcast_stale_session_seconds: int = int(os.environ.get("BROADCAST_STALE_SESSION_SECONDS", "300"))
+
     message_visibility_overrides_table_name: str = os.environ.get(
         "DDB_MESSAGE_VISIBILITY_OVERRIDES",
         "MessageVisibilityOverrides",

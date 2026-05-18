@@ -1,0 +1,82 @@
+{
+  "profile": {
+    "id": "p1",
+    "name": "Main",
+    "region": "us-east-1",
+    "rendition_preset": "720p",
+    "watermark_asset": null,
+    "drm_policy_id": null,
+    "drm_credentials_ref": null,
+    "drm_credentials_last_rotated_at": null,
+    "drm_credentials_rotation_interval_seconds": 86400,
+    "created_by": "u1",
+    "created_at": "2026-04-01T00:00:00+00:00",
+    "updated_at": "2026-04-01T00:00:00+00:00"
+  },
+  "session_created": {
+    "id": "s1",
+    "profile_id": "p1",
+    "status": "draft",
+    "ingest_url": null,
+    "stream_key_ref": null,
+    "stream_key_last_rotated_at": null,
+    "stream_key_rotation_interval_seconds": 86400,
+    "started_at": null,
+    "stopped_at": null,
+    "created_by": "u1",
+    "created_at": "2026-04-01T00:00:00+00:00",
+    "updated_at": "2026-04-01T00:00:00+00:00",
+    "mediapackage_endpoint": "https://pkg.example/s1/master.m3u8",
+    "cloudfront_playback_url": "https://d111.cloudfront.net/s1/master.m3u8?cf_token=t&cf_expires=1",
+    "s3_archive_prefix": "s3://broadcast-archive/sessions/s1/",
+    "aws_input_arn": "arn:aws:medialive:input:s1",
+    "aws_channel_arn": "arn:aws:medialive:channel:s1",
+    "provider_state_snapshot": {
+      "provider": "aws"
+    }
+  },
+  "session_started": {
+    "id": "s1",
+    "profile_id": "p1",
+    "status": "live",
+    "ingest_url": null,
+    "stream_key_ref": null,
+    "stream_key_last_rotated_at": null,
+    "stream_key_rotation_interval_seconds": 86400,
+    "started_at": null,
+    "stopped_at": null,
+    "created_by": "u1",
+    "created_at": "2026-04-01T00:00:00+00:00",
+    "updated_at": "2026-04-01T00:00:00+00:00",
+    "mediapackage_endpoint": "https://pkg.example/s1/master.m3u8",
+    "cloudfront_playback_url": "https://d111.cloudfront.net/s1/master.m3u8?cf_token=t&cf_expires=1",
+    "s3_archive_prefix": "s3://broadcast-archive/sessions/s1/",
+    "aws_input_arn": "arn:aws:medialive:input:s1",
+    "aws_channel_arn": "arn:aws:medialive:channel:s1",
+    "provider_state_snapshot": {
+      "provider": "aws"
+    }
+  },
+  "session_get": {
+    "id": "s1",
+    "profile_id": "p1",
+    "status": "live",
+    "ingest_url": null,
+    "stream_key_ref": null,
+    "stream_key_last_rotated_at": null,
+    "stream_key_rotation_interval_seconds": 86400,
+    "started_at": null,
+    "stopped_at": null,
+    "created_by": "u1",
+    "created_at": "2026-04-01T00:00:00+00:00",
+    "updated_at": "2026-04-01T00:00:00+00:00",
+    "mediapackage_endpoint": "https://pkg.example/s1/master.m3u8",
+    "cloudfront_playback_url": "https://d111.cloudfront.net/s1/master.m3u8?cf_token=t&cf_expires=1",
+    "s3_archive_prefix": "s3://broadcast-archive/sessions/s1/",
+    "aws_input_arn": "arn:aws:medialive:input:s1",
+    "aws_channel_arn": "arn:aws:medialive:channel:s1",
+    "provider_state_snapshot": {
+      "provider": "aws"
+    }
+  }
+}

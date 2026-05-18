@@ -36,6 +36,11 @@ class Tables:
     subscriptions: Any
     projects: Any
     contacts: Any
+    broadcast_profiles: Any
+    broadcast_sessions: Any
+    broadcast_outputs: Any
+    broadcast_session_transitions: Any
+    broadcast_action_audit: Any
     message_visibility_overrides: Any
     conversation_pins: Any
     message_threads: Any
@@ -97,6 +102,11 @@ T = Tables(
     subscriptions=ddb.Table(S.subscriptions_table_name),
     projects=ddb.Table(S.projects_table_name),
     contacts=ddb.Table(S.contacts_table_name),
+    broadcast_profiles=ddb.Table(S.broadcast_profiles_table_name),
+    broadcast_sessions=ddb.Table(S.broadcast_sessions_table_name),
+    broadcast_outputs=ddb.Table(S.broadcast_outputs_table_name),
+    broadcast_session_transitions=ddb.Table(S.broadcast_session_transitions_table_name),
+    broadcast_action_audit=ddb.Table(S.broadcast_action_audit_table_name),
     message_visibility_overrides=ddb.Table(S.message_visibility_overrides_table_name),
     conversation_pins=ddb.Table(S.conversation_pins_table_name),
     message_threads=ddb.Table(S.message_threads_table_name),

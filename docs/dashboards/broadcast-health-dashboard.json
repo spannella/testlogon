@@ -1,0 +1,29 @@
+{
+  "title": "Broadcast Health Dashboard",
+  "panels": [
+    {
+      "title": "Provisioning Latency p95 (s)",
+      "expr": "histogram_quantile(0.95, sum(rate(broadcast_provision_latency_seconds_bucket[5m])) by (le, provider, result))"
+    },
+    {
+      "title": "Start Success Rate (5m)",
+      "expr": "sum(rate(broadcast_session_actions_total{action=\"start\",result=\"success\"}[5m])) / clamp_min(sum(rate(broadcast_session_actions_total{action=\"start\"}[5m])), 1e-9)"
+    },
+    {
+      "title": "Stop Success Rate (5m)",
+      "expr": "sum(rate(broadcast_session_actions_total{action=\"stop\",result=\"success\"}[5m])) / clamp_min(sum(rate(broadcast_session_actions_total{action=\"stop\"}[5m])), 1e-9)"
+    },
+    {
+      "title": "Input Loss Events",
+      "expr": "sum(increase(broadcast_input_loss_total[10m])) by (provider, reason)"
+    },
+    {
+      "title": "Output Error Events",
+      "expr": "sum(increase(broadcast_output_errors_total[10m])) by (provider, reason)"
+    },
+    {
+      "title": "Drift/Stale Incidents",
+      "expr": "sum(increase(broadcast_drift_incidents_total[10m])) by (provider, incident_type)"
+    }
+  ]
+}
