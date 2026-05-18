@@ -393,6 +393,14 @@ class Settings:
         "DDB_MESSAGE_REPORTS",
         "MessageReports",
     )
+    mass_message_campaigns_table_name: str = os.environ.get(
+        "DDB_MASS_MESSAGE_CAMPAIGNS",
+        "MassMessageCampaigns",
+    )
+    mass_message_campaign_destinations_table_name: str = os.environ.get(
+        "DDB_MASS_MESSAGE_CAMPAIGN_DESTINATIONS",
+        "MassMessageCampaignDestinations",
+    )
     message_report_context_table_name: str = os.environ.get(
         "DDB_MESSAGE_REPORT_CONTEXT",
         "MessageReportContext",
@@ -813,6 +821,12 @@ class Settings:
     messaging_gallery_enabled: bool = os.environ.get("MESSAGING_GALLERY_ENABLED", "true").lower() == "true"
     messaging_gallery_kill_switch: bool = os.environ.get("MESSAGING_GALLERY_KILL_SWITCH", "false").lower() == "true"
     messaging_gallery_index_enabled: bool = os.environ.get("MESSAGING_GALLERY_INDEX_ENABLED", "false").lower() == "true"
+    messaging_mass_send_enabled: bool = os.environ.get("MESSAGING_MASS_SEND_ENABLED", "true").lower() == "true"
+    messaging_mass_send_kill_switch: bool = os.environ.get("MESSAGING_MASS_SEND_KILL_SWITCH", "false").lower() == "true"
+    messaging_mass_send_campaigns_per_user_per_hour: int = int(os.environ.get("MESSAGING_MASS_SEND_CAMPAIGNS_PER_USER_PER_HOUR", "20"))
+    messaging_mass_send_campaigns_per_tenant_per_hour: int = int(os.environ.get("MESSAGING_MASS_SEND_CAMPAIGNS_PER_TENANT_PER_HOUR", "500"))
+    messaging_mass_send_max_destinations_per_campaign: int = int(os.environ.get("MESSAGING_MASS_SEND_MAX_DESTINATIONS_PER_CAMPAIGN", "100"))
+    messaging_mass_send_max_concurrent_workers: int = int(os.environ.get("MESSAGING_MASS_SEND_MAX_CONCURRENT_WORKERS", "8"))
     # Subscriptions
     subscriptions_table_name: str = os.environ.get("SUBSCRIPTIONS_TABLE_NAME", "subscriptions")
     questionnaire_table_name: str = os.environ.get("QUESTIONNAIRE_TABLE_NAME", "questionnaires")

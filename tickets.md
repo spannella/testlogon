@@ -731,3 +731,236 @@
 **Acceptance criteria:**
 - Documentation covers known limitations, offline behavior, and cross-device expectations.
 - Support playbook includes troubleshooting for missing drafts, stale drafts, and sync conflicts.
+### MSG-001: Add mass messaging campaign table migration
+**Description:** Create the `MassMessageCampaigns` persistence migration with fields for campaign metadata (`campaign_id`, `sender_id`, `mode`, `status`, `send_at`, `payload_hash`, counters, timestamps) and required indexes.
+**Acceptance criteria:**
+- Migration creates campaign table with documented schema and indexes.
+- Migration rollback path is documented and works in non-prod environments.
+
+### MSG-002: Add mass messaging destination table migration
+**Description:** Create the `MassMessageCampaignDestinations` persistence migration keyed by `campaign_id + conversation_id` and indexed for state/updated-time queries.
+**Acceptance criteria:**
+- Migration creates destination table and all required GSIs.
+- Migration rollback path is documented and works in non-prod environments.
+
+### MSG-003: Wire table names into runtime configuration
+**Description:** Add environment-backed settings for campaign and destination table names and expose them through table registry wiring.
+**Acceptance criteria:**
+- Application boots with defaults and with overridden table env vars.
+- Table registry exposes both new table handles for service use.
+
+### MSG-004: Define campaign domain model and status contract
+**Description:** Implement campaign model constants/enums and state transition rules for campaign lifecycle (`pending`, `scheduled`, `processing`, `completed`, `failed`, `cancelled`).
+**Acceptance criteria:**
+- Invalid states/modes are rejected deterministically.
+- Transition guard enforces allowed transitions and blocks invalid ones.
+
+### MSG-005: Implement campaign create/read/update service methods
+**Description:** Add campaign service functions to create campaigns, fetch campaign by id, and update campaign status with optimistic guarding.
+**Acceptance criteria:**
+- Service supports create/get/update with deterministic validation errors.
+- Update path prevents unsafe concurrent status overrides.
+
+### MSG-006: Define destination domain model and state contract
+**Description:** Implement destination state definitions (`pending`, `sent`, `failed`, `skipped`, `cancelled`) and validation helpers.
+**Acceptance criteria:**
+- Invalid destination state transitions/values are rejected.
+- State metadata fields are consistently shaped for API responses.
+
+### MSG-007: Implement destination upsert/get/list service methods
+**Description:** Add idempotent destination persistence methods including attempt counting and indexed listing by campaign.
+**Acceptance criteria:**
+- Upsert is idempotent for repeated writes on same destination key.
+- List/get methods return stable ordering and bounded pagination inputs.
+
+### MSG-008: Build campaign aggregate counters update helper
+**Description:** Implement helper logic to atomically increment campaign counters (`total`, `queued`, `sent`, `failed`, `cancelled`) from destination state updates.
+**Acceptance criteria:**
+- Counter updates are race-safe under concurrent worker writes.
+- Counter totals reconcile with destination rows in integration tests.
+
+### MSG-009: Add request schemas for create campaign API
+**Description:** Implement backend validation schemas for mass message creation payload including `conversation_ids`, content payload, mode, `send_at`, and idempotency key.
+**Acceptance criteria:**
+- Schema validates destination limit and payload constraints.
+- Invalid payloads return structured 4xx validation errors.
+
+### MSG-010: Add response schemas for campaign APIs
+**Description:** Implement API response models for create and detail endpoints, including aggregate counters and per-destination statuses.
+**Acceptance criteria:**
+- Responses serialize campaign and destination fields consistently.
+- OpenAPI contract includes all new fields and examples.
+
+### MSG-011: Implement POST /messaging/mass-messages endpoint
+**Description:** Add endpoint that validates request, authorizes sender, creates campaign+destinations, and dispatches immediate/scheduled flow kickoff.
+**Acceptance criteria:**
+- Endpoint persists campaign and destination records for accepted targets.
+- Response includes accepted/rejected destination sets with campaign id.
+
+### MSG-012: Implement GET /messaging/mass-messages/{campaign_id}
+**Description:** Add endpoint to return campaign-level status plus destination-level outcome details.
+**Acceptance criteria:**
+- Sender can read their own campaigns and receives aggregate + destination details.
+- Unauthorized users receive 403/404 per policy without data leakage.
+
+### MSG-013: Add request-level idempotency storage and lookup
+**Description:** Implement sender+idempotency-key mapping to ensure duplicate create requests return existing campaign.
+**Acceptance criteria:**
+- Duplicate requests with same key do not create duplicate campaigns.
+- Endpoint returns deterministic response for replayed idempotent requests.
+
+### MSG-014: Add destination-level idempotency key strategy
+**Description:** Implement deterministic destination idempotency keying (`campaign_id + conversation_id`) used by worker execution.
+**Acceptance criteria:**
+- Duplicate worker executions do not create duplicate messages.
+- Destination writes remain idempotent across retry attempts.
+
+### MSG-015: Extract shared single-destination send helper
+**Description:** Refactor existing message send flow to a reusable internal helper consumed by both single-send APIs and mass fanout worker.
+**Acceptance criteria:**
+- Existing single-send behavior remains unchanged.
+- Shared helper preserves metering, archive events, receipts, and unread updates.
+
+### MSG-016: Implement immediate fanout worker job
+**Description:** Add background worker that processes pending destinations with bounded concurrency and records per-destination outcomes.
+**Acceptance criteria:**
+- Worker processes all eligible destinations without blocking on single failure.
+- Destination records persist success/failure status and error metadata.
+
+### MSG-017: Implement scheduled campaign dispatcher
+**Description:** Add scheduler task that scans due scheduled campaigns (`send_at <= now`) and enqueues worker execution.
+**Acceptance criteria:**
+- Scheduled campaigns do not send before due time.
+- Due campaigns transition from scheduled to processing once.
+
+### MSG-018: Implement retry policy for transient destination failures
+**Description:** Add retry classifier and capped exponential backoff for retryable destination errors.
+**Acceptance criteria:**
+- Retryable failures are retried up to configured max attempts.
+- Permanent failures are terminal and not retried.
+
+### MSG-019: Define and enforce destination error taxonomy
+**Description:** Introduce stable error codes for destination failures (authorization, conversation missing, policy blocked, transient infra, unknown).
+**Acceptance criteria:**
+- All failed destination records include canonical error code.
+- API status endpoint exposes canonical error code fields.
+
+### MSG-020: Add campaign and destination metrics instrumentation
+**Description:** Emit metrics for campaign create/complete counts, destination success/failure rates, retry counts, and worker latency.
+**Acceptance criteria:**
+- Metrics appear in telemetry sink with documented names/tags.
+- Dashboard queries validate expected signal for test campaigns.
+
+### MSG-021: Add campaign audit/compliance events
+**Description:** Emit campaign lifecycle audit events and ensure destination send paths preserve existing compliance archive behavior.
+**Acceptance criteria:**
+- Audit log contains campaign submit and completion events.
+- Destination send events remain discoverable in compliance archive.
+
+### MSG-022: Add feature flag gating and kill switch
+**Description:** Introduce `messaging.mass_send.enabled` flag for endpoint and worker gating with safe disable behavior.
+**Acceptance criteria:**
+- Flag-off blocks new campaign creation while preserving status reads.
+- Kill switch can stop worker execution without service restart.
+
+### MSG-023: Build frontend API client methods for mass messaging
+**Description:** Add frontend client endpoints for create campaign, fetch campaign status, and poll destination results.
+**Acceptance criteria:**
+- Frontend API layer exposes typed request/response contracts.
+- Client methods handle validation and transport errors consistently.
+
+### MSG-024: Build compose UI for mass messaging recipients and mode
+**Description:** Add UI flow to select multiple destination conversations, compose one identical message, and choose send-now vs scheduled mode.
+**Acceptance criteria:**
+- User can submit to mixed DM/group destinations with clear validation messages.
+- Scheduled mode includes date-time input with timezone-safe serialization.
+
+### MSG-025: Build campaign progress/status UI
+**Description:** Add frontend status page/panel that displays campaign aggregate progress and destination-level outcomes with error details.
+**Acceptance criteria:**
+- UI shows sent/failed/pending counters and destination rows.
+- UI refresh/polling updates state without full page reload.
+
+### MSG-026: Add frontend feature flag handling and fallback UX
+**Description:** Gate mass messaging UI behind feature flag and provide fallback messaging when disabled.
+**Acceptance criteria:**
+- UI controls are hidden/disabled when flag is off.
+- Fallback state explains availability and avoids broken interactions.
+
+### MSG-027: Add unit tests for campaign service and transitions
+**Description:** Expand unit tests for campaign model validation, transition guards, create/update semantics, and edge cases.
+**Acceptance criteria:**
+- Tests cover valid and invalid mode/status combinations.
+- Tests cover optimistic status update conflict behavior.
+
+### MSG-028: Add unit tests for destination service and retries
+**Description:** Add tests for idempotent destination upsert, attempt counting, error-code handling, and retry classifier behavior.
+**Acceptance criteria:**
+- Tests verify no duplicate destination processing on retries.
+- Tests verify terminal vs retryable error handling.
+
+### MSG-029: Add backend integration tests for immediate and scheduled campaigns
+**Description:** Implement integration tests covering API create/status flows, worker execution, partial failures, and due-time scheduling.
+**Acceptance criteria:**
+- Immediate campaign integration test validates message creation across destinations.
+- Scheduled campaign integration test validates pre-due and post-due behavior.
+
+### MSG-030: Add frontend component and e2e tests
+**Description:** Add frontend unit/integration tests for compose/status UI plus end-to-end coverage for send-now and scheduled mass messaging flows.
+**Acceptance criteria:**
+- Component tests cover validation, submission, and progress rendering.
+- E2E tests cover happy path and partial failure UX.
+
+### MSG-031: Add abuse/rate-limit controls for campaign creation and fanout
+**Description:** Introduce per-user and per-tenant limits for campaigns/hour, destinations/campaign, and concurrent fanout workers.
+**Acceptance criteria:**
+- Rate limits block abusive patterns with clear error responses.
+- Limits are configurable and observable via metrics.
+
+### MSG-032: Add operational runbook and alerting rules
+**Description:** Document operational procedures for rollout, incident response, stuck campaigns, retry storms, and rollback.
+**Acceptance criteria:**
+- Runbook includes diagnostics, remediation commands, and owner escalation path.
+- Alert definitions exist for high failure rate and worker lag thresholds.
+
+### MSG-033: Add deployment plan and staged rollout checklist
+**Description:** Define deployment sequencing (migrations, feature flags, worker enablement), canary phases, and go/no-go gates.
+**Acceptance criteria:**
+- Deployment checklist covers schema rollout before API/worker usage.
+- Canary success criteria and rollback conditions are documented.
+
+### MSG-034: Add backward-compatibility and migration validation scripts
+**Description:** Provide scripts/checks to validate new tables/indexes and ensure no regressions for existing messaging endpoints.
+**Acceptance criteria:**
+- Validation script passes in staging before rollout.
+- Existing messaging regression suite passes unchanged.
+
+### MSG-035: Add post-launch monitoring and success KPI review ticket
+**Description:** Define and execute post-launch KPI review (adoption, failure rate, latency, retries, support tickets) with follow-up actions.
+**Acceptance criteria:**
+- KPI report generated after launch window with baseline comparisons.
+- Follow-up backlog items created for any KPI/SLO gaps.
+
+### MSG-036: Retry storm dampening improvements
+**Description:** Reduce retry amplification with jittered backoff and circuit-breaker behavior when transient infra errors spike.
+**Acceptance criteria:**
+- Retry ratio reduced below 4% target during peak windows.
+- No sustained retry storms under dependency degradation tests.
+
+### MSG-037: Worker scaling and lag reduction
+**Description:** Add worker scaling policy and guardrails tied to campaign backlog and p95 worker latency.
+**Acceptance criteria:**
+- Worker p95 latency reduced to <= 15s in launch cohorts.
+- Capacity changes are observable and reversible via runtime controls.
+
+### MSG-038: Scheduled-send UX hardening
+**Description:** Improve frontend validation/help for scheduled sends and provide clearer error remediation guidance.
+**Acceptance criteria:**
+- Support tickets for scheduled-send confusion drop below baseline threshold.
+- UX copy includes timezone/send-at troubleshooting guidance.
+
+### MSG-039: Support diagnostics panel for campaign failures
+**Description:** Add support-facing diagnostic breakdowns (error distribution, retry reasons, failure hotspots by destination state).
+**Acceptance criteria:**
+- Support can identify top failure causes without log deep-dives.
+- Campaign troubleshooting time-to-resolution improves measurably.
