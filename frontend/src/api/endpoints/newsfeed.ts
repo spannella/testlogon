@@ -2,6 +2,7 @@ import { api } from "@/api/client";
 import type {
   FeedPost,
   FeedComment,
+  FeedCapabilities,
   CreatePostReq,
   CreateCommentReq,
   EditPostReq,
@@ -37,6 +38,9 @@ export const getFeed = (params?: FeedQueryParams) => {
     Object.keys(query).length ? query : undefined,
   );
 };
+
+export const getFeedCapabilities = () =>
+  api.get<FeedCapabilities>("/feed/capabilities");
 
 export const createPost = (body: CreatePostReq) =>
   api.post<FeedPost>("/posts", body);

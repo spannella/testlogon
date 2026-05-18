@@ -1705,7 +1705,11 @@ export interface FeedPost {
   body_version?: number;
   image_urls?: string[];
   file_attachments?: PostFileAttachment[];
-  unlock_price_cents?: number;
+  lock_expired?: boolean | null;
+  unlock_price_cents?: number | null;
+  unlock_limit?: number | null;
+  unlock_count?: number | null;
+  unlock_limit_reached?: boolean | null;
   like_count: number;
   comment_count: number;
   tip_total_cents?: number;
@@ -1740,6 +1744,11 @@ export interface FeedComment {
   tip_total_cents?: number;
 }
 
+export interface FeedCapabilities {
+  unlock_limit_enabled: boolean;
+  unlock_limit_rollout_mode: string;
+}
+
 export interface CreatePostReq {
   body?: string;
   body_plain?: string;
@@ -1753,6 +1762,7 @@ export interface CreatePostReq {
   publish_at?: number;
   schedule_timezone?: string;
   scheduled_at_local?: string;
+  unlock_limit?: number | null;
 }
 
 export interface CreateCommentReq {
@@ -1775,6 +1785,7 @@ export interface EditPostReq {
   publish_at?: number;
   schedule_timezone?: string;
   scheduled_at_local?: string;
+  unlock_limit?: number | null;
 }
 
 export interface ScheduledPostsResp {

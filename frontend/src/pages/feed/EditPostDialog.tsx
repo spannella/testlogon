@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ImagePlus, Loader2, X, Clock, Globe } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -12,7 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { newsfeedSchedulingUiEnabled } from "@/lib/featureFlags";
 import { MarkdownComposer, type EditorMode, type RichDoc, richDocToPlain, buildContentPayload } from "./MarkdownComposer";
-import { editPost, editScheduledPost, uploadPostImage } from "@/api/endpoints/newsfeed";
+import { editPost, editScheduledPost, getFeedCapabilities, uploadPostImage } from "@/api/endpoints/newsfeed";
 import { invalidateFeedCaches } from "@/lib/feedCacheInvalidation";
 
 const MAX_IMAGES = 10;
@@ -28,6 +28,8 @@ interface EditPostDialogProps {
   initialBody: string;
   initialImageUrls?: string[];
   initialBodyRich?: RichDoc | null;
+  initialUnlockPriceCents?: number;
+  initialUnlockLimit?: number | null;
 }
 
 export function EditPostDialog({
@@ -41,6 +43,8 @@ export function EditPostDialog({
   initialBody,
   initialImageUrls,
   initialBodyRich,
+  initialUnlockPriceCents,
+  initialUnlockLimit,
 }: EditPostDialogProps) {
   const schedulingUiEnabled = newsfeedSchedulingUiEnabled;
   const queryClient = useQueryClient();
@@ -74,6 +78,17 @@ export function EditPostDialog({
     return new Date(utcGuess.getTime() + (targetAsUtc - tzAsUtc));
   };
 
+  const { data: capabilities } = useQuery({
+    queryKey: ["feed", "capabilities"],
+    queryFn: getFeedCapabilities,
+    staleTime: 60_000,
+  });
+  const unlockLimitFeatureEnabled = capabilities?.unlock_limit_enabled ?? false;
+  const isLockedPost = (initialUnlockPriceCents ?? 0) > 0;
+  const [unlockLimitEnabled, setUnlockLimitEnabled] = useState<boolean>(isLockedPost && unlockLimitFeatureEnabled && initialUnlockLimit != null);
+  const [unlockLimitInput, setUnlockLimitInput] = useState<string>(initialUnlockLimit != null ? String(initialUnlockLimit) : "");
+  const [unlockLimitError, setUnlockLimitError] = useState<string | null>(null);
+
   // Sync with props when dialog opens
   useEffect(() => {
     if (open) {
@@ -84,22 +99,15 @@ export function EditPostDialog({
       setScheduleTimezone(initialScheduleTimezone ?? (Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"));
       setScheduledInput(initialScheduledAtLocal ?? "");
       setScheduledAt(initialPublishAt ? new Date(initialPublishAt * 1000) : null);
+      setUnlockLimitEnabled(isLockedPost && unlockLimitFeatureEnabled && initialUnlockLimit != null);
+      setUnlockLimitInput(initialUnlockLimit != null ? String(initialUnlockLimit) : "");
+      setUnlockLimitError(null);
     }
-  }, [open, initialBody, initialImageUrls, initialBodyRich, initialPublishAt, initialScheduleTimezone, initialScheduledAtLocal]);
+  }, [open, initialBody, initialImageUrls, initialBodyRich, initialPublishAt, initialScheduleTimezone, initialScheduledAtLocal, initialUnlockLimit, isLockedPost, unlockLimitFeatureEnabled]);
 
   const mutation = useMutation({
-    mutationFn: () =>
-      (postStatus === "scheduled" && schedulingUiEnabled ? editScheduledPost : editPost)(postId, {
-        ...buildContentPayload(body, editorMode, richDoc),
-        image_urls: imageUrls,
-        ...(postStatus === "scheduled" && schedulingUiEnabled && scheduledAt
-          ? {
-              publish_at: Math.floor(scheduledAt.getTime() / 1000),
-              schedule_timezone: scheduleTimezone,
-              scheduled_at_local: scheduledInput || undefined,
-            }
-          : {}),
-      }),
+    mutationFn: (payload: Parameters<typeof editPost>[1]) =>
+      (postStatus === "scheduled" && schedulingUiEnabled ? editScheduledPost : editPost)(postId, payload),
     onSuccess: async (post) => {
       toast.success("Post updated");
       await invalidateFeedCaches(queryClient, post.author_id);
@@ -113,7 +121,25 @@ export function EditPostDialog({
 
   const handleSave = () => {
     if (!body.trim() && imageUrls.length === 0) return;
-    mutation.mutate();
+    const canEditUnlockLimit = isLockedPost && unlockLimitFeatureEnabled;
+    const parsedUnlockLimit = canEditUnlockLimit && unlockLimitEnabled ? Number.parseInt(unlockLimitInput, 10) : undefined;
+    if (canEditUnlockLimit && unlockLimitEnabled && (!Number.isFinite(parsedUnlockLimit) || parsedUnlockLimit < 1)) {
+      setUnlockLimitError("Unlock limit must be a whole number greater than 0.");
+      return;
+    }
+    setUnlockLimitError(null);
+    mutation.mutate({
+      ...buildContentPayload(body, editorMode, richDoc),
+      image_urls: imageUrls,
+      ...(postStatus === "scheduled" && schedulingUiEnabled && scheduledAt
+        ? {
+            publish_at: Math.floor(scheduledAt.getTime() / 1000),
+            schedule_timezone: scheduleTimezone,
+            scheduled_at_local: scheduledInput || undefined,
+          }
+        : {}),
+      ...(canEditUnlockLimit ? (unlockLimitEnabled ? { unlock_limit: parsedUnlockLimit } : { unlock_limit: null }) : {}),
+    });
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -235,6 +261,48 @@ export function EditPostDialog({
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {isLockedPost && unlockLimitFeatureEnabled && (
+          <div className="rounded-md border border-border bg-muted/30 p-2 text-xs space-y-1.5">
+            <div className="flex items-center gap-2">
+              <input
+                id="unlock-limit-enabled-edit"
+                type="checkbox"
+                checked={unlockLimitEnabled}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setUnlockLimitEnabled(checked);
+                  if (!checked) {
+                    setUnlockLimitInput("");
+                    setUnlockLimitError(null);
+                  }
+                }}
+              />
+              <label htmlFor="unlock-limit-enabled-edit" className="text-muted-foreground">
+                Limit unlocks to N users
+              </label>
+            </div>
+            {unlockLimitEnabled && (
+              <div className="space-y-1">
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={unlockLimitInput}
+                  onChange={(e) => {
+                    setUnlockLimitInput(e.target.value);
+                    if (unlockLimitError) setUnlockLimitError(null);
+                  }}
+                  placeholder="e.g. 50"
+                  className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                />
+                {unlockLimitError && (
+                  <p className="text-[11px] text-destructive">{unlockLimitError}</p>
+                )}
+              </div>
+            )}
           </div>
         )}
 

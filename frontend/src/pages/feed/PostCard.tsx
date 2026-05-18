@@ -190,6 +190,12 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
 
   const imageUrls = post.image_urls ?? [];
   const isOwn = post.author_id === userId;
+  const unlockLimit = typeof post.unlock_limit === "number" && post.unlock_limit > 0 ? post.unlock_limit : undefined;
+  const unlockCountRaw = typeof post.unlock_count === "number" ? post.unlock_count : 0;
+  const unlockCount = Math.max(0, unlockCountRaw);
+  const soldOut = !!post.unlock_limit_reached || (unlockLimit != null && unlockCount >= unlockLimit);
+  const remainingUnlockSlots = unlockLimit != null ? Math.max(0, unlockLimit - unlockCount) : undefined;
+  const lockExpired = !!post.lock_expired;
 
   const { data: paymentMethods = [] } = useQuery<PaymentMethod[]>({
     queryKey: ["billing", "payment-methods"],
@@ -215,7 +221,28 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
       toast.success("Post unlocked!");
       setUnlockDialogOpen(false);
     },
-    onError: () => {
+    onError: (error) => {
+      const detail = error instanceof ApiError && error.body && typeof error.body === "object"
+        ? (error.body as { detail?: unknown }).detail
+        : null;
+      const code = detail && typeof detail === "object" ? (detail as { code?: unknown }).code : null;
+
+      if (code === "unlock_limit_reached") {
+        toast.error("This post is sold out and can no longer be unlocked.");
+        queryClient.invalidateQueries({ queryKey: ["feed"] });
+        setUnlockDialogOpen(false);
+        return;
+      }
+      if (code === "post_lock_expired") {
+        toast.error("This post’s lock has expired and can no longer be unlocked.");
+        queryClient.invalidateQueries({ queryKey: ["feed"] });
+        setUnlockDialogOpen(false);
+        return;
+      }
+      if (code === "unlock_attempt_throttled") {
+        toast.error("Please wait a moment before trying to unlock again.");
+        return;
+      }
       toast.error("Failed to unlock post");
     },
   });
@@ -338,6 +365,21 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
 
         {/* Post body */}
         <div className="mt-3">
+          {unlockLimit != null && (
+            <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+              <span className="rounded-full border border-border bg-muted px-2 py-0.5 text-muted-foreground">
+                Unlocks {Math.min(unlockCount, unlockLimit)}/{unlockLimit}
+              </span>
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5",
+                  soldOut ? "bg-destructive/15 text-destructive" : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+                )}
+              >
+                {soldOut ? "Sold out" : `${remainingUnlockSlots ?? 0} remaining`}
+              </span>
+            </div>
+          )}
           {isLocked ? (
             <div className="relative">
               <div className="blur-sm select-none">
@@ -352,7 +394,15 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
               </div>
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-background/60 rounded">
                 <Lock className="h-6 w-6 text-muted-foreground" />
-                {paymentMethods.length === 0 ? (
+                {lockExpired ? (
+                  <p className="text-xs text-muted-foreground px-4 text-center">
+                    Lock expired — this post can no longer be unlocked.
+                  </p>
+                ) : soldOut ? (
+                  <p className="text-xs text-destructive px-4 text-center">
+                    Sold out — no unlock slots remaining.
+                  </p>
+                ) : paymentMethods.length === 0 ? (
                   <p className="text-xs text-muted-foreground px-4 text-center">
                     Add a payment method in Billing to unlock this post
                   </p>
@@ -503,6 +553,8 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
         initialBody={post.body}
         initialImageUrls={imageUrls}
         initialBodyRich={(post.body_rich as any) ?? null}
+        initialUnlockPriceCents={post.unlock_price_cents}
+        initialUnlockLimit={post.unlock_limit ?? null}
       />
 
       {/* Tip dialog */}
@@ -532,7 +584,11 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
               Unlock post
             </DialogTitle>
             <DialogDescription>
-              Pay ${((post.unlock_price_cents ?? 0) / 100).toFixed(2)} to unlock this post.
+              {lockExpired
+                ? "This lock has expired, so this post can no longer be unlocked."
+                : soldOut
+                ? "This post is sold out and has no unlock slots remaining."
+                : `Pay $${((post.unlock_price_cents ?? 0) / 100).toFixed(2)} to unlock this post.`}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -578,9 +634,9 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
             </Button>
             <Button
               onClick={() => unlockMutation.mutate(unlockPaymentMethodId)}
-              disabled={unlockMutation.isPending || !unlockPaymentMethodId}
+              disabled={unlockMutation.isPending || !unlockPaymentMethodId || soldOut || lockExpired}
             >
-              {unlockMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Pay & Unlock"}
+              {unlockMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : lockExpired ? "Expired" : soldOut ? "Sold out" : "Pay & Unlock"}
             </Button>
           </DialogFooter>
         </DialogContent>

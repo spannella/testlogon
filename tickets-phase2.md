@@ -2113,3 +2113,242 @@
 **Acceptance criteria:**
 - Promotion is blocked when required tests/docs/observability artifacts are missing or stale.
 - Rollback drill report confirms disable/restore procedure meets target RTO.
+### NUL-101: Add unlock API request idempotency_key schema validation
+**Description:** Add explicit request validation for `idempotency_key` format, length, and allowed characters on unlock endpoints.
+**Acceptance criteria:**
+- Unlock request rejects malformed idempotency keys with a stable 400 error code.
+- API contract docs include the accepted idempotency key format and examples.
+
+### NUL-102: Persist request fingerprint for idempotent unlock attempts
+**Description:** Store a canonical fingerprint of unlock request inputs (post, user, payment method, amount) alongside the idempotency key.
+**Acceptance criteria:**
+- Unlock attempt records include a deterministic request fingerprint field.
+- Fingerprint generation is covered by unit tests for ordering and normalization.
+
+### NUL-103: Reject idempotency key reuse with changed payload
+**Description:** Detect key replay with a mismatched fingerprint and fail fast to prevent ambiguous outcomes.
+**Acceptance criteria:**
+- Reused key with changed request fields returns 409 `idempotency_conflict`.
+- Replay with identical payload returns existing result and no additional charge attempt.
+
+### NUL-104: Return replay metadata in unlock API responses
+**Description:** Include `replayed` and `attempt_id` fields in unlock responses for debugging and client UX.
+**Acceptance criteria:**
+- Successful replayed unlock responses set `replayed=true`.
+- New unlock attempts set `replayed=false` and include a non-empty `attempt_id`.
+
+### NUL-105: Add stale in-progress unlock timeout setting
+**Description:** Introduce configurable timeout for unlock attempts stuck in `in_progress`.
+**Acceptance criteria:**
+- New setting exists with sensible default and environment override.
+- Timeout behavior is documented in settings reference.
+
+### NUL-106: Build stale unlock attempt sweeper job
+**Description:** Add a periodic sweeper that marks timed-out `in_progress` attempts as failed and compensates reserved slots.
+**Acceptance criteria:**
+- Sweeper safely handles concurrent execution without double-compensation.
+- Job emits summary metrics: scanned, recovered, and failed records.
+
+### NUL-107: Add payment webhook correlation for async finalize
+**Description:** Correlate payment webhooks to unlock attempts to finalize delayed success/failure outcomes.
+**Acceptance criteria:**
+- Webhook handler can locate unlock attempt via correlation metadata.
+- Duplicate webhooks are idempotent and do not create state divergence.
+
+### NUL-108: Handle out-of-order webhook delivery
+**Description:** Harden unlock finalization for webhooks arriving before/after synchronous API completion.
+**Acceptance criteria:**
+- Final state remains correct for both early and late webhook arrival.
+- Tests cover at least two out-of-order delivery scenarios.
+
+### NUL-109: Add compensation retry queue for slot release failures
+**Description:** When slot release fails, enqueue deterministic retry jobs rather than relying on best-effort only.
+**Acceptance criteria:**
+- Failed compensation attempts are persisted for retry with backoff.
+- Retry worker guarantees at-least-once processing with idempotent release logic.
+
+### NUL-110: Emit metrics for reservation and compensation latency
+**Description:** Add histograms/timers for reservation duration, payment confirmation, and compensation execution.
+**Acceptance criteria:**
+- Metrics are tagged by outcome (`success`, `cap_reached`, `payment_failed`, `replayed`).
+- Dashboard panels show p50/p95/p99 for each unlock phase.
+
+### NUL-111: Add contention counters for hot posts
+**Description:** Track per-post contention signals to identify heavily contested locked posts.
+**Acceptance criteria:**
+- Metrics include transaction cancellations and conditional-check failures per post.
+- Alert threshold exists for sustained high-contention hotspots.
+
+### NUL-112: Implement adaptive backoff for hot-post reservation retries
+**Description:** Add bounded retry with jitter tuned by observed contention to reduce thundering herd behavior.
+**Acceptance criteria:**
+- Retry strategy is configurable and disabled by default behind a flag.
+- Load test shows lower failure rate under high contention versus no backoff.
+
+### NUL-113: Add unlock request rate limits by user and IP
+**Description:** Expand anti-abuse controls with layered limits (per-user, per-IP, and per-post).
+**Acceptance criteria:**
+- Rate-limit violations return standardized 429 errors with retry hints.
+- Limits can be tuned without redeploy and observed in metrics.
+
+### NUL-114: Add anomaly detector for suspicious unlock patterns
+**Description:** Detect abnormal unlock patterns (rapid key churn, repeated failures, distributed retries) and emit security signals.
+**Acceptance criteria:**
+- Detector generates structured events to a security stream.
+- Flagged users can be placed in temporary stricter throttle mode.
+
+### NUL-115: Add unlock authorization parity tests
+**Description:** Add explicit tests for authorization behavior across private/followers/public visibility permutations.
+**Acceptance criteria:**
+- Tests verify no unauthorized unlock succeeds for hidden/ineligible content.
+- Error responses do not leak sensitive post existence details.
+
+### NUL-116: Add immutable unlock audit trail entries
+**Description:** Persist append-only audit records for unlock lifecycle transitions and admin interventions.
+**Acceptance criteria:**
+- Every state transition writes an audit record with actor, timestamp, and reason.
+- Audit records are tamper-evident and excluded from normal mutation paths.
+
+### NUL-117: Add PII redaction policy for unlock telemetry
+**Description:** Ensure unlock logs and traces redact or hash user identifiers and payment-adjacent fields.
+**Acceptance criteria:**
+- Telemetry schema explicitly marks sensitive fields and redaction strategy.
+- Logging tests verify raw PII is not emitted in unlock events.
+
+### NUL-118: Add dashboard for unlock business KPIs
+**Description:** Create product-facing dashboards for unlock conversion, sold-out rate, and replay rate by cohort.
+**Acceptance criteria:**
+- Dashboard includes filters for cohort, post age, and author segment.
+- KPI definitions are documented and aligned with analytics taxonomy.
+
+### NUL-119: Add SLOs for unlock API availability and correctness
+**Description:** Define and monitor service-level indicators for unlock success, latency, and correctness incidents.
+**Acceptance criteria:**
+- SLO documents include error budget policy and ownership.
+- Alert rules fire on burn-rate thresholds with runbook links.
+
+### NUL-120: Add structured incident runbook for unlock failures
+**Description:** Expand operational docs for common failure modes: stuck attempts, webhook backlog, cap drift, and charge mismatch.
+**Acceptance criteria:**
+- Runbook includes triage queries and mitigation playbooks for each failure mode.
+- On-call drill validates runbook usability end-to-end.
+
+### NUL-121: Add unlock_count drift detector task
+**Description:** Add scheduled detector that compares post `unlock_count` to authoritative unlock success records.
+**Acceptance criteria:**
+- Detector emits drift events with severity and impacted post IDs.
+- Drift metrics include total drifted posts and absolute discrepancy.
+
+### NUL-122: Add safe auto-repair mode for small unlock_count drift
+**Description:** Automatically repair minor unlock_count discrepancies under strict safeguards.
+**Acceptance criteria:**
+- Auto-repair applies only when discrepancy is within configured low-risk threshold.
+- Every repair operation writes an audit trail record.
+
+### NUL-123: Add manual repair CLI approval workflow
+**Description:** Require two-step approval for high-risk unlock_count repairs via CLI/API.
+**Acceptance criteria:**
+- Repair command supports `plan`, `approve`, and `apply` phases.
+- Unauthorized users cannot execute apply step.
+
+### NUL-124: Add schema migration preflight checks
+**Description:** Add pre-deploy checks validating all required unlock-limit fields and indexes before migration rollout.
+**Acceptance criteria:**
+- Deployment pipeline blocks migration if preflight checks fail.
+- Preflight output lists actionable remediation steps.
+
+### NUL-125: Add rollback playbook and automation for unlock schema changes
+**Description:** Provide tested rollback scripts for unlock-related schema/index changes.
+**Acceptance criteria:**
+- Rollback script can restore previous behavior without data corruption.
+- Staging drill proves rollback completion under defined time target.
+
+### NUL-126: Add frontend UX for replayed unlock responses
+**Description:** Update UI to handle replayed unlock responses distinctly from new unlocks.
+**Acceptance criteria:**
+- Replayed success shows non-duplicative confirmation messaging.
+- Frontend state machine avoids duplicate loading/error transitions on replay.
+
+### NUL-127: Add frontend UX for pending async finalization
+**Description:** Show explicit pending state when unlock outcome depends on asynchronous webhook completion.
+**Acceptance criteria:**
+- Pending state auto-refreshes or subscribes to event updates until terminal outcome.
+- UX copy and retry actions are product-approved for pending/failure outcomes.
+
+### NUL-128: Add SSE event contract for unlock terminal transitions
+**Description:** Define and emit versioned SSE events for unlock success/failure/cap-reached transitions.
+**Acceptance criteria:**
+- Event schema includes version, post_id, attempt_id, and terminal status.
+- Frontend consumers process events idempotently.
+
+### NUL-129: Add contract tests for unlock endpoint backward compatibility
+**Description:** Verify new unlock fields remain backward-compatible with existing clients.
+**Acceptance criteria:**
+- Contract tests assert old clients can ignore additive response fields safely.
+- Breaking changes require explicit version bump and test fixture updates.
+
+### NUL-130: Add integration tests for idempotency conflict behavior
+**Description:** Add backend integration tests covering same-key-same-payload success and same-key-different-payload conflict.
+**Acceptance criteria:**
+- Tests assert at-most-once payment creation for same-key replays.
+- Conflict path returns deterministic status/code/body.
+
+### NUL-131: Add integration tests for stale attempt sweeper
+**Description:** Validate sweeper behavior for timed-out attempts with and without reserved slots.
+**Acceptance criteria:**
+- Sweeper marks stale attempts terminal and compensates exactly once.
+- Non-stale attempts remain unchanged.
+
+### NUL-132: Add integration tests for webhook out-of-order handling
+**Description:** Cover webhook-first and API-first orderings to prove final-state correctness.
+**Acceptance criteria:**
+- Final unlock state is identical regardless of event order.
+- No duplicate notifications or duplicate slot mutations occur.
+
+### NUL-133: Add load tests for high-cardinality concurrent unlock traffic
+**Description:** Benchmark unlock throughput and latency under mixed normal/hot-post traffic.
+**Acceptance criteria:**
+- Test reports include throughput, error rate, and p95/p99 latency.
+- Results are versioned and compared against baseline budgets.
+
+### NUL-134: Add chaos test suite for payment/storage fault injection
+**Description:** Introduce automated chaos scenarios for DynamoDB throttling, webhook delays, and payment API timeouts.
+**Acceptance criteria:**
+- Chaos suite validates invariants: no over-cap unlocks, no leaked slots, no duplicate charges.
+- Failures export reproducible artifacts for debugging.
+
+### NUL-135: Add end-to-end test for sold-out race between clients
+**Description:** Validate two clients racing for final unlock slot yields one success and one sold-out response.
+**Acceptance criteria:**
+- E2E confirms exactly one terminal success for last-slot contention.
+- Losing client sees consistent sold-out UI and error mapping.
+
+### NUL-136: Add end-to-end test for replay after network timeout
+**Description:** Simulate client timeout after payment initiation and retry with same idempotency key.
+**Acceptance criteria:**
+- Retry resolves to original outcome without duplicate charge.
+- UI reflects eventual success/failure consistently across retry.
+
+### NUL-137: Add end-to-end test for post expiry precedence over cap state
+**Description:** Ensure lock expiry supersedes sold-out messaging when both conditions are near-simultaneous.
+**Acceptance criteria:**
+- Expired posts present expiry-specific UX, not sold-out CTA states.
+- Backend response precedence matches documented contract.
+
+### NUL-138: Publish unlock-limit API cookbook for client teams
+**Description:** Add documentation with concrete client integration patterns for retries, pending states, and error handling.
+**Acceptance criteria:**
+- Cookbook includes TypeScript and mobile pseudocode examples.
+- Docs cover idempotency, replay handling, and webhook/pending flows.
+
+### NUL-139: Publish production operations checklist for unlock-limit GA
+**Description:** Create a checklist spanning observability, security, support readiness, and rollback confidence.
+**Acceptance criteria:**
+- Checklist has named owners and evidence links per item.
+- GA sign-off requires all blocking items marked complete.
+
+### NUL-140: Create post-GA monitoring review cadence
+**Description:** Establish recurring review process for unlock-limit KPIs, incidents, and regression trends after launch.
+**Acceptance criteria:**
+- Monthly review template and owners are documented.
+- Action items from each review are tracked to closure.

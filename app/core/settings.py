@@ -825,6 +825,14 @@ class Settings:
     newsfeed_scheduling_worker_enabled: bool = os.environ.get("NEWSFEED_SCHEDULING_WORKER_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     newsfeed_scheduling_min_lead_seconds: int = int(os.environ.get("NEWSFEED_SCHEDULING_MIN_LEAD_SECONDS", "5"))
     newsfeed_scheduling_max_horizon_seconds: int = int(os.environ.get("NEWSFEED_SCHEDULING_MAX_HORIZON_SECONDS", "31536000"))
+    newsfeed_unlock_limit_enabled: bool = os.environ.get("NEWSFEED_UNLOCK_LIMIT_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    newsfeed_unlock_limit_rollout_mode: str = os.environ.get("NEWSFEED_UNLOCK_LIMIT_ROLLOUT_MODE", "broad")
+    newsfeed_unlock_limit_internal_user_ids: str = os.environ.get("NEWSFEED_UNLOCK_LIMIT_INTERNAL_USER_IDS", "")
+    newsfeed_unlock_limit_cohort_user_ids: str = os.environ.get("NEWSFEED_UNLOCK_LIMIT_COHORT_USER_IDS", "")
+    newsfeed_unlock_attempt_stale_seconds: int = int(os.environ.get("NEWSFEED_UNLOCK_ATTEMPT_STALE_SECONDS", "300"))
+    newsfeed_unlock_throttle_window_seconds: int = int(os.environ.get("NEWSFEED_UNLOCK_THROTTLE_WINDOW_SECONDS", "10"))
+    newsfeed_unlock_throttle_max_attempts: int = int(os.environ.get("NEWSFEED_UNLOCK_THROTTLE_MAX_ATTEMPTS", "6"))
+>>>>>>> 33711ccd (test(newsfeed): cover unlock replay telemetry in-progress paths)
 
     # Messaging feature flags
     messaging_encrypted_messages_enabled: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_ENABLED", "false").lower() == "true"
