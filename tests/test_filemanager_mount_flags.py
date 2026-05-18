@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
 
 from app.routers import filemanager as filemanager_router
+from app.services import filemanager_mount_flags as flags
 
 
 class _Mount:
@@ -77,6 +81,174 @@ class TestFileManagerMountFlags(unittest.TestCase):
 
     def test_mount_share_policy_allows_native_paths(self):
         filemanager_router._enforce_sftp_mount_share_policy('/docs/a.txt')
+
+
+class TestFilemanagerICloudMountFlags(unittest.TestCase):
+    def test_internal_cohort_only_allows_allowlisted_users_or_tenants(self):
+        with patch.object(
+            flags,
+            "S",
+            SimpleNamespace(
+                filemgr_icloud_mount_enabled=True,
+                filemgr_icloud_mount_kill_switch=False,
+                filemgr_icloud_mount_rollout_mode="internal",
+                filemgr_icloud_mount_environment="dev",
+                filemgr_icloud_mount_rollout_mode_by_env="",
+                filemgr_icloud_mount_enabled_tenant_ids="",
+                filemgr_icloud_mount_disabled_tenant_ids="",
+                filemgr_icloud_mount_internal_user_subs="u-internal",
+                filemgr_icloud_mount_internal_tenant_ids="t-internal",
+                filemgr_icloud_mount_beta_user_subs="",
+                filemgr_icloud_mount_beta_tenant_ids="",
+            ),
+        ):
+            allowed_user = flags.evaluate_icloud_mount_access(user_sub="u-internal", tenant_id="t-x")
+            self.assertTrue(allowed_user.enabled)
+            self.assertEqual(allowed_user.cohort, "internal")
+
+            allowed_tenant = flags.evaluate_icloud_mount_access(user_sub="u-x", tenant_id="t-internal")
+            self.assertTrue(allowed_tenant.enabled)
+            self.assertEqual(allowed_tenant.cohort, "internal")
+
+            denied = flags.evaluate_icloud_mount_access(user_sub="u-x", tenant_id="t-x")
+            self.assertFalse(denied.enabled)
+            self.assertIn("allowlist_miss", denied.reason)
+
+    def test_beta_mode_supports_staged_rollout_cohorts(self):
+        with patch.object(
+            flags,
+            "S",
+            SimpleNamespace(
+                filemgr_icloud_mount_enabled=True,
+                filemgr_icloud_mount_kill_switch=False,
+                filemgr_icloud_mount_rollout_mode="beta",
+                filemgr_icloud_mount_environment="dev",
+                filemgr_icloud_mount_rollout_mode_by_env="",
+                filemgr_icloud_mount_enabled_tenant_ids="",
+                filemgr_icloud_mount_disabled_tenant_ids="",
+                filemgr_icloud_mount_internal_user_subs="u-int",
+                filemgr_icloud_mount_internal_tenant_ids="",
+                filemgr_icloud_mount_beta_user_subs="u-beta",
+                filemgr_icloud_mount_beta_tenant_ids="t-beta",
+            ),
+        ):
+            self.assertTrue(flags.evaluate_icloud_mount_access(user_sub="u-int", tenant_id=None).enabled)
+            self.assertTrue(flags.evaluate_icloud_mount_access(user_sub="u-beta", tenant_id=None).enabled)
+            self.assertTrue(flags.evaluate_icloud_mount_access(user_sub="u-x", tenant_id="t-beta").enabled)
+            denied = flags.evaluate_icloud_mount_access(user_sub="u-x", tenant_id="t-x")
+            self.assertFalse(denied.enabled)
+
+    def test_kill_switch_overrides_ga_mode(self):
+        with patch.object(
+            flags,
+            "S",
+            SimpleNamespace(
+                filemgr_icloud_mount_enabled=True,
+                filemgr_icloud_mount_kill_switch=True,
+                filemgr_icloud_mount_rollout_mode="ga",
+                filemgr_icloud_mount_environment="dev",
+                filemgr_icloud_mount_rollout_mode_by_env="",
+                filemgr_icloud_mount_enabled_tenant_ids="",
+                filemgr_icloud_mount_disabled_tenant_ids="",
+                filemgr_icloud_mount_internal_user_subs="",
+                filemgr_icloud_mount_internal_tenant_ids="",
+                filemgr_icloud_mount_beta_user_subs="",
+                filemgr_icloud_mount_beta_tenant_ids="",
+            ),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                flags.enforce_icloud_mount_enabled(user_sub="u1", tenant_id="t1")
+        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertEqual(ctx.exception.detail["reason"], "kill_switch")
+
+    def test_environment_mode_override_and_tenant_overrides(self):
+        with patch.object(
+            flags,
+            "S",
+            SimpleNamespace(
+                filemgr_icloud_mount_enabled=True,
+                filemgr_icloud_mount_kill_switch=False,
+                filemgr_icloud_mount_rollout_mode="ga",
+                filemgr_icloud_mount_environment="prod",
+                filemgr_icloud_mount_rollout_mode_by_env="prod:beta,staging:internal",
+                filemgr_icloud_mount_enabled_tenant_ids="t-allow",
+                filemgr_icloud_mount_disabled_tenant_ids="t-deny",
+                filemgr_icloud_mount_internal_user_subs="u-int",
+                filemgr_icloud_mount_internal_tenant_ids="",
+                filemgr_icloud_mount_beta_user_subs="u-beta",
+                filemgr_icloud_mount_beta_tenant_ids="",
+            ),
+        ):
+            denied = flags.evaluate_icloud_mount_access(user_sub="u-beta", tenant_id="t-deny")
+            self.assertFalse(denied.enabled)
+            self.assertEqual(denied.reason, "tenant_denylist")
+
+            allowed_override = flags.evaluate_icloud_mount_access(user_sub="u-x", tenant_id="t-allow")
+            self.assertTrue(allowed_override.enabled)
+            self.assertEqual(allowed_override.cohort, "tenant_override")
+
+            allowed_beta = flags.evaluate_icloud_mount_access(user_sub="u-beta", tenant_id="t-x")
+            self.assertTrue(allowed_beta.enabled)
+            self.assertEqual(allowed_beta.cohort, "beta")
+
+            missed = flags.evaluate_icloud_mount_access(user_sub="u-x", tenant_id="t-x")
+            self.assertFalse(missed.enabled)
+            self.assertEqual(missed.reason, "beta_allowlist_miss")
+
+    def test_runtime_overrides_allow_toggle_without_code_change(self):
+        with (
+            patch.object(
+                flags,
+                "S",
+                SimpleNamespace(
+                    filemgr_icloud_mount_enabled=True,
+                    filemgr_icloud_mount_kill_switch=False,
+                    filemgr_icloud_mount_rollout_mode="ga",
+                    filemgr_icloud_mount_environment="dev",
+                    filemgr_icloud_mount_rollout_mode_by_env="",
+                    filemgr_icloud_mount_enabled_tenant_ids="",
+                    filemgr_icloud_mount_disabled_tenant_ids="",
+                    filemgr_icloud_mount_internal_user_subs="",
+                    filemgr_icloud_mount_internal_tenant_ids="",
+                    filemgr_icloud_mount_beta_user_subs="",
+                    filemgr_icloud_mount_beta_tenant_ids="",
+                ),
+            ),
+            patch.dict("os.environ", {"FILEMGR_ICLOUD_MOUNT_ENABLED_OVERRIDE": "0", "FILEMGR_ICLOUD_MOUNT_KILL_SWITCH_OVERRIDE": "1"}, clear=False),
+        ):
+            decision = flags.evaluate_icloud_mount_access(user_sub="u1", tenant_id="t1")
+            self.assertFalse(decision.enabled)
+            self.assertEqual(decision.reason, "global_flag_off")
+
+    def test_rollout_decision_metric_emitted(self):
+        with (
+            patch.object(
+                flags,
+                "S",
+                SimpleNamespace(
+                    filemgr_icloud_mount_enabled=True,
+                    filemgr_icloud_mount_kill_switch=False,
+                    filemgr_icloud_mount_rollout_mode="beta",
+                    filemgr_icloud_mount_environment="prod",
+                    filemgr_icloud_mount_rollout_mode_by_env="",
+                    filemgr_icloud_mount_enabled_tenant_ids="",
+                    filemgr_icloud_mount_disabled_tenant_ids="",
+                    filemgr_icloud_mount_internal_user_subs="",
+                    filemgr_icloud_mount_internal_tenant_ids="",
+                    filemgr_icloud_mount_beta_user_subs="u-beta",
+                    filemgr_icloud_mount_beta_tenant_ids="",
+                ),
+            ),
+            patch.object(flags, "record_filemgr_mount_rollout_decision") as rec_rollout,
+        ):
+            flags.evaluate_icloud_mount_access(user_sub="u-beta", tenant_id="t1")
+            rec_rollout.assert_called_once_with(
+                provider="icloud",
+                environment="prod",
+                mode="beta",
+                cohort="beta",
+                reason="beta_allowlist",
+            )
 
 
 if __name__ == "__main__":

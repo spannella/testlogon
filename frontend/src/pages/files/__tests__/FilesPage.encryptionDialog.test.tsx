@@ -21,6 +21,9 @@ const emitFileCryptoTelemetry = vi.fn();
 const getUsageSummary = vi.fn();
 const listSftpMounts = vi.fn();
 const listMountMockFiles = vi.fn();
+const listMounts = vi.fn();
+const rotateICloudMount = vi.fn();
+const revokeICloudMount = vi.fn();
 
 vi.mock("@/api/endpoints/files", () => ({
   listFiles: (...args: unknown[]) => listFiles(...args),
@@ -40,6 +43,9 @@ vi.mock("@/api/endpoints/files", () => ({
   getUsageSummary: (...args: unknown[]) => getUsageSummary(...args),
   listSftpMounts: (...args: unknown[]) => listSftpMounts(...args),
   listMountMockFiles: (...args: unknown[]) => listMountMockFiles(...args),
+  listMounts: (...args: unknown[]) => listMounts(...args),
+  rotateICloudMount: (...args: unknown[]) => rotateICloudMount(...args),
+  revokeICloudMount: (...args: unknown[]) => revokeICloudMount(...args),
 }));
 
 vi.mock("../FileTable", () => ({ FileTable: () => <div data-testid="file-table" /> }));
@@ -86,6 +92,7 @@ describe("FilesPage encryption password dialog", () => {
     listSftpMounts.mockResolvedValue({ items: [] });
     listMountMockFiles.mockResolvedValue({ mount_id: "", owner: "", backend: "mock", path: "/", items: [], limit: 200, cursor: null });
     uploadFile.mockResolvedValue({ ok: true, path: "/a.txt", size: 1 });
+    listMounts.mockResolvedValue([]);
     getUsageSummary.mockResolvedValue({
       period_id: "2026-01",
       upload: { used_bytes: 0, limit_bytes: 100, percent_used: 0 },

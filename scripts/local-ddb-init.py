@@ -132,6 +132,14 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(
+            _resolve_table_name(S.filemgr_mounts_table_name, "filemgr_mounts"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "gsi_owner_pk", "sort_key": "gsi_owner_sk"},
+            ],
+        ),
+        TableDef(
             _resolve_table_name(S.signature_packets_table_name, "signature_packets"),
             "packet_id",
             gsi=[

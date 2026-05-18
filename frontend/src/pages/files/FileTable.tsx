@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { File, Folder, MoreHorizontal, Download, Share2, Pencil, Move, Trash2, Eye, Image } from "lucide-react";
+import { File, Folder, MoreHorizontal, Download, Share2, Pencil, Move, Trash2, Eye, Image, Cloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -86,6 +87,7 @@ interface FileTableProps {
   onLoadMore?: () => void;
   loadingMore?: boolean;
   emptyState?: React.ReactNode;
+  pathProvider?: (path: string) => string | null;
 }
 
 // ─── FileTable Component ────────────────────────────────────────
@@ -108,6 +110,7 @@ export function FileTable({
   onLoadMore,
   loadingMore,
   emptyState,
+  pathProvider,
 }: FileTableProps) {
   const columns: ColumnDef<FileEntry>[] = [
     {
@@ -139,6 +142,12 @@ export function FileTable({
           >
             {row.name}
           </span>
+          {pathProvider?.(row.path) === "icloud" && (
+            <Badge variant="secondary" className="gap-1 px-1.5 py-0 text-[10px]" data-testid={`provider-badge-${row.path}`}>
+              <Cloud className="h-3 w-3" />
+              iCloud
+            </Badge>
+          )}
         </div>
       ),
     },

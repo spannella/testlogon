@@ -279,3 +279,43 @@ def can_send_alert_channel(user_sub: str, channel: str) -> bool:
             S.alerts_webhook_window_seconds,
         )
     return True
+
+
+def rate_limit_filemgr_mount_onboarding(user_sub: str, ip: str) -> None:
+    sid = "rl#filemgr_mount_onboarding"
+    max_n = int(getattr(S, "filemgr_mount_initiate_max_per_window", 5) or 5)
+    win = int(getattr(S, "filemgr_mount_initiate_window_seconds", 900) or 900)
+    if not _bucket_limit(user_sub, sid, max_n, win):
+        raise HTTPException(429, "Too many mount onboarding attempts; try again later")
+    if not _bucket_limit(_ip_user(ip), sid, max_n, win):
+        raise HTTPException(429, "Too many mount onboarding attempts; try again later")
+
+
+def rate_limit_filemgr_mount_verify(user_sub: str, ip: str) -> None:
+    sid = "rl#filemgr_mount_verify"
+    max_n = int(getattr(S, "filemgr_mount_verify_max_per_window", 10) or 10)
+    win = int(getattr(S, "filemgr_mount_verify_window_seconds", 900) or 900)
+    if not _bucket_limit(user_sub, sid, max_n, win):
+        raise HTTPException(429, "Too many mount verification attempts; try again later")
+    if not _bucket_limit(_ip_user(ip), sid, max_n, win):
+        raise HTTPException(429, "Too many mount verification attempts; try again later")
+
+
+def rate_limit_filemgr_mount_rotate(user_sub: str, ip: str) -> None:
+    sid = "rl#filemgr_mount_rotate"
+    max_n = int(S.filemgr_mount_rotate_max_per_window)
+    win = int(S.filemgr_mount_rotate_window_seconds)
+    if not _bucket_limit(user_sub, sid, max_n, win):
+        raise HTTPException(429, "Too many mount rotate attempts; try again later")
+    if not _bucket_limit(_ip_user(ip), sid, max_n, win):
+        raise HTTPException(429, "Too many mount rotate attempts; try again later")
+
+
+def rate_limit_filemgr_mount_revoke(user_sub: str, ip: str) -> None:
+    sid = "rl#filemgr_mount_revoke"
+    max_n = int(S.filemgr_mount_revoke_max_per_window)
+    win = int(S.filemgr_mount_revoke_window_seconds)
+    if not _bucket_limit(user_sub, sid, max_n, win):
+        raise HTTPException(429, "Too many mount revoke attempts; try again later")
+    if not _bucket_limit(_ip_user(ip), sid, max_n, win):
+        raise HTTPException(429, "Too many mount revoke attempts; try again later")

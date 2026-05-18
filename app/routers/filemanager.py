@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import uuid
 import time
 import threading
@@ -75,6 +76,8 @@ from app.services.filemanager import (
 )
 from app.services.alerts import audit_event
 from app.metrics import (
+    record_filemgr_provider_operation,
+    record_filemgr_provider_auth_failure,
     record_filemgr_encryption_event,
     record_filemgr_shared_download,
     record_filemgr_preview_attempt,
@@ -92,12 +95,12 @@ from app.services.file_providers import default_provider_registry
 from app.services.mounts_store import (
     create_mount,
     delete_mount,
-    get_mount,
-    list_mounts,
+    get_mount as get_mount_store,
+    list_mounts as list_mounts_store,
     reconcile_mount_health,
     reconcile_mounts,
     set_mount_status,
-    update_mount,
+    update_mount as update_mount_store,
 )
 from app.services.file_mounts import (
     create_file_mount as create_file_mount_record,
@@ -124,8 +127,75 @@ from app.services.sftp_client import (
     release_sftp_session,
 )
 from app.services.filemanager_storage import resolve_storage_provider
+from app.services.filemanager_provider import build_default_dispatcher
+from app.services.filemanager_mount_secrets import (
+    create_mount_with_secret,
+    get_mount_secret,
+    revoke_mount_secret,
+    rotate_mount_secret,
+)
+from app.services.filemanager_mount_onboarding import (
+    clear_onboarding_sessions_for_mount,
+    create_onboarding_session,
+    get_onboarding_session,
+    update_onboarding_session,
+)
+from app.services.rate_limit import (
+    clear_lockout,
+    enforce_lockout,
+    rate_limit_filemgr_mount_onboarding,
+    rate_limit_filemgr_mount_revoke,
+    rate_limit_filemgr_mount_rotate,
+    rate_limit_filemgr_mount_verify,
+    record_lockout_failure,
+)
+from app.services.filemanager_mounts import (
+    apply_mount_health_signal,
+    clear_mount_status_override,
+    get_mount,
+    list_mounts,
+    set_mount_status_override,
+    update_mount,
+)
+from app.services.filemanager_mount_flags import enforce_icloud_mount_enabled
+from app.core.normalize import client_ip_from_request
+from app.core.crypto import sha256_str
 
 router = APIRouter(prefix="/v1/fs", tags=["filemanager"])
+_storage_dispatcher = build_default_dispatcher()
+
+
+def _request_tenant_id(req: Optional[Request]) -> Optional[str]:
+    if req is None:
+        return None
+    return (req.headers.get("X-Tenant-Id") or req.headers.get("x-tenant-id") or "").strip() or None
+
+
+def _enforce_icloud_feature_for_request(user: str, req: Optional[Request]) -> None:
+    enforce_icloud_mount_enabled(user_sub=user, tenant_id=_request_tenant_id(req))
+
+
+def _storage_context(user: str, path: str, req: Optional[Request] = None) -> tuple[str, Optional[str], bool]:
+    resolution = _storage_dispatcher.resolve(user, path)
+    if not resolution:
+        return "s3", None, False
+    provider = str(resolution.provider or "s3")
+    if provider == "icloud":
+        _enforce_icloud_feature_for_request(user, req)
+    mount_id = str(resolution.mount_id or "") or None
+    return provider, mount_id, True
+
+
+def _provider_error_class(exc: Optional[HTTPException]) -> str:
+    if exc is None:
+        return "none"
+    if exc.status_code == 401:
+        return "auth_failed"
+    if exc.status_code == 429:
+        return "throttled"
+    if exc.status_code >= 500:
+        return "server_error"
+    return "client_error"
 
 _SFTP_HEALTH_REFRESH_LOCK = threading.Lock()
 _SFTP_HEALTH_REFRESH_LAST_RUN_TS = 0.0
@@ -591,6 +661,104 @@ class MoveCheckpointIn(BaseModel):
     move_id: str = Field(..., description="Move checkpoint id")
 
 
+class ICloudInitiateIn(BaseModel):
+    mount_path: str = Field(default="/icloud/", description="Mount path prefix, e.g. /icloud/")
+    apple_id: str = Field(..., min_length=3, max_length=320, description="Apple account identifier")
+    auth_mode: str = Field(..., pattern="^(session_token|app_password)$")
+    auth_value: str = Field(..., min_length=1, max_length=4096, description="Sensitive auth artifact")
+    device_label: Optional[str] = Field(default=None, max_length=128)
+
+
+class ICloudInitiateOut(BaseModel):
+    onboarding_session_id: str
+    mount_id: str
+    status: str
+    next_action: str
+    expires_at: str
+
+
+def _validate_icloud_apple_id(value: str) -> str:
+    apple_id = str(value or "").strip()
+    if "@" not in apple_id or apple_id.startswith("@") or apple_id.endswith("@"):
+        raise HTTPException(status_code=400, detail="invalid apple_id")
+    return apple_id
+
+
+def _validate_icloud_auth_artifact(*, auth_mode: str, auth_value: str) -> str:
+    val = str(auth_value or "").strip()
+    if not val:
+        raise HTTPException(status_code=400, detail="invalid auth_value")
+
+    if auth_mode == "session_token":
+        if len(val) < 16:
+            raise HTTPException(status_code=400, detail="invalid auth_value")
+        if "\n" in val or "\r" in val:
+            raise HTTPException(status_code=400, detail="invalid auth_value")
+        return val
+
+    # Apple app-specific passwords are 16 lowercase letters displayed as 4 blocks.
+    app_pw = val.replace("-", "")
+    if not re.fullmatch(r"[a-z]{16}", app_pw):
+        raise HTTPException(status_code=400, detail="invalid auth_value")
+    return val
+
+
+def _session_verify_attempt_limit() -> int:
+    return max(1, int(getattr(S, "filemgr_mount_verify_session_max_attempts", 5)))
+
+
+class ICloudVerifyIn(BaseModel):
+    onboarding_session_id: str = Field(..., min_length=8, max_length=128)
+    mfa_code: Optional[str] = Field(default=None, min_length=4, max_length=16)
+
+
+class ICloudVerifyOut(BaseModel):
+    onboarding_session_id: str
+    mount_id: str
+    status: str
+    next_action: str
+    outcome: str
+
+
+class ICloudRotateIn(BaseModel):
+    mount_id: str = Field(..., min_length=2, max_length=128)
+    auth_mode: str = Field(..., pattern="^(session_token|app_password)$")
+    auth_value: str = Field(..., min_length=1, max_length=4096)
+    device_label: Optional[str] = Field(default=None, max_length=128)
+
+
+class ICloudRotateOut(BaseModel):
+    mount_id: str
+    secret_ref: str
+    status: str
+
+
+class ICloudRevokeIn(BaseModel):
+    mount_id: str = Field(..., min_length=2, max_length=128)
+
+
+class ICloudRevokeOut(BaseModel):
+    mount_id: str
+    status: str
+    sessions_cleared: int
+
+
+class FileMountOut(BaseModel):
+    mount_id: str
+    provider: str
+    mount_path: str
+    status: str
+    updated_at: Optional[str] = None
+    can_rotate: bool
+    can_reconnect: bool
+    can_disconnect: bool
+
+
+class MountStatusOverrideIn(BaseModel):
+    status: str = Field(..., pattern="^(active|degraded|reauth_required|revoked)$")
+    clear_override: bool = Field(default=False)
+
+
 class FileCryptoTelemetryIn(BaseModel):
     event: str = Field(..., pattern="^(decrypt_failure|remembered_password_used|hover_play_start|hover_play_failure)$")
     path: Optional[str] = Field(default=None)
@@ -802,8 +970,13 @@ def list_files(
     cursor: Optional[str] = Query(default=None),
     sort_by: str = Query("name", pattern="^(name|updated|size)$"),
     sort_dir: str = Query("asc", pattern="^(asc|desc)$"),
+    req: Request = None,
     user: str = Depends(_current_user),
 ):
+    started = time.perf_counter()
+    provider, mount_id, is_mounted = _storage_context(user, path, req=req)
+    outcome = "success"
+    err: Optional[HTTPException] = None
     _enforce_filemanager_internal_entitlement(user=user, action="list_directory")
     if not isinstance(limit, int):
         limit = 50
@@ -922,20 +1095,6 @@ def list_files(
             key=lambda x: (x["type"] != "folder", x.get("size") or 0, (x.get("name") or "").lower()),
             reverse=not scan_forward,
         )
-    elif sort_by == "name":
-        if cursor_payload and cursor_payload.get("mode") == "offset":
-            raise HTTPException(status_code=400, detail="invalid cursor")
-        if not next_cursor:
-            return {"path": folder, "items": out, "cursor": None}
-        return {"path": folder, "items": out, "cursor": _encode_cursor({"mode": "ddb", "key": next_cursor})}
-
-    offset = 0
-    if cursor_payload:
-        offset = int(cursor_payload.get("offset", 0) or 0)
-    paged = out[offset:offset + limit]
-    next_offset = offset + limit
-    next_payload = {"mode": "offset", "offset": next_offset} if next_offset < len(out) else None
-    return {"path": folder, "items": paged, "cursor": _encode_cursor(next_payload)}
 
 
 @router.get("/info")
@@ -1588,6 +1747,10 @@ def upload_fs_file(
     req: Request = None,
     user: str = Depends(_current_user),
 ):
+    started = time.perf_counter()
+    provider, mount_id, is_mounted = _storage_context(user, path, req=req)
+    outcome = "success"
+    err: Optional[HTTPException] = None
     _enforce_filemanager_internal_entitlement(
         user=user,
         action="upload_file",
@@ -1707,8 +1870,440 @@ def complete_fs_upload(inp: CompleteUploadIn, req: Request = None, user: str = D
     return {"ok": True, **result}
 
 
+
+
+@router.get("/mounts", response_model=List[FileMountOut])
+def list_file_mounts(user: str = Depends(_current_user)):
+    _enforce_filemanager_internal_entitlement(user=user, action="mount_list")
+    _enforce_icloud_feature_for_request(user, None)
+    items = list_mounts(owner_user_sub=user)
+    out: List[FileMountOut] = []
+    for mount in items:
+        status = str(mount.get("status") or "")
+        provider = str(mount.get("provider") or "")
+        is_icloud = provider == "icloud"
+        can_rotate = is_icloud and status in {"active", "degraded", "reauth_required"}
+        can_reconnect = is_icloud and status in {"degraded", "reauth_required", "revoked", "revocation_failed"}
+        can_disconnect = status in {"pending", "active", "degraded", "reauth_required", "revoking", "revocation_failed"}
+        out.append(
+            FileMountOut(
+                mount_id=str(mount.get("mount_id") or ""),
+                provider=provider,
+                mount_path=str(mount.get("mount_path") or ""),
+                status=status,
+                updated_at=mount.get("updated_at"),
+                can_rotate=can_rotate,
+                can_reconnect=can_reconnect,
+                can_disconnect=can_disconnect,
+            )
+        )
+    return out
+
+@router.post("/mounts/{mount_id}/status-override", response_model=FileMountOut)
+def set_file_mount_status_override(
+    mount_id: str,
+    inp: MountStatusOverrideIn,
+    req: Request = None,
+    user: str = Depends(_current_user),
+):
+    _enforce_filemanager_internal_entitlement(user=user, action="mount_status_override")
+    _enforce_icloud_feature_for_request(user, req)
+    if inp.clear_override:
+        mount = clear_mount_status_override(owner_user_sub=user, mount_id=mount_id, target_status=inp.status)
+    else:
+        mount = set_mount_status_override(owner_user_sub=user, mount_id=mount_id, status=inp.status)
+    status = str(mount.get("status") or "")
+    provider = str(mount.get("provider") or "")
+    is_icloud = provider == "icloud"
+    return FileMountOut(
+        mount_id=str(mount.get("mount_id") or ""),
+        provider=provider,
+        mount_path=str(mount.get("mount_path") or ""),
+        status=status,
+        updated_at=mount.get("updated_at"),
+        can_rotate=is_icloud and status in {"active", "degraded", "reauth_required"},
+        can_reconnect=is_icloud and status in {"degraded", "reauth_required", "revoked", "revocation_failed"},
+        can_disconnect=status in {"pending", "active", "degraded", "reauth_required", "revoking", "revocation_failed"},
+    )
+
+
+@router.post("/mounts/icloud/initiate", response_model=ICloudInitiateOut)
+def initiate_icloud_mount(inp: ICloudInitiateIn, req: Request = None, user: str = Depends(_current_user)):
+    _enforce_filemanager_internal_entitlement(
+        user=user,
+        action="mount_icloud_initiate",
+        request_id=(req.headers.get("X-Request-Id") if req else None),
+    )
+    _enforce_icloud_feature_for_request(user, req)
+    rate_limit_filemgr_mount_onboarding(user, client_ip_from_request(req))
+
+    apple_id = _validate_icloud_apple_id(inp.apple_id)
+    auth_value = _validate_icloud_auth_artifact(auth_mode=inp.auth_mode, auth_value=inp.auth_value)
+
+    payload = {
+        "apple_id": apple_id,
+        "auth_mode": inp.auth_mode,
+        "auth_value": auth_value,
+        "device_label": inp.device_label,
+    }
+    try:
+        mount = create_mount_with_secret(
+            owner_user_sub=user,
+            provider="icloud",
+            mount_path=inp.mount_path,
+            secret_payload=payload,
+            status="pending",
+        )
+    except HTTPException as exc:
+        # Keep outbound error details generic to avoid exposing sensitive auth artifacts.
+        if exc.status_code >= 500:
+            raise HTTPException(status_code=502, detail="unable to initiate iCloud mount onboarding") from exc
+        raise
+    out = create_onboarding_session(user_sub=user, mount_id=mount["mount_id"], provider="icloud", next_action="verify")
+    audit_event(
+        "filemgr_mount_icloud_initiated",
+        user,
+        req,
+        outcome="success",
+        provider="icloud",
+        mount_id=mount.get("mount_id"),
+        mount_path=mount.get("mount_path"),
+        onboarding_session_id=out.get("onboarding_session_id"),
+        apple_id_hash=sha256_str(apple_id.lower()),
+    )
+    return ICloudInitiateOut(**out)
+
+
+@router.post("/mounts/icloud/verify", response_model=ICloudVerifyOut)
+def verify_icloud_mount(inp: ICloudVerifyIn, req: Request = None, user: str = Depends(_current_user)):
+    _enforce_filemanager_internal_entitlement(
+        user=user,
+        action="mount_icloud_verify",
+        request_id=(req.headers.get("X-Request-Id") if req else inp.onboarding_session_id),
+    )
+    _enforce_icloud_feature_for_request(user, req)
+    ip = client_ip_from_request(req)
+    try:
+        enforce_lockout(user, ip, "filemgr_mount_verify")
+    except HTTPException as exc:
+        if exc.status_code == 429:
+            audit_event(
+                "filemgr_mount_icloud_verify",
+                user,
+                req,
+                outcome="failure",
+                reason="lockout",
+                provider="icloud",
+                onboarding_session_id=inp.onboarding_session_id,
+                status_code=429,
+            )
+        raise
+    try:
+        rate_limit_filemgr_mount_verify(user, ip)
+    except HTTPException as exc:
+        if exc.status_code == 429:
+            audit_event(
+                "filemgr_mount_icloud_verify",
+                user,
+                req,
+                outcome="failure",
+                reason="rate_limited",
+                provider="icloud",
+                onboarding_session_id=inp.onboarding_session_id,
+                status_code=429,
+            )
+        raise
+
+    session = get_onboarding_session(user_sub=user, onboarding_session_id=inp.onboarding_session_id)
+    session_provider = str(session.get("provider") or "icloud").strip().lower()
+    if session_provider != "icloud":
+        audit_event(
+            "filemgr_mount_icloud_verify",
+            user,
+            req,
+            outcome="failure",
+            reason="invalid_session_provider",
+            provider=session_provider or "unknown",
+            onboarding_session_id=inp.onboarding_session_id,
+        )
+        raise HTTPException(status_code=400, detail="invalid onboarding session provider")
+    mount_id = str(session.get("mount_id") or "")
+    if not mount_id:
+        raise HTTPException(status_code=400, detail="onboarding session missing mount_id")
+    session_status = str(session.get("status") or "pending")
+    if session_status in {"failed", "active"}:
+        raise HTTPException(status_code=409, detail="onboarding session is no longer verifiable")
+    next_action = str(session.get("next_action") or "verify").strip().lower()
+    if next_action not in {"verify", "mfa_required", "reconnect"}:
+        audit_event(
+            "filemgr_mount_icloud_verify",
+            user,
+            req,
+            outcome="failure",
+            reason="invalid_session_step",
+            provider="icloud",
+            mount_id=mount_id,
+            onboarding_session_id=inp.onboarding_session_id,
+            next_action=next_action,
+        )
+        raise HTTPException(status_code=409, detail="onboarding session is not in a verifiable step")
+    verify_attempts = int(session.get("verify_attempts") or 0)
+    if verify_attempts >= _session_verify_attempt_limit():
+        record_lockout_failure(user, ip, "filemgr_mount_verify")
+        update_onboarding_session(
+            user_sub=user,
+            onboarding_session_id=inp.onboarding_session_id,
+            status="failed",
+            next_action="reconnect",
+            attempts_inc=0,
+        )
+        raise HTTPException(status_code=429, detail="Too many mount verify attempts; reconnect required")
+
+    secret = get_mount_secret(owner_user_sub=user, mount_id=mount_id)
+    auth_mode = str(secret.get("auth_mode") or "")
+    auth_value = str(secret.get("auth_value") or "")
+    if not auth_value:
+        record_lockout_failure(user, ip, "filemgr_mount_verify")
+        update_onboarding_session(
+            user_sub=user,
+            onboarding_session_id=inp.onboarding_session_id,
+            status="failed",
+            next_action="reconnect",
+            attempts_inc=1,
+        )
+        record_filemgr_provider_auth_failure(provider="icloud", mount_id=mount_id, reason="auth_failed")
+        audit_event(
+            "filemgr_mount_icloud_verify",
+            user,
+            req,
+            outcome="failure",
+            reason="auth_failed",
+            provider="icloud",
+            mount_id=mount_id,
+            onboarding_session_id=inp.onboarding_session_id,
+        )
+        return ICloudVerifyOut(
+            onboarding_session_id=inp.onboarding_session_id,
+            mount_id=mount_id,
+            status="failed",
+            next_action="reconnect",
+            outcome="auth_failed",
+        )
+
+    force_mfa = bool(secret.get("force_mfa_required")) or auth_mode == "app_password"
+    if force_mfa and not (inp.mfa_code or "").strip():
+        update_onboarding_session(
+            user_sub=user,
+            onboarding_session_id=inp.onboarding_session_id,
+            status="pending",
+            next_action="mfa_required",
+            attempts_inc=1,
+        )
+        audit_event(
+            "filemgr_mount_icloud_verify",
+            user,
+            req,
+            outcome="success",
+            reason="mfa_required",
+            provider="icloud",
+            mount_id=mount_id,
+            onboarding_session_id=inp.onboarding_session_id,
+        )
+        return ICloudVerifyOut(
+            onboarding_session_id=inp.onboarding_session_id,
+            mount_id=mount_id,
+            status="pending",
+            next_action="mfa_required",
+            outcome="mfa_required",
+        )
+
+    force_auth_failed = bool(secret.get("force_auth_failed"))
+    if force_auth_failed:
+        record_lockout_failure(user, ip, "filemgr_mount_verify")
+        record_filemgr_provider_auth_failure(provider="icloud", mount_id=mount_id, reason="auth_failed")
+        update_onboarding_session(
+            user_sub=user,
+            onboarding_session_id=inp.onboarding_session_id,
+            status="failed",
+            next_action="reconnect",
+            attempts_inc=1,
+        )
+        audit_event(
+            "filemgr_mount_icloud_verify",
+            user,
+            req,
+            outcome="failure",
+            reason="auth_failed",
+            provider="icloud",
+            mount_id=mount_id,
+            onboarding_session_id=inp.onboarding_session_id,
+        )
+        return ICloudVerifyOut(
+            onboarding_session_id=inp.onboarding_session_id,
+            mount_id=mount_id,
+            status="failed",
+            next_action="reconnect",
+            outcome="auth_failed",
+        )
+
+    update_mount(owner_user_sub=user, mount_id=mount_id, status="active")
+    update_onboarding_session(
+        user_sub=user,
+        onboarding_session_id=inp.onboarding_session_id,
+        status="active",
+        next_action="none",
+        attempts_inc=0,
+    )
+    clear_lockout(user, ip, "filemgr_mount_verify")
+    audit_event(
+        "filemgr_mount_icloud_verify",
+        user,
+        req,
+        outcome="success",
+        reason="active",
+        provider="icloud",
+        mount_id=mount_id,
+        onboarding_session_id=inp.onboarding_session_id,
+    )
+    return ICloudVerifyOut(
+        onboarding_session_id=inp.onboarding_session_id,
+        mount_id=mount_id,
+        status="active",
+        next_action="none",
+        outcome="active",
+    )
+
+
+@router.post("/mounts/icloud/rotate", response_model=ICloudRotateOut)
+def rotate_icloud_mount_credentials(inp: ICloudRotateIn, req: Request = None, user: str = Depends(_current_user)):
+    _enforce_filemanager_internal_entitlement(
+        user=user,
+        action="mount_icloud_rotate",
+        request_id=(req.headers.get("X-Request-Id") if req else inp.mount_id),
+    )
+    _enforce_icloud_feature_for_request(user, req)
+    try:
+        rate_limit_filemgr_mount_rotate(user, client_ip_from_request(req))
+    except HTTPException as exc:
+        if exc.status_code == 429:
+            audit_event(
+                "filemgr_mount_icloud_rotate",
+                user,
+                req,
+                outcome="failure",
+                provider="icloud",
+                mount_id=inp.mount_id,
+                reason="rate_limited",
+                status_code=429,
+            )
+        raise
+    mount = get_mount(owner_user_sub=user, mount_id=inp.mount_id)
+    mount_status = str(mount.get("status") or "pending").lower()
+    if mount_status not in {"active", "degraded", "reauth_required"}:
+        audit_event(
+            "filemgr_mount_icloud_rotate",
+            user,
+            req,
+            outcome="failure",
+            provider="icloud",
+            mount_id=inp.mount_id,
+            reason="invalid_mount_status",
+            mount_status=mount_status,
+        )
+        raise HTTPException(status_code=409, detail="mount is not in a rotatable status")
+    auth_value = _validate_icloud_auth_artifact(auth_mode=inp.auth_mode, auth_value=inp.auth_value)
+    payload = {
+        "auth_mode": inp.auth_mode,
+        "auth_value": auth_value,
+        "device_label": inp.device_label,
+    }
+    try:
+        rotated = rotate_mount_secret(owner_user_sub=user, mount_id=inp.mount_id, secret_payload=payload)
+    except HTTPException as exc:
+        audit_event(
+            "filemgr_mount_icloud_rotate",
+            user,
+            req,
+            outcome="failure",
+            provider="icloud",
+            mount_id=inp.mount_id,
+            reason="rotate_failed",
+            status_code=exc.status_code,
+        )
+        raise
+    audit_event(
+        "filemgr_mount_icloud_rotate",
+        user,
+        req,
+        outcome="success",
+        provider="icloud",
+        mount_id=inp.mount_id,
+        secret_ref=rotated.get("secret_ref"),
+    )
+    return ICloudRotateOut(mount_id=inp.mount_id, secret_ref=str(rotated.get("secret_ref") or ""), status="active")
+
+
+@router.post("/mounts/icloud/revoke", response_model=ICloudRevokeOut)
+def revoke_icloud_mount_credentials(inp: ICloudRevokeIn, req: Request = None, user: str = Depends(_current_user)):
+    _enforce_filemanager_internal_entitlement(
+        user=user,
+        action="mount_icloud_revoke",
+        request_id=(req.headers.get("X-Request-Id") if req else inp.mount_id),
+    )
+    _enforce_icloud_feature_for_request(user, req)
+    try:
+        rate_limit_filemgr_mount_revoke(user, client_ip_from_request(req))
+    except HTTPException as exc:
+        if exc.status_code == 429:
+            audit_event(
+                "filemgr_mount_icloud_revoke",
+                user,
+                req,
+                outcome="failure",
+                provider="icloud",
+                mount_id=inp.mount_id,
+                reason="rate_limited",
+                status_code=429,
+            )
+        raise
+    try:
+        revoked = revoke_mount_secret(owner_user_sub=user, mount_id=inp.mount_id)
+        sessions_cleared = clear_onboarding_sessions_for_mount(user_sub=user, mount_id=inp.mount_id)
+    except HTTPException as exc:
+        audit_event(
+            "filemgr_mount_icloud_revoke",
+            user,
+            req,
+            outcome="failure",
+            provider="icloud",
+            mount_id=inp.mount_id,
+            reason="revoke_failed",
+            status_code=exc.status_code,
+        )
+        raise
+    audit_event(
+        "filemgr_mount_icloud_revoke",
+        user,
+        req,
+        outcome="success",
+        provider="icloud",
+        mount_id=inp.mount_id,
+        mount_status=revoked.get("mount_status") or "revoked",
+        sessions_cleared=sessions_cleared,
+    )
+    return ICloudRevokeOut(
+        mount_id=inp.mount_id,
+        status=str(revoked.get("mount_status") or "revoked"),
+        sessions_cleared=int(sessions_cleared),
+    )
+
+
 @router.get("/download")
 def download_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
+    started = time.perf_counter()
+    provider, mount_id, is_mounted = _storage_context(user, path, req=req)
+    outcome = "success"
+    err: Optional[HTTPException] = None
     _enforce_filemanager_internal_entitlement(
         user=user,
         action="download_file",
@@ -1917,6 +2512,10 @@ def remove_fs(path: str = Query(...), req: Request = None, user: str = Depends(_
 
 @router.delete("/file")
 def remove_fs_file(path: str = Query(...), req: Request = None, user: str = Depends(_current_user)):
+    started = time.perf_counter()
+    provider, mount_id, is_mounted = _storage_context(user, path, req=req)
+    outcome = "success"
+    err: Optional[HTTPException] = None
     _enforce_filemanager_internal_entitlement(
         user=user,
         action="delete_file",

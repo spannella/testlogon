@@ -31,6 +31,85 @@ export const searchText = (q: string, limit = 50) =>
 export const createFolder = (path: string) =>
   api.post<OkResp>("/v1/fs/folder", { path });
 
+
+type ICloudInitiateReq = {
+  mount_path: string;
+  apple_id: string;
+  auth_mode: "session_token" | "app_password";
+  auth_value: string;
+  device_label?: string | null;
+};
+
+type ICloudInitiateResp = {
+  onboarding_session_id: string;
+  mount_id: string;
+  status: string;
+  next_action: string;
+  expires_at: string;
+};
+
+type ICloudVerifyReq = {
+  onboarding_session_id: string;
+  mfa_code?: string;
+};
+
+type ICloudVerifyResp = {
+  onboarding_session_id: string;
+  mount_id: string;
+  status: string;
+  next_action: string;
+  outcome: "mfa_required" | "auth_failed" | "active";
+};
+
+export const initiateICloudMount = (body: ICloudInitiateReq) =>
+  api.post<ICloudInitiateResp>("/v1/fs/mounts/icloud/initiate", body);
+
+export const verifyICloudMount = (body: ICloudVerifyReq) =>
+  api.post<ICloudVerifyResp>("/v1/fs/mounts/icloud/verify", body);
+
+
+export type FileMount = {
+  mount_id: string;
+  provider: string;
+  mount_path: string;
+  status: string;
+  updated_at?: string | null;
+  can_rotate: boolean;
+  can_reconnect: boolean;
+  can_disconnect: boolean;
+};
+
+export type ICloudRotateReq = {
+  mount_id: string;
+  auth_mode: "session_token" | "app_password";
+  auth_value: string;
+  device_label?: string | null;
+};
+
+export type ICloudRotateResp = {
+  mount_id: string;
+  secret_ref: string;
+  status: string;
+};
+
+export type ICloudRevokeReq = {
+  mount_id: string;
+};
+
+export type ICloudRevokeResp = {
+  mount_id: string;
+  status: string;
+  sessions_cleared: number;
+};
+
+export const listMounts = () => api.get<FileMount[]>("/v1/fs/mounts");
+
+export const rotateICloudMount = (body: ICloudRotateReq) =>
+  api.post<ICloudRotateResp>("/v1/fs/mounts/icloud/rotate", body);
+
+export const revokeICloudMount = (body: ICloudRevokeReq) =>
+  api.post<ICloudRevokeResp>("/v1/fs/mounts/icloud/revoke", body);
+
 export const uploadFile = (
   file: File,
   path: string,

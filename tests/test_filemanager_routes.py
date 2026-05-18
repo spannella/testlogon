@@ -9,9 +9,505 @@ from fastapi import UploadFile
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from app.routers import filemanager
+from app.services.filemanager_provider import MountResolution
 
 
 class TestFileManagerRoutes(unittest.TestCase):
+    def test_icloud_mount_initiate_rejected_when_feature_disabled(self):
+        inp = filemanager.ICloudInitiateIn(
+            mount_path="/icloud/",
+            apple_id="user@example.com",
+            auth_mode="session_token",
+            auth_value="secret-token-value",
+        )
+        with (
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "_enforce_icloud_feature_for_request", side_effect=HTTPException(status_code=503, detail={"code": "feature_disabled"})),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.initiate_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_mounted_upload_respects_kill_switch(self):
+        upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"))
+        with (
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "_storage_dispatcher"),
+            patch.object(filemanager, "enforce_icloud_mount_enabled", side_effect=HTTPException(status_code=503, detail={"reason": "kill_switch"})),
+        ):
+            filemanager._storage_dispatcher.resolve.return_value = MountResolution(provider="icloud", mount_id="m1", mount_path="/icloud/")
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.upload_fs_file(path="/icloud/a.txt", file=upload, user="user")
+        self.assertEqual(ctx.exception.status_code, 503)
+
+    def test_storage_context_passes_tenant_header_to_feature_gate(self):
+        req = SimpleNamespace(headers={"X-Tenant-Id": "tenant-beta"})
+        with (
+            patch.object(filemanager, "enforce_icloud_mount_enabled") as gate,
+            patch.object(filemanager, "_storage_dispatcher"),
+        ):
+            filemanager._storage_dispatcher.resolve.return_value = MountResolution(provider="icloud", mount_id="m1", mount_path="/icloud/")
+            provider, mount_id, mounted = filemanager._storage_context("u1", "/icloud/", req=req)
+        self.assertEqual((provider, mount_id, mounted), ("icloud", "m1", True))
+        gate.assert_called_once_with(user_sub="u1", tenant_id="tenant-beta")
+
+    def test_icloud_mount_initiate_validates_and_returns_session(self):
+        inp = filemanager.ICloudInitiateIn(
+            mount_path="/icloud/",
+            apple_id="user@example.com",
+            auth_mode="session_token",
+            auth_value="secret-token-value",
+        )
+        with (
+            patch.object(filemanager, "rate_limit_filemgr_mount_onboarding"),
+            patch.object(filemanager, "create_mount_with_secret", return_value={"mount_id": "m1", "mount_path": "/icloud/"}) as create_mount,
+            patch.object(filemanager, "create_onboarding_session", return_value={
+                "onboarding_session_id": "filemgr_mount_onboard#abc",
+                "mount_id": "m1",
+                "status": "pending",
+                "next_action": "verify",
+                "expires_at": "2026-01-01T00:00:00+00:00",
+            }),
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            out = filemanager.initiate_icloud_mount(inp=inp, req=None, user="u1")
+
+        self.assertEqual(out.mount_id, "m1")
+        self.assertEqual(out.next_action, "verify")
+        sent_payload = create_mount.call_args.kwargs["secret_payload"]
+        self.assertEqual(sent_payload["apple_id"], "user@example.com")
+        self.assertNotIn("secret-token", str(audit_event.call_args.kwargs))
+
+    def test_icloud_mount_initiate_rate_limited(self):
+        inp = filemanager.ICloudInitiateIn(
+            mount_path="/icloud/",
+            apple_id="user@example.com",
+            auth_mode="session_token",
+            auth_value="secret-token",
+        )
+        with patch.object(filemanager, "rate_limit_filemgr_mount_onboarding", side_effect=HTTPException(status_code=429, detail="Too many mount onboarding attempts; try again later")):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.initiate_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 429)
+
+    def test_icloud_mount_initiate_rejects_bad_apple_id(self):
+        inp = filemanager.ICloudInitiateIn(
+            mount_path="/icloud/",
+            apple_id="not-an-email",
+            auth_mode="session_token",
+            auth_value="secret-token",
+        )
+        with patch.object(filemanager, "rate_limit_filemgr_mount_onboarding"):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.initiate_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_icloud_mount_initiate_rejects_invalid_auth_artifact(self):
+        inp = filemanager.ICloudInitiateIn(
+            mount_path="/icloud/",
+            apple_id="user@example.com",
+            auth_mode="session_token",
+            auth_value="short",
+        )
+        with patch.object(filemanager, "rate_limit_filemgr_mount_onboarding"):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.initiate_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail, "invalid auth_value")
+
+    def test_icloud_mount_initiate_masks_sensitive_upstream_errors(self):
+        inp = filemanager.ICloudInitiateIn(
+            mount_path="/icloud/",
+            apple_id="user@example.com",
+            auth_mode="session_token",
+            auth_value="this-is-a-long-token-value",
+        )
+        with (
+            patch.object(filemanager, "rate_limit_filemgr_mount_onboarding"),
+            patch.object(filemanager, "create_mount_with_secret", side_effect=HTTPException(status_code=502, detail="secret manager error: bad-token:this-is-a-long-token-value")),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.initiate_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.assertEqual(ctx.exception.detail, "unable to initiate iCloud mount onboarding")
+
+    def test_icloud_mount_verify_mfa_required_outcome(self):
+        inp = filemanager.ICloudVerifyIn(onboarding_session_id="filemgr_mount_onboard#abc")
+        with (
+            patch.object(filemanager, "enforce_lockout"),
+            patch.object(filemanager, "rate_limit_filemgr_mount_verify"),
+            patch.object(filemanager, "get_onboarding_session", return_value={"mount_id": "m1"}),
+            patch.object(filemanager, "get_mount_secret", return_value={"auth_mode": "app_password", "auth_value": "x"}),
+            patch.object(filemanager, "update_onboarding_session") as update_session,
+            patch.object(filemanager, "audit_event"),
+        ):
+            out = filemanager.verify_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(out.outcome, "mfa_required")
+        update_session.assert_called_once()
+        self.assertEqual(update_session.call_args.kwargs["attempts_inc"], 1)
+
+    def test_icloud_mount_verify_enforces_session_attempt_threshold(self):
+        inp = filemanager.ICloudVerifyIn(onboarding_session_id="filemgr_mount_onboard#abc", mfa_code="123456")
+        with (
+            patch.object(filemanager, "enforce_lockout"),
+            patch.object(filemanager, "rate_limit_filemgr_mount_verify"),
+            patch.object(filemanager, "_session_verify_attempt_limit", return_value=2),
+            patch.object(filemanager, "get_onboarding_session", return_value={"mount_id": "m1", "verify_attempts": 2}),
+            patch.object(filemanager, "record_lockout_failure") as lock_fail,
+            patch.object(filemanager, "update_onboarding_session") as update_session,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.verify_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 429)
+        lock_fail.assert_called_once()
+        update_session.assert_called_once()
+
+    def test_icloud_mount_verify_rejects_terminal_onboarding_sessions(self):
+        inp = filemanager.ICloudVerifyIn(onboarding_session_id="filemgr_mount_onboard#abc", mfa_code="123456")
+        with (
+            patch.object(filemanager, "enforce_lockout"),
+            patch.object(filemanager, "rate_limit_filemgr_mount_verify"),
+            patch.object(filemanager, "get_onboarding_session", return_value={"mount_id": "m1", "status": "failed"}),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.verify_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_icloud_mount_verify_rejects_non_icloud_session_provider(self):
+        inp = filemanager.ICloudVerifyIn(onboarding_session_id="filemgr_mount_onboard#abc", mfa_code="123456")
+        with (
+            patch.object(filemanager, "enforce_lockout"),
+            patch.object(filemanager, "rate_limit_filemgr_mount_verify"),
+            patch.object(filemanager, "get_onboarding_session", return_value={"mount_id": "m1", "provider": "dropbox"}),
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.verify_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(audit_event.call_args.kwargs["reason"], "invalid_session_provider")
+
+    def test_icloud_mount_verify_rejects_non_verifiable_next_action(self):
+        inp = filemanager.ICloudVerifyIn(onboarding_session_id="filemgr_mount_onboard#abc", mfa_code="123456")
+        with (
+            patch.object(filemanager, "enforce_lockout"),
+            patch.object(filemanager, "rate_limit_filemgr_mount_verify"),
+            patch.object(
+                filemanager,
+                "get_onboarding_session",
+                return_value={"mount_id": "m1", "provider": "icloud", "status": "pending", "next_action": "none"},
+            ),
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.verify_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(audit_event.call_args.kwargs["reason"], "invalid_session_step")
+
+    def test_icloud_mount_verify_missing_auth_value_records_auth_failure_metric(self):
+        inp = filemanager.ICloudVerifyIn(onboarding_session_id="filemgr_mount_onboard#abc", mfa_code="123456")
+        with (
+            patch.object(filemanager, "enforce_lockout"),
+            patch.object(filemanager, "rate_limit_filemgr_mount_verify"),
+            patch.object(filemanager, "get_onboarding_session", return_value={"mount_id": "m1"}),
+            patch.object(filemanager, "get_mount_secret", return_value={"auth_mode": "session_token", "auth_value": ""}),
+            patch.object(filemanager, "record_lockout_failure"),
+            patch.object(filemanager, "record_filemgr_provider_auth_failure") as auth_fail_metric,
+            patch.object(filemanager, "update_onboarding_session"),
+            patch.object(filemanager, "audit_event"),
+        ):
+            out = filemanager.verify_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(out.outcome, "auth_failed")
+        auth_fail_metric.assert_called_once_with(provider="icloud", mount_id="m1", reason="auth_failed")
+
+    def test_icloud_mount_verify_auth_failed_records_lockout_failure(self):
+        inp = filemanager.ICloudVerifyIn(onboarding_session_id="filemgr_mount_onboard#abc", mfa_code="123456")
+        with (
+            patch.object(filemanager, "enforce_lockout"),
+            patch.object(filemanager, "rate_limit_filemgr_mount_verify"),
+            patch.object(filemanager, "get_onboarding_session", return_value={"mount_id": "m1"}),
+            patch.object(filemanager, "get_mount_secret", return_value={"auth_mode": "session_token", "auth_value": "x", "force_auth_failed": True}),
+            patch.object(filemanager, "record_lockout_failure") as lock_fail,
+            patch.object(filemanager, "record_filemgr_provider_auth_failure") as auth_fail_metric,
+            patch.object(filemanager, "update_onboarding_session"),
+            patch.object(filemanager, "audit_event"),
+        ):
+            out = filemanager.verify_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(out.outcome, "auth_failed")
+        lock_fail.assert_called_once()
+        auth_fail_metric.assert_called_once_with(provider="icloud", mount_id="m1", reason="auth_failed")
+
+
+    def test_icloud_mount_verify_enforces_lockout_and_rate_limit(self):
+        inp = filemanager.ICloudVerifyIn(onboarding_session_id="filemgr_mount_onboard#abc", mfa_code="123456")
+        with (
+            patch.object(filemanager, "enforce_lockout", side_effect=HTTPException(status_code=429, detail="Account temporarily locked; try again later")),
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.verify_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 429)
+        self.assertEqual(audit_event.call_args.kwargs["reason"], "lockout")
+
+    def test_icloud_mount_verify_rate_limited_audits_failure(self):
+        inp = filemanager.ICloudVerifyIn(onboarding_session_id="filemgr_mount_onboard#abc", mfa_code="123456")
+        with (
+            patch.object(filemanager, "enforce_lockout"),
+            patch.object(filemanager, "rate_limit_filemgr_mount_verify", side_effect=HTTPException(status_code=429, detail="Too many mount verification attempts; try again later")),
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.verify_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 429)
+        self.assertEqual(audit_event.call_args.kwargs["reason"], "rate_limited")
+
+    def test_icloud_mount_verify_active_updates_mount_and_clears_lockout(self):
+        inp = filemanager.ICloudVerifyIn(onboarding_session_id="filemgr_mount_onboard#abc", mfa_code="123456")
+        with (
+            patch.object(filemanager, "enforce_lockout"),
+            patch.object(filemanager, "rate_limit_filemgr_mount_verify"),
+            patch.object(filemanager, "get_onboarding_session", return_value={"mount_id": "m1"}),
+            patch.object(filemanager, "get_mount_secret", return_value={"auth_mode": "session_token", "auth_value": "x"}),
+            patch.object(filemanager, "update_mount") as update_mount,
+            patch.object(filemanager, "update_onboarding_session") as update_session,
+            patch.object(filemanager, "clear_lockout") as clear_lockout,
+            patch.object(filemanager, "audit_event"),
+        ):
+            out = filemanager.verify_icloud_mount(inp=inp, req=None, user="u1")
+        self.assertEqual(out.outcome, "active")
+        update_mount.assert_called_once_with(owner_user_sub="u1", mount_id="m1", status="active")
+        clear_lockout.assert_called_once()
+        update_session.assert_called_once()
+
+    def test_icloud_mount_rotate_updates_secret_reference_and_audits(self):
+        inp = filemanager.ICloudRotateIn(mount_id="m1", auth_mode="session_token", auth_value="long-token-value")
+        with (
+            patch.object(filemanager, "rate_limit_filemgr_mount_rotate"),
+            patch.object(filemanager, "get_mount", return_value={"mount_id": "m1", "status": "active"}),
+            patch.object(filemanager, "rotate_mount_secret", return_value={"ok": True, "secret_ref": "arn:new"}) as rotate_secret,
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            out = filemanager.rotate_icloud_mount_credentials(inp=inp, req=None, user="u1")
+        self.assertEqual(out.mount_id, "m1")
+        self.assertEqual(out.secret_ref, "arn:new")
+        rotate_secret.assert_called_once()
+        self.assertEqual(audit_event.call_args.args[0], "filemgr_mount_icloud_rotate")
+
+    def test_icloud_mount_rotate_rejects_invalid_auth_artifact(self):
+        inp = filemanager.ICloudRotateIn(mount_id="m1", auth_mode="session_token", auth_value="short")
+        with (
+            patch.object(filemanager, "rate_limit_filemgr_mount_rotate"),
+            patch.object(filemanager, "get_mount", return_value={"mount_id": "m1", "status": "active"}),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.rotate_icloud_mount_credentials(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_icloud_mount_rotate_audits_failure(self):
+        inp = filemanager.ICloudRotateIn(mount_id="m1", auth_mode="session_token", auth_value="long-token-value")
+        with (
+            patch.object(filemanager, "rate_limit_filemgr_mount_rotate"),
+            patch.object(filemanager, "get_mount", return_value={"mount_id": "m1", "status": "active"}),
+            patch.object(filemanager, "rotate_mount_secret", side_effect=HTTPException(status_code=409, detail="conflict")),
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            with self.assertRaises(HTTPException):
+                filemanager.rotate_icloud_mount_credentials(inp=inp, req=None, user="u1")
+        self.assertEqual(audit_event.call_args.kwargs["outcome"], "failure")
+
+    def test_icloud_mount_rotate_rejects_non_rotatable_status(self):
+        inp = filemanager.ICloudRotateIn(mount_id="m1", auth_mode="session_token", auth_value="long-token-value")
+        with (
+            patch.object(filemanager, "rate_limit_filemgr_mount_rotate"),
+            patch.object(filemanager, "get_mount", return_value={"mount_id": "m1", "status": "revoked"}),
+            patch.object(filemanager, "rotate_mount_secret") as rotate_secret,
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.rotate_icloud_mount_credentials(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 409)
+        rotate_secret.assert_not_called()
+        self.assertEqual(audit_event.call_args.kwargs["reason"], "invalid_mount_status")
+
+    def test_icloud_mount_rotate_rate_limited(self):
+        inp = filemanager.ICloudRotateIn(mount_id="m1", auth_mode="session_token", auth_value="long-token-value")
+        with (
+            patch.object(filemanager, "rate_limit_filemgr_mount_rotate", side_effect=HTTPException(status_code=429, detail="rate limited")),
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.rotate_icloud_mount_credentials(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 429)
+        self.assertEqual(audit_event.call_args.kwargs["reason"], "rate_limited")
+
+    def test_icloud_mount_revoke_disables_mount_and_clears_sessions(self):
+        inp = filemanager.ICloudRevokeIn(mount_id="m1")
+        with (
+            patch.object(filemanager, "rate_limit_filemgr_mount_revoke"),
+            patch.object(filemanager, "revoke_mount_secret", return_value={"ok": True, "deleted": True, "mount_status": "revoked"}) as revoke_secret,
+            patch.object(filemanager, "clear_onboarding_sessions_for_mount", return_value=2) as clear_sessions,
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            out = filemanager.revoke_icloud_mount_credentials(inp=inp, req=None, user="u1")
+        self.assertEqual(out.status, "revoked")
+        self.assertEqual(out.sessions_cleared, 2)
+        revoke_secret.assert_called_once_with(owner_user_sub="u1", mount_id="m1")
+        clear_sessions.assert_called_once_with(user_sub="u1", mount_id="m1")
+        self.assertEqual(audit_event.call_args.args[0], "filemgr_mount_icloud_revoke")
+
+    def test_icloud_mount_revoke_audits_failure(self):
+        inp = filemanager.ICloudRevokeIn(mount_id="m1")
+        with (
+            patch.object(filemanager, "rate_limit_filemgr_mount_revoke"),
+            patch.object(filemanager, "revoke_mount_secret", side_effect=HTTPException(status_code=502, detail="upstream")),
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            with self.assertRaises(HTTPException):
+                filemanager.revoke_icloud_mount_credentials(inp=inp, req=None, user="u1")
+        self.assertEqual(audit_event.call_args.kwargs["outcome"], "failure")
+
+    def test_icloud_mount_revoke_rate_limited(self):
+        inp = filemanager.ICloudRevokeIn(mount_id="m1")
+        with (
+            patch.object(filemanager, "rate_limit_filemgr_mount_revoke", side_effect=HTTPException(status_code=429, detail="rate limited")),
+            patch.object(filemanager, "audit_event") as audit_event,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.revoke_icloud_mount_credentials(inp=inp, req=None, user="u1")
+        self.assertEqual(ctx.exception.status_code, 429)
+        self.assertEqual(audit_event.call_args.kwargs["reason"], "rate_limited")
+
+
+    def test_list_files_routes_mounted_paths_to_dispatcher_provider(self):
+        with (
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager._storage_dispatcher, "resolve", return_value=MountResolution(provider="icloud", mount_id="m1", mount_path="/icloud/")),
+            patch.object(filemanager._storage_dispatcher, "list", return_value=[{"path": "/icloud/a.txt", "name": "a.txt", "type": "file"}]) as dsp_list,
+            patch.object(filemanager, "list_children") as list_children,
+        ):
+            resp = filemanager.list_files(path="/icloud", user="user")
+        self.assertEqual(resp["items"][0]["path"], "/icloud/a.txt")
+        self.assertTrue(dsp_list.called)
+        self.assertFalse(list_children.called)
+
+    def test_upload_under_mounted_path_uses_remote_provider_not_default_upload(self):
+        upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"))
+        with (
+            patch.object(filemanager._storage_dispatcher, "resolve", return_value=MountResolution(provider="icloud", mount_id="m1", mount_path="/icloud/")),
+            patch.object(filemanager._storage_dispatcher, "write", side_effect=HTTPException(status_code=501, detail="provider 'icloud' is not configured")),
+            patch.object(filemanager, "upload_file") as upload_default,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.upload_fs_file(path="/icloud/a.txt", file=upload, user="user")
+        self.assertEqual(ctx.exception.status_code, 501)
+        self.assertFalse(upload_default.called)
+
+    def test_upload_non_mounted_path_keeps_legacy_upload_behavior(self):
+        upload = UploadFile(filename="legacy.txt", file=io.BytesIO(b"legacy"))
+        with (
+            patch.object(filemanager._storage_dispatcher, "resolve", return_value=None),
+            patch.object(filemanager, "upload_file", return_value={"path": "/docs/legacy.txt", "size": 6}) as upload_default,
+        ):
+            out = filemanager.upload_fs_file(path="/docs/legacy.txt", file=upload, user="user")
+        self.assertTrue(out["ok"])
+        upload_default.assert_called_once()
+
+    def test_download_non_mounted_path_keeps_legacy_download_behavior(self):
+        class _Body:
+            def __init__(self):
+                self._done = False
+
+            def read(self, n=-1):
+                del n
+                if self._done:
+                    return b""
+                self._done = True
+                return b"abc"
+
+        with (
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "_storage_context", return_value=("s3", None, False)),
+            patch.object(filemanager, "download_file", return_value={"node": {"name": "a.txt", "size": 3, "path": "/docs/a.txt", "content_type": "text/plain"}, "object": {"Body": _Body()}}) as dl_default,
+            patch.object(filemanager, "assert_file_bundle_access"),
+            patch.object(filemanager, "assert_download_allowed"),
+            patch.object(filemanager, "record_download_usage"),
+        ):
+            resp = filemanager.download_fs_file(path="/docs/a.txt", user="user")
+        self.assertEqual(resp.status_code, 200)
+        dl_default.assert_called_once()
+
+    def test_delete_non_mounted_path_keeps_legacy_delete_behavior(self):
+        with (
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "_storage_context", return_value=("s3", None, False)),
+            patch.object(filemanager, "remove_file") as remove_default,
+        ):
+            out = filemanager.remove_fs_file(path="/docs/a.txt", user="user")
+        self.assertTrue(out["ok"])
+        remove_default.assert_called_once_with("user", "/docs/a.txt")
+
+    def test_move_non_mounted_path_keeps_legacy_move_behavior(self):
+        with (
+            patch.object(filemanager, "_storage_context", return_value=("s3", None, False)),
+            patch.object(filemanager, "move_node", return_value={"src": "/docs/a.txt", "dst": "/docs/b.txt"}) as move_default,
+        ):
+            out = filemanager.move_fs_node(src="/docs/a.txt", dst="/docs/b.txt", user="user")
+        self.assertTrue(out["ok"])
+        move_default.assert_called_once_with("user", "/docs/a.txt", "/docs/b.txt")
+
+    def test_move_rejects_cross_provider_boundary(self):
+        with patch.object(
+            filemanager,
+            "_storage_context",
+            side_effect=[("icloud", "m1", True), ("s3", None, False)],
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                filemanager.move_fs_node(src="/icloud/a.txt", dst="/docs/a.txt", user="user")
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "cross_provider_move_not_supported")
+
+    def test_list_collision_path_does_not_route_to_mount(self):
+        with (
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "_storage_context", return_value=("s3", None, False)),
+            patch.object(filemanager._storage_dispatcher, "resolve", return_value=None),
+            patch.object(filemanager, "list_children", return_value=[]) as list_children,
+            patch.object(filemanager._storage_dispatcher, "list") as mounted_list,
+        ):
+            out = filemanager.list_files(path="/icloudx", user="user")
+        self.assertEqual(out["path"], "/icloudx/")
+        list_children.assert_called_once()
+        mounted_list.assert_not_called()
+
+    def test_upload_audit_and_meter_include_provider_mount_dimensions(self):
+        upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"))
+        with (
+            patch.object(filemanager, "_storage_context", return_value=("icloud", "m1", True)),
+            patch.object(filemanager._storage_dispatcher, "resolve", return_value=MountResolution(provider="icloud", mount_id="m1", mount_path="/icloud/")),
+            patch.object(filemanager._storage_dispatcher, "write", return_value={"path": "/icloud/a.txt", "size": 5}),
+            patch.object(filemanager, "audit_event") as audit_event,
+            patch.object(filemanager, "record_filemgr_provider_operation") as rec_provider,
+        ):
+            resp = filemanager.upload_fs_file(path="/icloud/a.txt", file=upload, user="user")
+        self.assertTrue(resp["ok"])
+        self.assertEqual(audit_event.call_args.kwargs["provider"], "icloud")
+        self.assertEqual(audit_event.call_args.kwargs["mount_id"], "m1")
+        self.assertEqual(rec_provider.call_args.kwargs["operation"], "write")
+        self.assertEqual(rec_provider.call_args.kwargs["provider"], "icloud")
+        self.assertTrue(rec_provider.call_args.kwargs["mounted"])
+
+    def test_list_meter_uses_default_provider_for_non_mounted_path(self):
+        with (
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "_storage_context", return_value=("s3", None, False)),
+            patch.object(filemanager._storage_dispatcher, "resolve", return_value=None),
+            patch.object(filemanager, "list_children", return_value=[]),
+            patch.object(filemanager, "record_filemgr_provider_operation") as rec_provider,
+        ):
+            filemanager.list_files(path="/docs", user="user")
+        self.assertEqual(rec_provider.call_args.kwargs["operation"], "list")
+        self.assertEqual(rec_provider.call_args.kwargs["provider"], "s3")
+        self.assertFalse(rec_provider.call_args.kwargs["mounted"])
+
     def test_list_files_rejects_invalid_cursor_payloads(self):
         bad = filemanager._encode_cursor({"mode": "invalid", "offset": 0})
         with self.assertRaises(HTTPException) as ctx:
@@ -1346,3 +1842,31 @@ class TestFileManagerRoutes(unittest.TestCase):
         self.assertIn("/v1/fs/mounts", paths)
         self.assertIn("/v1/fs/mounts/{mount_id}", paths)
         self.assertIn("/v1/fs/mounts/{mount_id}/validate", paths)
+
+    def test_mounted_list_updates_health_signal(self):
+        with (
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "_storage_context", return_value=("icloud", "m1", True)),
+            patch.object(filemanager._storage_dispatcher, "resolve", return_value=MountResolution(provider="icloud", mount_id="m1", mount_path="/icloud/", status="active")),
+            patch.object(filemanager._storage_dispatcher, "list", return_value=[]),
+            patch.object(filemanager, "apply_mount_health_signal") as health,
+        ):
+            filemanager.list_files(path="/icloud/", user="u1")
+        health.assert_called_once_with(owner_user_sub="u1", mount_id="m1", outcome="success", error_class="none")
+
+    def test_mount_status_override_endpoint_manual_and_clear(self):
+        with (
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "set_mount_status_override", return_value={"mount_id": "m1", "provider": "icloud", "mount_path": "/icloud/", "status": "degraded", "updated_at": "t1"}) as set_override,
+        ):
+            out = filemanager.set_file_mount_status_override("m1", filemanager.MountStatusOverrideIn(status="degraded"), user="u1")
+        self.assertEqual(out.status, "degraded")
+        set_override.assert_called_once_with(owner_user_sub="u1", mount_id="m1", status="degraded")
+
+        with (
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "clear_mount_status_override", return_value={"mount_id": "m1", "provider": "icloud", "mount_path": "/icloud/", "status": "active", "updated_at": "t2"}) as clear_override,
+        ):
+            out2 = filemanager.set_file_mount_status_override("m1", filemanager.MountStatusOverrideIn(status="active", clear_override=True), user="u1")
+        self.assertEqual(out2.status, "active")
+        clear_override.assert_called_once_with(owner_user_sub="u1", mount_id="m1", target_status="active")
