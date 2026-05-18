@@ -623,6 +623,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
 
       {/* Compose */}
       <ComposeBar
+        conversationId={convoId}
         onSendText={(payload) => {
           const fullPayload = {
             ...payload,

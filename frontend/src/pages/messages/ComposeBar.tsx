@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -8,6 +9,7 @@ import {
   isMessagingListenOnceAudioEnabled,
   isMessagingViewOnceImageEnabled,
   isMessagingViewOnceVideoEnabled,
+  isMessagingDraftsEnabled,
 } from "@/lib/featureFlags";
 import { encryptMessage, type MessageEncryptionEnvelope } from "@/lib/messageEncryption";
 import type { Message, PaymentMethod, SendTextMessageReq, FileEntry, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq } from "@/api/types";
@@ -23,8 +25,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { FilePickerDialog } from "./FilePickerDialog";
+import { useConversationDrafts } from "./useConversationDrafts";
 
 interface ComposeBarProps {
+  conversationId: string;
   onSendText: (payload: SendTextMessageReq) => void;
   onSendImage?: (file: File, options?: {
     consumption_policy?: "none" | "view_once";
@@ -61,7 +65,16 @@ interface ComposeBarProps {
   onCancelReply?: () => void;
 }
 
+function assertComposeConversationId(conversationId: string): string {
+  const normalized = conversationId.trim();
+  if (!normalized) {
+    throw new Error("ComposeBar requires a non-empty conversationId");
+  }
+  return normalized;
+}
+
 export function ComposeBar({
+  conversationId,
   onSendText,
   onSendImage,
   onSendVideoAttachment,
@@ -77,6 +90,10 @@ export function ComposeBar({
   replyingTo,
   onCancelReply,
 }: ComposeBarProps) {
+  const normalizedConversationId = React.useMemo(
+    () => assertComposeConversationId(conversationId),
+    [conversationId],
+  );
   const [text, setText] = React.useState("");
   const [encryptEnabled, setEncryptEnabled] = React.useState(false);
   const [password, setPassword] = React.useState("");
@@ -118,6 +135,43 @@ export function ComposeBar({
   const [calendarPickerOpen, setCalendarPickerOpen] = React.useState(false);
   const [eventPickerOpen, setEventPickerOpen] = React.useState(false);
   const [meetingPollOpen, setMeetingPollOpen] = React.useState(false);
+  const [activeDraftId, setActiveDraftId] = React.useState<string | null>(null);
+  const [draftDirty, setDraftDirty] = React.useState(false);
+  const [lastDraftSavedAt, setLastDraftSavedAt] = React.useState<number | null>(null);
+  const {
+    drafts,
+    saveDraft,
+    saveExistingDraft,
+    loadDraft,
+    deleteDraft,
+    refresh,
+    syncIssue,
+    requiresReauth,
+    clearSyncIssue,
+  } = useConversationDrafts(normalizedConversationId);
+  const draftsEnabled = isMessagingDraftsEnabled();
+  const [retryingDraftSync, setRetryingDraftSync] = React.useState(false);
+  const autosaveTimerRef = React.useRef<number | null>(null);
+  const lastPersistedDraftTextRef = React.useRef("");
+  const latestComposerTextRef = React.useRef("");
+  const latestActiveDraftIdRef = React.useRef<string | null>(null);
+  const latestDraftsEnabledRef = React.useRef(false);
+  const galleryFreePreviews = React.useMemo(
+    () => galleryFreeFiles.map((file) => ({ file, url: URL.createObjectURL(file) })),
+    [galleryFreeFiles],
+  );
+  const galleryLockedPreviews = React.useMemo(
+    () => galleryLockedFiles.map((file) => ({ file, url: URL.createObjectURL(file) })),
+    [galleryLockedFiles],
+  );
+
+  React.useEffect(() => () => {
+    galleryFreePreviews.forEach((preview) => URL.revokeObjectURL(preview.url));
+  }, [galleryFreePreviews]);
+
+  React.useEffect(() => () => {
+    galleryLockedPreviews.forEach((preview) => URL.revokeObjectURL(preview.url));
+  }, [galleryLockedPreviews]);
 
   // Parse a datetime-local string ("YYYY-MM-DDTHH:mm") as the given timezone,
   // returning the equivalent UTC Date.
@@ -219,6 +273,164 @@ export function ComposeBar({
     }
   };
 
+  const handleSaveDraft = React.useCallback(() => {
+    if (!draftsEnabled) return;
+    const saved = activeDraftId
+      ? saveExistingDraft(activeDraftId, text)
+      : saveDraft(text);
+    if (!saved) {
+      toast.error("Type a message before saving a draft");
+      return;
+    }
+    if (!activeDraftId) {
+      const latestLocal = drafts[0];
+      if (latestLocal) setActiveDraftId(latestLocal.id);
+    }
+    setDraftDirty(false);
+    setLastDraftSavedAt(Date.now());
+    lastPersistedDraftTextRef.current = text.trim();
+    toast.success("Draft saved");
+  }, [activeDraftId, drafts, draftsEnabled, saveDraft, saveExistingDraft, text]);
+
+  const handleLoadDraft = React.useCallback(async (draftId: string) => {
+    if (!draftsEnabled) return;
+    const draftText = await loadDraft(draftId);
+    if (!draftText) {
+      toast.error("Draft unavailable");
+      return;
+    }
+    setText(draftText);
+    setActiveDraftId(draftId);
+    setDraftDirty(false);
+    setLastDraftSavedAt(Date.now());
+    lastPersistedDraftTextRef.current = draftText.trim();
+    toast.success("Draft loaded");
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      handleInput();
+    });
+  }, [draftsEnabled, loadDraft]);
+
+  const handleDeleteDraft = React.useCallback((draftId: string) => {
+    if (!draftsEnabled) return;
+    deleteDraft(draftId);
+    if (activeDraftId === draftId) {
+      setActiveDraftId(null);
+    }
+    toast.success("Draft removed");
+  }, [activeDraftId, deleteDraft, draftsEnabled]);
+
+  React.useEffect(() => {
+    latestComposerTextRef.current = text;
+    latestActiveDraftIdRef.current = activeDraftId;
+    latestDraftsEnabledRef.current = draftsEnabled;
+  }, [activeDraftId, draftsEnabled, text]);
+
+  React.useEffect(() => () => {
+    if (!latestDraftsEnabledRef.current) return;
+    const trimmed = latestComposerTextRef.current.trim();
+    if (!trimmed) return;
+    const draftId = latestActiveDraftIdRef.current;
+    if (draftId) {
+      saveExistingDraft(draftId, trimmed);
+      return;
+    }
+    saveDraft(trimmed);
+  }, [saveDraft, saveExistingDraft]);
+
+  React.useEffect(() => {
+    if (!draftsEnabled || activeDraftId || !draftDirty) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const matchingDraft = drafts.find((draft) => draft.text === trimmed);
+    if (matchingDraft) {
+      setActiveDraftId(matchingDraft.id);
+    }
+  }, [activeDraftId, draftDirty, drafts, draftsEnabled, text]);
+
+  React.useEffect(() => {
+    if (!draftsEnabled || !draftDirty) return;
+    if (sending || encrypting) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (trimmed === lastPersistedDraftTextRef.current) {
+      setDraftDirty(false);
+      return;
+    }
+
+    if (autosaveTimerRef.current != null) {
+      window.clearTimeout(autosaveTimerRef.current);
+    }
+    autosaveTimerRef.current = window.setTimeout(() => {
+      const saved = activeDraftId
+        ? saveExistingDraft(activeDraftId, trimmed)
+        : saveDraft(trimmed);
+      if (saved) {
+        setDraftDirty(false);
+        setLastDraftSavedAt(Date.now());
+        lastPersistedDraftTextRef.current = trimmed;
+      }
+      autosaveTimerRef.current = null;
+    }, 1200);
+
+    return () => {
+      if (autosaveTimerRef.current != null) {
+        window.clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+    };
+  }, [activeDraftId, draftDirty, draftsEnabled, encrypting, saveDraft, saveExistingDraft, sending, text]);
+
+  React.useEffect(() => {
+    if (!draftsEnabled || typeof window === "undefined") return;
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!draftDirty) return;
+      event.preventDefault();
+      event.returnValue = "You have unsaved draft changes.";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+    };
+  }, [draftDirty, draftsEnabled]);
+
+  React.useEffect(() => {
+    if (!draftsEnabled || typeof document === "undefined") return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== "hidden") return;
+      if (!draftDirty) return;
+      if (sending || encrypting) return;
+      const trimmed = text.trim();
+      if (!trimmed || trimmed === lastPersistedDraftTextRef.current) {
+        setDraftDirty(false);
+        return;
+      }
+      const saved = activeDraftId
+        ? saveExistingDraft(activeDraftId, trimmed)
+        : saveDraft(trimmed);
+      if (saved) {
+        setDraftDirty(false);
+        setLastDraftSavedAt(Date.now());
+        lastPersistedDraftTextRef.current = trimmed;
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [activeDraftId, draftDirty, draftsEnabled, encrypting, saveDraft, saveExistingDraft, sending, text]);
+
+  const handleRetryDraftSync = React.useCallback(async () => {
+    if (!draftsEnabled || retryingDraftSync) return;
+    setRetryingDraftSync(true);
+    try {
+      await refresh();
+      toast.success("Draft sync retried");
+    } finally {
+      setRetryingDraftSync(false);
+    }
+  }, [draftsEnabled, refresh, retryingDraftSync]);
+
   const handleSubmit = async () => {
     if (sending || encrypting) return;
     const trimmed = text.trim();
@@ -239,6 +451,9 @@ export function ComposeBar({
         tip_payment_method_id: extraPayload.tip_payment_method_id,
       });
       setText("");
+      setActiveDraftId(null);
+      setDraftDirty(false);
+      lastPersistedDraftTextRef.current = "";
       resetTextArea();
       setGalleryFreeFiles([]);
       setGalleryLockedFiles([]);
@@ -261,6 +476,9 @@ export function ComposeBar({
       });
       setPendingFileShare(null);
       setText("");
+      setActiveDraftId(null);
+      setDraftDirty(false);
+      lastPersistedDraftTextRef.current = "";
       resetTextArea();
       if (scheduledAt) { setScheduledAt(null); setScheduledInput(""); setScheduleOpen(false); }
       return;
@@ -270,6 +488,9 @@ export function ComposeBar({
 
     const resetTextState = () => {
       setText("");
+      setActiveDraftId(null);
+      setDraftDirty(false);
+      lastPersistedDraftTextRef.current = "";
       resetTextArea();
       if (encryptEnabled) { setPassword(""); setConfirmPassword(""); }
       if (lockEnabled) { setLockEnabled(false); setLockPrice(""); setLockDescription(""); }
@@ -630,13 +851,13 @@ export function ComposeBar({
                 setGalleryFreeFiles((prev) => [...prev, ...files].slice(0, 20));
               }}
             />
-            {galleryFreeFiles.length > 0 && (
+            {galleryFreePreviews.length > 0 && (
               <div className="flex flex-wrap gap-1">
-                {galleryFreeFiles.map((f, i) => (
+                {galleryFreePreviews.map(({ file, url }, i) => (
                   <div key={i} className="group relative">
-                    {f.type.startsWith("video/") ? (
+                    {file.type.startsWith("video/") ? (
                       <video
-                        src={URL.createObjectURL(f)}
+                        src={url}
                         className="h-12 w-12 rounded object-cover"
                         muted
                         playsInline
@@ -644,8 +865,8 @@ export function ComposeBar({
                       />
                     ) : (
                       <img
-                        src={URL.createObjectURL(f)}
-                        alt={f.name}
+                        src={url}
+                        alt={file.name}
                         className="h-12 w-12 rounded object-cover"
                       />
                     )}
@@ -691,13 +912,13 @@ export function ComposeBar({
                 setGalleryLockedFiles((prev) => [...prev, ...files].slice(0, 30));
               }}
             />
-            {galleryLockedFiles.length > 0 && (
+            {galleryLockedPreviews.length > 0 && (
               <div className="flex flex-wrap gap-1">
-                {galleryLockedFiles.map((f, i) => (
+                {galleryLockedPreviews.map(({ file, url }, i) => (
                   <div key={i} className="group relative">
-                    {f.type.startsWith("video/") ? (
+                    {file.type.startsWith("video/") ? (
                       <video
-                        src={URL.createObjectURL(f)}
+                        src={url}
                         className="h-12 w-12 rounded object-cover opacity-70"
                         muted
                         playsInline
@@ -705,8 +926,8 @@ export function ComposeBar({
                       />
                     ) : (
                       <img
-                        src={URL.createObjectURL(f)}
-                        alt={f.name}
+                        src={url}
+                        alt={file.name}
                         className="h-12 w-12 rounded object-cover opacity-70"
                       />
                     )}
@@ -730,7 +951,80 @@ export function ComposeBar({
         </div>
       )}
 
+      {draftsEnabled && syncIssue !== "none" && (
+        <div
+          className="mb-2 flex items-start justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900"
+          role="status"
+          aria-live="polite"
+        >
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">Draft sync issue</p>
+            <p className="text-[11px] text-amber-800">
+              {requiresReauth
+                ? "Please sign in again to sync drafts with the server."
+                : syncIssue === "network"
+                ? "You are offline or the drafts service is unavailable. Local drafts are still saved."
+                : "Server sync failed. Local drafts are still saved and will retry when available."}
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            {!requiresReauth && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-[11px] text-amber-900 hover:bg-amber-100"
+                onClick={() => void handleRetryDraftSync()}
+                disabled={retryingDraftSync}
+              >
+                {retryingDraftSync ? "Retrying..." : "Retry sync"}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-[11px] text-amber-900 hover:bg-amber-100"
+              onClick={clearSyncIssue}
+            >
+              Dismiss
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Reply context */}
+      {draftsEnabled && drafts.length > 0 && (
+        <div className="mb-2 rounded-lg border border-border bg-muted/20 px-3 py-2">
+          <p className="mb-2 text-xs font-medium text-muted-foreground">Saved drafts</p>
+          <div className="space-y-1.5">
+            {drafts.slice(0, 3).map((draft) => (
+              <div key={draft.id} className="flex items-center gap-2 rounded border border-border bg-background px-2 py-1.5">
+                <p className="line-clamp-1 flex-1 text-xs text-foreground">{draft.text}</p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-[11px]"
+                  onClick={() => handleLoadDraft(draft.id)}
+                >
+                  Load
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-[11px] text-destructive"
+                  onClick={() => handleDeleteDraft(draft.id)}
+                >
+                  Remove
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {replyingTo && (
         <div className="mb-2 flex items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2">
           <Reply className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
@@ -988,11 +1282,41 @@ export function ComposeBar({
           </DropdownMenu>
         )}
 
+        {draftsEnabled && (
+          <span
+            className="shrink-0 text-[11px] text-muted-foreground"
+            aria-live="polite"
+          >
+            {draftDirty
+              ? "Unsaved draft"
+              : lastDraftSavedAt
+              ? "Draft saved"
+              : "No draft changes"}
+          </span>
+        )}
+
+        {draftsEnabled && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-9 shrink-0 px-2 text-xs"
+            onClick={handleSaveDraft}
+            disabled={disabled || sending || encrypting}
+          >
+            Save draft
+          </Button>
+        )}
+
         <textarea
           ref={textareaRef}
           value={text}
           onChange={(e) => {
             setText(e.target.value);
+            if (draftsEnabled) {
+              const trimmed = e.target.value.trim();
+              setDraftDirty(trimmed.length > 0 && trimmed !== lastPersistedDraftTextRef.current);
+            }
             onKeystroke?.();
           }}
           onKeyDown={handleKeyDown}

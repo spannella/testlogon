@@ -17,6 +17,7 @@ vi.mock("@/lib/featureFlags", () => ({
   isMessagingViewOnceImageEnabled: vi.fn(() => true),
   isMessagingViewOnceVideoEnabled: vi.fn(() => false),
   isMessagingListenOnceAudioEnabled: vi.fn(() => false),
+  isMessagingDraftsEnabled: vi.fn(() => true),
 }));
 
 vi.mock("@/lib/messageEncryption", () => ({
@@ -39,7 +40,7 @@ describe("ComposeBar encrypted send UX", () => {
 
   it("sends encrypted payload only (no plaintext/password fields)", async () => {
     const onSendText = vi.fn();
-    renderWithClient(<ComposeBar onSendText={onSendText} />);
+    renderWithClient(<ComposeBar conversationId="c1" onSendText={onSendText} />);
 
     await userEvent.click(screen.getByLabelText(/Encrypt message/i));
     await userEvent.type(screen.getByPlaceholderText(/Encryption password/i), "Str0ng!Password");
@@ -56,7 +57,7 @@ describe("ComposeBar encrypted send UX", () => {
 
   it("shows validation when password confirmation mismatches and does not send", async () => {
     const onSendText = vi.fn();
-    renderWithClient(<ComposeBar onSendText={onSendText} />);
+    renderWithClient(<ComposeBar conversationId="c1" onSendText={onSendText} />);
 
     await userEvent.click(screen.getByLabelText(/Encrypt message/i));
     await userEvent.type(screen.getByPlaceholderText(/Encryption password/i), "A");
@@ -87,7 +88,7 @@ describe("ComposeBar once-media toggles", () => {
   it("sends image with view-once metadata when toggle is enabled", async () => {
     const onSendText = vi.fn();
     const onSendImage = vi.fn();
-    renderWithClient(<ComposeBar onSendText={onSendText} onSendImage={onSendImage} />);
+    renderWithClient(<ComposeBar conversationId="c1" onSendText={onSendText} onSendImage={onSendImage} />);
 
     // Upload a file first — the view-once checkbox appears in the file preview panel
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -110,7 +111,7 @@ describe("ComposeBar once-media toggles", () => {
   it("does not render once-media toggles when feature flags are disabled", async () => {
     vi.mocked(isMessagingViewOnceImageEnabled).mockReturnValue(false);
     const onSendText = vi.fn();
-    renderWithClient(<ComposeBar onSendText={onSendText} onSendImage={vi.fn()} />);
+    renderWithClient(<ComposeBar conversationId="c1" onSendText={onSendText} onSendImage={vi.fn()} />);
 
     // Upload a file — view-once checkbox should not appear when flag is disabled
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -118,5 +119,37 @@ describe("ComposeBar once-media toggles", () => {
     await userEvent.upload(fileInput, file);
 
     expect(screen.queryByLabelText(/Recipient can only view once/i)).not.toBeInTheDocument();
+  });
+
+  it("releases gallery object URLs on unmount to avoid preview memory leaks", async () => {
+    let idx = 0;
+    const createObjectUrlMock = vi.fn(() => `blob:gallery-${idx++}`);
+    const revokeObjectUrlMock = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", {
+      value: createObjectUrlMock,
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      value: revokeObjectUrlMock,
+      writable: true,
+      configurable: true,
+    });
+
+    const { unmount } = renderWithClient(
+      <ComposeBar conversationId="c1" onSendText={vi.fn()} onSendGallery={vi.fn()} />,
+    );
+    await userEvent.click(screen.getByLabelText(/Gallery message/i));
+    const fileInputs = document.querySelectorAll('input[type="file"]');
+    const freeGalleryInput = fileInputs[0] as HTMLInputElement;
+    const image = new File(["img"], "gallery.png", { type: "image/png" });
+    await userEvent.upload(freeGalleryInput, image);
+
+    expect(createObjectUrlMock).toHaveBeenCalled();
+    const createdUrl = createObjectUrlMock.mock.results[0]?.value;
+    expect(createdUrl).toMatch(/^blob:gallery-/);
+
+    unmount();
+    expect(revokeObjectUrlMock).toHaveBeenCalledWith(createdUrl);
   });
 });

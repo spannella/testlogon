@@ -35,6 +35,10 @@ import type {
   ReportMessageReq,
   ReportMessageResp,
   ThreadMessagesPage,
+  ConversationDraft,
+  ConversationDraftListResp,
+  CreateConversationDraftReq,
+  UpdateConversationDraftReq,
 } from "@/api/types";
 import { adaptConversation, adaptMessage } from "./messagingAdapter";
 import { isMessagingEncryptionEnabled } from "@/lib/featureFlags";
@@ -102,6 +106,67 @@ export const getThreadMessages = async (threadId: string, cursor?: string, limit
   };
 };
 
+const adaptConversationDraft = (draft: ConversationDraft): ConversationDraft => ({
+  ...draft,
+  version: Number(draft.version ?? 1),
+  created_at: Number(draft.created_at ?? 0),
+  updated_at: Number(draft.updated_at ?? 0),
+  client_updated_at: draft.client_updated_at != null ? Number(draft.client_updated_at) : undefined,
+});
+
+export const listConversationDrafts = async (conversationId: string, cursor?: string, limit = 20): Promise<ConversationDraftListResp> => {
+  const res = await api.get<ConversationDraftListResp>(
+    `/messaging/conversations/${conversationId}/drafts`,
+    {
+      limit: String(limit),
+      ...(cursor ? { cursor } : {}),
+    },
+  );
+
+  return {
+    items: (res.items ?? []).map(adaptConversationDraft),
+    next_cursor: res.next_cursor,
+  };
+};
+
+export const createConversationDraft = async (
+  conversationId: string,
+  body: CreateConversationDraftReq,
+  idempotencyKey: string,
+): Promise<ConversationDraft> => {
+  const res = await api<{ draft: ConversationDraft }>(
+    `/messaging/conversations/${conversationId}/drafts`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+      headers: { "Idempotency-Key": idempotencyKey },
+    },
+  );
+  return adaptConversationDraft(res.draft);
+};
+
+export const getConversationDraft = async (conversationId: string, draftId: string): Promise<ConversationDraft> => {
+  const res = await api.get<{ draft: ConversationDraft }>(
+    `/messaging/conversations/${conversationId}/drafts/${draftId}`,
+  );
+  return adaptConversationDraft(res.draft);
+};
+
+export const updateConversationDraft = async (
+  conversationId: string,
+  draftId: string,
+  body: UpdateConversationDraftReq,
+): Promise<ConversationDraft> => {
+  const res = await api.patch<{ draft: ConversationDraft }>(
+    `/messaging/conversations/${conversationId}/drafts/${draftId}`,
+    body,
+  );
+  return adaptConversationDraft(res.draft);
+};
+
+export const deleteConversationDraft = async (conversationId: string, draftId: string): Promise<void> => {
+  await api.del(`/messaging/conversations/${conversationId}/drafts/${draftId}`);
+};
 
 export const getConversationGallery = async (
   conversationId: string,

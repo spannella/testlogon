@@ -606,3 +606,128 @@
 **Acceptance criteria:**
 - Feature flag controls thread behavior by environment/tenant cohort.
 - Runbook documents deploy order, verification checks, rollback steps, and post-deploy validation.
+### MSGD-001: Product requirements and scope lock for messaging drafts
+**Description:** Finalize the feature contract for draft messages, including data model, lifecycle behavior, retention policy, cross-device expectations, and rollout constraints. Define in-scope (text drafts, save/load/remove) and out-of-scope (attachments, scheduled payloads, encrypted payload persistence) behavior.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Product spec documents exact user behavior for save, load, remove, overwrite/replace semantics, and empty-draft handling.
+- Spec includes platform behavior (desktop/mobile), privacy constraints, and explicit non-goals for v1.
+
+### MSGD-002: UX wireframes and interaction states for composer drafts
+**Description:** Deliver UX for draft controls in the composer: Save Draft trigger, saved-drafts list, load/remove actions, empty state, loading/error states, and accessibility annotations.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Final wireframes include default, empty, populated, and error states for the draft panel.
+- Accessibility notes include keyboard traversal, ARIA labels, focus management, and screen-reader text.
+
+### MSGD-003: Backend API contract for server-synced conversation drafts
+**Description:** Define OpenAPI contract for draft endpoints under messaging conversations. Include create/update, list, fetch, and delete semantics; idempotency; pagination strategy; and error formats.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- API contract includes `GET/POST/PATCH/DELETE /messaging/conversations/{conversation_id}/drafts` with request/response schemas.
+- Contract defines authz failures, validation errors, and versioning strategy.
+
+### MSGD-004: DynamoDB schema and migration plan for drafts
+**Description:** Design and implement storage schema for conversation drafts in DynamoDB (or existing store), including keys, GSIs, TTL/retention fields, created/updated metadata, and tenancy/user scoping.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Migration script creates required table/indexes and is idempotent across environments.
+- Schema supports fast list-by-conversation and secure user-scoped reads/writes.
+
+### MSGD-005: Backend repository/service layer for draft CRUD
+**Description:** Implement service/repository methods for draft CRUD with validation, deterministic ordering, row size limits, and safe handling of malformed legacy rows.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Service supports create, update, list, get-by-id, and delete with stable ordering and strict ownership checks.
+- Unit tests cover validation, ordering, and defensive handling of malformed records.
+
+### MSGD-006: Messaging router endpoints for draft operations
+**Description:** Add FastAPI messaging routes for draft CRUD operations and hook them to auth, policy checks, and service layer methods.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Endpoints return contract-compliant payloads and status codes for all success/failure paths.
+- Route tests validate authn/authz, schema validation, and error response parity.
+
+### MSGD-007: Frontend API client methods for server draft endpoints
+**Description:** Add typed client methods in frontend API layer for list/save/load/remove draft operations and adapt DTOs to UI-safe models.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- API client exposes strongly typed methods consumed by UI hooks/components.
+- Unit tests verify request shapes, path params, and response adaptation.
+
+### MSGD-008: Frontend draft data hook with local fallback strategy
+**Description:** Build/extend draft hook to support server-backed drafts with localStorage fallback for offline mode. Add sync/reconcile behavior between local and server states.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Hook supports online CRUD via API and local fallback when offline or API unavailable.
+- Reconciliation policy is documented and tested (e.g., last-write-wins with timestamp).
+
+### MSGD-009: Composer UI integration for save/load/remove drafts
+**Description:** Integrate draft hook into `ComposeBar` with user controls, list rendering, load/remove actions, and optimistic UX feedback. Preserve existing send behavior and compose state handling.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Users can save, load, and remove drafts without breaking message send, reply, and attachment flows.
+- UI updates are immediate and remain correct after conversation switches and page refresh.
+
+### MSGD-010: Conversation-scoping and prop contract hardening
+**Description:** Enforce conversation-scoped draft behavior end-to-end by requiring conversation context and validating all callsites that instantiate composer/draft logic.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- All composer entrypoints provide `conversationId` and pass type checks.
+- Tests prove no cross-conversation draft leakage.
+
+### MSGD-011: Backend integration tests for draft endpoints
+**Description:** Add integration tests covering full draft lifecycle via HTTP API, including ownership checks, malformed input rejection, and pagination/list order behavior.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Integration suite validates create/list/load/update/delete end-to-end against local test backend.
+- Negative tests cover unauthorized access and cross-user data isolation.
+
+### MSGD-012: Frontend unit/integration tests for draft UX
+**Description:** Expand frontend tests for draft panel and composer interactions, including keyboard accessibility, focus behavior, and toast/error handling.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Tests cover empty-save rejection, load-replaces-text behavior, remove behavior, and focus restoration.
+- Tests verify draft state across rerenders and conversation changes.
+
+### MSGD-013: E2E draft lifecycle scenarios
+**Description:** Add robust Playwright scenarios for save/reload/load/isolation/remove across multiple conversations and sessions, with deterministic fixtures and cleanup.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- E2E tests pass in CI with stable selectors and no flaky timing dependencies.
+- Scenarios include at least one negative path (e.g., session expiry or auth failure during draft operation).
+
+### MSGD-014: Observability and analytics instrumentation
+**Description:** Emit metrics/events for draft operations (save/load/remove/failure), backend latency/error rates, and fallback usage (server vs local).
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Dashboards/alerts include draft endpoint errors, latency percentiles, and operation volumes.
+- Event schema documented and validated for privacy-safe payloads.
+
+### MSGD-015: Security and privacy hardening for draft content
+**Description:** Review draft storage and transmission for sensitive data exposure risks. Add safeguards for logging, retention, and encryption-at-rest/in-transit assumptions.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Security review completed with no plaintext draft content in logs/telemetry.
+- Retention/deletion behavior is documented and validated in test environments.
+
+### MSGD-016: Release strategy, feature flagging, and rollout plan
+**Description:** Add feature flag gates and phased rollout plan (internal, beta, GA), plus rollback steps and operational readiness checklist.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Feature can be toggled per environment/tenant without redeploy.
+- Rollout doc includes rollback procedure, owner on-call notes, and success criteria.
+
+### MSGD-017: Deployment and migration execution checklist
+**Description:** Prepare and execute deployment checklist covering migration ordering, compatibility windows, smoke tests, and post-deploy verification.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Deployment runbook includes preflight checks, migration sequencing, and post-deploy verification commands.
+- Production rollout completes with no data-loss incidents and verified draft CRUD functionality.
+
+### MSGD-018: Documentation and support enablement
+**Description:** Update developer docs, user-facing release notes, QA test plans, and support troubleshooting guides for draft behavior.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Documentation covers known limitations, offline behavior, and cross-device expectations.
+- Support playbook includes troubleshooting for missing drafts, stale drafts, and sync conflicts.
