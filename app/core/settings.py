@@ -95,6 +95,25 @@ class Settings:
     browser_ssh_connect_rate_limit_count: int = int(os.environ.get("BROWSER_SSH_CONNECT_RATE_LIMIT_COUNT", "10"))
     browser_ssh_connect_rate_limit_window_seconds: int = int(os.environ.get("BROWSER_SSH_CONNECT_RATE_LIMIT_WINDOW_SECONDS", "60"))
 
+    # Calendar integrations
+    calendar_integrations_enabled: bool = os.environ.get("CALENDAR_INTEGRATIONS_ENABLED", "1") not in ("0", "false", "False")
+    apple_caldav_enabled: bool = os.environ.get("APPLE_CALDAV_ENABLED", "0") not in ("0", "false", "False")
+    apple_caldav_base_url: str = os.environ.get("APPLE_CALDAV_BASE_URL", "https://caldav.icloud.com").rstrip("/")
+    apple_caldav_connect_timeout_seconds: float = float(os.environ.get("APPLE_CALDAV_CONNECT_TIMEOUT_SECONDS", "5"))
+    apple_caldav_read_timeout_seconds: float = float(os.environ.get("APPLE_CALDAV_READ_TIMEOUT_SECONDS", "10"))
+    apple_caldav_retry_max_attempts: int = int(os.environ.get("APPLE_CALDAV_RETRY_MAX_ATTEMPTS", "3"))
+    apple_caldav_poll_interval_seconds: int = int(os.environ.get("APPLE_CALDAV_POLL_INTERVAL_SECONDS", "300"))
+    apple_caldav_poll_jitter_seconds: int = int(os.environ.get("APPLE_CALDAV_POLL_JITTER_SECONDS", "30"))
+    apple_caldav_poll_batch_size: int = int(os.environ.get("APPLE_CALDAV_POLL_BATCH_SIZE", "50"))
+    apple_caldav_outbox_process_limit: int = int(os.environ.get("APPLE_CALDAV_OUTBOX_PROCESS_LIMIT", "200"))
+    apple_caldav_initial_import_lookback_days: int = int(os.environ.get("APPLE_CALDAV_INITIAL_IMPORT_LOOKBACK_DAYS", "365"))
+    apple_caldav_initial_import_lookahead_days: int = int(os.environ.get("APPLE_CALDAV_INITIAL_IMPORT_LOOKAHEAD_DAYS", "30"))
+    calendar_connections_table_name: str = os.environ.get("CALENDAR_CONNECTIONS_TABLE_NAME", "calendar_connections")
+    calendar_connection_secrets_table_name: str = os.environ.get("CALENDAR_CONNECTION_SECRETS_TABLE_NAME", "calendar_connection_secrets")
+    external_calendars_table_name: str = os.environ.get("EXTERNAL_CALENDARS_TABLE_NAME", "external_calendars")
+    external_event_links_table_name: str = os.environ.get("EXTERNAL_EVENT_LINKS_TABLE_NAME", "external_event_links")
+    calendar_sync_runs_table_name: str = os.environ.get("CALENDAR_SYNC_RUNS_TABLE_NAME", "calendar_sync_runs")
+
     # MFA rate limiting
     mfa_send_min_interval_seconds: int = int(os.environ.get("MFA_SEND_MIN_INTERVAL_SECONDS", "30"))
     mfa_send_max_per_hour: int = int(os.environ.get("MFA_SEND_MAX_PER_HOUR", "20"))

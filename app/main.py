@@ -42,7 +42,9 @@ from app.routers.signature_packets import router as signature_packets_router
 from app.routers.addresses import router as addresses_router
 from app.routers.calendar import public_router as calendar_public_router
 from app.routers.calendar import public_event_router as calendar_public_event_router
+from app.routers.calendar import integration_router as calendar_integration_router
 from app.routers.calendar import router as calendar_router
+from app.routers.admin_calendar_integrations import router as admin_calendar_integrations_router
 from app.routers.device_trust import router as device_trust_router
 from app.routers.newsfeed import router as newsfeed_router, startup as newsfeed_startup
 from app.routers.purchase_history import router as purchase_history_router
@@ -77,6 +79,7 @@ from app.services.projects_reconcile import start_projects_reconcile_task
 from app.services.provider_oauth import validate_google_drive_mount_oauth_configuration
 from app.services.filemanager_mount_reconcile import start_filemgr_mount_reconcile_task
 from app.services.api_usage_entitlements import enforce_api_package_entitlement_pre_request
+from app.services.calendar_integrations.registry import initialize_calendar_integration_registry
 
 
 def _api_usage_metering_middleware():
@@ -187,6 +190,8 @@ def create_app() -> FastAPI:
     app.include_router(signature_packets_router)
     app.include_router(addresses_router)
     app.include_router(calendar_router)
+    app.include_router(calendar_integration_router)
+    app.include_router(admin_calendar_integrations_router)
     app.include_router(calendar_public_router)
     app.include_router(calendar_public_event_router)
     app.include_router(device_trust_router)
@@ -196,6 +201,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_moderation_router)
     app.add_event_handler("startup", validate_startup_root_invariant)
     app.add_event_handler("startup", validate_google_drive_mount_oauth_configuration)
+    app.add_event_handler("startup", lambda: setattr(app.state, "calendar_integration_registry", initialize_calendar_integration_registry()))
     if _S.dev_mode:
         _dev_buckets = [b for b in [
             _S.filemgr_bucket,

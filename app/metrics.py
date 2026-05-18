@@ -629,6 +629,32 @@ GOOGLE_CALENDAR_OAUTH_CALLBACK_OUTCOMES = Counter(
     "Google Calendar OAuth callback outcomes by outcome/reason",
     ["outcome", "reason"],
 )
+CALENDAR_SYNC_RUNS = Counter(
+    "calendar_sync_runs_total",
+    "Calendar sync run outcomes by provider/mode/outcome",
+    ["provider", "mode", "outcome"],
+)
+CALENDAR_SYNC_LATENCY = Histogram(
+    "calendar_sync_latency_seconds",
+    "Calendar sync operation latency in seconds",
+    ["provider", "operation", "outcome"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120),
+)
+CALENDAR_SYNC_CONFLICTS = Counter(
+    "calendar_sync_conflicts_total",
+    "Calendar sync conflicts by provider/reason/operation",
+    ["provider", "reason", "operation"],
+)
+CALENDAR_SYNC_QUEUE_BACKLOG = Gauge(
+    "calendar_sync_queue_backlog",
+    "Calendar sync queue backlog depth",
+    ["provider", "queue"],
+)
+CALENDAR_SYNC_AUTH_FAILURES = Counter(
+    "calendar_sync_auth_failures_total",
+    "Calendar integration authentication failures",
+    ["provider"],
+)
 
 ENTITLEMENT_CHECKS = Counter(
     "entitlement_checks_total",
@@ -1427,6 +1453,40 @@ def record_google_calendar_oauth_callback_outcome(*, outcome: str, reason: str) 
         reason=(reason or "unknown").lower(),
     ).inc()
 
+
+def record_calendar_sync_run(*, provider: str, mode: str, outcome: str) -> None:
+    CALENDAR_SYNC_RUNS.labels(
+        provider=(provider or "unknown").lower(),
+        mode=(mode or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).inc()
+
+
+def record_calendar_sync_latency(*, provider: str, operation: str, outcome: str, elapsed_seconds: float) -> None:
+    CALENDAR_SYNC_LATENCY.labels(
+        provider=(provider or "unknown").lower(),
+        operation=(operation or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_calendar_sync_conflict(*, provider: str, reason: str, operation: str) -> None:
+    CALENDAR_SYNC_CONFLICTS.labels(
+        provider=(provider or "unknown").lower(),
+        reason=(reason or "unknown").lower(),
+        operation=(operation or "unknown").lower(),
+    ).inc()
+
+
+def record_calendar_sync_queue_backlog(*, provider: str, queue: str, depth: int) -> None:
+    CALENDAR_SYNC_QUEUE_BACKLOG.labels(
+        provider=(provider or "unknown").lower(),
+        queue=(queue or "unknown").lower(),
+    ).set(float(max(0, int(depth))))
+
+
+def record_calendar_sync_auth_failure(*, provider: str) -> None:
+    CALENDAR_SYNC_AUTH_FAILURES.labels(provider=(provider or "unknown").lower()).inc()
 
 
 def record_vnc_session_event(*, action: str, outcome: str, target_id: str = "unknown", error_code: str = "none") -> None:
