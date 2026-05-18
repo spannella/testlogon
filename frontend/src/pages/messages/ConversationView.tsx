@@ -32,6 +32,7 @@ import { ScheduledMessages } from "./ScheduledMessages";
 import { HiddenMessagesPanel } from "./HiddenMessagesPanel";
 import { PinnedMessageBanner } from "./PinnedMessageBanner";
 import { PinnedMessagesPanel } from "./PinnedMessagesPanel";
+import { ThreadPanel } from "./ThreadPanel";
 import { useMessageJump } from "./useMessageJump";
 import {
   DropdownMenu,
@@ -66,6 +67,8 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const [dismissedPinnedMessageId, setDismissedPinnedMessageId] = React.useState<string | null>(null);
   const [replyingTo, setReplyingTo] = React.useState<Message | null>(null);
   const [viewedOnceIds, setViewedOnceIds] = React.useState<Set<string>>(new Set());
+  const [threadPanelOpen, setThreadPanelOpen] = React.useState(false);
+  const [threadAnchorMessage, setThreadAnchorMessage] = React.useState<Message | null>(null);
   const handleViewOnce = React.useCallback((id: string) => {
     setViewedOnceIds((prev) => new Set([...prev, id]));
   }, []);
@@ -101,6 +104,35 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     for (const msg of allMessages) map.set(msg.message_id, msg);
     return map;
   }, [allMessages]);
+
+  const handleViewThread = React.useCallback((anchor: Message) => {
+    if (!anchor.thread_id) {
+      toast.info("Thread details are unavailable for this message.");
+      return;
+    }
+    setThreadAnchorMessage(anchor);
+    setThreadPanelOpen(true);
+  }, []);
+
+  const handleReplyAction = React.useCallback((target: Message) => {
+    if (target.thread_id) {
+      setThreadAnchorMessage(target);
+      setThreadPanelOpen(true);
+      return;
+    }
+    setReplyingTo(target);
+  }, []);
+
+  const buildReplyLinkagePayload = React.useCallback((target: Message | null) => {
+    if (!target) return {};
+    const threadRoot = target.thread_root_message_id ?? target.parent_message_id ?? target.message_id;
+    return {
+      reply_to_message_id: target.message_id,
+      parent_message_id: target.message_id,
+      ...(target.thread_id ? { thread_id: target.thread_id } : {}),
+      ...(threadRoot ? { thread_root_message_id: threadRoot } : {}),
+    };
+  }, []);
 
   // ── Auto-scroll to bottom on new messages ───────────────────────
 
@@ -575,7 +607,8 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
                 isOwn={msg.sender_id === userId}
                 showSender={isGroup}
                 conversationId={convoId}
-                onReply={(m) => setReplyingTo(m)}
+                onReply={handleReplyAction}
+                onViewThread={handleViewThread}
                 replyToMessage={msg.reply_to_message_id ? messageById.get(msg.reply_to_message_id) : undefined}
                 viewedOnceIds={viewedOnceIds}
                 onViewOnce={handleViewOnce}
@@ -593,7 +626,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         onSendText={(payload) => {
           const fullPayload = {
             ...payload,
-            reply_to_message_id: replyingTo?.message_id,
+            ...buildReplyLinkagePayload(replyingTo),
           };
           // Only queue non-scheduled messages — scheduled messages need server-side
           // delivery at the chosen time and should not be silently deferred.
@@ -670,6 +703,14 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
           setPinsOpen(false);
           jumpToMessage(messageId);
         }}
+      />
+
+      <ThreadPanel
+        open={threadPanelOpen}
+        onOpenChange={setThreadPanelOpen}
+        conversationId={convoId}
+        anchorMessage={threadAnchorMessage}
+        currentUserId={userId ?? undefined}
       />
 
       {/* Group participants panel */}

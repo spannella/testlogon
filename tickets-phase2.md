@@ -1032,3 +1032,122 @@
 **Acceptance criteria:**
 - Scorecard aggregates reliability, security, support, and rollout metrics.
 - GA status remains blocked until all required sign-offs are recorded.
+### THR-101: Cursor versioning contract and strict parser
+**Description:** Introduce explicit cursor schema versioning and a strict parser for thread pagination cursors to support safe protocol evolution.
+**Acceptance criteria:**
+- Cursor payload includes mandatory `version` field and parser rejects unknown versions.
+- Parser behavior is fully covered with tests for malformed, missing, and unsupported versions.
+
+### THR-102: Cursor secret rotation runbook automation
+**Description:** Implement automated secret rotation steps for thread cursor signing with staged rollout and rollback support.
+**Acceptance criteria:**
+- Rotation automation supports preflight validation, staged activation, and rollback.
+- Rotation metrics and alerts are emitted and linked in runbook docs.
+
+### THR-103: Idempotency guarantees for reply-driven promotion
+**Description:** Add explicit idempotency handling for message write paths that can trigger thread promotion to avoid duplicate promotions under retries.
+**Acceptance criteria:**
+- Duplicate idempotency keys return consistent prior results without extra writes.
+- Concurrency tests verify exactly-once thread record creation semantics.
+
+### THR-104: Thread lifecycle event outbox implementation
+**Description:** Implement transactional outbox delivery for thread lifecycle events so downstream systems observe promotion/reconciliation reliably.
+**Acceptance criteria:**
+- Thread write and outbox insert are atomic in the same transaction boundary.
+- Dispatcher retries with backoff and dead-letter routing for exhausted retries.
+
+### THR-105: DLQ replay tooling for thread lifecycle events
+**Description:** Build operator tooling to inspect and replay dead-lettered thread lifecycle events by tenant/conversation and time range.
+**Acceptance criteria:**
+- Tool supports inspect, dry-run replay, and execute replay modes.
+- Replay operations generate audit logs and structured outcome reports.
+
+### THR-106: Hot-thread latency optimization (p95/p99)
+**Description:** Optimize thread read path for high-volume threads via adaptive read windows and/or precomputed projections.
+**Acceptance criteria:**
+- Benchmark results show measurable p95/p99 latency reduction on hot threads.
+- Ordering and authorization behavior remains functionally identical.
+
+### THR-107: Thread summary projection service
+**Description:** Add a projection service to maintain thread summary fields (`reply_count`, `last_reply_at`) incrementally.
+**Acceptance criteria:**
+- Projections update correctly on send, revoke, delete, hide/unhide operations.
+- Projection drift detector and repair job are covered by tests.
+
+### THR-108: Reconciliation checkpoint durability
+**Description:** Harden backfill/reconciliation with durable checkpoints and deterministic resume behavior after interruption.
+**Acceptance criteria:**
+- Interrupted runs resume from persisted checkpoint without duplicate destructive updates.
+- Progress, lag, and completion metrics are emitted for every run.
+
+### THR-109: Reconciliation safety limits and blast-radius controls
+**Description:** Add scoped execution controls, max-write thresholds, and mandatory dry-run previews for reconciliation jobs.
+**Acceptance criteria:**
+- Operators can scope by tenant/conversation/time window and preview exact planned updates.
+- Jobs fail safely with clear diagnostics when safety thresholds are exceeded.
+
+### THR-110: Policy enforcement parity across thread mutations
+**Description:** Ensure retention/legal-hold checks are consistently enforced for all thread mutation paths including backfill/repair.
+**Acceptance criteria:**
+- Policy violations return stable, policy-specific error codes.
+- Policy decisions are fully audited with actor and resource context.
+
+### THR-111: Authorization matrix regression suite for thread APIs
+**Description:** Build a complete authorization regression matrix for thread reads/writes across user roles and participant states.
+**Acceptance criteria:**
+- Tests cover member, removed member, moderator/admin/root, and cross-conversation misuse.
+- CI gate fails on any authorization regression.
+
+### THR-112: Unread counter convergence and repair
+**Description:** Implement reconciliation between conversation unread counters and thread unread counters under race and reconnect conditions.
+**Acceptance criteria:**
+- Drift detection and repair logic converges counters deterministically.
+- Multi-device integration tests validate convergence after repair.
+
+### THR-113: Notification dedupe for thread/timeline fanout overlap
+**Description:** Add deterministic dedupe keys to suppress duplicate notifications emitted from overlapping thread and timeline fanout paths.
+**Acceptance criteria:**
+- Duplicate notification rate remains below defined SLO in load tests.
+- Dedupe counters and suppression reasons are visible in dashboards.
+
+### THR-114: Fanout backpressure and circuit-breaker controls
+**Description:** Add queue backpressure and circuit-breaker behavior for thread fanout when downstream dependencies degrade.
+**Acceptance criteria:**
+- Circuit breaker opens/closes based on configurable error thresholds.
+- Backpressure/circuit events are metricized and alertable.
+
+### THR-115: Failure-injection coverage for thread critical flows
+**Description:** Add chaos/failure-injection tests for promotion, thread reads, and reconciliation under throttling and partial failure scenarios.
+**Acceptance criteria:**
+- Tests prove no orphaned linkage or duplicate thread records under injected faults.
+- Recovery behavior meets defined error-budget thresholds.
+
+### THR-116: Thread API contract drift gate
+**Description:** Add strict CI checks for drift between runtime thread API behavior and OpenAPI schema definitions.
+**Acceptance criteria:**
+- CI blocks changes when runtime responses diverge from contract fixtures.
+- Schema/fixture update process is documented and enforced.
+
+### THR-117: Thread SLOs and alerting package
+**Description:** Define and implement thread-specific SLOs and alert rules (latency, success rate, reconciliation health, error budget burn).
+**Acceptance criteria:**
+- Dashboard includes SLI panels and error-budget visualizations.
+- Alerts route to on-call with linked remediation runbooks.
+
+### THR-118: Automated rollout gate orchestration
+**Description:** Automate tenant-cohort progression and rollback actions based on thread telemetry gate outcomes.
+**Acceptance criteria:**
+- Cohort expansion is blocked when health gates fail.
+- Gate decisions and rollback actions are logged with auditable metadata.
+
+### THR-119: Production-like canary E2E for threaded messaging
+**Description:** Add scheduled and deploy-triggered canary E2E tests for thread creation, promotion, pagination, notifications, and rollback toggles.
+**Acceptance criteria:**
+- Canary results feed release gates and surface actionable diagnostics on failure.
+- Failure artifacts include request IDs, logs, traces, and screenshots where applicable.
+
+### THR-120: Thread operations handbook and incident drills
+**Description:** Publish a comprehensive threaded messaging operations handbook and run recurring incident drills.
+**Acceptance criteria:**
+- Handbook contains deployment, rollback, reconciliation recovery, and incident response SOPs.
+- Staging drill outcomes are recorded with remediation follow-ups and owners.

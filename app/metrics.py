@@ -379,6 +379,32 @@ MESSAGING_ARCHIVE_EXPORT_OUTCOMES = Counter(
     "Messaging compliance archive export outcomes",
     ["outcome"],
 )
+MESSAGING_THREAD_PROMOTION_EVENTS = Counter(
+    "messaging_thread_promotion_events_total",
+    "Messaging thread promotion outcomes by stage/outcome",
+    ["stage", "outcome"],
+)
+MESSAGING_THREAD_PROMOTION_RETRIES = Counter(
+    "messaging_thread_promotion_retries_total",
+    "Messaging thread promotion retry attempts by reason",
+    ["reason"],
+)
+MESSAGING_THREAD_QUERY_LATENCY = Histogram(
+    "messaging_thread_query_latency_seconds",
+    "Messaging thread query latency by endpoint/outcome",
+    ["endpoint", "outcome"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
+)
+MESSAGING_THREAD_INVALID_CURSORS = Counter(
+    "messaging_thread_invalid_cursors_total",
+    "Messaging thread invalid cursor rejections by endpoint and reason category",
+    ["endpoint", "reason_category"],
+)
+MESSAGING_THREAD_RECONCILIATION_ANOMALIES = Counter(
+    "messaging_thread_reconciliation_anomalies_total",
+    "Messaging thread reconciliation anomalies by reason",
+    ["reason"],
+)
 USAGE_METERING_EVENTS = Counter(
     "usage_metering_events_total",
     "Usage metering event outcomes",
@@ -1306,6 +1332,35 @@ def record_messaging_archive_integrity_error(*, reason: str) -> None:
 
 def record_messaging_archive_export_outcome(*, outcome: str) -> None:
     MESSAGING_ARCHIVE_EXPORT_OUTCOMES.labels(outcome=(outcome or "unknown").lower()).inc()
+
+
+def record_messaging_thread_promotion_event(*, stage: str, outcome: str) -> None:
+    MESSAGING_THREAD_PROMOTION_EVENTS.labels(
+        stage=(stage or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).inc()
+
+
+def record_messaging_thread_promotion_retry(*, reason: str) -> None:
+    MESSAGING_THREAD_PROMOTION_RETRIES.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def record_messaging_thread_query_latency(*, endpoint: str, outcome: str, elapsed_seconds: float) -> None:
+    MESSAGING_THREAD_QUERY_LATENCY.labels(
+        endpoint=(endpoint or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_messaging_thread_invalid_cursor(*, endpoint: str, reason_category: str) -> None:
+    MESSAGING_THREAD_INVALID_CURSORS.labels(
+        endpoint=(endpoint or "unknown").lower(),
+        reason_category=(reason_category or "other").lower(),
+    ).inc()
+
+
+def record_messaging_thread_reconciliation_anomaly(*, reason: str) -> None:
+    MESSAGING_THREAD_RECONCILIATION_ANOMALIES.labels(reason=(reason or "unknown").lower()).inc()
 
 
 def record_project_count_delta(delta: int) -> None:

@@ -9,6 +9,20 @@ from typing import Dict, Iterable, List, Optional
 import boto3
 from botocore.exceptions import ClientError, EndpointConnectionError
 from app.core.settings import S
+from app.services.messaging_thread_contract import (
+    INDEX_BY_CONVERSATION_CREATED_AT,
+    INDEX_BY_PARENT_MESSAGE_ID,
+    INDEX_BY_ROOT_MESSAGE,
+    INDEX_BY_THREAD_CREATED_AT,
+    INDEX_BY_THREAD_ROOT_MESSAGE_ID,
+    MESSAGE_FIELD_PARENT_ID,
+    MESSAGE_FIELD_THREAD_ID,
+    MESSAGE_FIELD_THREAD_ROOT_ID,
+    THREAD_FIELD_CONVERSATION_ID,
+    THREAD_FIELD_CREATED_AT,
+    THREAD_FIELD_ID,
+    THREAD_FIELD_ROOT_MESSAGE_ID,
+)
 
 
 @dataclass(frozen=True)
@@ -217,7 +231,18 @@ def _table_defs() -> List[TableDef]:
             "conversation_id",
             gsi=[{"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"}],
         ),
-        TableDef(os.getenv("DDB_MESSAGES", "Messages"), "conversation_id", "message_id"),
+        TableDef(
+            os.getenv("DDB_MESSAGES", "Messages"),
+            "conversation_id",
+            "message_id",
+            gsi=[
+                {"index_name": INDEX_BY_CONVERSATION_CREATED_AT, "partition_key": "conversation_id", "sort_key": "created_at"},
+                {"index_name": INDEX_BY_PARENT_MESSAGE_ID, "partition_key": MESSAGE_FIELD_PARENT_ID},
+                {"index_name": INDEX_BY_THREAD_CREATED_AT, "partition_key": MESSAGE_FIELD_THREAD_ID, "sort_key": "created_at"},
+                {"index_name": INDEX_BY_THREAD_ROOT_MESSAGE_ID, "partition_key": MESSAGE_FIELD_THREAD_ROOT_ID},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         TableDef(os.getenv("DDB_USER_EVENTS", "UserEvents"), "user_id", "event_id"),
         TableDef(os.getenv("DDB_USERS", "Users"), "user_id"),
         TableDef(os.getenv("DDB_USER_SEARCH", "UserSearch"), "token"),
@@ -434,6 +459,16 @@ def _table_defs() -> List[TableDef]:
         ),
         # MessageReportContext: pk=(report_id, message_id)
         TableDef(_resolve_table_name(S.message_report_context_table_name, "MessageReportContext"), "report_id", "message_id"),
+        # MessageThreads: pk=id, GSIs ByConversationCreatedAt + ByRootMessage
+        TableDef(
+            _resolve_table_name(S.message_threads_table_name, "MessageThreads"),
+            THREAD_FIELD_ID,
+            gsi=[
+                {"index_name": INDEX_BY_CONVERSATION_CREATED_AT, "partition_key": THREAD_FIELD_CONVERSATION_ID, "sort_key": THREAD_FIELD_CREATED_AT},
+                {"index_name": INDEX_BY_ROOT_MESSAGE, "partition_key": THREAD_FIELD_ROOT_MESSAGE_ID},
+            ],
+            attr_types={THREAD_FIELD_CREATED_AT: "N"},
+        ),
         # MessageLegalHolds: pk=hold_id, GSIs ByConversationStatusCreatedAt + ByStatusCreatedAt
         TableDef(
             _resolve_table_name(S.message_legal_holds_table_name, "MessageLegalHolds"),

@@ -74,6 +74,7 @@ interface MessageBubbleProps {
   showSender?: boolean;
   conversationId: string;
   onReply?: (message: Message) => void;
+  onViewThread?: (message: Message) => void;
   replyToMessage?: Message;
   viewedOnceIds?: Set<string>;
   onViewOnce?: (messageId: string) => void;
@@ -278,7 +279,7 @@ function MeetingPollCard({ pollStub, conversationId, isOwn }: MeetingPollCardPro
   );
 }
 
-export function MessageBubble({ message, isOwn, showSender, conversationId, onReply, replyToMessage, viewedOnceIds, onViewOnce }: MessageBubbleProps) {
+export function MessageBubble({ message, isOwn, showSender, conversationId, onReply, onViewThread, replyToMessage, viewedOnceIds, onViewOnce }: MessageBubbleProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [forwardOpen, setForwardOpen] = useState(false);
@@ -468,6 +469,13 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
     hour: "numeric",
     minute: "2-digit",
   });
+  const threadReplyCount = typeof message.thread_reply_count === "number" ? message.thread_reply_count : undefined;
+  const hasThreadEntry = !!message.has_thread && !!threadReplyCount && threadReplyCount > 0;
+  const threadReplyLabel = threadReplyCount === 1 ? "1 reply" : `${threadReplyCount ?? 0} replies`;
+  const threadLastActivityLabel =
+    message.thread_last_reply_at && message.thread_last_reply_at > 0
+      ? new Date(message.thread_last_reply_at * 1000).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+      : undefined;
 
   if (message.revoked_at || message.revoked) {
     return (
@@ -1369,6 +1377,29 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 </button>
               ))}
             </div>
+          )}
+
+          {hasThreadEntry && (
+            <button
+              type="button"
+              onClick={() => onViewThread?.(message)}
+              className={cn(
+                "mt-1 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
+                isOwn
+                  ? "border-primary-foreground/30 bg-primary-foreground/10 hover:bg-primary-foreground/20"
+                  : "border-border bg-background/70 hover:bg-muted",
+              )}
+            >
+              <span className="font-medium">View thread</span>
+              <span aria-hidden>·</span>
+              <span>{threadReplyLabel}</span>
+              {threadLastActivityLabel && (
+                <>
+                  <span aria-hidden>·</span>
+                  <span>Last activity {threadLastActivityLabel}</span>
+                </>
+              )}
+            </button>
           )}
 
           <div className={cn(

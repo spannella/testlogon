@@ -44,6 +44,10 @@ from app.metrics import (
     record_messaging_gallery_request,
     record_messaging_message_control_action,
     record_messaging_report_validation_error,
+    record_messaging_thread_promotion_event,
+    record_messaging_thread_promotion_retry,
+    record_messaging_thread_invalid_cursor,
+    record_messaging_thread_query_latency,
 )
 from app.core.settings import S
 from app.core.cursor import decode_cursor, encode_cursor
@@ -75,6 +79,17 @@ from app.services.messaging_archive_export import build_case_export_bundle
 from app.services.signature_packet_store import get_signature_packet_progress_for_user
 from app.services.subscription_access import require_subscription_access
 from app.services.internal_api_entitlements import enforce_internal_api_entitlement
+from app.services.messaging_thread_contract import (
+    MESSAGE_FIELD_PARENT_ID,
+    MESSAGE_FIELD_REPLY_TO_ID,
+    MESSAGE_FIELD_THREAD_ID,
+    MESSAGE_FIELD_THREAD_ROOT_ID,
+)
+from app.services.messaging_threads_store import (
+    create_message_thread_record,
+    find_thread_for_root_message,
+    get_message_thread_record,
+)
 from app.services.usage_metering import (
     build_usage_event,
     build_usage_source_idempotency_key,
@@ -104,6 +119,33 @@ DDB_PRESENCE = os.getenv("DDB_PRESENCE", "UserPresence")
 DDB_TYPING = os.getenv("DDB_TYPING", "Typing")
 
 DDB_MESSAGE_EDITS = os.getenv("DDB_MESSAGE_EDITS", "MessageEdits")
+
+
+def _safe_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default))
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        logger.warning("Invalid integer env override for %s=%r; using default=%d", name, raw, default)
+        return default
+
+
+MESSAGING_THREAD_CURSOR_SECRET = os.getenv("MESSAGING_THREAD_CURSOR_SECRET", "").strip()
+MESSAGING_THREAD_CURSOR_PREVIOUS_SECRETS = [
+    value.strip()
+    for value in os.getenv("MESSAGING_THREAD_CURSOR_PREVIOUS_SECRETS", "").split(",")
+    if value.strip()
+]
+MESSAGING_THREAD_CURSOR_TTL_SECONDS = max(60, _safe_int_env("MESSAGING_THREAD_CURSOR_TTL_SECONDS", 3600))
+MESSAGING_THREAD_CURSOR_ALLOW_LEGACY = os.getenv("MESSAGING_THREAD_CURSOR_ALLOW_LEGACY", "1") not in ("0", "false", "False")
+MESSAGING_THREAD_CURSOR_ALLOW_LEGACY_SIGNED_FIELDS = os.getenv("MESSAGING_THREAD_CURSOR_ALLOW_LEGACY_SIGNED_FIELDS", "0") not in (
+    "0",
+    "false",
+    "False",
+)
+MESSAGING_THREAD_CURSOR_MAX_CHARS = max(256, _safe_int_env("MESSAGING_THREAD_CURSOR_MAX_CHARS", 4096))
+MESSAGING_THREAD_CURSOR_VERSION = 1
+MESSAGING_THREAD_CURSOR_ALG = "HS256"
 DDB_MESSAGE_VIEWS = os.getenv("DDB_MESSAGE_VIEWS", "MessageViews")
 DDB_MESSAGE_RECEIPTS = os.getenv("DDB_MESSAGE_RECEIPTS", "MessageReceipts")
 DDB_MESSAGE_CONSUMPTION = os.getenv("DDB_MESSAGE_CONSUMPTION", "MessageConsumption")
@@ -594,6 +636,23 @@ def _is_helpdesk_bridge_mode_enabled_for(*, user_id: str, group_id: str) -> bool
         return bool(tenant_id and tenant_id in enabled_tenant_ids)
     return False
 
+
+def _is_thread_promotion_enabled_for(*, user_id: str) -> bool:
+    mode = os.getenv("MESSAGING_THREAD_PROMOTION_MODE", "enabled").strip().lower()
+    if mode in {"enabled", "on", "true", "1"}:
+        return True
+    if mode in {"disabled", "off", "false", "0", ""}:
+        return False
+    tenant_id = _resolve_user_tenant_id(user_id)
+    if mode in {"internal", "pilot_internal"}:
+        internal_tenant_ids = _csv_env_set("MESSAGING_THREAD_PROMOTION_INTERNAL_TENANT_IDS", default="internal")
+        return bool(tenant_id and tenant_id in internal_tenant_ids)
+    if mode in {"selective", "tenant"}:
+        enabled_tenant_ids = _csv_env_set("MESSAGING_THREAD_PROMOTION_ENABLED_TENANT_IDS")
+        return bool(tenant_id and tenant_id in enabled_tenant_ids)
+    return False
+
+
 def _helpdesk_virtual_participant_id(group_id: str) -> str:
     return f"helpdesk_group:{group_id}"
 
@@ -784,6 +843,9 @@ class SendTextMessageIn(BaseModel):
     text: Optional[str] = Field(default=None, min_length=1, max_length=MESSAGE_TEXT_MAX_CHARS)
     body: Optional[str] = None
     reply_to_message_id: Optional[str] = None
+    parent_message_id: Optional[str] = None
+    thread_id: Optional[str] = None
+    thread_root_message_id: Optional[str] = None
     preview: Optional[LinkPreviewIn] = None
     encryption: Optional[MessageEncryptionEnvelope] = None
     send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
@@ -1171,7 +1233,13 @@ class MessageOut(BaseModel):
     locked_images: Optional[List[Dict[str, Any]]] = None  # None = hidden (not unlocked)
     locked_image_count: Optional[int] = None
 
-    reply_to_message_id: Optional[str] = None
+    reply_to_message_id: Optional[str] = Field(default=None, alias=MESSAGE_FIELD_REPLY_TO_ID)
+    parent_message_id: Optional[str] = Field(default=None, alias=MESSAGE_FIELD_PARENT_ID)
+    thread_id: Optional[str] = Field(default=None, alias=MESSAGE_FIELD_THREAD_ID)
+    thread_root_message_id: Optional[str] = Field(default=None, alias=MESSAGE_FIELD_THREAD_ROOT_ID)
+    has_thread: bool = False
+    thread_reply_count: Optional[int] = None
+    thread_last_reply_at: Optional[int] = None
     forwarded_from: Optional[Dict[str, Any]] = None
     forward_note: Optional[str] = None
     edited_at: Optional[int] = None
@@ -1236,6 +1304,12 @@ class GalleryItemOut(BaseModel):
 class GalleryPageOut(BaseModel):
     items: List[GalleryItemOut]
     next_cursor: Optional[str] = None
+
+
+class ThreadMessagesPageOut(BaseModel):
+    items: List[MessageOut]
+    next_cursor: Optional[str] = None
+    unread_count: int = 0
 
 
 HELPDESK_MASKED_SENDER_ID = "Helpdesk"
@@ -2455,6 +2529,15 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         meeting_poll_out = {k: raw.get(k) for k in
             ["poll_id", "creator_id", "title", "duration_minutes", "status", "confirmed_slot_id"]}
 
+    thread_id_value = str(merged_item.get(MESSAGE_FIELD_THREAD_ID) or "").strip()
+    has_thread = False
+    thread_reply_count: Optional[int] = None
+    thread_last_reply_at: Optional[int] = None
+    if thread_id_value:
+        thread_count, thread_last_reply_at = _thread_summary(conversation_id, thread_id_value)
+        thread_reply_count = max(thread_count - 1, 0)
+        has_thread = thread_reply_count > 0
+
     return MessageOut(
         conversation_id=merged_item["conversation_id"],
         message_id=merged_item["message_id"],
@@ -2472,7 +2555,13 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         free_images=free_images_out,
         locked_images=locked_images_out,
         locked_image_count=locked_image_count,
-        reply_to_message_id=merged_item.get("reply_to_message_id"),
+        reply_to_message_id=merged_item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=merged_item.get(MESSAGE_FIELD_PARENT_ID),
+        thread_id=merged_item.get(MESSAGE_FIELD_THREAD_ID),
+        thread_root_message_id=merged_item.get(MESSAGE_FIELD_THREAD_ROOT_ID),
+        has_thread=has_thread,
+        thread_reply_count=thread_reply_count,
+        thread_last_reply_at=thread_last_reply_at,
         forwarded_from=merged_item.get("forwarded_from"),
         forward_note=merged_item.get("forward_note"),
         edited_at=int(merged_item.get("edited_at", 0)) or None,
@@ -2505,6 +2594,30 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
 def _serialize_message_event_payload(message_item: dict, viewer_user_id: str) -> dict:
     """Serialize a message item to a JSON-safe event payload."""
     return _message_out_from_item(message_item, viewer_user_id).model_dump(exclude_none=True)
+
+
+def _thread_summary(conversation_id: str, thread_id: str) -> tuple[int, Optional[int]]:
+    count = 0
+    last_created_at: Optional[int] = None
+    query_kwargs: Dict[str, Any] = {
+        "IndexName": "ByThreadCreatedAt",
+        "KeyConditionExpression": Key(MESSAGE_FIELD_THREAD_ID).eq(thread_id),
+        "ScanIndexForward": True,
+    }
+    while True:
+        resp = tbl_msgs.query(**query_kwargs)
+        for item in resp.get("Items", []):
+            if str(item.get("conversation_id") or "") != conversation_id:
+                continue
+            count += 1
+            created_at = int(item.get("created_at") or 0)
+            if created_at and (last_created_at is None or created_at > last_created_at):
+                last_created_at = created_at
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        query_kwargs["ExclusiveStartKey"] = lek
+    return count, last_created_at
 
 
 def _project_message_sender_id(*, message_item: dict, viewer_user_id: str, conversation_id: str) -> str:
@@ -3654,6 +3767,35 @@ def fanout_event_to_conversation(
             )
 
 
+def _fanout_new_message_event(
+    *,
+    conversation_id: str,
+    sender_id: str,
+    message_item: dict,
+    payload: dict,
+    respect_mute: bool = False,
+) -> None:
+    thread_id = str(message_item.get(MESSAGE_FIELD_THREAD_ID) or "").strip()
+    thread_root_message_id = str(message_item.get(MESSAGE_FIELD_THREAD_ROOT_ID) or "").strip()
+    event_type = "message:thread_new" if thread_id else "message:new"
+    enriched_payload = dict(payload)
+    if thread_id:
+        enriched_payload.setdefault("thread_id", thread_id)
+        if thread_root_message_id:
+            enriched_payload.setdefault("thread_root_message_id", thread_root_message_id)
+        enriched_payload.setdefault("notification_scope", "thread")
+    else:
+        enriched_payload.setdefault("notification_scope", "conversation")
+
+    fanout_event_to_conversation(
+        conversation_id=conversation_id,
+        sender_id=sender_id,
+        event_type=event_type,
+        payload=enriched_payload,
+        respect_mute=respect_mute,
+    )
+
+
 def _reaction_summaries(message_item: dict, viewer_user_id: str) -> tuple[Dict[str, int], List[str]]:
     reactions = message_item.get("reactions") or {}
     counts: Dict[str, int] = {}
@@ -3700,6 +3842,210 @@ def _validate_reply_target(conversation_id: str, reply_to_message_id: Optional[s
     msg = _get_message_or_404(conversation_id, reply_to_message_id)
     if isinstance(msg, dict) and msg.get("revoked_at"):
         raise HTTPException(400, "Cannot reply to a revoked message")
+
+
+def _load_message_item(conversation_id: str, message_id: str) -> Optional[dict]:
+    resp = tbl_msgs.get_item(Key={"conversation_id": conversation_id, "message_id": message_id})
+    return resp.get("Item")
+
+
+def _resolve_thread_root_message_id(conversation_id: str, parent_message: dict) -> str:
+    threaded_root = str(parent_message.get(MESSAGE_FIELD_THREAD_ROOT_ID) or "").strip()
+    if threaded_root:
+        return threaded_root
+
+    cursor = str(parent_message.get("message_id") or "")
+    visited: set[str] = set()
+    while cursor and cursor not in visited:
+        visited.add(cursor)
+        current = _load_message_item(conversation_id, cursor)
+        if not current:
+            raise HTTPException(status_code=400, detail="Reply target ancestry is invalid")
+        if str(current.get("conversation_id") or "") != conversation_id:
+            raise HTTPException(status_code=400, detail="Reply target ancestry crosses conversations")
+        parent_id = str(current.get(MESSAGE_FIELD_PARENT_ID) or "").strip()
+        if not parent_id:
+            return str(current.get("message_id") or cursor)
+        cursor = parent_id
+    if cursor in visited:
+        raise HTTPException(status_code=400, detail="Reply target ancestry contains a cycle")
+    return str(parent_message.get("message_id") or "")
+
+
+def _validate_reply_parent_and_thread_context(conversation_id: str, parent_message: dict) -> None:
+    parent_conversation_id = str(parent_message.get("conversation_id") or conversation_id)
+    if parent_conversation_id and parent_conversation_id != conversation_id:
+        raise HTTPException(status_code=400, detail="Reply target is not in this conversation")
+
+    thread_id = str(parent_message.get(MESSAGE_FIELD_THREAD_ID) or "").strip()
+    if not thread_id:
+        return
+    thread = get_message_thread_record(thread_id)
+    if not thread:
+        raise HTTPException(status_code=400, detail="Reply target thread does not exist")
+    if thread.conversation_id != conversation_id:
+        raise HTTPException(status_code=400, detail="Reply target thread is not in this conversation")
+
+    declared_root = str(parent_message.get(MESSAGE_FIELD_THREAD_ROOT_ID) or "").strip()
+    if declared_root and thread.root_message_id != declared_root:
+        raise HTTPException(status_code=409, detail="Reply target thread root mismatch")
+
+
+def _count_direct_replies(conversation_id: str, root_message_id: str) -> int:
+    count = 0
+    query_kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": Key("conversation_id").eq(conversation_id),
+    }
+    while True:
+        resp = tbl_msgs.query(**query_kwargs)
+        for item in resp.get("Items", []):
+            if str(item.get(MESSAGE_FIELD_PARENT_ID) or "") == root_message_id:
+                count += 1
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        query_kwargs["ExclusiveStartKey"] = lek
+    return count
+
+
+def _promote_existing_subtree(conversation_id: str, root_message_id: str, thread_id: str) -> None:
+    items: List[dict] = []
+    query_kwargs: Dict[str, Any] = {
+        "KeyConditionExpression": Key("conversation_id").eq(conversation_id),
+    }
+    while True:
+        resp = tbl_msgs.query(**query_kwargs)
+        items.extend(resp.get("Items", []))
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        query_kwargs["ExclusiveStartKey"] = lek
+
+    by_parent: Dict[str, List[str]] = {}
+    by_message_id: Dict[str, dict] = {}
+    for item in items:
+        message_id = str(item.get("message_id") or "")
+        if not message_id:
+            continue
+        by_message_id[message_id] = item
+        parent_id = str(item.get(MESSAGE_FIELD_PARENT_ID) or "")
+        if parent_id:
+            by_parent.setdefault(parent_id, []).append(message_id)
+
+    stack = [root_message_id]
+    seen: set[str] = set()
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        if current in by_message_id:
+            tbl_msgs.update_item(
+                Key={"conversation_id": conversation_id, "message_id": current},
+                UpdateExpression=f"SET {MESSAGE_FIELD_THREAD_ID} = :tid, {MESSAGE_FIELD_THREAD_ROOT_ID} = :rid",
+                ExpressionAttributeValues={":tid": thread_id, ":rid": root_message_id},
+            )
+        stack.extend(by_parent.get(current, []))
+
+
+def _deterministic_thread_id(root_message_id: str) -> str:
+    return f"thr_{root_message_id}"
+
+
+def _is_retryable_thread_creation_error(exc: ClientError) -> bool:
+    code = str(exc.response.get("Error", {}).get("Code") or "")
+    return code in {
+        "TransactionCanceledException",
+        "ProvisionedThroughputExceededException",
+        "ThrottlingException",
+        "InternalServerError",
+    }
+
+
+def _ensure_thread_record_for_root(
+    *,
+    conversation_id: str,
+    root_message_id: str,
+    actor_user_id: str,
+    created_at: int,
+    max_attempts: int = 3,
+):
+    thread_id = _deterministic_thread_id(root_message_id)
+    for _attempt in range(max_attempts):
+        existing = find_thread_for_root_message(root_message_id)
+        if existing:
+            record_messaging_thread_promotion_event(stage="thread_record", outcome="reused_existing")
+            return existing
+        try:
+            created = create_message_thread_record(
+                thread_id=thread_id,
+                conversation_id=conversation_id,
+                root_message_id=root_message_id,
+                created_at=created_at,
+                created_by=actor_user_id,
+            )
+            record_messaging_thread_promotion_event(stage="thread_record", outcome="created")
+            return created
+        except ClientError as exc:
+            if not _is_retryable_thread_creation_error(exc):
+                record_messaging_thread_promotion_event(stage="thread_record", outcome="failed_non_retryable")
+                raise
+            record_messaging_thread_promotion_retry(reason=str(exc.response.get("Error", {}).get("Code") or "retryable"))
+            continue
+    existing = find_thread_for_root_message(root_message_id)
+    if existing:
+        record_messaging_thread_promotion_event(stage="thread_record", outcome="reused_after_retry")
+        return existing
+    record_messaging_thread_promotion_event(stage="thread_record", outcome="failed_exhausted")
+    raise RuntimeError(f"Failed to resolve thread record for root={root_message_id}")
+
+
+def _build_reply_linkage_fields(
+    *,
+    conversation_id: str,
+    reply_to_message_id: Optional[str],
+    actor_user_id: str,
+    created_at: int,
+) -> Dict[str, str]:
+    if not reply_to_message_id:
+        return {}
+    parent_message = _get_message_or_404(conversation_id, reply_to_message_id)
+    _validate_reply_parent_and_thread_context(conversation_id, parent_message)
+    parent_message_id = str(parent_message.get("message_id") or reply_to_message_id)
+    linkage = {
+        MESSAGE_FIELD_REPLY_TO_ID: parent_message_id,
+        MESSAGE_FIELD_PARENT_ID: parent_message_id,
+    }
+
+    existing_thread_id = str(parent_message.get(MESSAGE_FIELD_THREAD_ID) or "")
+    if existing_thread_id:
+        linkage[MESSAGE_FIELD_THREAD_ID] = existing_thread_id
+        linkage[MESSAGE_FIELD_THREAD_ROOT_ID] = str(parent_message.get(MESSAGE_FIELD_THREAD_ROOT_ID) or parent_message_id)
+        record_messaging_thread_promotion_event(stage="linkage", outcome="reused_parent_thread")
+        return linkage
+
+    root_message_id = _resolve_thread_root_message_id(conversation_id, parent_message)
+    direct_reply_count = _count_direct_replies(conversation_id, root_message_id)
+    parent_is_reply = bool(parent_message.get(MESSAGE_FIELD_PARENT_ID))
+    should_promote = parent_is_reply or direct_reply_count >= 1
+    if not should_promote:
+        record_messaging_thread_promotion_event(stage="linkage", outcome="no_promotion")
+        return linkage
+    if not _is_thread_promotion_enabled_for(user_id=actor_user_id):
+        record_messaging_thread_promotion_event(stage="linkage", outcome="rollout_disabled")
+        return linkage
+
+    thread_record = _ensure_thread_record_for_root(
+        conversation_id=conversation_id,
+        root_message_id=root_message_id,
+        actor_user_id=actor_user_id,
+        created_at=created_at,
+    )
+    _promote_existing_subtree(conversation_id, root_message_id, thread_record.id)
+    linkage[MESSAGE_FIELD_THREAD_ID] = thread_record.id
+    linkage[MESSAGE_FIELD_THREAD_ROOT_ID] = root_message_id
+    record_messaging_thread_promotion_event(stage="linkage", outcome="promoted")
+    return linkage
 
 
 def _message_key(conversation_id: str, message_id: str) -> str:
@@ -4916,6 +5262,390 @@ def list_messages(
     return out
 
 
+def _thread_cursor_signing_secrets() -> List[str]:
+    # Prefer dedicated thread cursor secret; fall back to existing app secret for safer defaults.
+    primary = MESSAGING_THREAD_CURSOR_SECRET or S.ui_access_token_secret or "dev-insecure-thread-cursor-secret"
+    secrets = [primary]
+    for old_secret in MESSAGING_THREAD_CURSOR_PREVIOUS_SECRETS:
+        if old_secret and old_secret not in secrets:
+            secrets.append(old_secret)
+    return secrets
+
+
+def _sign_thread_cursor_payload(payload_b64: str, *, secret: Optional[str] = None) -> str:
+    secret = secret or _thread_cursor_signing_secrets()[0]
+    digest = hmac.new(secret.encode("utf-8"), payload_b64.encode("utf-8"), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode("utf-8").rstrip("=")
+
+
+def _encode_thread_messages_cursor(
+    *,
+    last_evaluated_key: Optional[Dict[str, Any]],
+    thread_id: str,
+    conversation_id: str,
+    user_id: str,
+) -> Optional[str]:
+    if not isinstance(last_evaluated_key, dict) or not last_evaluated_key:
+        return None
+    payload = {
+        "version": MESSAGING_THREAD_CURSOR_VERSION,
+        "alg": MESSAGING_THREAD_CURSOR_ALG,
+        "v": MESSAGING_THREAD_CURSOR_VERSION,
+        "tid": thread_id,
+        "cid": conversation_id,
+        "uid": user_id,
+        "exp": int(time.time()) + MESSAGING_THREAD_CURSOR_TTL_SECONDS,
+        "lek": last_evaluated_key,
+    }
+    payload_raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    payload_b64 = base64.urlsafe_b64encode(payload_raw).decode("utf-8").rstrip("=")
+    signature = _sign_thread_cursor_payload(payload_b64)
+    return f"{payload_b64}.{signature}"
+
+
+def _decode_thread_messages_cursor_or_400(
+    *,
+    thread_id: str,
+    conversation_id: str,
+    user_id: str,
+    cursor: str,
+) -> Dict[str, Any]:
+    def _validate_thread_lek_or_400(lek: Any) -> Dict[str, Any]:
+        if not isinstance(lek, dict) or not lek:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_cursor", "message": "cursor payload is malformed"},
+            )
+        lek_thread_id = str(lek.get(MESSAGE_FIELD_THREAD_ID) or "")
+        if lek_thread_id != thread_id:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_cursor", "message": "cursor does not match requested thread_id"},
+            )
+        lek_conversation_id = str(lek.get("conversation_id") or "")
+        if lek_conversation_id != conversation_id:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_cursor", "message": "cursor does not match requested conversation"},
+            )
+        if not str(lek.get("message_id") or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_cursor", "message": "cursor payload is malformed"},
+            )
+        return lek
+
+    raw = (cursor or "").strip()
+    if not raw:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_cursor", "message": "cursor is required"},
+        )
+    if len(raw) > MESSAGING_THREAD_CURSOR_MAX_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_cursor", "message": "cursor is too long"},
+        )
+
+    payload_b64: Optional[str] = None
+    signature: Optional[str] = None
+    if "." in raw:
+        payload_b64, signature = raw.rsplit(".", 1)
+    elif MESSAGING_THREAD_CURSOR_ALLOW_LEGACY:
+        decoded_legacy = decode_cursor(raw)
+        if not isinstance(decoded_legacy, dict):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_cursor",
+                    "message": "cursor must be urlsafe base64 encoded JSON for thread pagination",
+                },
+            )
+        return _validate_thread_lek_or_400(decoded_legacy)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_cursor", "message": "cursor signature is required"},
+        )
+
+    valid_signature = any(
+        hmac.compare_digest(_sign_thread_cursor_payload(payload_b64, secret=secret), signature or "")
+        for secret in _thread_cursor_signing_secrets()
+    )
+    if not valid_signature:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_cursor", "message": "cursor signature is invalid"},
+        )
+    try:
+        pad = "=" * ((4 - (len(payload_b64 or "") % 4)) % 4)
+        payload_raw = base64.urlsafe_b64decode(((payload_b64 or "") + pad).encode("utf-8"))
+        payload = json.loads(payload_raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_cursor", "message": "cursor payload is malformed"},
+        )
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_cursor", "message": "cursor payload is malformed"},
+        )
+    if "version" not in payload:
+        if MESSAGING_THREAD_CURSOR_ALLOW_LEGACY_SIGNED_FIELDS and "v" in payload:
+            version = payload.get("v")
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_cursor", "message": "cursor version is missing"},
+            )
+    else:
+        version = payload.get("version")
+    try:
+        version_num = int(version or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_cursor", "message": "cursor version is malformed"},
+        )
+    if version_num != MESSAGING_THREAD_CURSOR_VERSION:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_cursor", "message": "cursor version is unsupported"},
+        )
+    if "alg" not in payload:
+        if MESSAGING_THREAD_CURSOR_ALLOW_LEGACY_SIGNED_FIELDS:
+            alg = MESSAGING_THREAD_CURSOR_ALG
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_cursor", "message": "cursor algorithm is missing"},
+            )
+    else:
+        alg = str(payload.get("alg") or "").upper()
+    if alg != MESSAGING_THREAD_CURSOR_ALG:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_cursor", "message": "cursor algorithm is unsupported"},
+        )
+    try:
+        exp = int(payload.get("exp", 0) or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_cursor", "message": "cursor expiry is malformed"},
+        )
+    if exp <= int(time.time()):
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_cursor", "message": "cursor has expired"},
+        )
+    if str(payload.get("tid") or "") != thread_id:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_cursor", "message": "cursor does not match requested thread_id"},
+        )
+    if str(payload.get("cid") or "") != conversation_id:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_cursor", "message": "cursor does not match requested conversation"},
+        )
+    if str(payload.get("uid") or "") != user_id:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_cursor", "message": "cursor does not match current user"},
+        )
+    return _validate_thread_lek_or_400(payload.get("lek"))
+
+
+def _normalize_cursor_error_reason(detail: Any) -> str:
+    reason = "unknown"
+    if isinstance(detail, dict):
+        reason = str(detail.get("message") or detail.get("code") or "unknown")
+    elif isinstance(detail, str):
+        reason = detail
+    reason = reason.strip() or "unknown"
+    reason = re.sub(r"[^a-zA-Z0-9 .:_-]", "?", reason)
+    return reason[:200]
+
+
+def _cursor_error_category(detail: Any) -> str:
+    reason = _normalize_cursor_error_reason(detail).lower()
+    if "too long" in reason:
+        return "too_long"
+    if "signature" in reason:
+        return "signature"
+    if "expired" in reason:
+        return "expired"
+    if "algorithm" in reason:
+        return "algorithm"
+    if "version" in reason:
+        return "version"
+    if "payload" in reason:
+        return "payload"
+    if "urlsafe base64" in reason:
+        return "payload"
+    if "match requested thread_id" in reason:
+        return "scope_thread"
+    if "match requested conversation" in reason:
+        return "scope_conversation"
+    if "match current user" in reason:
+        return "scope_user"
+    return "other"
+
+
+@router.get("/threads/{thread_id}/messages", response_model=ThreadMessagesPageOut)
+def list_thread_messages(
+    thread_id: str,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    cursor: Optional[str] = None,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    started = time.perf_counter()
+    outcome = "success"
+    thread = get_message_thread_record(thread_id)
+    if not thread:
+        outcome = "not_found"
+        record_messaging_thread_query_latency(
+            endpoint="list_thread_messages",
+            outcome=outcome,
+            elapsed_seconds=time.perf_counter() - started,
+        )
+        audit_event(
+            "messaging_thread_query_not_found",
+            user_id,
+            req,
+            outcome=outcome,
+            thread_id=thread_id,
+        )
+        raise HTTPException(status_code=404, detail="Thread not found")
+    try:
+        participant = require_participant_active(user_id, thread.conversation_id)
+    except HTTPException:
+        outcome = "forbidden"
+        record_messaging_thread_query_latency(
+            endpoint="list_thread_messages",
+            outcome=outcome,
+            elapsed_seconds=time.perf_counter() - started,
+        )
+        audit_event(
+            "messaging_thread_query_forbidden",
+            user_id,
+            req,
+            outcome=outcome,
+            thread_id=thread_id,
+            conversation_id=thread.conversation_id,
+        )
+        raise
+
+    try:
+        parts = tbl_parts.query(
+            IndexName="GSI1",
+            KeyConditionExpression=Key("GSI1PK").eq(thread.conversation_id),
+        ).get("Items", [])
+    except Exception:
+        parts = []
+    if not isinstance(parts, list):
+        parts = []
+
+    kwargs: Dict[str, Any] = {
+        "IndexName": "ByThreadCreatedAt",
+        "KeyConditionExpression": Key(MESSAGE_FIELD_THREAD_ID).eq(thread_id),
+        "ScanIndexForward": True,
+        "Limit": limit,
+    }
+    if cursor:
+        try:
+            kwargs["ExclusiveStartKey"] = _decode_thread_messages_cursor_or_400(
+                thread_id=thread_id,
+                conversation_id=thread.conversation_id,
+                user_id=user_id,
+                cursor=cursor,
+            )
+        except HTTPException as exc:
+            outcome = "invalid_cursor"
+            reason_category = _cursor_error_category(exc.detail)
+            record_messaging_thread_query_latency(
+                endpoint="list_thread_messages",
+                outcome=outcome,
+                elapsed_seconds=time.perf_counter() - started,
+            )
+            record_messaging_thread_invalid_cursor(
+                endpoint="list_thread_messages",
+                reason_category=reason_category,
+            )
+            audit_event(
+                "messaging_thread_query_invalid_cursor",
+                user_id,
+                req,
+                outcome=outcome,
+                reason=_normalize_cursor_error_reason(exc.detail),
+                reason_category=reason_category,
+                thread_id=thread_id,
+                conversation_id=thread.conversation_id,
+            )
+            raise
+    try:
+        resp = tbl_msgs.query(**kwargs)
+    except Exception:
+        outcome = "error"
+        record_messaging_thread_query_latency(
+            endpoint="list_thread_messages",
+            outcome=outcome,
+            elapsed_seconds=time.perf_counter() - started,
+        )
+        audit_event(
+            "messaging_thread_query_failed",
+            user_id,
+            req,
+            outcome=outcome,
+            thread_id=thread_id,
+            conversation_id=thread.conversation_id,
+        )
+        logger.exception(
+            "messaging.thread_read query failed",
+            extra={"thread_id": thread_id, "user_id": user_id},
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "thread_query_failed",
+                "message": "thread message query temporarily unavailable",
+            },
+        )
+    raw_items = resp.get("Items", [])
+
+    hidden_ids: set[str] = set()
+    if MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED:
+        message_ids = [str(item.get("message_id") or "") for item in raw_items]
+        hidden_ids = _load_hidden_message_ids_for_user(thread.conversation_id, user_id, message_ids)
+
+    items: List[MessageOut] = []
+    for raw in raw_items:
+        if raw.get("message_id") in hidden_ids:
+            continue
+        if not _filter_message_visible(raw, user_id):
+            continue
+        msg = _message_out_from_item(raw, user_id)
+        items.append(_apply_message_receipts(msg, raw, parts))
+
+    next_cursor = _encode_thread_messages_cursor(
+        last_evaluated_key=resp.get("LastEvaluatedKey"),
+        thread_id=thread_id,
+        conversation_id=thread.conversation_id,
+        user_id=user_id,
+    )
+    last_read_at = int(participant.get("last_read_at", 0) or 0)
+    unread_count = sum(1 for msg in items if int(msg.created_at) > last_read_at and msg.sender_id != user_id)
+    record_messaging_thread_query_latency(
+        endpoint="list_thread_messages",
+        outcome=outcome,
+        elapsed_seconds=time.perf_counter() - started,
+    )
+    return ThreadMessagesPageOut(items=items, next_cursor=next_cursor, unread_count=unread_count)
+
+
 @router.get("/conversations/{conversation_id}/messages/search", response_model=List[MessageOut])
 def search_messages_in_conversation(
     conversation_id: str,
@@ -5316,8 +6046,14 @@ def send_text_message(
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
         item["ttl"] = ttl
-    if inp.reply_to_message_id:
-        item["reply_to_message_id"] = inp.reply_to_message_id
+    item.update(
+        _build_reply_linkage_fields(
+            conversation_id=conversation_id,
+            reply_to_message_id=inp.reply_to_message_id,
+            actor_user_id=user_id,
+            created_at=ts,
+        )
+    )
 
     tbl_msgs.put_item(Item=item)
     _sync_gallery_index_message(item)
@@ -5344,7 +6080,10 @@ def send_text_message(
         kind="text",
         text=message_text if not is_encrypted else None,
         preview=link_preview,
-        reply_to_message_id=inp.reply_to_message_id,
+        reply_to_message_id=item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=item.get(MESSAGE_FIELD_PARENT_ID),
+        thread_id=item.get(MESSAGE_FIELD_THREAD_ID),
+        thread_root_message_id=item.get(MESSAGE_FIELD_THREAD_ROOT_ID),
         is_encrypted=is_encrypted,
         encryption=inp.encryption,
         scheduled=is_scheduled,
@@ -5363,10 +6102,10 @@ def send_text_message(
         message = _apply_message_receipts(message, item, participants)
 
     if not is_scheduled:
-        fanout_event_to_conversation(
+        _fanout_new_message_event(
             conversation_id=conversation_id,
             sender_id=user_id,
-            event_type="message:new",
+            message_item=item,
             payload={
                 "message_id": mid,
                 "created_at": ts,
@@ -5384,7 +6123,8 @@ def send_text_message(
         message_id=mid,
         kind="text",
         is_encrypted=is_encrypted,
-        reply_to_message_id=inp.reply_to_message_id,
+        reply_to_message_id=item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=item.get(MESSAGE_FIELD_PARENT_ID),
         scheduled=is_scheduled,
         tip_amount_cents=tip_amount_cents,
     )
@@ -5547,8 +6287,14 @@ def create_image_message(
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
         item["ttl"] = ttl
-    if inp.reply_to_message_id:
-        item["reply_to_message_id"] = inp.reply_to_message_id
+    item.update(
+        _build_reply_linkage_fields(
+            conversation_id=conversation_id,
+            reply_to_message_id=inp.reply_to_message_id,
+            actor_user_id=user_id,
+            created_at=ts,
+        )
+    )
     if inp.consumption_policy != CONSUMPTION_POLICY_NONE:
         item["consumption_policy"] = inp.consumption_policy
         item["media_kind"] = "image"
@@ -5582,10 +6328,10 @@ def create_image_message(
             ExpressionAttributeValues={":ts": ts, ":p": _preview, ":mid": mid},
         )
 
-        fanout_event_to_conversation(
+        _fanout_new_message_event(
             conversation_id=conversation_id,
             sender_id=user_id,
-            event_type="message:new",
+            message_item=item,
             payload={
                 "message_id": mid,
                 "created_at": ts,
@@ -5603,7 +6349,10 @@ def create_image_message(
         image=item.get("image"),
         file=item.get("file"),
         text=inp.caption,
-        reply_to_message_id=inp.reply_to_message_id,
+        reply_to_message_id=item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=item.get(MESSAGE_FIELD_PARENT_ID),
+        thread_id=item.get(MESSAGE_FIELD_THREAD_ID),
+        thread_root_message_id=item.get(MESSAGE_FIELD_THREAD_ROOT_ID),
         consumption_policy=inp.consumption_policy if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
         media_kind="image" if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
         consumption_state=CONSUMPTION_STATE_PENDING if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
@@ -5630,7 +6379,8 @@ def create_image_message(
         conversation_id=conversation_id,
         message_id=mid,
         kind="image",
-        reply_to_message_id=inp.reply_to_message_id,
+        reply_to_message_id=item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=item.get(MESSAGE_FIELD_PARENT_ID),
         tip_amount_cents=tip_amount_cents,
     )
     _emit_message_lifecycle_archive_event_or_503(
@@ -5795,10 +6545,10 @@ def create_gallery_message(
             ExpressionAttributeValues={":ts": ts, ":p": _preview, ":mid": mid},
         )
 
-        fanout_event_to_conversation(
+        _fanout_new_message_event(
             conversation_id=conversation_id,
             sender_id=user_id,
-            event_type="message:new",
+            message_item=item,
             payload={
                 "message_id": mid,
                 "created_at": ts,
@@ -5938,10 +6688,10 @@ def create_file_share_message(
             ExpressionAttributeValues={":ts": ts, ":p": preview_text, ":mid": mid},
         )
 
-        fanout_event_to_conversation(
+        _fanout_new_message_event(
             conversation_id=conversation_id,
             sender_id=user_id,
-            event_type="message:new",
+            message_item=item,
             payload={
                 "message_id": mid,
                 "created_at": ts,
@@ -6116,10 +6866,10 @@ def create_calendar_share_message(
             UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
             ExpressionAttributeValues={":ts": ts, ":p": preview_text, ":mid": mid},
         )
-        fanout_event_to_conversation(
+        _fanout_new_message_event(
             conversation_id=conversation_id,
             sender_id=user_id,
-            event_type="message:new",
+            message_item=item,
             payload={
                 "message_id": mid,
                 "created_at": ts,
@@ -6231,10 +6981,10 @@ def create_calendar_event_message(
             UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
             ExpressionAttributeValues={":ts": ts, ":p": preview_text, ":mid": mid},
         )
-        fanout_event_to_conversation(
+        _fanout_new_message_event(
             conversation_id=conversation_id,
             sender_id=user_id,
-            event_type="message:new",
+            message_item=item,
             payload={
                 "message_id": mid,
                 "created_at": ts,
@@ -6344,10 +7094,10 @@ def create_meeting_poll_message(
         UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
         ExpressionAttributeValues={":ts": ts, ":p": preview_text, ":mid": mid},
     )
-    fanout_event_to_conversation(
+    _fanout_new_message_event(
         conversation_id=conversation_id,
         sender_id=user_id,
-        event_type="message:new",
+        message_item=item,
         payload={
             "message_id": mid,
             "created_at": ts,
@@ -6614,8 +7364,14 @@ def create_file_message(
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
         item["ttl"] = ttl
-    if inp.reply_to_message_id:
-        item["reply_to_message_id"] = inp.reply_to_message_id
+    item.update(
+        _build_reply_linkage_fields(
+            conversation_id=conversation_id,
+            reply_to_message_id=inp.reply_to_message_id,
+            actor_user_id=user_id,
+            created_at=ts,
+        )
+    )
     if inp.consumption_policy != CONSUMPTION_POLICY_NONE:
         item["consumption_policy"] = inp.consumption_policy
         item["media_kind"] = inp.kind if inp.kind in {"audio", "video"} else None
@@ -6655,7 +7411,10 @@ def create_file_message(
         kind=inp.kind,
         file=item["file"],
         preview=preview,
-        reply_to_message_id=inp.reply_to_message_id,
+        reply_to_message_id=item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=item.get(MESSAGE_FIELD_PARENT_ID),
+        thread_id=item.get(MESSAGE_FIELD_THREAD_ID),
+        thread_root_message_id=item.get(MESSAGE_FIELD_THREAD_ROOT_ID),
         consumption_policy=inp.consumption_policy if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
         media_kind=item.get("media_kind") if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
         consumption_state=CONSUMPTION_STATE_PENDING if inp.consumption_policy != CONSUMPTION_POLICY_NONE else None,
@@ -6669,7 +7428,8 @@ def create_file_message(
         conversation_id=conversation_id,
         message_id=mid,
         kind=inp.kind,
-        reply_to_message_id=inp.reply_to_message_id,
+        reply_to_message_id=item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=item.get(MESSAGE_FIELD_PARENT_ID),
     )
     _emit_message_lifecycle_archive_event_or_503(
         mutation="send",
@@ -7343,8 +8103,14 @@ def forward_message(
 
     if inp.note:
         item["forward_note"] = inp.note
-    if inp.reply_to_message_id:
-        item["reply_to_message_id"] = inp.reply_to_message_id
+    item.update(
+        _build_reply_linkage_fields(
+            conversation_id=target_conversation_id,
+            reply_to_message_id=inp.reply_to_message_id,
+            actor_user_id=user_id,
+            created_at=ts,
+        )
+    )
 
     if kind == "text":
         is_encrypted = bool(src.get("is_encrypted"))
@@ -7423,6 +8189,8 @@ def forward_message(
         message_id=mid,
         source_conversation_id=inp.source_conversation_id,
         source_message_id=inp.source_message_id,
+        reply_to_message_id=item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=item.get(MESSAGE_FIELD_PARENT_ID),
     )
     _emit_message_lifecycle_archive_event_or_503(
         mutation="send",
@@ -8912,10 +9680,10 @@ def _deliver_scheduled_message(item: dict) -> None:
         ExpressionAttributeValues={":ts": ts, ":p": preview_text},
     )
 
-    fanout_event_to_conversation(
+    _fanout_new_message_event(
         conversation_id=conversation_id,
         sender_id=user_id,
-        event_type="message:new",
+        message_item=item,
         payload={"conversation_id": conversation_id, "message_id": message_id},
     )
     # Also notify the sender — fanout excludes them by default, but they need
@@ -8924,10 +9692,15 @@ def _deliver_scheduled_message(item: dict) -> None:
     tbl_events.put_item(Item={
         "user_id": user_id,
         "event_id": _event_id(),
-        "type": "message:new",
+        "type": "message:thread_new" if item.get(MESSAGE_FIELD_THREAD_ID) else "message:new",
         "created_at": ts_notify,
         "conversation_id": conversation_id,
-        "payload": {"conversation_id": conversation_id, "message_id": message_id},
+        "payload": {
+            "conversation_id": conversation_id,
+            "message_id": message_id,
+            **({"thread_id": item.get(MESSAGE_FIELD_THREAD_ID)} if item.get(MESSAGE_FIELD_THREAD_ID) else {}),
+            "notification_scope": "thread" if item.get(MESSAGE_FIELD_THREAD_ID) else "conversation",
+        },
         "ttl": ts_notify + 7 * 24 * 3600,
     })
 

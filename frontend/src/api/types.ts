@@ -813,6 +813,12 @@ export interface Message {
   meeting_poll?: MeetingPollAttachment;
   preview?: LinkPreview;
   reply_to_message_id?: string;
+  parent_message_id?: string;
+  thread_id?: string;
+  thread_root_message_id?: string;
+  has_thread?: boolean;
+  thread_reply_count?: number;
+  thread_last_reply_at?: number;
   forwarded_from?: Record<string, unknown>;
   forward_note?: string;
   edited_at?: number;
@@ -847,6 +853,12 @@ export interface Message {
   revoked?: boolean;
 }
 
+export interface ThreadMessagesPage {
+  items: Message[];
+  next_cursor?: string | null;
+  unread_count?: number;
+}
+
 export interface LinkPreview {
   url?: string;
   title?: string;
@@ -859,6 +871,9 @@ export interface SendTextMessageReq {
   text?: string;
   encryption?: MessageEncryptionEnvelope;
   reply_to_message_id?: string;
+  parent_message_id?: string;
+  thread_id?: string;
+  thread_root_message_id?: string;
   preview?: LinkPreview;
   lock_price_cents?: number;
   lock_description?: string;

@@ -241,3 +241,51 @@ def test_once_media_consume_request_contract_shape_is_stable():
 def test_once_media_contract_version_stable_in_schema():
     schema = json.loads(ONCE_SCHEMA_PATH.read_text())
     assert schema["properties"]["messaging_contract_version"]["const"] == "2026-02-once-media-v1"
+
+
+def test_message_out_supports_nullable_thread_linkage_fields():
+    message = MessageOut(
+        conversation_id="c1",
+        message_id="m1",
+        sender_id="u1",
+        created_at=1,
+        kind="text",
+        text="hello",
+    )
+    payload = message.model_dump(exclude_none=True)
+    assert "thread_id" not in payload
+    assert "thread_root_message_id" not in payload
+    assert "parent_message_id" not in payload
+
+
+def test_swagger_includes_thread_endpoint_and_unread_contract() -> None:
+    spec = json.loads(SWAGGER_PATH.read_text())
+    paths = spec.get("paths", {})
+    schemas = spec.get("components", {}).get("schemas", {})
+
+    assert "/messaging/threads/{thread_id}/messages" in paths
+    assert "ThreadMessagesPageOut" in schemas
+    thread_page = schemas["ThreadMessagesPageOut"]
+    assert "unread_count" in thread_page.get("properties", {})
+
+
+def test_swagger_send_text_contract_includes_thread_linkage_fields() -> None:
+    spec = json.loads(SWAGGER_PATH.read_text())
+    schemas = spec.get("components", {}).get("schemas", {})
+    send_text = schemas["SendTextMessageIn"]["properties"]
+
+    assert "reply_to_message_id" in send_text
+    assert "parent_message_id" in send_text
+    assert "thread_id" in send_text
+    assert "thread_root_message_id" in send_text
+
+
+def test_frontend_types_include_thread_contract_fields() -> None:
+    frontend_types = FRONTEND_TYPES_PATH.read_text()
+
+    assert "thread_id?: string;" in frontend_types
+    assert "thread_root_message_id?: string;" in frontend_types
+    assert "thread_reply_count?: number;" in frontend_types
+    assert "export interface ThreadMessagesPage" in frontend_types
+    assert "unread_count?: number;" in frontend_types
+    assert "parent_message_id?: string;" in frontend_types
