@@ -23,9 +23,19 @@ from starlette.responses import StreamingResponse
 from app.core.aws import ddb
 from app.core.aws_clients import s3_client, sqs_client
 from app.core.cursor import decode_cursor, encode_cursor
+from app.metrics import (
+    record_newsfeed_feed_budget_hit,
+    record_newsfeed_feed_error,
+    record_newsfeed_feed_filter_usage,
+    record_newsfeed_feed_latency,
+    record_newsfeed_feed_page_depth,
+    record_newsfeed_feed_request,
+)
 from app.core.settings import S
 from app.metrics import record_newsfeed_schedule_operation
 from app.services.filemanager import download_file, get_node, get_usage_summary, norm_path
+from app.services.newsfeed_feed_query import FeedFilterParams, parse_filter_window, post_matches_filters, sort_posts_deterministically
+from app.services.rate_limit import rate_limit_feed_query
 from app.services.sessions import require_ui_session
 from app.services.subscription_access import can_access_creator
 from app.services.usage_metering import (
@@ -149,9 +159,26 @@ def new_id(prefix: str) -> str:
 def decode_cursor_or_400(cursor: Optional[str]) -> Optional[Dict[str, Any]]:
     if not cursor:
         return None
-    decoded = decode_cursor(cursor)
+    raw = str(cursor).strip()
+    max_chars = max(1, int(getattr(S, "newsfeed_feed_max_cursor_chars", 2048) or 2048))
+    if len(raw) > max_chars:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_cursor",
+                "message": "cursor exceeds maximum length",
+                "max_cursor_chars": max_chars,
+            },
+        )
+    decoded = decode_cursor(raw)
     if decoded is None:
-        raise HTTPException(status_code=400, detail="Invalid cursor")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_cursor",
+                "message": "Invalid cursor",
+            },
+        )
     return decoded
 
 
@@ -1759,6 +1786,18 @@ def has_unlocked(user_id: str, post_id: str) -> bool:
     return bool(it and it.get("unlocked") is True)
 
 
+def can_view_post(viewer_id: str, post: Dict[str, Any]) -> bool:
+    author = str(post.get("user_id") or "").strip()
+    if not author or author == viewer_id:
+        return True
+    if not can_access_creator(viewer_id, author):
+        return False
+    visibility = str(post.get("visibility") or "followers").strip().lower()
+    if visibility == "public":
+        return True
+    return is_following(viewer_id, author)
+
+
 def _dedupe_strs(values: List[str]) -> List[str]:
     seen: Set[str] = set()
     out: List[str] = []
@@ -2268,6 +2307,8 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "publish_at": req.publish_at if is_scheduled else None,
         "schedule_timezone": req.schedule_timezone if is_scheduled else None,
         "scheduled_at_local": req.scheduled_at_local if is_scheduled else None,
+        "GSI2PK": f"POST_AUTHOR#{user_id}",
+        "GSI2SK": f"{created_at}#POST#{post_id}",
         **content,
         "image_urls": req.image_urls,
         "visibility": req.visibility,
@@ -2684,9 +2725,8 @@ def get_post(post_id: str, user_id: UserIdDep):
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
     author = post.get("user_id")
-    if author and author != user_id:
-        if not can_access_creator(user_id, author):
-            raise HTTPException(status_code=403, detail="Subscription required")
+    if author and author != user_id and not can_view_post(user_id, post):
+        raise HTTPException(status_code=403, detail="Not authorized to view this post")
     locked = bool(post.get("locked"))
     is_locked_for_viewer = locked and author != user_id and not has_unlocked(user_id, post_id)
     viewer_unlocked = locked and not is_locked_for_viewer
@@ -2701,9 +2741,8 @@ def get_post_file(post_id: str, file_index: int, user_id: UserIdDep):
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
     author = post.get("user_id")
-    if author and author != user_id:
-        if not can_access_creator(user_id, author):
-            raise HTTPException(status_code=403, detail="Subscription required")
+    if author and author != user_id and not can_view_post(user_id, post):
+        raise HTTPException(status_code=403, detail="Not authorized to view this post")
     locked = bool(post.get("locked"))
     if locked and author != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required")
@@ -2949,80 +2988,374 @@ def hide_post(req: HidePostRequest, user_id: UserIdDep):
     return {"ok": True}
 
 
+def _feed_request_mode(author_filter: Optional[str]) -> str:
+    return "profile" if author_filter else "global"
+
+
+_AUTHOR_ID_ALLOWED = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+
+def _normalize_author_filter_or_400(author_id: Optional[str]) -> Optional[str]:
+    if author_id is None:
+        return None
+    candidate = str(author_id).strip()
+    if not candidate:
+        return None
+    if not _AUTHOR_ID_ALLOWED.fullmatch(candidate):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_author_id",
+                "message": "author_id contains unsupported characters",
+            },
+        )
+    return candidate
+
+
+def _normalize_query_or_400(q: Optional[str]) -> Optional[str]:
+    if q is None:
+        return None
+    candidate = str(q).strip()
+    if not candidate:
+        return None
+    max_chars = max(1, int(getattr(S, "newsfeed_feed_max_query_chars", 200) or 200))
+    if len(candidate) > max_chars:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_query",
+                "message": "q exceeds maximum length",
+                "max_query_chars": max_chars,
+            },
+        )
+    return candidate
+
+
+def _emit_feed_filter_usage_metrics(*, mode: str, q: Optional[str], from_ts: Optional[str], to_ts: Optional[str], has_media: Optional[bool]) -> None:
+    if q and str(q).strip():
+        record_newsfeed_feed_filter_usage(mode=mode, filter_name="q")
+    if from_ts:
+        record_newsfeed_feed_filter_usage(mode=mode, filter_name="from")
+    if to_ts:
+        record_newsfeed_feed_filter_usage(mode=mode, filter_name="to")
+    if has_media is not None:
+        record_newsfeed_feed_filter_usage(mode=mode, filter_name="has_media")
+
+
+def _build_feed_query_log_extra(
+    *,
+    mode: str,
+    user_id: str,
+    author_filter: Optional[str],
+    limit: int,
+    cursor: Optional[str],
+    q: Optional[str],
+    from_ts: Optional[str],
+    to_ts: Optional[str],
+    has_media: Optional[bool],
+    page_depth: int,
+    item_count: int,
+    has_next_cursor: bool,
+    outcome: str,
+    error_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    safe_query = {
+        "has_q": bool(q and str(q).strip()),
+        "q_length": len(str(q or "")),
+        "has_from": bool(from_ts),
+        "has_to": bool(to_ts),
+        "has_media": has_media,
+    }
+    payload: Dict[str, Any] = {
+        "event": "newsfeed_feed_query",
+        "mode": mode,
+        "viewer_id": user_id,
+        "author_id": author_filter,
+        "limit": int(limit),
+        "cursor_present": bool(cursor),
+        "page_depth": int(page_depth),
+        "item_count": int(item_count),
+        "has_next_cursor": bool(has_next_cursor),
+        "query": safe_query,
+        "outcome": outcome,
+    }
+    if error_type:
+        payload["error_type"] = error_type
+    return payload
+
+
+def _feed_query_budget_limits() -> Tuple[int, int]:
+    max_pages = max(1, int(getattr(S, "newsfeed_feed_max_scanned_pages", 20) or 20))
+    max_elapsed_ms = max(1, int(getattr(S, "newsfeed_feed_max_elapsed_ms", 2000) or 2000))
+    return max_pages, max_elapsed_ms
+
+
+def _validate_filter_window_or_400(*, from_dt: Optional[datetime], to_dt: Optional[datetime]) -> None:
+    if not from_dt or not to_dt:
+        return
+    max_window_days = max(1, int(getattr(S, "newsfeed_feed_max_window_days", 365) or 365))
+    span_days = (to_dt - from_dt).total_seconds() / 86400.0
+    if span_days > float(max_window_days):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_time_window",
+                "message": f"'from' and 'to' may span at most {max_window_days} days",
+                "max_window_days": max_window_days,
+            },
+        )
+
+
+def _http_error_type(exc: HTTPException) -> str:
+    detail = exc.detail
+    if isinstance(detail, dict):
+        code = str(detail.get("code") or "").strip().lower()
+        if code:
+            return f"code_{code}"
+    return f"http_{int(exc.status_code)}"
+
+
 @router.get("/feed")
 def view_feed(
     limit: int = Query(default=20, ge=1, le=50),
     cursor: Optional[str] = Query(default=None),
+    author_id: Optional[str] = Query(default=None, min_length=1),
+    q: Optional[str] = Query(default=None),
+    from_ts: Optional[str] = Query(default=None, alias="from"),
+    to_ts: Optional[str] = Query(default=None, alias="to"),
+    has_media: Optional[bool] = Query(default=None),
     user_id: UserIdDep = None,
 ):
-    eks = decode_cursor_or_400(cursor)
+    author_filter: Optional[str] = None
+    normalized_q: Optional[str] = None
+    mode = _feed_request_mode(str(author_id).strip() if author_id else None)
+    started = time.perf_counter()
+    page_depth = 0
+    max_scanned_pages, max_elapsed_ms = _feed_query_budget_limits()
 
-    resp = ddb_query(
-        IndexName="GSI1",
-        KeyConditionExpression="GSI1PK = :pk",
-        ExpressionAttributeValues={":pk": f"FEED#{user_id}"},
-        ScanIndexForward=False,
-        Limit=limit,
-        ExclusiveStartKey=eks if eks else None,
-    )
+    try:
+        author_filter = _normalize_author_filter_or_400(author_id)
+        normalized_q = _normalize_query_or_400(q)
+        mode = _feed_request_mode(author_filter)
+        from_dt, to_dt = parse_filter_window(from_ts, to_ts)
+        _validate_filter_window_or_400(from_dt=from_dt, to_dt=to_dt)
+        eks = decode_cursor_or_400(cursor)
+        rate_limit_feed_query(user_id, mode)
+        ordered: List[Dict[str, Any]] = []
+        filter_params = FeedFilterParams(author_id=author_filter, q=normalized_q, from_dt=from_dt, to_dt=to_dt, has_media=has_media)
+        next_eks = eks
 
-    refs = resp.get("Items", [])
-    post_ids = [ref.get("post_id") for ref in refs if ref.get("post_id")]
+        while len(ordered) < limit:
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            if page_depth >= max_scanned_pages:
+                record_newsfeed_feed_budget_hit(mode=mode, reason="max_scanned_pages")
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "feed_query_budget_exceeded",
+                        "reason": "max_scanned_pages",
+                        "max_scanned_pages": max_scanned_pages,
+                    },
+                )
+            if elapsed_ms > float(max_elapsed_ms):
+                record_newsfeed_feed_budget_hit(mode=mode, reason="max_elapsed_ms")
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "code": "feed_query_budget_exceeded",
+                        "reason": "max_elapsed_ms",
+                        "max_elapsed_ms": max_elapsed_ms,
+                    },
+                )
+            page_depth += 1
+            if author_filter:
+                resp = ddb_query(
+                    IndexName="GSI2",
+                    KeyConditionExpression="GSI2PK = :pk",
+                    ExpressionAttributeValues={":pk": f"POST_AUTHOR#{author_filter}"},
+                    ScanIndexForward=False,
+                    Limit=limit,
+                    ExclusiveStartKey=next_eks if next_eks else None,
+                )
+                posts = [it for it in (resp.get("Items") or []) if it.get("post_id")]
+                post_ids = [str(it.get("post_id")) for it in posts if it.get("post_id")]
+                post_by_id = {str(post.get("post_id")): post for post in posts if post.get("post_id")}
+            else:
+                resp = ddb_query(
+                    IndexName="GSI1",
+                    KeyConditionExpression="GSI1PK = :pk",
+                    ExpressionAttributeValues={":pk": f"FEED#{user_id}"},
+                    ScanIndexForward=False,
+                    Limit=limit,
+                    ExclusiveStartKey=next_eks if next_eks else None,
+                )
+                refs = resp.get("Items", [])
+                post_ids = [ref.get("post_id") for ref in refs if ref.get("post_id")]
+                posts = []
+                if post_ids:
+                    try:
+                        raw = ddb.batch_get_item(RequestItems={APP_TABLE: {"Keys": [{"pk": pk_post(pid), "sk": sk_post()} for pid in post_ids]}})
+                        posts = raw.get("Responses", {}).get(APP_TABLE, [])
+                    except ClientError as exc:
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"DDB batch_get_item error: {exc.response['Error'].get('Message','unknown')}",
+                        ) from exc
+                post_by_id = {post["post_id"]: post for post in posts if "post_id" in post}
 
-    posts: List[Dict[str, Any]] = []
-    if post_ids:
-        keys = [{"pk": pk_post(pid), "sk": sk_post()} for pid in post_ids]
-        try:
-            raw = ddb.batch_get_item(
-                RequestItems={APP_TABLE: {"Keys": keys}}
-            )
-            posts = raw.get("Responses", {}).get(APP_TABLE, [])
-        except ClientError as exc:
-            raise HTTPException(
-                status_code=500,
-                detail=f"DDB batch_get_item error: {exc.response['Error'].get('Message','unknown')}",
-            ) from exc
-
-    post_by_id = {post["post_id"]: post for post in posts if "post_id" in post}
-
-    # Batch-fetch like records so we can set liked_by_me per post
-    liked_post_ids: set = set()
-    if post_ids:
-        like_keys = [{"pk": pk_like(user_id), "sk": f"POST#{pid}"} for pid in post_ids]
-        try:
-            like_raw = ddb.batch_get_item(RequestItems={APP_TABLE: {"Keys": like_keys}})
-            liked_post_ids = {item.get("post_id", "") for item in like_raw.get("Responses", {}).get(APP_TABLE, [])}
-        except ClientError:
-            pass  # Best effort — liked_by_me will default to False
-
-    ordered: List[Dict[str, Any]] = []
-
-    for post_id in post_ids:
-        post = post_by_id.get(post_id)
-        if not post:
-            continue
-        status, _publish_at, _published_at, _schedule_timezone, _scheduled_at_local = _resolve_post_lifecycle_fields(post)
-        if status != "published":
-            continue
-        if post.get("moderation_removed") or post.get("moderation_removed_at"):
-            continue
-
-        if is_hidden(user_id, post_id):
-            continue
-
-        author = post.get("user_id")
-        if author and author != user_id:
-            if not can_access_creator(user_id, author):
+            if not post_ids:
+                next_eks = resp.get("LastEvaluatedKey")
+                if not next_eks:
+                    break
                 continue
-            if not is_following(user_id, author):
-                continue
 
-        locked = bool(post.get("locked"))
-        is_locked_for_viewer = locked and author != user_id and not has_unlocked(user_id, post_id)
-        viewer_unlocked = locked and not is_locked_for_viewer
-        ordered.append(_post_to_dict(post, locked_body=is_locked_for_viewer, liked_by_me=post_id in liked_post_ids, unlocked=viewer_unlocked, viewer_id=user_id))
+            liked_post_ids: set = set()
+            try:
+                like_raw = ddb.batch_get_item(
+                    RequestItems={APP_TABLE: {"Keys": [{"pk": pk_like(user_id), "sk": f"POST#{pid}"} for pid in post_ids]}}
+                )
+                liked_post_ids = {item.get("post_id", "") for item in like_raw.get("Responses", {}).get(APP_TABLE, [])}
+            except ClientError:
+                pass
 
-    return {"items": ordered, "next_cursor": encode_cursor(resp.get("LastEvaluatedKey"))}
+            candidates: List[Dict[str, Any]] = []
+            for post_id in post_ids:
+                post = post_by_id.get(post_id)
+                if not post:
+                    continue
+                status, _publish_at, _published_at, _schedule_timezone, _scheduled_at_local = _resolve_post_lifecycle_fields(post)
+                if status != "published":
+                    continue
+                if post.get("moderation_removed") or post.get("moderation_removed_at"):
+                    continue
+                if is_hidden(user_id, post_id):
+                    continue
+                if not post_matches_filters(post, filter_params):
+                    continue
+                candidates.append(post)
+
+            for post in sort_posts_deterministically(candidates):
+                author = post.get("user_id")
+                post_id = str(post.get("post_id") or "")
+                if author and author != user_id and not can_view_post(user_id, post):
+                    continue
+
+                locked = bool(post.get("locked"))
+                is_locked_for_viewer = locked and author != user_id and not has_unlocked(user_id, post_id)
+                viewer_unlocked = locked and not is_locked_for_viewer
+                ordered.append(
+                    _post_to_dict(
+                        post,
+                        locked_body=is_locked_for_viewer,
+                        liked_by_me=post_id in liked_post_ids,
+                        unlocked=viewer_unlocked,
+                        viewer_id=user_id,
+                    )
+                )
+                if len(ordered) >= limit:
+                    break
+
+            next_eks = resp.get("LastEvaluatedKey")
+            if len(ordered) >= limit or not next_eks:
+                break
+
+        out = {"items": ordered[:limit], "next_cursor": encode_cursor(next_eks)}
+        _emit_feed_filter_usage_metrics(mode=mode, q=normalized_q, from_ts=from_ts, to_ts=to_ts, has_media=has_media)
+        record_newsfeed_feed_page_depth(mode=mode, depth=page_depth)
+        record_newsfeed_feed_request(mode=mode, outcome="success")
+        record_newsfeed_feed_latency(mode=mode, outcome="success", elapsed_seconds=time.perf_counter() - started)
+        logger.info(
+            "newsfeed feed query",
+            extra=_build_feed_query_log_extra(
+                mode=mode,
+                user_id=user_id,
+                author_filter=author_filter,
+                limit=limit,
+                cursor=cursor,
+                q=normalized_q,
+                from_ts=from_ts,
+                to_ts=to_ts,
+                has_media=has_media,
+                page_depth=page_depth,
+                item_count=len(out["items"]),
+                has_next_cursor=bool(out["next_cursor"]),
+                outcome="success",
+            ),
+        )
+        return out
+    except ValueError as exc:
+        record_newsfeed_feed_error(mode=mode, error_type="validation")
+        record_newsfeed_feed_request(mode=mode, outcome="error")
+        record_newsfeed_feed_latency(mode=mode, outcome="error", elapsed_seconds=time.perf_counter() - started)
+        logger.warning(
+            "newsfeed feed query validation error",
+            extra=_build_feed_query_log_extra(
+                mode=mode,
+                user_id=user_id,
+                author_filter=author_filter,
+                limit=limit,
+                cursor=cursor,
+                q=normalized_q,
+                from_ts=from_ts,
+                to_ts=to_ts,
+                has_media=has_media,
+                page_depth=page_depth,
+                item_count=0,
+                has_next_cursor=False,
+                outcome="error",
+                error_type="validation",
+            ),
+        )
+        raise HTTPException(status_code=400, detail=str(exc) or "Invalid 'from'/'to' datetime; expected ISO-8601") from exc
+    except HTTPException as exc:
+        error_type = _http_error_type(exc)
+        record_newsfeed_feed_error(mode=mode, error_type=error_type)
+        record_newsfeed_feed_request(mode=mode, outcome="error")
+        record_newsfeed_feed_latency(mode=mode, outcome="error", elapsed_seconds=time.perf_counter() - started)
+        logger.warning(
+            "newsfeed feed query http error",
+            extra=_build_feed_query_log_extra(
+                mode=mode,
+                user_id=user_id,
+                author_filter=author_filter,
+                limit=limit,
+                cursor=cursor,
+                q=normalized_q,
+                from_ts=from_ts,
+                to_ts=to_ts,
+                has_media=has_media,
+                page_depth=page_depth,
+                item_count=0,
+                has_next_cursor=False,
+                outcome="error",
+                error_type=error_type,
+            ),
+        )
+        raise
+    except Exception:
+        record_newsfeed_feed_error(mode=mode, error_type="unhandled")
+        record_newsfeed_feed_request(mode=mode, outcome="error")
+        record_newsfeed_feed_latency(mode=mode, outcome="error", elapsed_seconds=time.perf_counter() - started)
+        logger.exception(
+            "newsfeed feed query unhandled error",
+            extra=_build_feed_query_log_extra(
+                mode=mode,
+                user_id=user_id,
+                author_filter=author_filter,
+                limit=limit,
+                cursor=cursor,
+                q=normalized_q,
+                from_ts=from_ts,
+                to_ts=to_ts,
+                has_media=has_media,
+                page_depth=page_depth,
+                item_count=0,
+                has_next_cursor=False,
+                outcome="error",
+                error_type="unhandled",
+            ),
+        )
+        raise
 
 
 @router.get("/posts/{post_id}/attachments/{attachment_id}")
@@ -3039,11 +3372,8 @@ def download_post_attachment(
         raise HTTPException(status_code=404, detail="Post not found")
 
     author = post.get("user_id")
-    if author and author != user_id:
-        if not can_access_creator(user_id, author):
-            raise HTTPException(status_code=403, detail="Subscription required")
-        if not is_following(user_id, author):
-            raise HTTPException(status_code=403, detail="Following required")
+    if author and author != user_id and not can_view_post(user_id, post):
+        raise HTTPException(status_code=403, detail="Not authorized to view this post")
 
     if bool(post.get("locked")) and author != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required")
@@ -3111,8 +3441,8 @@ def create_comment(post_id: str, req: CreateCommentRequest, user_id: UserIdDep):
         raise HTTPException(status_code=404, detail="Post not found")
 
     post_author = post.get("user_id")
-    if post_author and post_author != user_id and not can_access_creator(user_id, post_author):
-        raise HTTPException(status_code=403, detail="Subscription required to comment")
+    if post_author and post_author != user_id and not can_view_post(user_id, post):
+        raise HTTPException(status_code=403, detail="Not authorized to comment on this post")
 
     if post.get("locked") and post.get("user_id") != user_id and not has_unlocked(user_id, post_id):
         raise HTTPException(status_code=402, detail="Post is locked; unlock required to comment")

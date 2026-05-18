@@ -14,6 +14,7 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { ReportContentModal, type ReportContentPayload } from "@/components/shared/ReportContentModal";
 import { cancelScheduledPost, deletePost, hidePost, reportFeedContent } from "@/api/endpoints/newsfeed";
 import { ApiError } from "@/api/client";
+import { invalidateFeedCaches } from "@/lib/feedCacheInvalidation";
 
 interface PostActionsProps {
   postId: string;
@@ -32,7 +33,7 @@ export function PostActions({ postId, postStatus, isOwn, onEdit }: PostActionsPr
     mutationFn: () => (postStatus === "scheduled" ? cancelScheduledPost(postId) : deletePost(postId)),
     onSuccess: () => {
       toast.success(postStatus === "scheduled" ? "Scheduled post cancelled" : "Post deleted");
-      void queryClient.invalidateQueries({ queryKey: ["feed"] });
+      void invalidateFeedCaches(queryClient);
       void queryClient.invalidateQueries({ queryKey: ["scheduled-posts"] });
       setDeleteOpen(false);
     },
@@ -43,7 +44,7 @@ export function PostActions({ postId, postStatus, isOwn, onEdit }: PostActionsPr
     mutationFn: () => hidePost({ post_id: postId }),
     onSuccess: () => {
       toast.success("Post hidden from your feed");
-      void queryClient.invalidateQueries({ queryKey: ["feed"] });
+      void invalidateFeedCaches(queryClient);
     },
     onError: () => toast.error("Failed to hide post"),
   });

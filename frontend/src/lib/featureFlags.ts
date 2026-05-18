@@ -52,6 +52,9 @@ export const newsfeedDraftsEnabled = toBool(env.VITE_NEWSFEED_DRAFTS_ENABLED, tr
 export const newsfeedDraftsKillSwitch = toBool(env.VITE_NEWSFEED_DRAFTS_KILL_SWITCH, false);
 export const isNewsfeedDraftsEnabled = () => newsfeedDraftsEnabled && !newsfeedDraftsKillSwitch;
 export const newsfeedSchedulingUiEnabled = toBool(env.VITE_NEWSFEED_SCHEDULING_UI_ENABLED, true);
+export const profilePostsFeedEnabled = toBool(env.VITE_PROFILE_POSTS_FEED_ENABLED, true);
+export const profilePostsFeedKillSwitch = toBool(env.VITE_PROFILE_POSTS_FEED_KILL_SWITCH, false);
+export const isProfilePostsFeedEnabled = () => profilePostsFeedEnabled && !profilePostsFeedKillSwitch;
 
 export const canonicalProfileNavigationEnabled = toBool(env.VITE_CANONICAL_PROFILE_NAVIGATION_ENABLED, false);
 export const isCanonicalProfileNavigationEnabled = () => canonicalProfileNavigationEnabled;

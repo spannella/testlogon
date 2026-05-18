@@ -15,11 +15,28 @@ import type {
   ScheduledPostsResp,
 } from "@/api/types";
 
-export const getFeed = (cursor?: string) =>
-  api.get<{ items: FeedPost[]; next_cursor?: string }>(
+export interface FeedQueryParams {
+  cursor?: string;
+  author_id?: string;
+  q?: string;
+  from?: string;
+  to?: string;
+  has_media?: boolean;
+}
+
+export const getFeed = (params?: FeedQueryParams) => {
+  const query: Record<string, string> = {};
+  if (params?.cursor) query.cursor = params.cursor;
+  if (params?.author_id) query.author_id = params.author_id;
+  if (params?.q) query.q = params.q;
+  if (params?.from) query.from = params.from;
+  if (params?.to) query.to = params.to;
+  if (typeof params?.has_media === "boolean") query.has_media = String(params.has_media);
+  return api.get<{ items: FeedPost[]; next_cursor?: string }>(
     "/feed",
-    cursor ? { cursor } : undefined,
+    Object.keys(query).length ? query : undefined,
   );
+};
 
 export const createPost = (body: CreatePostReq) =>
   api.post<FeedPost>("/posts", body);

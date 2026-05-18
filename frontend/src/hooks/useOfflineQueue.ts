@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useOfflineStore, type OfflineAction } from "@/stores/offlineStore";
 import { sendTextMessage } from "@/api/endpoints/messaging";
 import { createPost } from "@/api/endpoints/newsfeed";
+import { invalidateFeedCaches } from "@/lib/feedCacheInvalidation";
 
 export function useOfflineQueue() {
   const queue = useOfflineStore((s) => s.queue);
@@ -53,7 +54,7 @@ export function useOfflineQueue() {
       if (successCount > 0) {
         void queryClient.invalidateQueries({ queryKey: ["messages"] });
         void queryClient.invalidateQueries({ queryKey: ["conversations"] });
-        void queryClient.invalidateQueries({ queryKey: ["feed"] });
+        void invalidateFeedCaches(queryClient);
       }
 
       if (successCount > 0 && failCount === 0) {
