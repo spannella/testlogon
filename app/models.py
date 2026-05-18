@@ -295,6 +295,8 @@ class WebAuthnAuthFinishResp(BaseModel):
 class CreateApiKeyReq(BaseModel):
     label: Optional[str] = None
     expires_in_days: Optional[int] = None
+    # Canonical product scopes; accepts legacy alias `scopes`.
+    capabilities: List[str] = Field(default_factory=list)
 
 class RevokeApiKeyReq(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
@@ -305,6 +307,12 @@ class ApiKeyIpRulesReq(BaseModel):
     key_id: str = Field(validation_alias=AliasChoices("key_id", "api_key_id"))
     allow_cidrs: List[str] = Field(default_factory=list)
     deny_cidrs: List[str] = Field(default_factory=list)
+
+
+class ApiKeyScopesReq(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    key_id: str = Field(validation_alias=AliasChoices("key_id", "api_key_id"))
+    capabilities: List[str] = Field(default_factory=list, validation_alias=AliasChoices("capabilities", "scopes"))
 
 class ApiKeyRouteCapReq(BaseModel):
     monthly_calls_cap: int = Field(default=0, ge=0)

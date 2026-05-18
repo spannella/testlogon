@@ -30,10 +30,11 @@ from app.models import (
     CatalogReviewOut,
 )
 from app.services.filemanager import download_file, upload_catalog_image
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from app.services.sessions import require_ui_session
 from app.services.subscription_access import can_access_creator
 
-router = APIRouter(prefix="/ui/catalog", tags=["catalog"])
+router = APIRouter(prefix="/ui/catalog", tags=["catalog"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 
 _MULTIPART_AVAILABLE = importlib.util.find_spec("multipart") is not None
 

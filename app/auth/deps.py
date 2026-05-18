@@ -191,6 +191,23 @@ async def get_authenticated_user(request: Request) -> AuthenticatedUser:
     2. Cognito JWT Bearer token (API clients / production SPA).
     3. Dev-mode fallbacks (x-user-sub header, bare Bearer token).
     """
+    state = getattr(request, "state", None)
+    principal = getattr(state, "api_key_principal", None) if state is not None else None
+    if isinstance(principal, dict):
+        user_sub = str(principal.get("user_sub") or "").strip()
+        if user_sub:
+            role = Role.USER
+            try:
+                from app.core.tables import T
+
+                user_item = T.users.get_item(Key={"user_sub": user_sub}).get("Item") or {}
+                role = normalize_role(user_item.get("role"))
+            except Exception:
+                role = Role.USER
+            role = enforce_root_role_invariant(user_sub=user_sub, role=role)
+            _enforce_not_banned(user_sub=user_sub, role=role)
+            return AuthenticatedUser(sub=user_sub, role=role)
+
     # 1. Cookie-based path (browser flow)
     access_cookie_name = getattr(S, "ui_access_token_cookie_name", "")
     access_secret = getattr(S, "ui_access_token_secret", "")

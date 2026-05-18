@@ -287,6 +287,20 @@ async def require_ui_session(
     x_session_id: Optional[str] = Header(default=None, alias="X-SESSION-ID"),
     x_impersonation_token: Optional[str] = Header(default=None, alias="X-IMPERSONATION-TOKEN"),
 ) -> Dict[str, str]:
+    principal = getattr(getattr(request, "state", None), "api_key_principal", None)
+    if isinstance(principal, dict):
+        principal_sub = str(principal.get("user_sub") or "").strip()
+        if principal_sub:
+            role = normalize_role(getattr(auth_user, "role", None))
+            request.state.user_sub = principal_sub
+            request.state.user_role = role.value
+            return {
+                "user_sub": principal_sub,
+                "session_id": f"api_key:{str(principal.get('api_key_id') or '').strip()}",
+                "role": role.value,
+                "ip": "",
+            }
+
     resolved_user_sub = user_sub or (auth_user.sub if auth_user else "")
     if not resolved_user_sub:
         raise HTTPException(401, "Missing user")

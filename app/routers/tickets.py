@@ -13,12 +13,13 @@ from app.auth.roles import Role, normalize_role
 from app.core.tables import T
 from app.services.alerts import audit_event
 from app.services.jira_ticket_sync_store import JiraTicketSyncStore
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from app.services.sessions import require_ui_session
 from app.services.tickets import STORE, TicketStateError
 from app.services.payment_incidents_store import DynamoPaymentIncidentRepository
 from app.services.payment_incident_ticket_sync import sync_incident_from_ticket
 
-router = APIRouter(prefix="/tickets", tags=["tickets"])
+router = APIRouter(prefix="/tickets", tags=["tickets"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 
 
 class ErrorDetail(BaseModel):
@@ -153,6 +154,23 @@ def _is_admin(user: AuthenticatedUser) -> bool:
     return normalize_role(user.role) in {Role.ADMIN, Role.ROOT}
 
 
+def _api_key_principal(request: Request) -> dict[str, Any]:
+    principal = getattr(getattr(request, "state", None), "api_key_principal", None)
+    return principal if isinstance(principal, dict) else {}
+
+
+def _has_api_key_scope(request: Request, scope: str) -> bool:
+    principal = _api_key_principal(request)
+    capabilities = principal.get("capabilities")
+    if not isinstance(capabilities, list):
+        return False
+    return (scope or "").strip().lower() in {str(item).strip().lower() for item in capabilities}
+
+
+def _is_admin_actor(request: Request, user: AuthenticatedUser) -> bool:
+    return _is_admin(user) or _has_api_key_scope(request, "tickets:admin")
+
+
 def _wrap_ticket(ticket: dict[str, Any]) -> TicketEnvelope:
     return TicketEnvelope(ticket=TicketOut.model_validate(ticket))
 
@@ -260,8 +278,8 @@ def _ticket_or_404(ticket_id: str) -> dict:
     return ticket
 
 
-def _can_access_ticket(user: AuthenticatedUser, ticket: dict) -> bool:
-    return user.sub == ticket["owner_sub"] or _is_admin(user)
+def _can_access_ticket(request: Request, user: AuthenticatedUser, ticket: dict) -> bool:
+    return user.sub == ticket["owner_sub"] or _is_admin_actor(request, user)
 
 
 def _is_assignable_admin(user_sub: str) -> bool:
@@ -284,8 +302,16 @@ def _ticket_state_error(exc: TicketStateError) -> dict[str, Any]:
 
 
 def _emit_ticket_alerts(event: str, *, recipients: list[str], actor_sub: str, request: Request, **fields: Any) -> None:
+    principal = _api_key_principal(request)
+    api_key_fields: dict[str, Any] = {}
+    if principal:
+        api_key_fields = {
+            "auth_type": "api_key",
+            "api_key_id": str(principal.get("api_key_id") or ""),
+            "api_key_owner_sub": str(principal.get("user_sub") or ""),
+        }
     for recipient in sorted({item for item in recipients if item}):
-        audit_event(event, recipient, request, outcome="success", actor_sub=actor_sub, **fields)
+        audit_event(event, recipient, request, outcome="success", actor_sub=actor_sub, **api_key_fields, **fields)
 
 @router.post("", response_model=TicketEnvelope, responses=_error_responses())
 def create_ticket(
@@ -387,7 +413,7 @@ def list_tickets(
             )
         return _wrap_ticket_list({"tickets": page_items, "next_cursor": next_cursor})
 
-    if _is_admin(user):
+    if _is_admin_actor(request, user):
         payload = STORE.list_tickets(
             limit=limit,
             cursor=cursor,
@@ -410,10 +436,11 @@ def list_tickets(
 @router.get("/admin/summary", response_model=TicketAdminSummaryEnvelope, responses=_error_responses())
 def admin_ticket_summary(
     stale_after_seconds: int = Query(default=48 * 3600, ge=60, le=30 * 24 * 3600),
+    request: Request = None,
     _ctx: dict[str, str] = Depends(require_ui_session),
     user: AuthenticatedUser = Depends(get_authenticated_user),
 ):
-    if not _is_admin(user):
+    if not _is_admin_actor(request, user):
         _raise(403, "admin_role_required", "admin role required")
     summary = STORE.get_admin_summary(stale_after_seconds=stale_after_seconds)
     return TicketAdminSummaryEnvelope(summary=TicketAdminSummary.model_validate(summary))
@@ -422,11 +449,12 @@ def admin_ticket_summary(
 @router.get("/{ticket_id}", response_model=TicketEnvelope, responses=_error_responses())
 def get_ticket(
     ticket_id: str,
+    request: Request,
     _ctx: dict[str, str] = Depends(require_ui_session),
     user: AuthenticatedUser = Depends(get_authenticated_user),
 ):
     ticket = _ticket_or_404(ticket_id)
-    if not _can_access_ticket(user, ticket):
+    if not _can_access_ticket(request, user, ticket):
         _raise(403, "ticket_access_forbidden", "not authorized to access this ticket", details={"ticket_id": ticket_id})
     return _wrap_ticket(ticket)
 
@@ -439,7 +467,7 @@ def assign_ticket(
     _ctx: dict[str, str] = Depends(require_ui_session),
     user: AuthenticatedUser = Depends(get_authenticated_user),
 ):
-    if not _is_admin(user):
+    if not _is_admin_actor(request, user):
         _raise(403, "admin_role_required", "admin role required")
 
     assignee = body.assignee_admin_sub.strip()
@@ -475,10 +503,10 @@ def add_ticket_message(
     user: AuthenticatedUser = Depends(get_authenticated_user),
 ):
     ticket = _ticket_or_404(ticket_id)
-    if not _can_access_ticket(user, ticket):
+    if not _can_access_ticket(request, user, ticket):
         _raise(403, "ticket_reply_forbidden", "not authorized to reply to this ticket", details={"ticket_id": ticket_id})
 
-    sender_role = "admin" if _is_admin(user) else "user"
+    sender_role = "admin" if _is_admin_actor(request, user) else "user"
     email_targets = [ticket["owner_sub"]]
     assigned_admin_sub = ticket.get("assigned_admin_sub")
     if assigned_admin_sub:
@@ -509,7 +537,7 @@ def set_ticket_status(
     _ctx: dict[str, str] = Depends(require_ui_session),
     user: AuthenticatedUser = Depends(get_authenticated_user),
 ):
-    if not _is_admin(user):
+    if not _is_admin_actor(request, user):
         _raise(403, "admin_role_required", "admin role required")
     ticket = _ticket_or_404(ticket_id)
     try:

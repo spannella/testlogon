@@ -2590,3 +2590,183 @@
 **Acceptance criteria:**
 - Clients transition gracefully to disabled state with deterministic server responses.
 - Rollback drill artifacts are produced and linked in release checklist.
+
+### AKI-201: Route-policy registry coverage audit in CI
+**Description:** Implement an automated CI audit that verifies all API-key-protected routes are present in the route-scope registry and mapped to the correct product namespace.
+**Acceptance criteria:**
+- CI fails when protected routes are missing from the registry.
+- Failure output includes missing route IDs and owning router modules.
+
+### AKI-202: Registry stale-entry detection
+**Description:** Add a validator that flags registry entries that no longer correspond to mounted API routes.
+**Acceptance criteria:**
+- Stale route entries fail CI with actionable diffs.
+- Validator supports local pre-commit execution.
+
+### AKI-203: Rollout config drift detector
+**Description:** Build a startup/runtime checker that compares effective rollout flags across workers and surfaces inconsistent phase/canary state.
+**Acceptance criteria:**
+- Drift is emitted as a structured alert/event with product context.
+- Detector has tests covering phase mismatch and canary-percent mismatch.
+
+### AKI-204: Rollout state admin API
+**Description:** Add an admin-only API endpoint to inspect effective API-key rollout state per product (enabled/phase/canary cohorts).
+**Acceptance criteria:**
+- Endpoint returns deterministic state for all integrated products.
+- Access is RBAC-restricted and requests are fully audited.
+
+### AKI-205: Shadow decision telemetry normalization
+**Description:** Standardize shadow-evaluation telemetry fields to include route_id, product, deny reason, and rollout phase.
+**Acceptance criteria:**
+- All shadow events conform to one schema.
+- Dashboard queries no longer require per-event fallback parsing.
+
+### AKI-206: Shadow vs enforce divergence alert rules
+**Description:** Add alerting that detects sustained divergence between shadow decisions and enforced decisions during canary.
+**Acceptance criteria:**
+- Alert rules trigger in simulated divergence scenarios.
+- Runbook includes triage and rollback playbook for this alert.
+
+### AKI-207: Unified API-key error contract v2
+**Description:** Introduce a consistent error envelope for API-key 401/403/429 responses across auth, scope, entitlement, and throttling layers.
+**Acceptance criteria:**
+- Contract tests validate schema consistency across representative deny paths.
+- OpenAPI includes updated examples for each deny class.
+
+### AKI-208: Actor attribution middleware
+**Description:** Add middleware/helper to normalize actor identity (session/JWT/API-key) for downstream audit and authorization consumers.
+**Acceptance criteria:**
+- Product routers consume the shared actor context helper.
+- Audit events remain backward compatible while adding normalized fields.
+
+### AKI-209: Dual-credential policy hardening
+**Description:** Define and enforce explicit behavior when session/JWT credentials and API-key headers are present in the same request.
+**Acceptance criteria:**
+- Policy is configuration-driven (precedence or reject mode).
+- Integration tests cover all credential-combination outcomes.
+
+### AKI-210: Entitlement deduplication cache per request
+**Description:** Implement in-request memoization for entitlement checks to prevent duplicate backend calls in nested service paths.
+**Acceptance criteria:**
+- Repeated equivalent entitlement checks produce one backend request.
+- Allow/deny behavior remains functionally identical.
+
+### AKI-211: Key rotation grace-window API
+**Description:** Add an API-key rotation flow supporting dual-secret validation during a bounded grace period.
+**Acceptance criteria:**
+- Old secret expires automatically after grace period.
+- Rotation lifecycle emits auditable state transitions.
+
+### AKI-212: Revocation propagation SLO metrics
+**Description:** Add metrics that measure revoke-to-deny propagation latency across all app workers.
+**Acceptance criteria:**
+- Propagation latency is visible on observability dashboards.
+- Alerts trigger when revocation latency exceeds SLA.
+
+### AKI-213: IP rule evaluator parity (IPv4/IPv6)
+**Description:** Refactor IP rule evaluation to ensure consistent behavior across IPv4 and IPv6 with canonical CIDR normalization.
+**Acceptance criteria:**
+- Test matrix covers overlapping allow/deny CIDRs and malformed inputs.
+- Evaluation precedence is documented and deterministic.
+
+### AKI-214: Replay protection for critical writes
+**Description:** Add optional nonce+timestamp replay prevention for critical write endpoints (checkout, transactions, ticket-admin writes).
+**Acceptance criteria:**
+- Replayed nonce requests are rejected with deterministic error code.
+- Timestamp skew tolerance is configurable and tested.
+
+### AKI-215: Idempotency reconciliation worker
+**Description:** Implement a reconciliation worker that checks idempotency key records against downstream transaction/order outcomes.
+**Acceptance criteria:**
+- Worker reports mismatch anomalies with correlation identifiers.
+- Fault-injection tests verify anomaly detection behavior.
+
+### AKI-216: Product-specific throttling profiles
+**Description:** Create configurable throttling profiles per product and route class (read-heavy/write-heavy/high-risk).
+**Acceptance criteria:**
+- Runtime can select profile by product and route group.
+- 429 telemetry includes applied profile identifier.
+
+### AKI-217: Policy engine performance benchmark suite
+**Description:** Add benchmark suite for API-key parse, capability expansion, scope check, entitlement gate, and rollout evaluation.
+**Acceptance criteria:**
+- Baseline benchmark reports are versioned in repo artifacts.
+- Regression thresholds fail performance CI job.
+
+### AKI-218: End-to-end partner simulation environment
+**Description:** Build deterministic E2E partner simulation covering all integrated products with seeded keys, scopes, and entitlements.
+**Acceptance criteria:**
+- Simulation runs in CI without external paid dependencies.
+- Includes positive and negative scenarios for each product.
+
+### AKI-219: OpenAPI-to-runtime parity gate
+**Description:** Validate that OpenAPI `x-api-key-scopes` and entitlement flags always match runtime route policy registry.
+**Acceptance criteria:**
+- CI fails on annotation/policy drift with route-level diffs.
+- Validation includes missing, extra, and mismatched scope lists.
+
+### AKI-220: Capability implication explain tool
+**Description:** Add operator tooling to explain effective scopes (raw grants + implied grants + implication chain).
+**Acceptance criteria:**
+- Tool outputs explain tree for any key id.
+- Unit tests cover invalid/cyclic implication defenses.
+
+### AKI-221: Over-scoped key recommendation engine
+**Description:** Add scheduled analysis to identify over-scoped keys based on observed route usage and least-privilege targets.
+**Acceptance criteria:**
+- Engine generates actionable down-scope recommendations.
+- Recommendations are filterable by tenant/product/severity.
+
+### AKI-222: Telemetry secret-safety enforcement
+**Description:** Add guardrails that prevent API-key secrets/tokens from appearing in logs, metrics labels, and audit payloads.
+**Acceptance criteria:**
+- Automated checks fail builds on sensitive field leakage.
+- Redaction policy is documented and tested.
+
+### AKI-223: Rollout mutation timeline dashboard
+**Description:** Build dashboard of rollout changes (phase flips, canary changes, disable toggles) with actor attribution and diff.
+**Acceptance criteria:**
+- Dashboard supports product and time-range filtering.
+- Alerting flags unusual rollout mutation frequency.
+
+### AKI-224: Canary auto-promotion controller
+**Description:** Implement automated canary progression/rollback based on SLO and error-budget gates.
+**Acceptance criteria:**
+- Promotion to GA requires passing configurable SLO windows.
+- Controller auto-rolls back and emits audit events on breach.
+
+### AKI-225: Failure-mode matrix and chaos validation
+**Description:** Define fail-open/fail-closed behavior per dependency failure class and validate via chaos experiments.
+**Acceptance criteria:**
+- Matrix is documented for auth, entitlement, metering, and storage dependencies.
+- Chaos tests assert expected behavior for each failure mode.
+
+### AKI-226: Multi-region consistency strategy
+**Description:** Design and prototype multi-region key validation/revocation consistency and policy sync approach.
+**Acceptance criteria:**
+- Design doc specifies consistency guarantees and recovery behavior.
+- Prototype demonstrates revocation correctness during regional failover.
+
+### AKI-227: Tenant override governance controls
+**Description:** Add governance rules for tenant-level policy overrides (owner, reason, expiry, approval metadata).
+**Acceptance criteria:**
+- Override creation fails without required governance fields.
+- Expired overrides auto-disable and generate notifications.
+
+### AKI-228: API-key lifecycle compliance reporting
+**Description:** Create periodic compliance reports for key age, rotation adherence, inactivity, and risky scope combinations.
+**Acceptance criteria:**
+- Reports support global and tenant-scoped views.
+- High-risk findings include remediation guidance.
+
+### AKI-229: Integrator migration cookbook
+**Description:** Publish migration cookbook from session/JWT integrations to API-key integrations with phased rollout guidance.
+**Acceptance criteria:**
+- Cookbook includes product-specific examples and anti-patterns.
+- Troubleshooting maps common errors to corrective actions.
+
+### AKI-230: GA readiness certification checklist
+**Description:** Build final cross-functional GA checklist covering security, performance, observability, rollback, support, and docs readiness.
+**Acceptance criteria:**
+- Checklist defines measurable pass/fail criteria and owners.
+- GA promotion requires completed sign-off artifacts.

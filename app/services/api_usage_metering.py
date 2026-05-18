@@ -31,6 +31,7 @@ class ApiUsageEvent(TypedDict):
     user_sub: str
     api_key_id: str
     route_id: str
+    product: str
     status_code: int
     request_id: str
     request_attempt: int
@@ -153,6 +154,7 @@ def build_api_usage_event(request: Request, status_code: int) -> Optional[ApiUsa
     if not route_id:
         return None
 
+    product = _product_from_route_id(route_id)
     now = datetime.now(timezone.utc)
     request_id = _extract_request_id(request)
     request_attempt = _extract_request_attempt(request)
@@ -175,6 +177,7 @@ def build_api_usage_event(request: Request, status_code: int) -> Optional[ApiUsa
         "user_sub": _extract_user_sub(request),
         "api_key_id": _extract_api_key_id(request),
         "route_id": route_id,
+        "product": product,
         "status_code": int(status_code),
         "request_id": request_id,
         "request_attempt": request_attempt,
@@ -187,6 +190,35 @@ def build_api_usage_event(request: Request, status_code: int) -> Optional[ApiUsa
         "timestamp": now.isoformat(),
         "idempotency_key": idempotency_key,
     }
+
+
+def _product_from_route_id(route_id: str) -> str:
+    rid = (route_id or "").strip().lower()
+    if ":" not in rid:
+        return "other"
+    _method, path = rid.split(":", 1)
+    if path.startswith("/v1/files") or path.startswith("/ui/files") or "/filemanager" in path:
+        return "filemanager"
+    if path.startswith("/v1/newsfeed") or "/newsfeed" in path:
+        return "newsfeed"
+    if path.startswith("/v1/tickets") or "/ticket" in path or "/helpdesk" in path:
+        return "tickets"
+    if "/cart" in path or "/checkout" in path or "/catalog" in path or "/orders" in path or "/commerce" in path:
+        return "shopping"
+    if (
+        "/messaging/conversations/" in path
+        and (
+            "/messages/image" in path
+            or "/messages/file" in path
+            or "/messages/gallery" in path
+            or "/attachment" in path
+            or "/gallery" in path
+        )
+    ):
+        return "messager_media"
+    if path.startswith("/v1/messages") or "/messaging" in path or "/conversations" in path:
+        return "messager"
+    return "other"
 
 
 def _is_conditional_check_failed(exc: Exception) -> bool:
@@ -269,6 +301,20 @@ def _apply_route_aggregate(table: Any, event: ApiUsageEvent) -> None:
         updated_at=event["timestamp"],
     )
 
+def _apply_product_aggregate(table: Any, event: ApiUsageEvent) -> None:
+    _apply_generic_counter_row(
+        table,
+        key={"PK": f"USER#{event['user_sub']}", "SK": f"API_USAGE#PRODUCT#{event['product']}#PERIOD#{event['period_id']}"},
+        attrs={
+            "entity_type": "api_product_usage_period_totals",
+            "user_sub": event["user_sub"],
+            "product": event["product"],
+            "period_id": event["period_id"],
+        },
+        vals=_aggregate_values(event),
+        updated_at=event["timestamp"],
+    )
+
 
 def _apply_daily_aggregate(table: Any, event: ApiUsageEvent) -> None:
     day_utc = str(event["timestamp"])[:10]
@@ -290,6 +336,7 @@ def _apply_api_usage_aggregates(table: Any, event: ApiUsageEvent) -> None:
     _apply_period_aggregate(table, event)
     _apply_key_aggregate(table, event)
     _apply_route_aggregate(table, event)
+    _apply_product_aggregate(table, event)
     _apply_daily_aggregate(table, event)
 
 
@@ -307,6 +354,8 @@ def record_api_usage_event_and_aggregates(table: Any, event: ApiUsageEvent) -> b
                 "GSI_API_KEY_SK": f"PERIOD#{event['period_id']}#TS#{event['timestamp']}#EVT#{event['event_id']}",
                 "GSI_ROUTE_PK": f"ROUTE#{event['route_id']}",
                 "GSI_ROUTE_SK": f"PERIOD#{event['period_id']}#TS#{event['timestamp']}#EVT#{event['event_id']}",
+                "GSI_PRODUCT_PK": f"PRODUCT#{event['product']}",
+                "GSI_PRODUCT_SK": f"PERIOD#{event['period_id']}#TS#{event['timestamp']}#EVT#{event['event_id']}",
                 "aggregates_applied": False,
                 "ttl_epoch": _ttl_epoch_for_days(getattr(S, "api_usage_event_retention_days", 365)),
             },

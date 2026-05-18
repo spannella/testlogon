@@ -1,0 +1,65 @@
+{
+  "dashboard": {
+    "title": "API Key Product/Route/Key Operations",
+    "description": "Operational dashboard for API key adoption, authorization denials, and suspicious key behavior.",
+    "tags": ["api-keys", "api-usage", "security", "ops"],
+    "refresh": "30s",
+    "time": {"from": "now-24h", "to": "now"},
+    "panels": [
+      {
+        "id": 1,
+        "title": "API calls by product",
+        "type": "timeseries",
+        "expr": "sum by (product) (rate(api_usage_events_total[5m]))"
+      },
+      {
+        "id": 2,
+        "title": "API calls by route",
+        "type": "timeseries",
+        "expr": "topk(20, sum by (route_id) (rate(api_usage_events_total[5m])))"
+      },
+      {
+        "id": 3,
+        "title": "API calls by key",
+        "type": "timeseries",
+        "expr": "topk(20, sum by (api_key_id) (rate(api_usage_events_total[5m])))"
+      },
+      {
+        "id": 4,
+        "title": "Status class breakdown",
+        "type": "timeseries",
+        "expr": "sum by (status_class) (rate(api_usage_status_class_total[5m]))"
+      },
+      {
+        "id": 5,
+        "title": "Auth deny reasons",
+        "type": "timeseries",
+        "expr": "sum by (reason) (rate(api_key_scope_denied_total[5m]))"
+      },
+      {
+        "id": 6,
+        "title": "401/403 ratio",
+        "type": "stat",
+        "expr": "sum(rate(api_usage_status_class_total{status_class=~\"401|403\"}[5m])) / clamp_min(sum(rate(api_usage_events_total[5m])), 1)"
+      },
+      {
+        "id": 7,
+        "title": "Suspicious key fan-out (distinct routes/key)",
+        "type": "table",
+        "expr": "topk(20, count by (api_key_id) (count by (api_key_id, route_id) (increase(api_usage_events_total[1h])) > 0))"
+      },
+      {
+        "id": 8,
+        "title": "Suspicious key fan-out (distinct client IP/key)",
+        "type": "table",
+        "expr": "topk(20, count by (api_key_id) (count by (api_key_id, client_ip) (increase(api_key_requests_total[1h])) > 0))"
+      },
+      {
+        "id": 9,
+        "title": "Registry drift (stale + unregistered live routes)",
+        "type": "timeseries",
+        "expr": "api_key_registry_drift_routes or api_key_registry_unregistered_live_routes"
+      }
+    ]
+  }
+}

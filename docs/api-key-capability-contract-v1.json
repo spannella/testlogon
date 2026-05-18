@@ -1,0 +1,47 @@
+{
+  "version": "v1",
+  "deny_by_default_unmapped_routes": true,
+  "capabilities": [
+    "filemanager:admin",
+    "filemanager:read",
+    "filemanager:share",
+    "filemanager:write",
+    "messager:manage",
+    "messager:read",
+    "messager:write",
+    "newsfeed:moderate",
+    "newsfeed:read",
+    "newsfeed:write",
+    "shopping:cart:write",
+    "shopping:catalog:read",
+    "shopping:checkout:write",
+    "shopping:orders:read",
+    "tickets:admin",
+    "tickets:read",
+    "tickets:write"
+  ],
+  "implications": {
+    "filemanager:admin": [
+      "filemanager:read",
+      "filemanager:write",
+      "filemanager:share"
+    ],
+    "messager:manage": [
+      "messager:read",
+      "messager:write"
+    ],
+    "newsfeed:moderate": [
+      "newsfeed:read",
+      "newsfeed:write"
+    ],
+    "tickets:admin": [
+      "tickets:read",
+      "tickets:write"
+    ]
+  },
+  "ownership_model": {
+    "api_key_owner_is_request_principal": true,
+    "capability_grants_do_not_expand_resource_ownership": true,
+    "entitlement_checks_are_additive": true
+  }
+}

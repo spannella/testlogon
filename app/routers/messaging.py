@@ -87,6 +87,7 @@ from app.services.filemanager import get_node, get_usage_summary, norm_path, sha
 from app.services.messaging_gallery import fetch_gallery_page
 from app.services.messaging_gallery_index import fetch_gallery_index_page, sync_gallery_index_entries
 from app.services.profile import get_profile_identity
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from app.services.sessions import require_ui_session
 from app.services.messaging_archive_writer import MessagingArchiveWriteError, _archive_root_dir, emit_messaging_archive_event
 from app.services.messaging_archive_query import query_archive_records
@@ -234,7 +235,7 @@ tbl_views = ddb.Table(DDB_MESSAGE_VIEWS)
 tbl_receipts = ddb.Table(DDB_MESSAGE_RECEIPTS)
 tbl_msg_consumption = ddb.Table(DDB_MESSAGE_CONSUMPTION)
 
-router = APIRouter(prefix="/messaging", tags=["messaging"])
+router = APIRouter(prefix="/messaging", tags=["messaging"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 logger = logging.getLogger(__name__)
 
 _MASS_MESSAGE_RATE_LOCK = threading.Lock()
@@ -1536,6 +1537,13 @@ async def get_messaging_user_id(
     authorization: Optional[str] = Header(default=None),
     x_session_id: Optional[str] = Header(default=None, alias="X-SESSION-ID"),
 ) -> str:
+    principal = getattr(getattr(request, "state", None), "api_key_principal", None)
+    if isinstance(principal, dict):
+        uid = str(principal.get("user_sub") or "").strip()
+        if uid:
+            _ensure_user_indexed(uid)
+            return uid
+
     cookies = getattr(request, "cookies", {}) or {}
     if x_session_id or cookies.get(S.ui_session_cookie_name):
         user_sub = await get_authenticated_user_sub(request)

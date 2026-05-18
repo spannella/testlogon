@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.routers import admin_usage
@@ -245,6 +246,74 @@ class TestAdminUsageRoutes(unittest.TestCase):
             rollback_criteria="rollback on drift",
         )
         audit.assert_called_once()
+
+    def test_admin_api_keys_rollout_state_includes_registry_drift_threshold_fields(self):
+        req = SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(
+                    api_key_registry_drift={
+                        "stale_route_count": 3,
+                        "stale_route_preview": ["GET:/missing"],
+                        "unregistered_live_route_count": 2,
+                        "unregistered_live_route_preview": ["GET:/v1/fs/unknown"],
+                        "warn_threshold": 1,
+                        "warn_threshold_exceeded": True,
+                        "status": "critical",
+                    }
+                )
+            )
+        )
+        with (
+            patch.object(admin_usage, "get_api_key_rollout_state", return_value={"dual_credential_mode": "prefer_api_key", "products": {}}),
+            patch.object(admin_usage, "audit_event") as audit,
+        ):
+            out = admin_usage.admin_api_keys_rollout_state(req=req, include_subjects=False, admin_user="admin")
+        self.assertEqual(out["registry_drift"]["stale_route_count"], 3)
+        self.assertEqual(out["registry_drift"]["unregistered_live_route_count"], 2)
+        self.assertEqual(out["registry_drift"]["warn_threshold"], 1)
+        self.assertTrue(out["registry_drift"]["warn_threshold_exceeded"])
+        self.assertEqual(out["registry_drift"]["status"], "critical")
+        audit.assert_called_once()
+
+    def test_admin_api_keys_rollout_state_defaults_registry_drift_threshold_fields(self):
+        req = SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(
+                    api_key_registry_drift={
+                        "stale_route_count": 0,
+                        "stale_route_preview": [],
+                    }
+                )
+            )
+        )
+        with patch.object(admin_usage, "get_api_key_rollout_state", return_value={"dual_credential_mode": "prefer_api_key", "products": {}}):
+            out = admin_usage.admin_api_keys_rollout_state(req=req, include_subjects=False, admin_user="admin")
+        self.assertEqual(out["registry_drift"]["warn_threshold"], 0)
+        self.assertFalse(out["registry_drift"]["warn_threshold_exceeded"])
+        self.assertEqual(out["registry_drift"]["unregistered_live_route_count"], 0)
+        self.assertEqual(out["registry_drift"]["status"], "ok")
+
+    def test_admin_api_keys_rollout_state_blocks_include_subjects_without_explicit_enable(self):
+        req = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(api_key_registry_drift={})))
+        with (
+            patch.object(admin_usage, "S", SimpleNamespace(api_key_rollout_state_allow_subjects=False)),
+            patch.object(admin_usage, "audit_event") as audit,
+        ):
+            with self.assertRaises(admin_usage.HTTPException) as exc:
+                admin_usage.admin_api_keys_rollout_state(req=req, include_subjects=True, admin_user="admin")
+        self.assertEqual(exc.exception.status_code, 403)
+        self.assertIn("include_subjects is disabled", str(exc.exception.detail))
+        audit.assert_called_once()
+
+    def test_admin_api_keys_rollout_state_allows_include_subjects_when_enabled(self):
+        req = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(api_key_registry_drift={})))
+        with (
+            patch.object(admin_usage, "S", SimpleNamespace(api_key_rollout_state_allow_subjects=True)),
+            patch.object(admin_usage, "get_api_key_rollout_state", return_value={"dual_credential_mode": "prefer_api_key", "products": {}}) as get_state,
+            patch.object(admin_usage, "audit_event"),
+        ):
+            admin_usage.admin_api_keys_rollout_state(req=req, include_subjects=True, admin_user="admin")
+        get_state.assert_called_once_with(include_subjects=True)
 
 
 if __name__ == "__main__":

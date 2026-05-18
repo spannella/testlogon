@@ -138,6 +138,17 @@ def _fetch_txn(user_sub: str, txn_id: str) -> Optional[Dict[str, Any]]:
     return items[0] if items else None
 
 
+def _fetch_txn_by_idempotency_key(user_sub: str, idempotency_key: str) -> Optional[Dict[str, Any]]:
+    resp = T.purchase_transactions.query(
+        KeyConditionExpression="user_sub = :u AND begins_with(sk, :p)",
+        ExpressionAttributeValues={":u": user_sub, ":p": "TXN#", ":idem": idempotency_key},
+        FilterExpression="request_idempotency_key = :idem",
+        Limit=1,
+    )
+    items = resp.get("Items", [])
+    return items[0] if items else None
+
+
 def get_transaction_item(user_sub: str, txn_id: str) -> Dict[str, Any]:
     item = _fetch_txn(user_sub, txn_id)
     if not item:
@@ -186,7 +197,16 @@ def record_receipt_download(user_sub: str, txn_id: str, receipt_path: str) -> No
     )
 
 
-def create_transaction(user_sub: str, body: Dict[str, Any]) -> Dict[str, Any]:
+def create_transaction(user_sub: str, body: Dict[str, Any], *, idempotency_key: str | None = None) -> Dict[str, Any]:
+    request_idempotency_key = str(idempotency_key or "").strip()
+    if request_idempotency_key:
+        existing = _fetch_txn_by_idempotency_key(user_sub, request_idempotency_key)
+        if existing:
+            return {
+                "txn_id": existing["txn_id"],
+                "status": existing.get("status", "PENDING"),
+                "created_at": int(existing.get("created_at") or now_ts()),
+            }
     txn_id = uuid4().hex
     created_at = now_ts()
     profile = _safe_profile(user_sub)
@@ -203,6 +223,7 @@ def create_transaction(user_sub: str, body: Dict[str, Any]) -> Dict[str, Any]:
         "amount": str(body["money"]["amount"]),
         "currency": body["money"]["currency"],
         "version": 1,
+        "request_idempotency_key": request_idempotency_key or None,
     }
     for key in ("merchant_id", "external_ref", "description", "metadata"):
         if body.get(key) is not None:

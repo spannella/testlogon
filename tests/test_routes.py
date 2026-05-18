@@ -21,6 +21,7 @@ from app.models import (
     AlertToastPrefsReq,
     ApiKeyIpRulesReq,
     ApiKeyLimitsPatchReq,
+    ApiKeyScopesReq,
     ApiKeySelfLimitsReq,
     CreateApiKeyReq,
     EmailBeginReq,
@@ -406,6 +407,7 @@ class TestApiKeysRoutes(unittest.TestCase):
             stack.enter_context(patch.object(api_keys, "create_api_key", return_value={"key_id": "k2"}))
             stack.enter_context(patch.object(api_keys, "revoke_api_key"))
             stack.enter_context(patch.object(api_keys, "set_api_key_ip_rules", return_value={"allow_cidrs": [], "deny_cidrs": []}))
+            stack.enter_context(patch.object(api_keys, "set_api_key_capabilities", return_value={"key_id": "k1", "capabilities": ["tickets:read"]}))
             stack.enter_context(patch.object(api_keys, "set_api_key_self_limits", return_value={"key_id": "k1", "monthly_calls_cap": 10, "monthly_spend_cap_micros": 1000, "route_caps": {}}))
             stack.enter_context(patch.object(api_keys, "get_api_key_item", return_value={"key_id": "k1", "user_sub": "user", "monthly_calls_cap": 10, "monthly_spend_cap_micros": 1000, "route_caps": {}}))
             stack.enter_context(patch.object(api_keys, "_api_usage_table", return_value="table"))
@@ -424,6 +426,11 @@ class TestApiKeysRoutes(unittest.TestCase):
             ip_rules = run_async(api_keys.ui_set_api_key_ip_rules(req, ApiKeyIpRulesReq(key_id="k1", allow_cidrs=["10.0.0.0/24"], deny_cidrs=[]), ctx=build_ctx()))
             self.assertEqual(ip_rules["ok"], True)
 
+            scopes = run_async(api_keys.ui_set_api_key_scopes(req, ApiKeyScopesReq(key_id="k1", capabilities=["tickets:read"]), ctx=build_ctx()))
+            self.assertEqual(scopes["ok"], True)
+            scopes_patch = run_async(api_keys.ui_patch_api_key_scopes(req, "k1", ApiKeyScopesReq(key_id="k1", scopes=["tickets:read"]), ctx=build_ctx()))
+            self.assertEqual(scopes_patch["ok"], True)
+
             self_limits = run_async(api_keys.ui_set_api_key_self_limits(req, ApiKeySelfLimitsReq(key_id="k1", monthly_calls_cap=10, monthly_spend_cap_micros=1000, route_caps={}), ctx=build_ctx()))
             self.assertEqual(self_limits["ok"], True)
 
@@ -432,6 +439,14 @@ class TestApiKeysRoutes(unittest.TestCase):
 
             usage = run_async(api_keys.ui_get_api_key_usage("k1", period="2026-03", ctx=build_ctx()))
             self.assertEqual(usage["totals"]["calls_total"], 4)
+
+    def test_api_key_scopes_patch_target_mismatch(self):
+        req = build_request()
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(api_keys, "set_api_key_capabilities", return_value={"key_id": "k1", "capabilities": ["tickets:read"]}))
+            with self.assertRaises(HTTPException) as exc:
+                run_async(api_keys.ui_patch_api_key_scopes(req, "k2", ApiKeyScopesReq(key_id="k1", capabilities=["tickets:read"]), ctx=build_ctx()))
+        self.assertEqual(exc.exception.status_code, 400)
 
     def test_api_keys_empty_label(self):
         req = build_request()
