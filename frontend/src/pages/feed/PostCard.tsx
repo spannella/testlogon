@@ -316,6 +316,7 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
           </div>
           <PostActions
             postId={post.post_id}
+            postStatus={post.status}
             isOwn={isOwn}
             onEdit={() => setEditOpen(true)}
           />
@@ -481,6 +482,10 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
         open={editOpen}
         onOpenChange={setEditOpen}
         postId={post.post_id}
+        postStatus={post.status}
+        initialPublishAt={post.publish_at}
+        initialScheduleTimezone={post.schedule_timezone}
+        initialScheduledAtLocal={post.scheduled_at_local}
         initialBody={post.body}
         initialImageUrls={imageUrls}
         initialBodyRich={(post.body_rich as any) ?? null}

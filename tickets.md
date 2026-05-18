@@ -964,3 +964,184 @@
 **Acceptance criteria:**
 - Support can identify top failure causes without log deep-dives.
 - Campaign troubleshooting time-to-resolution improves measurably.
+# Newsfeed Scheduling Implementation Tickets
+
+### NFS-001: Add scheduling fields to post data model
+**Description:** Extend persisted post metadata with lifecycle/scheduling fields (`status`, `publish_at`, `published_at`, `schedule_timezone`, `scheduled_at_local`) and define default semantics for existing rows.
+**Acceptance criteria:**
+- Post records can store all scheduling fields without breaking existing read/write paths.
+- Legacy posts without new fields still serialize correctly with sensible defaults.
+
+### NFS-002: Introduce scheduled post reference key conventions
+**Description:** Add deterministic key builder(s) and item shape for scheduled-post references under owner partition to support efficient listing and management.
+**Acceptance criteria:**
+- Scheduled ref key format is documented and stable (includes publish timestamp + post id).
+- Helper utilities are covered by unit tests and used by create/list flows.
+
+### NFS-003: Extend create-post request contract for scheduling
+**Description:** Update API request schema for `POST /posts` to accept optional `publish_at`, `schedule_timezone`, and `scheduled_at_local`.
+**Acceptance criteria:**
+- OpenAPI/schema includes scheduling inputs with clear types and validation bounds.
+- Existing immediate-post clients continue to work without sending schedule fields.
+
+### NFS-004: Validate schedule payload rules on create
+**Description:** Enforce scheduling invariants for create requests: timezone validity (IANA), minimum future offset, and consistent field combinations.
+**Acceptance criteria:**
+- Invalid schedule payloads return 4xx with actionable error details.
+- Valid schedule payloads pass validation and proceed to persistence.
+
+### NFS-005: Implement immediate-vs-scheduled create behavior
+**Description:** Branch create flow by schedule presence: immediate posts publish now; scheduled posts persist as scheduled and defer publish side effects.
+**Acceptance criteria:**
+- Immediate posts create feed refs and preserve current user-visible behavior.
+- Scheduled posts do not create feed refs and are stored with `status=scheduled`.
+
+### NFS-006: Persist scheduled reference items during scheduled create
+**Description:** On scheduled create, write owner-scoped `ScheduledPostRef` records used by management APIs.
+**Acceptance criteria:**
+- Scheduled create writes exactly one post item and one scheduled ref item.
+- Scheduled ref contains owner id, post id, publish timestamp, and creation metadata.
+
+### NFS-007: Add owner-only scheduled posts listing endpoint
+**Description:** Implement `GET /posts/scheduled` with pagination, owner scoping, and serialization of scheduled posts.
+**Acceptance criteria:**
+- Endpoint returns only caller-owned posts with `status=scheduled`.
+- Response supports cursor pagination and stable ordering by schedule time.
+
+### NFS-008: Add request/response examples and API docs updates
+**Description:** Update endpoint docstrings/schema examples to include scheduled create/list usage and typical validation errors.
+**Acceptance criteria:**
+- API docs show immediate and scheduled create examples.
+- Error cases for invalid timezone/past schedule are documented.
+
+### NFS-009: Add edit-scheduled-post API contract
+**Description:** Extend `PATCH /posts/{post_id}` contract to support schedule metadata updates for scheduled posts.
+**Acceptance criteria:**
+- Edit schema includes mutable scheduling fields and constraints.
+- API rejects schedule updates for non-scheduled statuses.
+
+### NFS-010: Implement scheduled-post edit behavior
+**Description:** Apply schedule/content edits atomically for scheduled posts, including updated scheduled ref key maintenance.
+**Acceptance criteria:**
+- Editing publish time updates both post metadata and scheduled ref ordering key.
+- Conflicting or invalid edits return deterministic error codes.
+
+### NFS-011: Add cancel-scheduled-post endpoint
+**Description:** Implement `POST /posts/{post_id}/cancel` to transition scheduled posts to cancelled state and clean up listing refs.
+**Acceptance criteria:**
+- Cancelling a scheduled post removes it from scheduled list responses.
+- Cancel operation is idempotent and safe under retries.
+
+### NFS-012: Ensure feed queries exclude non-published posts
+**Description:** Harden feed/get paths so scheduled/cancelled posts never appear in public feed results before publication.
+**Acceptance criteria:**
+- Feed endpoint excludes scheduled/cancelled posts even if reference data drifts.
+- Regression tests verify hidden behavior for scheduled items.
+
+### NFS-013: Add publish worker due-query index migration
+**Description:** Create DynamoDB migration/backfill scripts for schedule-oriented due-query access pattern (GSI keys and existing rows).
+**Acceptance criteria:**
+- Migration scripts are idempotent and can be re-run safely.
+- Backfill populates required index attributes for existing scheduled rows.
+
+### NFS-014: Implement scheduler worker loop
+**Description:** Build periodic worker to query due scheduled posts and execute publish transitions.
+**Acceptance criteria:**
+- Worker publishes due scheduled posts within configured SLA.
+- Worker handles retries/backoff without duplicate publishes.
+
+### NFS-015: Make publish transition idempotent
+**Description:** Use conditional writes and state checks for `scheduled -> published` transitions and feed-ref creation.
+**Acceptance criteria:**
+- Duplicate worker runs do not create duplicate publish side effects.
+- Transition fails safely when post is already published/cancelled.
+
+### NFS-016: Move publish metering to publish-time for scheduled posts
+**Description:** Ensure publish usage/metering triggers only when scheduled posts are actually published.
+**Acceptance criteria:**
+- Scheduled create does not meter publish usage.
+- Scheduled publish meters once; cancelled scheduled posts meter zero.
+
+### NFS-017: Add backend unit tests for create/list validation
+**Description:** Expand tests for schedule payload validation, scheduled create behavior, and scheduled list filtering/pagination.
+**Acceptance criteria:**
+- Tests cover valid/invalid timezone and future-time constraints.
+- Tests assert scheduled refs are created and list endpoint returns expected rows.
+
+### NFS-018: Add backend unit tests for edit/cancel transitions
+**Description:** Add tests for schedule edits, cancellation, state guards, and ref maintenance.
+**Acceptance criteria:**
+- Tests verify edit/cancel behavior across status permutations.
+- Tests confirm refs and status transitions stay consistent.
+
+### NFS-019: Add backend worker tests
+**Description:** Add deterministic tests for due-query processing, idempotent transitions, and partial failure recovery.
+**Acceptance criteria:**
+- Worker tests validate no duplicate publishes under retry.
+- Failure cases are retried and logged with actionable telemetry.
+
+### NFS-020: Extend frontend API types for scheduling metadata
+**Description:** Update TS API types (`FeedPost`, `CreatePostReq`, `EditPostReq`) and client wrappers for scheduled list/cancel/edit actions.
+**Acceptance criteria:**
+- Frontend compiles with new schedule-aware API contracts.
+- New endpoint wrappers are typed and consumed by UI modules.
+
+### NFS-021: Add create-post scheduling controls in UI
+**Description:** Add date/time + timezone controls and “remove schedule” action to composer, reusing message scheduling UX patterns.
+**Acceptance criteria:**
+- Users can schedule a post without leaving create flow.
+- UI shows clear scheduled preview and sends correct payload.
+
+### NFS-022: Add scheduled posts management panel
+**Description:** Build owner-facing scheduled posts panel/sheet with list view and navigation to edit/cancel actions.
+**Acceptance criteria:**
+- Panel shows upcoming scheduled posts sorted by publish time.
+- Empty/loading/error states are implemented and accessible.
+
+### NFS-023: Add edit dialog scheduling controls
+**Description:** Extend edit post dialog to update release datetime/timezone for scheduled posts.
+**Acceptance criteria:**
+- Scheduled posts can be rescheduled from edit dialog.
+- Published posts retain existing edit behavior unchanged.
+
+### NFS-024: Add frontend unit tests for scheduling UX
+**Description:** Add tests for create/edit scheduling controls, timezone conversion, and list interactions.
+**Acceptance criteria:**
+- Tests cover DST/timezone conversions and remove-schedule behavior.
+- Scheduled list action tests validate mutation callbacks and query invalidation.
+
+### NFS-025: Add end-to-end scheduled publish scenario
+**Description:** Implement E2E flow that schedules a near-future post, verifies feed invisibility before due time, and visibility after publish.
+**Acceptance criteria:**
+- E2E test passes reliably with scheduler latency tolerance.
+- Test includes cleanup and deterministic timing guards.
+
+### NFS-026: Add telemetry and operational metrics
+**Description:** Instrument schedule create/edit/cancel/publish paths with counters, error logs, and publish-lag metrics.
+**Acceptance criteria:**
+- Dashboards can track scheduled backlog, publish throughput, and failures.
+- Alerts fire for publish lag/error threshold breaches.
+
+### NFS-027: Add feature flags and rollout controls
+**Description:** Gate scheduling APIs/UI/worker behind flags and define staged rollout plan (internal → cohort → general availability).
+**Acceptance criteria:**
+- Flags can independently disable UI and publish worker paths.
+- Rollout checklist includes rollback steps and validation gates.
+
+### NFS-028: Deployment and migration runbook
+**Description:** Create deployment docs covering schema migration order, worker startup, backfill, verification steps, and rollback procedures.
+**Acceptance criteria:**
+- Runbook is executable in staging and production with explicit checkpoints.
+- Includes post-deploy validation queries and incident fallback playbook.
+
+### NFS-029: Security and authorization review ticket
+**Description:** Validate owner-only access for list/edit/cancel scheduled posts and confirm no unauthorized read/write paths exist.
+**Acceptance criteria:**
+- Security tests verify cross-user access is denied for all scheduling endpoints.
+- Review sign-off documents threat considerations and mitigations.
+
+### NFS-030: Final readiness and GA checklist
+**Description:** Aggregate completion criteria from all tickets and perform final readiness review before full rollout.
+**Acceptance criteria:**
+- All P0/P1 tickets complete with passing tests and monitoring in place.
+- Product, engineering, and operations sign off on GA release decision.

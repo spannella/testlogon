@@ -6,8 +6,11 @@ import { getFeed } from "@/api/endpoints/newsfeed";
 import { CreatePost } from "./CreatePost";
 import { PostCard } from "./PostCard";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { newsfeedSchedulingUiEnabled } from "@/lib/featureFlags";
+import { ScheduledPostsPanel } from "./ScheduledPostsPanel";
 
 export function NewsFeed() {
+  const schedulingUiEnabled = newsfeedSchedulingUiEnabled;
   const feedQuery = useInfiniteQuery({
     queryKey: ["feed"],
     queryFn: ({ pageParam }) => getFeed(pageParam as string | undefined),
@@ -47,6 +50,7 @@ export function NewsFeed() {
   return (
     <div className="space-y-4">
       <CreatePost />
+      {schedulingUiEnabled ? <ScheduledPostsPanel /> : null}
 
       {allPosts.length === 0 ? (
         <EmptyState

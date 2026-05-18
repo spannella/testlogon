@@ -814,6 +814,10 @@ class Settings:
     newsfeed_drafts_enabled: bool = os.environ.get("NEWSFEED_DRAFTS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     newsfeed_drafts_enabled_user_ids: str = os.environ.get("NEWSFEED_DRAFTS_ENABLED_USER_IDS", "")
     newsfeed_drafts_disabled_user_ids: str = os.environ.get("NEWSFEED_DRAFTS_DISABLED_USER_IDS", "")
+    newsfeed_scheduling_api_enabled: bool = os.environ.get("NEWSFEED_SCHEDULING_API_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    newsfeed_scheduling_worker_enabled: bool = os.environ.get("NEWSFEED_SCHEDULING_WORKER_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    newsfeed_scheduling_min_lead_seconds: int = int(os.environ.get("NEWSFEED_SCHEDULING_MIN_LEAD_SECONDS", "5"))
+    newsfeed_scheduling_max_horizon_seconds: int = int(os.environ.get("NEWSFEED_SCHEDULING_MAX_HORIZON_SECONDS", "31536000"))
 
     # Messaging feature flags
     messaging_encrypted_messages_enabled: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_ENABLED", "false").lower() == "true"

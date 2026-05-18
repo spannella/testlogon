@@ -1705,6 +1705,11 @@ export interface FeedPost {
   my_reactions?: string[];
   created_at: string;
   updated_at?: string;
+  status?: "scheduled" | "published" | "cancelled";
+  publish_at?: number;
+  published_at?: string;
+  schedule_timezone?: string;
+  scheduled_at_local?: string;
 }
 
 export interface FeedComment {
@@ -1735,6 +1740,9 @@ export interface CreatePostReq {
   image_urls?: string[];
   file_paths?: string[];
   unlock_price_cents?: number;
+  publish_at?: number;
+  schedule_timezone?: string;
+  scheduled_at_local?: string;
 }
 
 export interface CreateCommentReq {
@@ -1754,6 +1762,14 @@ export interface EditPostReq {
   body_format?: "plain" | "markdown" | "rich";
   body_version?: number;
   image_urls?: string[] | null;
+  publish_at?: number;
+  schedule_timezone?: string;
+  scheduled_at_local?: string;
+}
+
+export interface ScheduledPostsResp {
+  items: FeedPost[];
+  next_cursor?: string;
 }
 
 export interface EditCommentReq {

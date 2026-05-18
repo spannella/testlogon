@@ -9,11 +9,13 @@ import os
 import time
 import uuid
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Annotated, Any, Dict, List, Literal, Optional, Set, Tuple
 
 from urllib.parse import parse_qs, quote, urlparse
 
 from botocore.exceptions import ClientError
+from boto3.dynamodb.types import TypeSerializer
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, Field, ValidationError, model_validator
 from starlette.responses import StreamingResponse
@@ -22,6 +24,7 @@ from app.core.aws import ddb
 from app.core.aws_clients import s3_client, sqs_client
 from app.core.cursor import decode_cursor, encode_cursor
 from app.core.settings import S
+from app.metrics import record_newsfeed_schedule_operation
 from app.services.filemanager import download_file, get_node, get_usage_summary, norm_path
 from app.services.sessions import require_ui_session
 from app.services.subscription_access import can_access_creator
@@ -46,6 +49,8 @@ sqs = sqs_client() if EVENTS_SQS_URL else None
 
 router = APIRouter(tags=["newsfeed"])
 logger = logging.getLogger(__name__)
+_SCHEDULED_LOCAL_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
+_ddb_serializer = TypeSerializer()
 
 
 def _emit_newsfeed_content_metric(event: str, **fields: Any) -> None:
@@ -74,6 +79,59 @@ def _emit_newsfeed_content_reject(reason_code: str, *, source: str, body_format:
         "newsfeed content reject",
         extra={"event": "newsfeed_content_reject", "source": source, "reason_code": reason_code, "body_format": body_format or "unknown"},
     )
+
+
+def _schedule_payload_error(
+    *,
+    code: str,
+    message: str,
+    field: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+    operation: Optional[str] = None,
+) -> HTTPException:
+    if operation:
+        record_newsfeed_schedule_operation(operation=operation, outcome="validation_error")
+        logger.warning(
+            "newsfeed schedule validation failed",
+            extra={"event": "newsfeed_schedule_validation_failed", "operation": operation, "code": code, "field": field or "unknown"},
+        )
+    detail: Dict[str, Any] = {"code": code, "message": message}
+    if field:
+        detail["field"] = field
+    if extra:
+        detail.update(extra)
+    return HTTPException(status_code=400, detail=detail)
+
+
+def _require_newsfeed_scheduling_api_enabled() -> None:
+    if bool(getattr(S, "newsfeed_scheduling_api_enabled", True)):
+        return
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "code": "schedule_feature_disabled",
+            "message": "scheduled posting is currently disabled",
+        },
+    )
+
+
+def _schedule_min_lead_seconds() -> int:
+    try:
+        return max(1, int(getattr(S, "newsfeed_scheduling_min_lead_seconds", 5)))
+    except Exception:
+        return 5
+
+
+def _schedule_max_horizon_seconds() -> int:
+    min_lead = _schedule_min_lead_seconds()
+    try:
+        return max(min_lead + 1, int(getattr(S, "newsfeed_scheduling_max_horizon_seconds", 31536000)))
+    except Exception:
+        return 31536000
+
+
+def _ddb_serialize_map(values: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: _ddb_serializer.serialize(value) for key, value in values.items()}
 
 
 
@@ -449,6 +507,42 @@ def pk_user(user_id: str) -> str:
 
 def pk_post(post_id: str) -> str:
     return f"POST#{post_id}"
+
+
+SCHEDULED_POST_REF_PREFIX = "SCHEDULEDPOST"
+SCHEDULE_DUE_INDEX_PK_ATTR = "GSI_SCHEDULE_PK"
+SCHEDULE_DUE_INDEX_SK_ATTR = "GSI_SCHEDULE_SK"
+SCHEDULE_DUE_INDEX_PK_VALUE = "SCHEDULED"
+
+
+def _scheduled_publish_sort_key(publish_at: int) -> str:
+    # Zero-pad to keep lexicographic sort aligned with numeric timestamp order.
+    return f"{int(publish_at):012d}"
+
+
+def schedule_due_index_values(publish_at: int, post_id: str) -> Dict[str, str]:
+    return {
+        SCHEDULE_DUE_INDEX_PK_ATTR: SCHEDULE_DUE_INDEX_PK_VALUE,
+        SCHEDULE_DUE_INDEX_SK_ATTR: f"{_scheduled_publish_sort_key(publish_at)}#POST#{post_id}",
+    }
+
+
+def sk_scheduled_post_ref(publish_at: int, post_id: str) -> str:
+    return f"{SCHEDULED_POST_REF_PREFIX}#{_scheduled_publish_sort_key(publish_at)}#{post_id}"
+
+
+def parse_scheduled_post_ref_sk(sk: str) -> Optional[Tuple[int, str]]:
+    raw = str(sk or "").strip()
+    parts = raw.split("#", 2)
+    if len(parts) != 3:
+        return None
+    prefix, publish_at_token, post_id = parts
+    if prefix != SCHEDULED_POST_REF_PREFIX or not publish_at_token.isdigit() or not post_id:
+        return None
+    try:
+        return int(publish_at_token), post_id
+    except ValueError:
+        return None
 
 
 def sk_post() -> str:
@@ -905,6 +999,23 @@ class CreatePostRequest(ContentFieldsMixin):
     visibility: Literal["followers", "public"] = "followers"
     unlock_price_cents: Optional[int] = Field(default=None, ge=0)
     file_paths: List[str] = Field(default_factory=list)
+    publish_at: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Unix timestamp (seconds) for scheduled publish time.",
+    )
+    schedule_timezone: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        description="IANA timezone name used when scheduling (e.g. America/New_York).",
+    )
+    scheduled_at_local: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=32,
+        description="User-entered local datetime string (for display/audit), e.g. 2026-12-31T19:00.",
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -922,6 +1033,12 @@ class CreatePostRequest(ContentFieldsMixin):
                     "body_format": "rich",
                     "body_version": 1,
                 },
+                {
+                    "body_plain": "Scheduled post",
+                    "publish_at": 1767225600,
+                    "schedule_timezone": "America/New_York",
+                    "scheduled_at_local": "2026-12-31T19:00",
+                },
             ]
         }
     }
@@ -931,6 +1048,11 @@ class PostResponse(BaseModel):
     post_id: str
     author_id: str
     created_at: str
+    published_at: Optional[str] = None
+    status: Literal["scheduled", "published", "cancelled"] = "published"
+    publish_at: Optional[int] = None
+    schedule_timezone: Optional[str] = None
+    scheduled_at_local: Optional[str] = None
     body: str
     body_plain: Optional[str] = None
     body_markdown: Optional[str] = None
@@ -944,6 +1066,42 @@ class PostResponse(BaseModel):
     unlock_price_cents: Optional[int] = None
     like_count: int = 0
     comment_count: int = 0
+
+
+class ScheduledPostsResponse(BaseModel):
+    items: List[Dict[str, Any]] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "items": [
+                        {
+                            "post_id": "post_123",
+                            "author_id": "user_abc",
+                            "status": "scheduled",
+                            "publish_at": 1767225600,
+                            "schedule_timezone": "America/New_York",
+                            "scheduled_at_local": "2026-12-31T19:00",
+                            "created_at": "2026-01-01T00:00:00+00:00",
+                            "published_at": None,
+                            "body": "Scheduled post body",
+                            "body_plain": "Scheduled post body",
+                            "body_format": "plain",
+                            "body_version": 1,
+                            "image_urls": [],
+                            "visibility": "followers",
+                            "locked": False,
+                            "like_count": 0,
+                            "comment_count": 0,
+                        }
+                    ],
+                    "next_cursor": "eyJwayI6ICJVU0VSI3UxIiwgInNrIjogIlNDSEVEVUxFRFBPU1QjMDAwMDAxNzY3MjI1NjAwI3Bvc3RfMTIzIn0",
+                }
+            ]
+        }
+    }
 
 
 class CreateCommentRequest(ContentFieldsMixin):
@@ -1002,6 +1160,9 @@ class HidePostRequest(BaseModel):
 
 class EditPostRequest(ContentFieldsMixin):
     image_urls: Optional[List[str]] = None
+    publish_at: Optional[int] = Field(default=None, ge=0)
+    schedule_timezone: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    scheduled_at_local: Optional[str] = Field(default=None, min_length=1, max_length=32)
 
 
 class DraftPostResponse(BaseModel):
@@ -1251,9 +1412,83 @@ def _reaction_summaries(reactions_map: Dict, viewer_id: Optional[str] = None):
     return counts, mine
 
 
+def _resolve_post_lifecycle_fields(post: Dict[str, Any]) -> Tuple[Literal["scheduled", "published", "cancelled"], Optional[int], Optional[str], Optional[str], Optional[str]]:
+    raw_status = str(post.get("status") or "").strip().lower()
+    status: Literal["scheduled", "published", "cancelled"]
+    if raw_status in {"scheduled", "published", "cancelled"}:
+        status = raw_status
+    else:
+        status = "published"
+
+    publish_at_raw = post.get("publish_at")
+    try:
+        publish_at = int(publish_at_raw) if publish_at_raw is not None else None
+    except (TypeError, ValueError):
+        publish_at = None
+
+    published_at_raw = post.get("published_at")
+    published_at = published_at_raw.strip() if isinstance(published_at_raw, str) and published_at_raw.strip() else None
+    if not published_at and status == "published":
+        created_at_raw = post.get("created_at")
+        if isinstance(created_at_raw, str) and created_at_raw.strip():
+            published_at = created_at_raw.strip()
+
+    schedule_timezone_raw = post.get("schedule_timezone")
+    schedule_timezone = schedule_timezone_raw.strip() if isinstance(schedule_timezone_raw, str) and schedule_timezone_raw.strip() else None
+
+    scheduled_at_local_raw = post.get("scheduled_at_local")
+    scheduled_at_local = scheduled_at_local_raw.strip() if isinstance(scheduled_at_local_raw, str) and scheduled_at_local_raw.strip() else None
+
+    if status != "scheduled":
+        publish_at = None
+        schedule_timezone = None
+        scheduled_at_local = None
+
+    return status, publish_at, published_at, schedule_timezone, scheduled_at_local
+
+
+def _write_feed_ref_for_published_post(*, user_id: str, post_id: str, created_at: str) -> None:
+    feed_item = {
+        "pk": pk_post(post_id),
+        "sk": f"FEEDREF#{user_id}",
+        "Entity": "FeedRef",
+        "post_id": post_id,
+        "owner_user_id": user_id,
+        "created_at": created_at,
+        "GSI1PK": f"FEED#{user_id}",
+        "GSI1SK": f"{created_at}#POST#{post_id}",
+    }
+    ddb_put_item(feed_item)
+
+
+def _write_scheduled_post_ref(
+    *,
+    user_id: str,
+    post_id: str,
+    created_at: str,
+    publish_at: int,
+    schedule_timezone: Optional[str] = None,
+    scheduled_at_local: Optional[str] = None,
+) -> None:
+    scheduled_ref = {
+        "pk": pk_user(user_id),
+        "sk": sk_scheduled_post_ref(publish_at, post_id),
+        "Entity": "ScheduledPostRef",
+        "post_id": post_id,
+        "owner_user_id": user_id,
+        "status": "scheduled",
+        "publish_at": publish_at,
+        "schedule_timezone": schedule_timezone,
+        "scheduled_at_local": scheduled_at_local,
+        "created_at": created_at,
+    }
+    ddb_put_item(scheduled_ref)
+
+
 def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: bool = False, unlocked: bool = False, viewer_id: Optional[str] = None) -> Dict[str, Any]:
     """Map a raw DDB post item to the FeedPost shape expected by the frontend."""
     body, body_plain, body_markdown, body_markdown_html, body_rich, body_format, body_version = _resolve_read_body_fields(post)
+    status, publish_at, published_at, schedule_timezone, scheduled_at_local = _resolve_post_lifecycle_fields(post)
 
     # Support both old image_url (str) and new image_urls (list)
     image_urls = list(post.get("image_urls") or [])
@@ -1285,6 +1520,11 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "post_id": post_id,
         "author_id": post.get("user_id", ""),
         "created_at": post.get("created_at", ""),
+        "published_at": published_at,
+        "status": status,
+        "publish_at": publish_at,
+        "schedule_timezone": schedule_timezone,
+        "scheduled_at_local": scheduled_at_local,
         "updated_at": post.get("updated_at"),
         "body": body,
         "body_plain": body_plain,
@@ -1904,11 +2144,109 @@ def publish_draft_post(
     return published
 
 
-@router.post("/posts", response_model=PostResponse)
+@router.post(
+    "/posts",
+    response_model=PostResponse,
+    responses={
+        400: {
+            "description": "Invalid schedule payload",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "invalid_timezone": {
+                            "summary": "Invalid IANA timezone",
+                            "value": {
+                                "detail": {
+                                    "code": "schedule_timezone_invalid",
+                                    "message": "schedule_timezone must be a valid IANA timezone",
+                                    "field": "schedule_timezone",
+                                }
+                            },
+                        },
+                        "publish_at_too_soon": {
+                            "summary": "Publish time must be in the future",
+                            "value": {
+                                "detail": {
+                                    "code": "schedule_publish_at_too_soon",
+                                    "message": "publish_at must be at least 5 seconds in the future",
+                                    "field": "publish_at",
+                                    "minimum_publish_at": 1767000006,
+                                }
+                            },
+                        },
+                    }
+                }
+            },
+        }
+    },
+)
 def create_post(req: CreatePostRequest, user_id: UserIdDep):
+    """
+    Create a newsfeed post immediately or schedule it for later publication.
+
+    Immediate create (no `publish_at`) publishes now and appears in the feed.
+    Scheduled create (with `publish_at`) persists with `status=scheduled` and is excluded from feed until publish time.
+    """
     _enforce_newsfeed_post_quota_precheck(user_id=user_id)
     post_id = new_id("post")
     created_at = now_iso()
+    now_ts = int(time.time())
+
+    has_schedule_metadata = bool(req.schedule_timezone or req.scheduled_at_local)
+    if req.publish_at is not None or has_schedule_metadata:
+        _require_newsfeed_scheduling_api_enabled()
+    if req.publish_at is None and has_schedule_metadata:
+        raise _schedule_payload_error(
+            code="schedule_publish_at_required",
+            field="publish_at",
+            message="publish_at is required when schedule_timezone or scheduled_at_local is provided",
+            operation="create",
+        )
+
+    is_scheduled = req.publish_at is not None
+    if is_scheduled:
+        min_lead = _schedule_min_lead_seconds()
+        max_horizon = _schedule_max_horizon_seconds()
+        max_publish_at = now_ts + max_horizon
+        if req.publish_at is None or req.publish_at <= now_ts + min_lead:
+            raise _schedule_payload_error(
+                code="schedule_publish_at_too_soon",
+                field="publish_at",
+                message=f"publish_at must be at least {min_lead} seconds in the future",
+                extra={"minimum_publish_at": now_ts + min_lead + 1},
+                operation="create",
+            )
+        if int(req.publish_at) > max_publish_at:
+            raise _schedule_payload_error(
+                code="schedule_publish_at_too_far",
+                field="publish_at",
+                message=f"publish_at must be within {max_horizon} seconds from now",
+                extra={"maximum_publish_at": max_publish_at},
+                operation="create",
+            )
+        if not req.schedule_timezone:
+            raise _schedule_payload_error(
+                code="schedule_timezone_required",
+                field="schedule_timezone",
+                message="schedule_timezone is required when publish_at is set",
+                operation="create",
+            )
+        try:
+            ZoneInfo(req.schedule_timezone)
+        except Exception as exc:
+            raise _schedule_payload_error(
+                code="schedule_timezone_invalid",
+                field="schedule_timezone",
+                message="schedule_timezone must be a valid IANA timezone",
+                operation="create",
+            ) from exc
+        if req.scheduled_at_local and not _SCHEDULED_LOCAL_RE.fullmatch(req.scheduled_at_local):
+            raise _schedule_payload_error(
+                code="schedule_local_datetime_invalid",
+                field="scheduled_at_local",
+                message="scheduled_at_local must use format YYYY-MM-DDTHH:mm",
+                operation="create",
+            )
 
     unlock_price_cents = req.unlock_price_cents if req.unlock_price_cents and req.unlock_price_cents > 0 else None
     locked = unlock_price_cents is not None
@@ -1925,6 +2263,11 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "post_id": post_id,
         "user_id": user_id,
         "created_at": created_at,
+        "published_at": None if is_scheduled else created_at,
+        "status": "scheduled" if is_scheduled else "published",
+        "publish_at": req.publish_at if is_scheduled else None,
+        "schedule_timezone": req.schedule_timezone if is_scheduled else None,
+        "scheduled_at_local": req.scheduled_at_local if is_scheduled else None,
         **content,
         "image_urls": req.image_urls,
         "visibility": req.visibility,
@@ -1934,25 +2277,33 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "comment_count": 0,
         "file_attachments": file_attachments,
     }
+    if is_scheduled:
+        post_item.update(schedule_due_index_values(req.publish_at or 0, post_id))
     ddb_put_item(post_item)
 
-    feed_item = {
-        "pk": pk_post(post_id),
-        "sk": f"FEEDREF#{user_id}",
-        "Entity": "FeedRef",
-        "post_id": post_id,
-        "owner_user_id": user_id,
-        "created_at": created_at,
-        "GSI1PK": f"FEED#{user_id}",
-        "GSI1SK": f"{created_at}#POST#{post_id}",
-    }
-    ddb_put_item(feed_item)
-    _meter_newsfeed_post_publish(user_id=user_id, post_id=post_id)
+    if not is_scheduled:
+        _write_feed_ref_for_published_post(user_id=user_id, post_id=post_id, created_at=created_at)
+        _meter_newsfeed_post_publish(user_id=user_id, post_id=post_id)
+    else:
+        record_newsfeed_schedule_operation(operation="create", outcome="success")
+        _write_scheduled_post_ref(
+            user_id=user_id,
+            post_id=post_id,
+            created_at=created_at,
+            publish_at=req.publish_at or 0,
+            schedule_timezone=req.schedule_timezone,
+            scheduled_at_local=req.scheduled_at_local,
+        )
 
     return PostResponse(
         post_id=post_id,
         author_id=user_id,
         created_at=created_at,
+        published_at=None if is_scheduled else created_at,
+        status="scheduled" if is_scheduled else "published",
+        publish_at=req.publish_at if is_scheduled else None,
+        schedule_timezone=req.schedule_timezone if is_scheduled else None,
+        scheduled_at_local=req.scheduled_at_local if is_scheduled else None,
         body=content["body"],
         body_plain=content["body_plain"],
         body_markdown=content["body_markdown"],
@@ -1969,6 +2320,69 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
     )
 
 
+@router.get(
+    "/posts/scheduled",
+    response_model=ScheduledPostsResponse,
+)
+def list_scheduled_posts(
+    limit: int = Query(default=20, ge=1, le=50),
+    cursor: Optional[str] = Query(default=None),
+    user_id: UserIdDep = None,
+):
+    """List caller-owned scheduled posts in stable publish-time order (oldest scheduled publish first)."""
+    _require_newsfeed_scheduling_api_enabled()
+    eks = decode_cursor_or_400(cursor)
+    resp = ddb_query(
+        KeyConditionExpression="pk = :pk AND begins_with(sk, :prefix)",
+        ExpressionAttributeValues={
+            ":pk": pk_user(user_id),
+            ":prefix": f"{SCHEDULED_POST_REF_PREFIX}#",
+        },
+        ScanIndexForward=True,
+        Limit=limit,
+        ExclusiveStartKey=eks if eks else None,
+    )
+    refs = resp.get("Items", [])
+    parsed_refs: List[Tuple[int, str]] = []
+    for ref in refs:
+        post_id = str(ref.get("post_id") or "").strip()
+        parsed = parse_scheduled_post_ref_sk(str(ref.get("sk") or ""))
+        if not post_id or parsed is None:
+            continue
+        publish_at, parsed_post_id = parsed
+        if parsed_post_id != post_id:
+            continue
+        parsed_refs.append((publish_at, post_id))
+
+    parsed_refs.sort(key=lambda row: (row[0], row[1]))
+    post_ids = [post_id for _publish_at, post_id in parsed_refs]
+    posts: List[Dict[str, Any]] = []
+    if post_ids:
+        keys = [{"pk": pk_post(pid), "sk": sk_post()} for pid in post_ids]
+        try:
+            raw = ddb.batch_get_item(RequestItems={APP_TABLE: {"Keys": keys}})
+            posts = raw.get("Responses", {}).get(APP_TABLE, [])
+        except ClientError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"DDB batch_get_item error: {exc.response['Error'].get('Message','unknown')}",
+            ) from exc
+
+    post_by_id = {post.get("post_id"): post for post in posts if post.get("post_id")}
+    ordered: List[Dict[str, Any]] = []
+    for _publish_at, post_id in parsed_refs:
+        post = post_by_id.get(post_id)
+        if not post:
+            continue
+        if post.get("user_id") != user_id:
+            continue
+        if str(post.get("status") or "").strip().lower() != "scheduled":
+            continue
+        ordered.append(_post_to_dict(post, viewer_id=user_id))
+
+    return {"items": ordered, "next_cursor": encode_cursor(resp.get("LastEvaluatedKey"))}
+
+
 @router.patch("/posts/{post_id}")
 def edit_post(post_id: str, req: EditPostRequest, user_id: UserIdDep):
     post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
@@ -1978,22 +2392,289 @@ def edit_post(post_id: str, req: EditPostRequest, user_id: UserIdDep):
         raise HTTPException(status_code=403, detail="Not your post")
     content = _content_from_payload(req)
     _emit_newsfeed_content_metric("edit_post", surface="post", body_format=content.get("body_format", "plain"))
+    schedule_fields_in_payload = bool({"publish_at", "schedule_timezone", "scheduled_at_local"} & req.model_fields_set)
+    if schedule_fields_in_payload:
+        _require_newsfeed_scheduling_api_enabled()
+    schedule_updates: Dict[str, Any] = {}
+    if schedule_fields_in_payload:
+        if str(post.get("status") or "").strip().lower() != "scheduled":
+            record_newsfeed_schedule_operation(operation="edit", outcome="rejected")
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "schedule_update_not_allowed",
+                    "message": "schedule metadata can only be updated for scheduled posts",
+                },
+            )
+        now_ts = int(time.time())
+        min_lead = _schedule_min_lead_seconds()
+        max_horizon = _schedule_max_horizon_seconds()
+        max_publish_at = now_ts + max_horizon
+        publish_at = req.publish_at if "publish_at" in req.model_fields_set else post.get("publish_at")
+        schedule_timezone = req.schedule_timezone if "schedule_timezone" in req.model_fields_set else post.get("schedule_timezone")
+        scheduled_at_local = req.scheduled_at_local if "scheduled_at_local" in req.model_fields_set else post.get("scheduled_at_local")
+
+        if publish_at is None or int(publish_at) <= now_ts + min_lead:
+            raise _schedule_payload_error(
+                code="schedule_publish_at_too_soon",
+                field="publish_at",
+                message=f"publish_at must be at least {min_lead} seconds in the future",
+                extra={"minimum_publish_at": now_ts + min_lead + 1},
+                operation="edit",
+            )
+        if int(publish_at) > max_publish_at:
+            raise _schedule_payload_error(
+                code="schedule_publish_at_too_far",
+                field="publish_at",
+                message=f"publish_at must be within {max_horizon} seconds from now",
+                extra={"maximum_publish_at": max_publish_at},
+                operation="edit",
+            )
+        if not schedule_timezone:
+            raise _schedule_payload_error(
+                code="schedule_timezone_required",
+                field="schedule_timezone",
+                message="schedule_timezone is required when updating schedule metadata",
+                operation="edit",
+            )
+        try:
+            ZoneInfo(str(schedule_timezone))
+        except Exception as exc:
+            raise _schedule_payload_error(
+                code="schedule_timezone_invalid",
+                field="schedule_timezone",
+                message="schedule_timezone must be a valid IANA timezone",
+                operation="edit",
+            ) from exc
+        if scheduled_at_local is not None and (not isinstance(scheduled_at_local, str) or not _SCHEDULED_LOCAL_RE.fullmatch(scheduled_at_local)):
+            raise _schedule_payload_error(
+                code="schedule_local_datetime_invalid",
+                field="scheduled_at_local",
+                message="scheduled_at_local must use format YYYY-MM-DDTHH:mm",
+                operation="edit",
+            )
+        schedule_updates = {
+            "publish_at": int(publish_at),
+            "schedule_timezone": str(schedule_timezone),
+            "scheduled_at_local": scheduled_at_local,
+        }
+
     image_urls_in_payload = "image_urls" in req.model_fields_set
+    set_parts = [
+        "#body = :b",
+        "body_plain = :bp",
+        "body_markdown = :bm",
+        "body_markdown_html = :bmh",
+        "body_rich = :br",
+        "body_format = :bf",
+        "body_version = :bv",
+        "updated_at = :u",
+    ]
+    expr_vals: Dict[str, Any] = {
+        ":b": content["body"],
+        ":bp": content["body_plain"],
+        ":bm": content["body_markdown"],
+        ":bmh": content["body_markdown_html"],
+        ":br": content["body_rich"],
+        ":bf": content["body_format"],
+        ":bv": content["body_version"],
+        ":u": now_iso(),
+    }
+    if schedule_updates:
+        set_parts.extend(
+            [
+                "publish_at = :pa",
+                "schedule_timezone = :stz",
+                "scheduled_at_local = :sal",
+                f"{SCHEDULE_DUE_INDEX_PK_ATTR} = :sdpk",
+                f"{SCHEDULE_DUE_INDEX_SK_ATTR} = :sdsk",
+            ]
+        )
+        expr_vals[":pa"] = schedule_updates["publish_at"]
+        expr_vals[":stz"] = schedule_updates["schedule_timezone"]
+        expr_vals[":sal"] = schedule_updates["scheduled_at_local"]
+        due_values = schedule_due_index_values(schedule_updates["publish_at"], post_id)
+        expr_vals[":sdpk"] = due_values[SCHEDULE_DUE_INDEX_PK_ATTR]
+        expr_vals[":sdsk"] = due_values[SCHEDULE_DUE_INDEX_SK_ATTR]
+
     if image_urls_in_payload and req.image_urls:
-        update_expr = "SET #body = :b, body_plain = :bp, body_markdown = :bm, body_markdown_html = :bmh, body_rich = :br, body_format = :bf, body_version = :bv, image_urls = :imgs, updated_at = :u"
-        expr_vals = {":b": content["body"], ":bp": content["body_plain"], ":bm": content["body_markdown"], ":bmh": content["body_markdown_html"], ":br": content["body_rich"], ":bf": content["body_format"], ":bv": content["body_version"], ":imgs": req.image_urls, ":u": now_iso()}
+        update_expr = f"SET {', '.join(set_parts)}, image_urls = :imgs"
+        expr_vals[":imgs"] = req.image_urls
     elif image_urls_in_payload:
-        update_expr = "SET #body = :b, body_plain = :bp, body_markdown = :bm, body_markdown_html = :bmh, body_rich = :br, body_format = :bf, body_version = :bv, updated_at = :u REMOVE image_urls"
-        expr_vals = {":b": content["body"], ":bp": content["body_plain"], ":bm": content["body_markdown"], ":bmh": content["body_markdown_html"], ":br": content["body_rich"], ":bf": content["body_format"], ":bv": content["body_version"], ":u": now_iso()}
+        update_expr = f"SET {', '.join(set_parts)} REMOVE image_urls"
     else:
-        update_expr = "SET #body = :b, body_plain = :bp, body_markdown = :bm, body_markdown_html = :bmh, body_rich = :br, body_format = :bf, body_version = :bv, updated_at = :u"
-        expr_vals = {":b": content["body"], ":bp": content["body_plain"], ":bm": content["body_markdown"], ":bmh": content["body_markdown_html"], ":br": content["body_rich"], ":bf": content["body_format"], ":bv": content["body_version"], ":u": now_iso()}
-    updated = ddb_update_item(
-        key={"pk": pk_post(post_id), "sk": sk_post()},
-        update_expr=update_expr,
-        expr_names={"#body": "body"},
-        expr_vals=expr_vals,
-    )
+        update_expr = f"SET {', '.join(set_parts)}"
+    if schedule_updates:
+        condition_expr = "#user = :uid AND #status = :scheduled"
+        expr_vals_tx = dict(expr_vals)
+        expr_vals_tx[":uid"] = user_id
+        expr_vals_tx[":scheduled"] = "scheduled"
+
+        old_publish_at = int(post.get("publish_at") or 0)
+        old_ref_sk = sk_scheduled_post_ref(old_publish_at, post_id)
+        new_ref_sk = sk_scheduled_post_ref(int(schedule_updates["publish_at"]), post_id)
+        transact_items: List[Dict[str, Any]] = [
+            {
+                "Update": {
+                    "TableName": APP_TABLE,
+                    "Key": _ddb_serialize_map({"pk": pk_post(post_id), "sk": sk_post()}),
+                    "UpdateExpression": update_expr,
+                    "ExpressionAttributeNames": {"#body": "body", "#status": "status", "#user": "user_id"},
+                    "ExpressionAttributeValues": _ddb_serialize_map(expr_vals_tx),
+                    "ConditionExpression": condition_expr,
+                }
+            }
+        ]
+        if old_ref_sk != new_ref_sk:
+            transact_items.append(
+                {
+                    "Delete": {
+                        "TableName": APP_TABLE,
+                        "Key": _ddb_serialize_map({"pk": pk_user(user_id), "sk": old_ref_sk}),
+                    }
+                }
+            )
+            transact_items.append(
+                {
+                    "Put": {
+                        "TableName": APP_TABLE,
+                        "Item": _ddb_serialize_map(
+                            {
+                                "pk": pk_user(user_id),
+                                "sk": new_ref_sk,
+                                "Entity": "ScheduledPostRef",
+                                "post_id": post_id,
+                                "owner_user_id": user_id,
+                                "status": "scheduled",
+                                "publish_at": int(schedule_updates["publish_at"]),
+                                "schedule_timezone": schedule_updates["schedule_timezone"],
+                                "scheduled_at_local": schedule_updates.get("scheduled_at_local"),
+                                "created_at": post.get("created_at") or now_iso(),
+                            }
+                        ),
+                    }
+                }
+            )
+        try:
+            ddb.meta.client.transact_write_items(TransactItems=transact_items)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") == "TransactionCanceledException":
+                record_newsfeed_schedule_operation(operation="edit", outcome="conflict")
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "schedule_edit_conflict",
+                        "message": "schedule update conflicted with concurrent modification",
+                    },
+                ) from exc
+            record_newsfeed_schedule_operation(operation="edit", outcome="error")
+            raise HTTPException(status_code=500, detail=f"DynamoDB error: {exc.response['Error'].get('Message','unknown')}") from exc
+        updated = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()}) or {}
+        record_newsfeed_schedule_operation(operation="edit", outcome="success")
+    else:
+        updated = ddb_update_item(
+            key={"pk": pk_post(post_id), "sk": sk_post()},
+            update_expr=update_expr,
+            expr_names={"#body": "body"},
+            expr_vals=expr_vals,
+        )
+    return _post_to_dict(updated, viewer_id=user_id)
+
+
+@router.post("/posts/{post_id}/cancel")
+def cancel_scheduled_post(post_id: str, user_id: UserIdDep):
+    _require_newsfeed_scheduling_api_enabled()
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    if post.get("user_id") != user_id:
+        raise HTTPException(status_code=403, detail="Not your post")
+
+    status = str(post.get("status") or "").strip().lower()
+    if status == "cancelled":
+        record_newsfeed_schedule_operation(operation="cancel", outcome="noop")
+        return _post_to_dict(post, viewer_id=user_id)
+    if status != "scheduled":
+        record_newsfeed_schedule_operation(operation="cancel", outcome="rejected")
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "schedule_cancel_not_allowed",
+                "message": "only scheduled posts can be cancelled",
+            },
+        )
+
+    publish_at = post.get("publish_at")
+    try:
+        publish_at_int = int(publish_at)
+    except Exception as exc:
+        record_newsfeed_schedule_operation(operation="cancel", outcome="invalid_state")
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "schedule_cancel_not_allowed",
+                "message": "scheduled post has invalid publish_at",
+            },
+        ) from exc
+
+    now = now_iso()
+    ref_sk = sk_scheduled_post_ref(publish_at_int, post_id)
+    transact_items: List[Dict[str, Any]] = [
+        {
+            "Update": {
+                "TableName": APP_TABLE,
+                "Key": _ddb_serialize_map({"pk": pk_post(post_id), "sk": sk_post()}),
+                "UpdateExpression": f"SET #status = :cancelled, updated_at = :u, published_at = :null, publish_at = :null, schedule_timezone = :null, scheduled_at_local = :null, {SCHEDULE_DUE_INDEX_PK_ATTR} = :null, {SCHEDULE_DUE_INDEX_SK_ATTR} = :null",
+                "ConditionExpression": "#user = :uid AND #status = :scheduled",
+                "ExpressionAttributeNames": {"#status": "status", "#user": "user_id"},
+                "ExpressionAttributeValues": _ddb_serialize_map(
+                    {
+                        ":cancelled": "cancelled",
+                        ":u": now,
+                        ":null": None,
+                        ":uid": user_id,
+                        ":scheduled": "scheduled",
+                    }
+                ),
+            }
+        },
+        {
+            "Delete": {
+                "TableName": APP_TABLE,
+                "Key": _ddb_serialize_map({"pk": pk_user(user_id), "sk": ref_sk}),
+            }
+        },
+    ]
+    try:
+        ddb.meta.client.transact_write_items(TransactItems=transact_items)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "TransactionCanceledException":
+            latest = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+            latest_status = str((latest or {}).get("status") or "").strip().lower()
+            if latest and latest.get("user_id") == user_id and latest_status == "cancelled":
+                record_newsfeed_schedule_operation(operation="cancel", outcome="noop")
+                return _post_to_dict(latest, viewer_id=user_id)
+            record_newsfeed_schedule_operation(operation="cancel", outcome="conflict")
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "schedule_cancel_conflict",
+                    "message": "schedule cancel conflicted with concurrent modification",
+                },
+            ) from exc
+        record_newsfeed_schedule_operation(operation="cancel", outcome="error")
+        raise HTTPException(status_code=500, detail=f"DynamoDB error: {exc.response['Error'].get('Message','unknown')}") from exc
+
+    updated = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()}) or {
+        **post,
+        "status": "cancelled",
+        "publish_at": None,
+        "schedule_timezone": None,
+        "scheduled_at_local": None,
+        "published_at": None,
+        "updated_at": now,
+    }
+    record_newsfeed_schedule_operation(operation="cancel", outcome="success")
     return _post_to_dict(updated, viewer_id=user_id)
 
 
@@ -2319,6 +3000,9 @@ def view_feed(
     for post_id in post_ids:
         post = post_by_id.get(post_id)
         if not post:
+            continue
+        status, _publish_at, _published_at, _schedule_timezone, _scheduled_at_local = _resolve_post_lifecycle_fields(post)
+        if status != "published":
             continue
         if post.get("moderation_removed") or post.get("moderation_removed_at"):
             continue
