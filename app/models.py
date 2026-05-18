@@ -862,6 +862,82 @@ class CalendarAccessOut(BaseModel):
     permission: Literal["owner", "read", "write"]
 
 
+class GoogleCalendarConnectStartOut(BaseModel):
+    provider: Literal["google"] = "google"
+    authorization_url: str
+    state: str
+    nonce: str
+    expires_at_utc: str
+
+
+class GoogleCalendarConnectCallbackOut(BaseModel):
+    provider: Literal["google"] = "google"
+    connection_id: str
+    account_email: str
+    linked: bool
+    updated_at_utc: str
+
+
+class GoogleCalendarDisconnectOut(BaseModel):
+    provider: Literal["google"] = "google"
+    connection_id: str
+    account_email: str
+    active: bool
+    revoked: bool
+    revoke_status: str
+    disconnected_at_utc: str
+
+
+class GoogleCalendarIntegrationStatusOut(BaseModel):
+    provider: Literal["google"] = "google"
+    sync_enabled: bool
+    writeback_enabled: bool
+    rollout_mode: Literal["all", "cohort", "off"]
+    rollout_percent: int = Field(ge=0, le=100)
+    in_rollout_cohort: bool
+    connection_active: bool = False
+    sync_health: str = "unknown"
+    last_sync_status: str = "never_synced"
+    last_sync_at_utc: str = ""
+    reauth_required: bool = False
+
+
+class GoogleCalendarProviderCalendarOut(BaseModel):
+    google_calendar_id: str
+    summary: str = ""
+    access_role: str | None = None
+    primary: bool = False
+    mapped_internal_calendar_id: str | None = None
+
+
+class GoogleCalendarProviderCalendarsOut(BaseModel):
+    calendars: List[GoogleCalendarProviderCalendarOut]
+
+
+class GoogleCalendarMappingCreateIn(BaseModel):
+    internal_calendar_id: str
+    google_calendar_id: str
+
+
+class GoogleCalendarMappingOut(BaseModel):
+    mapping_id: str
+    provider: Literal["google"] = "google"
+    user_sub: str
+    internal_calendar_id: str
+    google_calendar_id: str
+    active: bool
+    created_at_utc: str
+    updated_at_utc: str
+    unmapped_at_utc: str
+
+
+class GoogleCalendarSyncRunOut(BaseModel):
+    accepted: bool
+    mode: Literal["incremental", "full"] = "incremental"
+    rate_limited: bool = False
+    metrics: Dict[str, Any] = Field(default_factory=dict)
+
+
 class CalendarUpdateIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     timezone: str | None = Field(default=None, max_length=64)
@@ -920,6 +996,9 @@ class EventOut(BaseModel):
     exdates_utc: List[str] | None = None
     recurrence_overrides: Dict[str, EventOccurrenceOverrideIn] | None = None
     created_at_utc: str
+    sync_state: str | None = None
+    sync_conflict_reason: str | None = None
+    sync_conflict_detected_at_utc: str | None = None
 
 
 class EventUpdateIn(BaseModel):

@@ -588,6 +588,47 @@ PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE_ENTRIES = Gauge(
     "payment_incident_webhook_replay_cache_entries",
     "Current in-process payment incident webhook replay cache entries",
 )
+GOOGLE_CALENDAR_SYNC_JOBS = Counter(
+    "google_calendar_sync_jobs_total",
+    "Google Calendar sync job outcomes by flow/state",
+    ["flow", "state"],
+)
+GOOGLE_CALENDAR_SYNC_LATENCY = Histogram(
+    "google_calendar_sync_latency_seconds",
+    "Google Calendar sync latency by flow",
+    ["flow"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120),
+)
+GOOGLE_CALENDAR_SYNC_CONFLICTS = Counter(
+    "google_calendar_sync_conflicts_total",
+    "Google Calendar sync conflicts by reason",
+    ["reason"],
+)
+GOOGLE_CALENDAR_TOKEN_REFRESH_FAILURES = Counter(
+    "google_calendar_token_refresh_failures_total",
+    "Google Calendar token refresh failures by reason",
+    ["reason"],
+)
+GOOGLE_CALENDAR_OUTBOX_BACKLOG = Gauge(
+    "google_calendar_outbox_backlog",
+    "Google Calendar outbox backlog by status",
+    ["status"],
+)
+GOOGLE_CALENDAR_API_RETRIES = Counter(
+    "google_calendar_api_retries_total",
+    "Google Calendar API retry attempts by reason and provider status code",
+    ["reason", "provider_status_code"],
+)
+GOOGLE_CALENDAR_OAUTH_CALLBACK_REJECTIONS = Counter(
+    "google_calendar_oauth_callback_rejections_total",
+    "Google Calendar OAuth callback rejections by reason",
+    ["reason"],
+)
+GOOGLE_CALENDAR_OAUTH_CALLBACK_OUTCOMES = Counter(
+    "google_calendar_oauth_callback_outcomes_total",
+    "Google Calendar OAuth callback outcomes by outcome/reason",
+    ["outcome", "reason"],
+)
 
 ENTITLEMENT_CHECKS = Counter(
     "entitlement_checks_total",
@@ -1342,6 +1383,50 @@ def record_payment_incident_webhook_replay_event(*, provider: str, event: str) -
 
 def set_payment_incident_webhook_replay_cache_entries(*, entries: int) -> None:
     PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE_ENTRIES.set(max(0, int(entries)))
+
+
+def record_google_calendar_sync_job(*, flow: str, state: str, count: int = 1) -> None:
+    GOOGLE_CALENDAR_SYNC_JOBS.labels(
+        flow=(flow or "unknown").lower(),
+        state=(state or "unknown").lower(),
+    ).inc(max(0, int(count)))
+
+
+def record_google_calendar_sync_latency(*, flow: str, elapsed_seconds: float) -> None:
+    GOOGLE_CALENDAR_SYNC_LATENCY.labels(
+        flow=(flow or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_google_calendar_sync_conflict(*, reason: str) -> None:
+    GOOGLE_CALENDAR_SYNC_CONFLICTS.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def record_google_calendar_token_refresh_failure(*, reason: str) -> None:
+    GOOGLE_CALENDAR_TOKEN_REFRESH_FAILURES.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def set_google_calendar_outbox_backlog(*, status: str, count: int) -> None:
+    GOOGLE_CALENDAR_OUTBOX_BACKLOG.labels(status=(status or "unknown").lower()).set(float(max(0, int(count))))
+
+
+def record_google_calendar_api_retry(*, reason: str, provider_status_code: int | None = None) -> None:
+    GOOGLE_CALENDAR_API_RETRIES.labels(
+        reason=(reason or "unknown").lower(),
+        provider_status_code=str(provider_status_code if provider_status_code is not None else "none"),
+    ).inc()
+
+
+def record_google_calendar_oauth_callback_rejection(*, reason: str) -> None:
+    GOOGLE_CALENDAR_OAUTH_CALLBACK_REJECTIONS.labels(reason=(reason or "unknown").lower()).inc()
+
+
+def record_google_calendar_oauth_callback_outcome(*, outcome: str, reason: str) -> None:
+    GOOGLE_CALENDAR_OAUTH_CALLBACK_OUTCOMES.labels(
+        outcome=(outcome or "unknown").lower(),
+        reason=(reason or "unknown").lower(),
+    ).inc()
+
 
 
 def record_vnc_session_event(*, action: str, outcome: str, target_id: str = "unknown", error_code: str = "none") -> None:

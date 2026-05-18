@@ -303,6 +303,34 @@ class Settings:
 
     # Calendar
     calendar_table_name: str = os.environ.get("CALENDAR_TABLE_NAME", "calendar")
+    google_calendar_sync_enabled: bool = os.environ.get("GOOGLE_CALENDAR_SYNC_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    google_calendar_writeback_enabled: bool = os.environ.get("GOOGLE_CALENDAR_WRITEBACK_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    google_calendar_tokens_kms_key_id: str = os.environ.get("GOOGLE_CALENDAR_TOKENS_KMS_KEY_ID", "")
+    google_calendar_sync_rollout_mode: str = os.environ.get("GOOGLE_CALENDAR_SYNC_ROLLOUT_MODE", "all")
+    google_calendar_sync_rollout_cohort_user_subs: str = os.environ.get("GOOGLE_CALENDAR_SYNC_ROLLOUT_COHORT_USER_SUBS", "")
+    google_calendar_sync_rollout_percent: int = int(os.environ.get("GOOGLE_CALENDAR_SYNC_ROLLOUT_PERCENT", "100"))
+    google_calendar_oauth_client_id: str = os.environ.get("GOOGLE_CALENDAR_OAUTH_CLIENT_ID", "")
+    google_calendar_oauth_redirect_uri: str = os.environ.get("GOOGLE_CALENDAR_OAUTH_REDIRECT_URI", "")
+    google_calendar_oauth_auth_base_url: str = os.environ.get("GOOGLE_CALENDAR_OAUTH_AUTH_BASE_URL", "https://accounts.google.com/o/oauth2/v2/auth")
+    google_calendar_oauth_scopes: str = os.environ.get(
+        "GOOGLE_CALENDAR_OAUTH_SCOPES",
+        "openid,email,profile,https://www.googleapis.com/auth/calendar.events",
+    )
+    google_calendar_oauth_state_ttl_seconds: int = int(os.environ.get("GOOGLE_CALENDAR_OAUTH_STATE_TTL_SECONDS", "600"))
+    google_calendar_oauth_client_secret: str = os.environ.get("GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET", "")
+    google_calendar_oauth_token_url: str = os.environ.get("GOOGLE_CALENDAR_OAUTH_TOKEN_URL", "https://oauth2.googleapis.com/token")
+    google_calendar_oauth_userinfo_url: str = os.environ.get("GOOGLE_CALENDAR_OAUTH_USERINFO_URL", "https://openidconnect.googleapis.com/v1/userinfo")
+    google_calendar_connection_default_id: str = os.environ.get("GOOGLE_CALENDAR_CONNECTION_DEFAULT_ID", "google-primary")
+    google_calendar_oauth_revoke_url: str = os.environ.get("GOOGLE_CALENDAR_OAUTH_REVOKE_URL", "https://oauth2.googleapis.com/revoke")
+    google_calendar_api_base_url: str = os.environ.get("GOOGLE_CALENDAR_API_BASE_URL", "https://www.googleapis.com/calendar/v3")
+    google_calendar_api_timeout_seconds: int = int(os.environ.get("GOOGLE_CALENDAR_API_TIMEOUT_SECONDS", "20"))
+    google_calendar_outbound_retry_max_attempts: int = int(os.environ.get("GOOGLE_CALENDAR_OUTBOUND_RETRY_MAX_ATTEMPTS", "5"))
+    google_calendar_outbound_retry_base_seconds: float = float(os.environ.get("GOOGLE_CALENDAR_OUTBOUND_RETRY_BASE_SECONDS", "5"))
+    google_calendar_outbound_retry_max_seconds: float = float(os.environ.get("GOOGLE_CALENDAR_OUTBOUND_RETRY_MAX_SECONDS", "300"))
+    google_calendar_outbound_retry_jitter_ratio: float = float(os.environ.get("GOOGLE_CALENDAR_OUTBOUND_RETRY_JITTER_RATIO", "0.2"))
+    google_calendar_full_import_past_days: int = int(os.environ.get("GOOGLE_CALENDAR_FULL_IMPORT_PAST_DAYS", "365"))
+    google_calendar_full_import_future_days: int = int(os.environ.get("GOOGLE_CALENDAR_FULL_IMPORT_FUTURE_DAYS", "365"))
+    google_calendar_event_tombstone_retention_days: int = int(os.environ.get("GOOGLE_CALENDAR_EVENT_TOMBSTONE_RETENTION_DAYS", "90"))
 
     # Contacts
     contacts_table_name: str = os.environ.get("DDB_CONTACTS_TABLE", "Contacts")
@@ -745,6 +773,10 @@ class Settings:
     questionnaire_captcha_required_anonymous: bool = os.environ.get("QUESTIONNAIRE_CAPTCHA_REQUIRED_ANONYMOUS", "false").lower() in ("1", "true", "yes", "on")
     questionnaire_captcha_static_token: str = os.environ.get("QUESTIONNAIRE_CAPTCHA_STATIC_TOKEN", "")
     questionnaire_encrypt_sensitive_answers: bool = os.environ.get("QUESTIONNAIRE_ENCRYPT_SENSITIVE_ANSWERS", "false").lower() in ("1", "true", "yes", "on")
+
+    # Google Calendar integration hardening/tuning
+    google_calendar_oauth_require_refresh_token: bool = os.environ.get("GOOGLE_CALENDAR_OAUTH_REQUIRE_REFRESH_TOKEN", "true").lower() in ("1", "true", "yes", "on")
+    google_calendar_api_retry_after_max_seconds: int = int(os.environ.get("GOOGLE_CALENDAR_API_RETRY_AFTER_MAX_SECONDS", "60"))
 
 
 S = Settings()

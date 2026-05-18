@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Badge } from "@/components/ui/badge";
 import { getCalendars, getEvents, excludeOccurrence } from "@/api/endpoints/calendar";
 import { EventDialog } from "./EventDialog";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -190,7 +191,25 @@ function EventChip({ ev, variant, onEdit, onRecurrenceMenu }: EventChipProps) {
         onClick={handleClick}
       >
         {recurring && <Repeat className="mr-0.5 inline h-2.5 w-2.5" />}
-        {ev.name}
+        <span className="truncate">{ev.name}</span>
+        {ev.sync_state && (
+          <span className="ml-1 inline-flex gap-1 align-middle">
+            <Badge
+              variant="outline"
+              className="h-4 px-1 text-[9px]"
+              aria-label="Source: Google Calendar"
+            >
+              GCal
+            </Badge>
+            <Badge
+              variant={ev.sync_state === "conflict" ? "destructive" : "secondary"}
+              className="h-4 px-1 text-[9px]"
+              aria-label={`Sync state: ${ev.sync_state}`}
+            >
+              {ev.sync_state}
+            </Badge>
+          </span>
+        )}
       </button>
     );
   }
@@ -207,6 +226,17 @@ function EventChip({ ev, variant, onEdit, onRecurrenceMenu }: EventChipProps) {
     >
       {recurring && <Repeat className="mr-1 inline h-3 w-3" />}
       {ev.name}
+      {ev.sync_state && (
+        <span className="ml-2 inline-flex gap-1 align-middle">
+          <Badge variant="outline" aria-label="Source: Google Calendar">Google</Badge>
+          <Badge
+            variant={ev.sync_state === "conflict" ? "destructive" : "secondary"}
+            aria-label={`Sync state: ${ev.sync_state}`}
+          >
+            {ev.sync_state}
+          </Badge>
+        </span>
+      )}
       {ev.description && (
         <span className="ml-2 text-xs font-normal text-muted-foreground">
           {ev.description}

@@ -49,3 +49,9 @@ export const newsfeedRichtextEnabled = toBool(env.VITE_NEWSFEED_RICHTEXT_ENABLED
 export const vncRemoteDesktopEnabled = toBool(env.VITE_VNC_REMOTE_DESKTOP_ENABLED, true);
 export const vncRemoteDesktopKillSwitch = toBool(env.VITE_VNC_REMOTE_DESKTOP_KILL_SWITCH, false);
 export const isVncRemoteDesktopEnabled = () => vncRemoteDesktopEnabled && !vncRemoteDesktopKillSwitch;
+
+export const googleCalendarSyncEnabled = toBool(env.VITE_GOOGLE_CALENDAR_SYNC_ENABLED, false);
+export const googleCalendarWritebackEnabled = toBool(env.VITE_GOOGLE_CALENDAR_WRITEBACK_ENABLED, false);
+export const isGoogleCalendarSyncEnabled = () => googleCalendarSyncEnabled;
+export const isGoogleCalendarWritebackEnabled = () =>
+  isGoogleCalendarSyncEnabled() && googleCalendarWritebackEnabled;
