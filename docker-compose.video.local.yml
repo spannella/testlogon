@@ -1,0 +1,101 @@
+services:
+  ingest:
+    image: tiangolo/nginx-rtmp:latest
+    container_name: video-local-ingest
+    ports:
+      - "1935:1935"
+      - "8088:80"
+    volumes:
+      - ./docker/video/ingest/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./video-data/input:/tmp/hls
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:80 >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - video_local
+
+  transcoder:
+    image: jrottenberg/ffmpeg:6.0-alpine
+    container_name: video-local-transcoder
+    command: ["/bin/sh", "/workspace/scripts/video/transcoder_entrypoint.sh"]
+    environment:
+      INGEST_STREAM_KEY: localdemo
+      INPUT_URL: rtmp://ingest/live/localdemo
+    environment:
+      DRM_MOCK_SECRET: local-dev-secret
+    volumes:
+      - ./scripts/video:/workspace/scripts/video:ro
+      - ./video-data:/workspace/video-data
+      - ./config/video:/workspace/config/video
+      - ./config/video:/workspace/config/video:ro
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /workspace/video-data/hls/master.m3u8 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - video_local
+
+  packager:
+    image: alpine:3.20
+    container_name: video-local-packager
+    command: ["/bin/sh", "/workspace/scripts/video/packager_entrypoint.sh"]
+    volumes:
+      - ./scripts/video:/workspace/scripts/video:ro
+      - ./video-data:/workspace/video-data
+      - ./config/video:/workspace/config/video
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /workspace/video-data/dash/manifest.mpd || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    networks:
+      - video_local
+
+  origin:
+    image: nginx:1.27-alpine
+    container_name: video-local-origin
+    ports:
+      - "8089:8080"
+    volumes:
+      - ./docker/video/origin/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./video-data:/var/www/media:ro
+    depends_on:
+      transcoder:
+        condition: service_started
+      packager:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - video_local
+
+  license-mock:
+    image: python:3.11-alpine
+    container_name: video-local-license-mock
+    command: ["python", "/workspace/scripts/video/license_mock_server.py"]
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./scripts/video:/workspace/scripts/video:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8090/healthz >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - video_local
+
+networks:
+  video_local:
+    name: video_local

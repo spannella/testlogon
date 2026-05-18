@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.internal/schemas/video-pipeline-event-contract-v1.json",
+  "title": "Video Pipeline Event Contract v1",
+  "type": "object",
+  "properties": {
+    "contract_version": { "const": "2026-03-video-pipeline-v1" },
+    "event_type": { "enum": ["job.accepted", "job.running", "job.failed", "job.completed"] },
+    "job_id": { "type": "string", "minLength": 1 },
+    "asset_id": { "type": "string", "minLength": 1 },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["accepted", "running", "failed", "completed"] },
+    "error_code": { "type": ["string", "null"] },
+    "error_message": { "type": ["string", "null"] },
+    "output_hls_manifest_uri": { "type": ["string", "null"] },
+    "output_dash_manifest_uri": { "type": ["string", "null"] }
+  },
+  "required": ["contract_version", "event_type", "job_id", "asset_id", "tenant_id", "status"],
+  "additionalProperties": false
+}

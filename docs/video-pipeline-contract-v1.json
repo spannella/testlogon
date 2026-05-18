@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.internal/schemas/video-pipeline-contract-v1.json",
+  "title": "Video Pipeline Contract v1",
+  "type": "object",
+  "properties": {
+    "contract_version": {
+      "const": "2026-03-video-pipeline-v1"
+    },
+    "asset": {
+      "type": "object",
+      "required": [
+        "asset_id",
+        "tenant_id",
+        "source_uri",
+        "input_codec",
+        "input_fps",
+        "input_width",
+        "input_height",
+        "audio_layout"
+      ],
+      "properties": {
+        "asset_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tenant_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_uri": {
+          "type": "string",
+          "minLength": 1
+        },
+        "input_codec": {
+          "enum": [
+            "h264",
+            "hevc",
+            "av1"
+          ]
+        },
+        "input_fps": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "input_width": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "input_height": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "audio_layout": {
+          "enum": [
+            "mono",
+            "stereo",
+            "5.1"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "renditions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "width",
+          "height",
+          "video_bitrate_kbps",
+          "audio_bitrate_kbps",
+          "fps"
+        ],
+        "properties": {
+          "name": {
+            "enum": [
+              "1080p",
+              "720p",
+              "540p",
+              "360p"
+            ]
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "video_bitrate_kbps": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "audio_bitrate_kbps": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "fps": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "watermark": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "none",
+            "static_image",
+            "dynamic_text"
+          ]
+        },
+        "position": {
+          "enum": [
+            "top_left",
+            "top_right",
+            "bottom_left",
+            "bottom_right"
+          ]
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "margin_x": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "margin_y": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "text_template": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "asset_uri": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "drm": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "enum": [
+            "none",
+            "widevine",
+            "fairplay",
+            "playready",
+            "multi_drm"
+          ]
+        },
+        "key_rotation_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 60
+        },
+        "offline_allowed": {
+          "type": "boolean"
+        },
+        "per_content_key": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "retention_days": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": [
+    "contract_version",
+    "asset",
+    "renditions",
+    "watermark",
+    "drm",
+    "retention_days"
+  ],
+  "additionalProperties": false
+}

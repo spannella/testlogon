@@ -1,0 +1,40 @@
+{
+  "tool": "shaka-packager",
+  "streams": [
+    {
+      "name": "1080p",
+      "input": "/workspace/testlogon/video-data/hls/1080p/index.m3u8",
+      "dash_output": "/workspace/testlogon/video-data/dash/1080p.mp4",
+      "hls_output": "/workspace/testlogon/video-data/hls/1080p/index.m3u8",
+      "dash_representation_id": "v_1080p"
+    },
+    {
+      "name": "720p",
+      "input": "/workspace/testlogon/video-data/hls/720p/index.m3u8",
+      "dash_output": "/workspace/testlogon/video-data/dash/720p.mp4",
+      "hls_output": "/workspace/testlogon/video-data/hls/720p/index.m3u8",
+      "dash_representation_id": "v_720p"
+    },
+    {
+      "name": "540p",
+      "input": "/workspace/testlogon/video-data/hls/540p/index.m3u8",
+      "dash_output": "/workspace/testlogon/video-data/dash/540p.mp4",
+      "hls_output": "/workspace/testlogon/video-data/hls/540p/index.m3u8",
+      "dash_representation_id": "v_540p"
+    },
+    {
+      "name": "360p",
+      "input": "/workspace/testlogon/video-data/hls/360p/index.m3u8",
+      "dash_output": "/workspace/testlogon/video-data/dash/360p.mp4",
+      "hls_output": "/workspace/testlogon/video-data/hls/360p/index.m3u8",
+      "dash_representation_id": "v_360p"
+    }
+  ],
+  "dash_manifest_output": "/workspace/testlogon/video-data/dash/manifest.mpd",
+  "hls_master_playlist_output": "/workspace/testlogon/video-data/hls/master.m3u8",
+  "path_convention": {
+    "hls_variant": "hls/<rendition>/index.m3u8",
+    "dash_manifest": "dash/manifest.mpd",
+    "dash_representation_id": "v_<rendition>"
+  }
+}

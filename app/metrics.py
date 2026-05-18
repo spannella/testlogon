@@ -892,6 +892,17 @@ ENTITLEMENT_CHECK_LATENCY = Histogram(
     ["product_family"],
     buckets=(0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5),
 )
+PLAYBACK_ENTITLEMENT_EVENTS = Counter(
+    "playback_entitlement_events_total",
+    "Playback entitlement operation outcomes",
+    ["operation", "outcome", "reason"],
+)
+PLAYBACK_ENTITLEMENT_LATENCY = Histogram(
+    "playback_entitlement_latency_seconds",
+    "Playback entitlement operation latency",
+    ["operation"],
+    buckets=(0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5),
+)
 
 
 VNC_SESSION_EVENTS = Counter(
@@ -1137,6 +1148,20 @@ def record_entitlement_check(*, product_family: str, outcome: str, reason: str =
 def record_entitlement_check_latency(*, product_family: str, elapsed_seconds: float) -> None:
     ENTITLEMENT_CHECK_LATENCY.labels(
         product_family=(product_family or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_playback_entitlement_event(*, operation: str, outcome: str, reason: str = "") -> None:
+    PLAYBACK_ENTITLEMENT_EVENTS.labels(
+        operation=(operation or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+        reason=(reason or "none").lower(),
+    ).inc()
+
+
+def record_playback_entitlement_latency(*, operation: str, elapsed_seconds: float) -> None:
+    PLAYBACK_ENTITLEMENT_LATENCY.labels(
+        operation=(operation or "unknown").lower(),
     ).observe(max(0.0, float(elapsed_seconds)))
 
 
