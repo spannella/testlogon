@@ -96,6 +96,10 @@ def _table_defs() -> List[TableDef]:
         ),
         TableDef(_resolve_table_name(S.order_items_table_name, "order_items"), "order_id", "item_id"),
         TableDef(
+            _resolve_table_name(S.payment_incidents_table_name, "payment_incidents"),
+            "incident_id",
+        ),
+        TableDef(
             _resolve_table_name(S.payments_table_name, "payments"),
             "payment_id",
             "event_id",
