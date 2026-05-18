@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import patch
+from decimal import Decimal
 
+from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.routers import newsfeed
@@ -732,6 +734,300 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
         self.assertEqual([it["post_id"] for it in out["items"]], ["p-published"])
         self.assertEqual(out["items"][0]["status"], "published")
 
+    def test_create_post_with_tip_lottery_persists_lottery_schema_fields(self):
+        req = newsfeed.CreatePostRequest(
+            body_plain="Lottery post",
+            body_format="plain",
+            visibility="followers",
+            lock_type="tip_lottery",
+            lottery_tip_cents=125,
+            lottery_quiet_period_seconds=90,
+        )
+
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_lottery_1"),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
+            patch.object(newsfeed, "ddb_put_item") as put_item,
+            patch.object(newsfeed, "_meter_newsfeed_post_publish"),
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            resp = newsfeed.create_post(req, user_id="u1")
+
+        self.assertEqual(resp.lock_type, "tip_lottery")
+        self.assertTrue(resp.locked)
+        self.assertEqual(resp.lottery_tip_cents, 125)
+        self.assertEqual(resp.lottery_quiet_period_seconds, 90)
+        self.assertEqual(resp.lottery_state, "open")
+        self.assertEqual(resp.lottery_version, 0)
+
+        post_item = put_item.call_args_list[0].args[0]
+        self.assertEqual(post_item["lock_type"], "tip_lottery")
+        self.assertEqual(post_item["lottery_tip_cents"], 125)
+        self.assertEqual(post_item["lottery_quiet_period_seconds"], 90)
+        self.assertEqual(post_item["lottery_state"], "open")
+        self.assertEqual(post_item["lottery_version"], 0)
+
+    def test_create_post_rejects_tip_lottery_with_unlock_price(self):
+        req = newsfeed.CreatePostRequest(
+            body="invalid",
+            lock_type="tip_lottery",
+            unlock_price_cents=100,
+            lottery_tip_cents=50,
+            lottery_quiet_period_seconds=60,
+        )
+        with (
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+            patch.object(newsfeed.logger, "warning") as warn_log,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("unlock_price_cents", str(ctx.exception.detail))
+        warn_log.assert_called()
+        self.assertEqual(
+            warn_log.call_args.kwargs["extra"]["reason_code"],
+            "tip_lottery_with_unlock_price",
+        )
+
+    def test_create_post_rejects_tip_lottery_when_feature_flag_disabled(self):
+        req = newsfeed.CreatePostRequest(
+            body="invalid",
+            lock_type="tip_lottery",
+            lottery_tip_cents=50,
+            lottery_quiet_period_seconds=60,
+        )
+        original_flag = getattr(newsfeed.S, "newsfeed_tip_lottery_enabled", True)
+        object.__setattr__(newsfeed.S, "newsfeed_tip_lottery_enabled", False)
+        try:
+            with (
+                patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+                patch.object(newsfeed.logger, "warning") as warn_log,
+            ):
+                with self.assertRaises(HTTPException) as ctx:
+                    newsfeed.create_post(req, user_id="u1")
+            self.assertEqual(ctx.exception.status_code, 403)
+            self.assertIn("disabled", str(ctx.exception.detail))
+            self.assertEqual(
+                warn_log.call_args.kwargs["extra"]["reason_code"],
+                "tip_lottery_feature_disabled",
+            )
+        finally:
+            object.__setattr__(newsfeed.S, "newsfeed_tip_lottery_enabled", original_flag)
+
+    def test_create_post_rejects_tip_lottery_when_tip_amount_missing(self):
+        req = newsfeed.CreatePostRequest(
+            body="invalid",
+            lock_type="tip_lottery",
+            lottery_quiet_period_seconds=60,
+        )
+        with (
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("lottery_tip_cents", str(ctx.exception.detail))
+
+    def test_create_post_rejects_tip_lottery_when_quiet_period_missing(self):
+        req = newsfeed.CreatePostRequest(
+            body="invalid",
+            lock_type="tip_lottery",
+            lottery_tip_cents=75,
+        )
+        with (
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("lottery_quiet_period_seconds", str(ctx.exception.detail))
+
+    def test_create_post_rejects_fixed_price_with_lottery_fields(self):
+        req = newsfeed.CreatePostRequest(
+            body="invalid",
+            lock_type="fixed_price",
+            unlock_price_cents=200,
+            lottery_tip_cents=25,
+        )
+        with (
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("lottery_*", str(ctx.exception.detail))
+
+    def test_create_post_rejects_fixed_price_without_unlock_price(self):
+        req = newsfeed.CreatePostRequest(
+            body="invalid",
+            lock_type="fixed_price",
+        )
+        with (
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("unlock_price_cents", str(ctx.exception.detail))
+
+    def test_create_post_rejects_lottery_fields_without_tip_lottery_lock_type(self):
+        req = newsfeed.CreatePostRequest(
+            body="invalid",
+            lottery_tip_cents=30,
+            lottery_quiet_period_seconds=45,
+        )
+        with (
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("lock_type", str(ctx.exception.detail))
+
+    def test_create_post_non_locked_still_allowed(self):
+        req = newsfeed.CreatePostRequest(body="plain post")
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_unlocked_1"),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
+            patch.object(newsfeed, "ddb_put_item"),
+            patch.object(newsfeed, "_meter_newsfeed_post_publish"),
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            resp = newsfeed.create_post(req, user_id="u1")
+        self.assertFalse(resp.locked)
+        self.assertIsNone(resp.lock_type)
+
+    def test_create_post_fixed_price_still_allowed_without_explicit_lock_type(self):
+        req = newsfeed.CreatePostRequest(body="fixed post", unlock_price_cents=299)
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_fixed_1"),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
+            patch.object(newsfeed, "ddb_put_item") as put_item,
+            patch.object(newsfeed, "_meter_newsfeed_post_publish"),
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            resp = newsfeed.create_post(req, user_id="u1")
+        self.assertTrue(resp.locked)
+        self.assertEqual(resp.lock_type, "fixed_price")
+        self.assertEqual(resp.unlock_price_cents, 299)
+        post_item = put_item.call_args_list[0].args[0]
+        self.assertEqual(post_item["lock_type"], "fixed_price")
+        self.assertEqual(post_item["unlock_price_cents"], 299)
+        self.assertIsNone(post_item["lottery_tip_cents"])
+        self.assertIsNone(post_item["lottery_quiet_period_seconds"])
+        self.assertIsNone(post_item["lottery_state"])
+        self.assertIsNone(post_item["lottery_version"])
+
+    def test_post_serializer_coerces_lottery_numeric_fields_to_int(self):
+        post = {
+            "post_id": "p_decimal_1",
+            "user_id": "author_1",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body": "lottery body",
+            "locked": True,
+            "lock_type": "tip_lottery",
+            "lottery_tip_cents": Decimal("150"),
+            "lottery_quiet_period_seconds": Decimal("45"),
+            "lottery_version": Decimal("2"),
+            "unlock_price_cents": Decimal("0"),
+        }
+        out = newsfeed._post_to_dict(post)
+        self.assertEqual(out["lottery_tip_cents"], 150)
+        self.assertEqual(out["lottery_quiet_period_seconds"], 45)
+        self.assertEqual(out["lottery_version"], 2)
+        self.assertEqual(out["unlock_price_cents"], 0)
+
+    def test_post_serializer_infers_fixed_price_lock_type_for_legacy_rows(self):
+        post = {
+            "post_id": "p_fixed_1",
+            "user_id": "author_1",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body": "legacy body",
+            "locked": True,
+            "unlock_price_cents": 333,
+        }
+
+        with patch.object(newsfeed.logger, "info") as info_log:
+            out = newsfeed._post_to_dict(post, locked_body=False)
+        self.assertEqual(out["lock_type"], "fixed_price")
+        self.assertEqual(out["unlock_price_cents"], 333)
+        self.assertNotIn("lock_type", post)
+        info_log.assert_called()
+        self.assertEqual(
+            info_log.call_args.kwargs["extra"]["event"],
+            "newsfeed_lock_type_fallback",
+        )
+
+    def test_post_serializer_preserves_explicit_valid_lock_type(self):
+        fixed_post = {
+            "post_id": "p_fixed_explicit",
+            "user_id": "author_1",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body": "fixed body",
+            "locked": True,
+            "lock_type": "fixed_price",
+            "unlock_price_cents": 125,
+        }
+        lottery_post = {
+            "post_id": "p_lottery_explicit",
+            "user_id": "author_1",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body": "lottery body",
+            "locked": True,
+            "lock_type": "tip_lottery",
+            "lottery_tip_cents": 50,
+            "lottery_quiet_period_seconds": 30,
+        }
+
+        fixed_out = newsfeed._post_to_dict(fixed_post)
+        lottery_out = newsfeed._post_to_dict(lottery_post)
+
+        self.assertEqual(fixed_out["lock_type"], "fixed_price")
+        self.assertEqual(lottery_out["lock_type"], "tip_lottery")
+        self.assertEqual(lottery_out["lottery_tip_cents"], 50)
+        self.assertEqual(lottery_out["lottery_quiet_period_seconds"], 30)
+
+    def test_post_serializer_passthrough_for_modern_tip_lottery_metadata(self):
+        post = {
+            "post_id": "p_modern_lottery",
+            "user_id": "author_1",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body": "lottery body",
+            "locked": True,
+            "lock_type": "tip_lottery",
+            "lottery_tip_cents": 175,
+            "lottery_quiet_period_seconds": 90,
+            "lottery_state": "won",
+            "lottery_last_tip_at": "2026-01-01T01:00:00+00:00",
+            "lottery_last_tipper_user_id": "u_last",
+            "lottery_winner_user_id": "u_winner",
+            "lottery_won_at": "2026-01-01T01:03:00+00:00",
+            "lottery_version": 7,
+        }
+        out = newsfeed._post_to_dict(post, locked_body=False)
+        self.assertEqual(out["lock_type"], "tip_lottery")
+        self.assertEqual(out["lottery_tip_cents"], 175)
+        self.assertEqual(out["lottery_quiet_period_seconds"], 90)
+        self.assertEqual(out["lottery_state"], "won")
+        self.assertEqual(out["lottery_last_tip_at"], "2026-01-01T01:00:00+00:00")
+        self.assertEqual(out["lottery_last_tipper_user_id"], "u_last")
+        self.assertEqual(out["lottery_winner_user_id"], "u_winner")
+        self.assertEqual(out["lottery_won_at"], "2026-01-01T01:03:00+00:00")
+        self.assertEqual(out["lottery_version"], 7)
+
+    def test_post_serializer_non_locked_rows_remain_backward_compatible(self):
+        post = {
+            "post_id": "p_open_1",
+            "user_id": "author_1",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body": "plain body",
+            "locked": False,
+        }
+        out = newsfeed._post_to_dict(post, locked_body=False)
+        self.assertFalse(out["locked"])
+        self.assertIsNone(out["lock_type"])
+        self.assertEqual(out["body"], "plain body")
+
 
     def test_post_serializer_masks_all_format_fields_when_locked(self):
         post = {
@@ -759,6 +1055,34 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
         self.assertEqual(out["body_format"], "plain")
         self.assertEqual(out["body_version"], 1)
         self.assertEqual(out["image_urls"], [])
+
+    def test_post_serializer_locked_content_masking_unchanged_for_tip_lottery(self):
+        post = {
+            "post_id": "p1",
+            "user_id": "author_1",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body": "secret body",
+            "body_plain": "secret body",
+            "body_markdown": "## secret",
+            "body_markdown_html": "<h2>secret</h2>",
+            "body_rich": {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "secret"}]}]},
+            "body_format": "rich",
+            "body_version": 3,
+            "image_urls": ["https://cdn.example.com/private.png"],
+            "locked": True,
+            "lock_type": "tip_lottery",
+            "lottery_tip_cents": 99,
+            "lottery_quiet_period_seconds": 45,
+        }
+        out = newsfeed._post_to_dict(post, locked_body=True)
+        self.assertEqual(out["body"], "[Locked content]")
+        self.assertEqual(out["body_plain"], "[Locked content]")
+        self.assertIsNone(out["body_markdown"])
+        self.assertIsNone(out["body_markdown_html"])
+        self.assertIsNone(out["body_rich"])
+        self.assertEqual(out["body_format"], "plain")
+        self.assertEqual(out["image_urls"], [])
+        self.assertEqual(out["lock_type"], "tip_lottery")
 
     def test_get_post_masks_locked_content_without_format_bypass(self):
         locked_post = {

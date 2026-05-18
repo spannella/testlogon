@@ -617,6 +617,48 @@ test.describe("8. Locked posts", () => {
     await feedDelete(page, `/posts/${data.post_id}`);
   });
 
+  test("lottery lock metadata appears on create and subsequent reads", async () => {
+    const lotteryResp = await feedPost(page, "/posts", {
+      body: `Lottery lock post ${Date.now()}`,
+      lock_type: "tip_lottery",
+      lottery_tip_cents: 125,
+      lottery_quiet_period_seconds: 90,
+    });
+    expect(lotteryResp.ok()).toBe(true);
+    const lotteryData = await lotteryResp.json() as {
+      post_id: string;
+      lock_type: string;
+      lottery_tip_cents: number;
+      lottery_quiet_period_seconds: number;
+      lottery_state: string;
+    };
+    expect(lotteryData.lock_type).toBe("tip_lottery");
+    expect(lotteryData.lottery_tip_cents).toBe(125);
+    expect(lotteryData.lottery_quiet_period_seconds).toBe(90);
+    expect(lotteryData.lottery_state).toBe("open");
+
+    const getResp = await feedGet(page, `/posts/${lotteryData.post_id}`);
+    expect(getResp.ok()).toBe(true);
+    const fromGet = await getResp.json() as {
+      lock_type: string;
+      lottery_tip_cents: number;
+      lottery_quiet_period_seconds: number;
+    };
+    expect(fromGet.lock_type).toBe("tip_lottery");
+    expect(fromGet.lottery_tip_cents).toBe(125);
+    expect(fromGet.lottery_quiet_period_seconds).toBe(90);
+
+    const feedResp = await feedGet(page, "/feed");
+    expect(feedResp.ok()).toBe(true);
+    const feedData = await feedResp.json() as { items: Array<{ post_id: string; lock_type?: string; lottery_tip_cents?: number }> };
+    const found = (feedData.items ?? []).find((p) => p.post_id === lotteryData.post_id);
+    expect(found).toBeTruthy();
+    expect(found?.lock_type).toBe("tip_lottery");
+    expect(found?.lottery_tip_cents).toBe(125);
+
+    await feedDelete(page, `/posts/${lotteryData.post_id}`);
+  });
+
   test("owner (Alice) sees full content in feed — unlocked=true", async () => {
     const resp = await feedGet(page, "/feed");
     expect(resp.ok()).toBe(true);
@@ -767,6 +809,28 @@ test.describe("8. Locked posts", () => {
     await expect(priceInput).toBeVisible({ timeout: 3000 });
 
     await uiPage.close();
+  });
+
+  test("UI: lottery lock post shows metadata banner", async ({ browser }) => {
+    const createResp = await feedPost(page, "/posts", {
+      body: `Lottery lock UI post ${Date.now()}`,
+      lock_type: "tip_lottery",
+      lottery_tip_cents: 175,
+      lottery_quiet_period_seconds: 45,
+    });
+    expect(createResp.ok()).toBe(true);
+    const created = await createResp.json() as { post_id: string };
+
+    const uiPage = await browser.newPage();
+    await gotoFeed(uiPage);
+    await expect(uiPage.getByText(/Lottery lock UI post/i)).toBeVisible({ timeout: 5000 });
+    await expect(uiPage.getByText(/lottery lock/i)).toBeVisible({ timeout: 5000 });
+    await expect(uiPage.getByText(/tip \$1\.75/i)).toBeVisible({ timeout: 5000 });
+    await expect(uiPage.getByText(/quiet period 45s/i)).toBeVisible({ timeout: 5000 });
+    await expect(uiPage.getByText(/state open/i)).toBeVisible({ timeout: 5000 });
+
+    await uiPage.close();
+    await feedDelete(page, `/posts/${created.post_id}`);
   });
 });
 

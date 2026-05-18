@@ -29,18 +29,19 @@ vi.mock("../RichContentRenderer", () => ({ RichContentRenderer: () => <div>post 
 vi.mock("@/pages/files/FilePreview", () => ({ FilePreview: () => null }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-function renderCard() {
+function renderCard(postOverrides?: Partial<Record<string, unknown>>) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const basePost = {
+    post_id: "p1",
+    author_id: "author2",
+    body: "hello",
+    created_at: new Date().toISOString(),
+    image_urls: ["https://example.com/a.jpg"],
+  };
   return render(
     <QueryClientProvider client={client}>
       <PostCard
-        post={{
-          post_id: "p1",
-          author_id: "author2",
-          body: "hello",
-          created_at: new Date().toISOString(),
-          image_urls: ["https://example.com/a.jpg"],
-        } as never}
+        post={{ ...basePost, ...(postOverrides ?? {}) } as never}
       />
     </QueryClientProvider>,
   );
@@ -49,6 +50,7 @@ function renderCard() {
 describe("PostCard media reporting", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    (window as any).__TIP_LOTTERY_ENABLED__ = true;
   });
 
   it("submits report with feed_media metadata", async () => {
@@ -81,5 +83,62 @@ describe("PostCard media reporting", () => {
     for (const link of links) {
       expect(link).toHaveAttribute("href", "/u/author2");
     }
+  });
+
+  it("renders lottery lock strategy metadata safely", async () => {
+    renderCard({
+      locked: true,
+      unlocked: false,
+      lock_type: "tip_lottery",
+      lottery_tip_cents: 175,
+      lottery_quiet_period_seconds: 90,
+      lottery_state: "open",
+    });
+
+    expect(await screen.findByText(/lottery lock/i)).toBeInTheDocument();
+    expect(screen.getByText(/tip \$1\.75/i)).toBeInTheDocument();
+    expect(screen.getByText(/quiet period 90s/i)).toBeInTheDocument();
+    expect(screen.getByText(/state open/i)).toBeInTheDocument();
+  });
+
+  it("renders lottery lock fallback values safely when metadata is missing", async () => {
+    renderCard({
+      locked: true,
+      unlocked: false,
+      lock_type: "tip_lottery",
+    });
+
+    expect(await screen.findByText(/lottery lock/i)).toBeInTheDocument();
+    expect(screen.getByText(/tip n\/a/i)).toBeInTheDocument();
+    expect(screen.getByText(/quiet period n\/a/i)).toBeInTheDocument();
+    expect(screen.getByText(/state open/i)).toBeInTheDocument();
+  });
+
+  it("keeps fixed-price lock display unchanged", async () => {
+    renderCard({
+      locked: true,
+      unlocked: false,
+      lock_type: "fixed_price",
+      unlock_price_cents: 250,
+    });
+
+    expect(await screen.findByRole("button", { name: /unlock for \$2\.50/i })).toBeInTheDocument();
+    expect(screen.queryByText(/lottery lock/i)).not.toBeInTheDocument();
+  });
+
+  it("hides lottery metadata when tip-lottery feature flag is disabled", async () => {
+    (window as any).__TIP_LOTTERY_ENABLED__ = false;
+    renderCard({
+      locked: true,
+      unlocked: false,
+      lock_type: "tip_lottery",
+      lottery_tip_cents: 175,
+      lottery_quiet_period_seconds: 90,
+      lottery_state: "open",
+    });
+
+    expect(await screen.findByText(/this post is locked\./i)).toBeInTheDocument();
+    expect(screen.queryByText(/lottery lock/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/tip \$1\.75/i)).not.toBeInTheDocument();
   });
 });
