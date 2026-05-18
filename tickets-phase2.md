@@ -2770,3 +2770,184 @@
 **Acceptance criteria:**
 - Checklist defines measurable pass/fail criteria and owners.
 - GA promotion requires completed sign-off artifacts.
+# KYC Phase 2 Production Readiness Tickets
+
+### KYC-201: External verification provider adapter layer
+**Description:** Implement a pluggable provider adapter abstraction for sanctions, PEP, and document-verification vendors with normalized request/response contracts.
+**Acceptance criteria:**
+- KYC service integrates through a provider interface, not vendor-specific calls.
+- Provider responses are normalized into a stable internal result schema.
+
+### KYC-202: Sanctions screening orchestration on submit
+**Description:** Trigger sanctions screening asynchronously on case submission and persist results for admin review.
+**Acceptance criteria:**
+- Submit creates a screening job idempotently per evidence hash.
+- Admin case detail surfaces sanctions status, result code, and check timestamp.
+
+### KYC-203: PEP screening integration and escalation
+**Description:** Add PEP (politically exposed person) checks and queue escalation for elevated-risk matches.
+**Acceptance criteria:**
+- PEP checks run independently from sanctions checks.
+- High-risk PEP matches annotate queue entries with escalation metadata.
+
+### KYC-204: Dynamic requirement policy engine
+**Description:** Replace static submit requirements with policy-driven rules by country, risk tier, and applicant type.
+**Acceptance criteria:**
+- Readiness checks evaluate active policy version at runtime.
+- Policy updates can be applied without application redeploy.
+
+### KYC-205: Policy simulation endpoint for admins
+**Description:** Add an admin API to simulate requirement evaluation for a case without mutating state.
+**Acceptance criteria:**
+- Simulation response includes unmet requirements and policy version used.
+- Simulation requests emit audit events with actor and case correlation.
+
+### KYC-206: Idempotency-key support for all KYC mutations
+**Description:** Add optional idempotency keys to create/update/submit/admin decision endpoints.
+**Acceptance criteria:**
+- Replayed requests with same key return the original successful response.
+- Idempotency key records expire via configurable TTL.
+
+### KYC-207: Out-of-order webhook event ingestion hardening
+**Description:** Add sequence/ordering validation for provider webhooks and ignore stale events safely.
+**Acceptance criteria:**
+- Older webhook events cannot regress case/provider status.
+- Ignored stale events are tracked in sync counters and audit logs.
+
+### KYC-208: Dead-letter queue for failed KYC sync events
+**Description:** Route repeated sync failures to dead-letter storage with replay tooling.
+**Acceptance criteria:**
+- Failed events move to dead-letter after bounded retries.
+- Operators can replay dead-letter events in dry-run or apply mode.
+
+### KYC-209: Retry/backoff framework for async KYC jobs
+**Description:** Introduce standardized retry/backoff and failure classification for screening and sync workers.
+**Acceptance criteria:**
+- Each job type declares retry policy and terminal failure conditions.
+- Retry attempts and terminal failures are emitted as metrics.
+
+### KYC-210: Purge scheduler with checkpoints and resume
+**Description:** Move retention purge execution to scheduled jobs with checkpointing for resumability.
+**Acceptance criteria:**
+- Interrupted purge jobs resume without reprocessing completed pages.
+- Purge job metrics include scanned, purged, skipped, and failed counts.
+
+### KYC-211: Upload malware scanning integration
+**Description:** Add malware scanning for KYC uploads and block compromised files from readiness.
+**Acceptance criteria:**
+- File metadata stores scanner verdict and scan timestamp.
+- Readiness fails when required files are unscanned or blocked.
+
+### KYC-212: Strict MIME and file signature validation
+**Description:** Validate true MIME/content signatures for uploaded documents to prevent spoofed files.
+**Acceptance criteria:**
+- Files with mismatched extension/content are rejected.
+- Validation failures are auditable and visible in case file metadata.
+
+### KYC-213: Scoped reviewer authorization model v2
+**Description:** Add reviewer scope controls (region/risk/product) for queue listing and admin actions.
+**Acceptance criteria:**
+- Out-of-scope reviewers are denied list/read/mutate access.
+- Scope-denied events include explicit reason in audit logs.
+
+### KYC-214: Break-glass access workflow with dual control
+**Description:** Implement emergency case access requiring justification and second-approver authorization.
+**Acceptance criteria:**
+- Break-glass grants expire automatically and are time-bounded.
+- All break-glass actions are immutable and security-audited.
+
+### KYC-215: PII redaction middleware for logs/metrics/traces
+**Description:** Add centralized field-level redaction for sensitive KYC attributes across observability pipelines.
+**Acceptance criteria:**
+- Sensitive fields are masked before log/metric/trace emission.
+- Automated tests fail if raw PII appears in telemetry output.
+
+### KYC-216: Security anomaly detection for KYC abuse patterns
+**Description:** Detect suspicious behavior (high retry rate, repeated conflicts, unusual file patterns) and raise alerts.
+**Acceptance criteria:**
+- Anomaly thresholds are configurable per environment.
+- Security events include severity, actor, and case context.
+
+### KYC-217: KYC SLO dashboard and burn-rate alerts
+**Description:** Define SLOs for submit/readiness/admin operations and add burn-rate based alerting.
+**Acceptance criteria:**
+- Dashboard includes p50/p95/p99 latency and error-rate panels.
+- Burn-rate alerts are configured for at least two critical KYC paths.
+
+### KYC-218: Queue performance tuning for high-cardinality workloads
+**Description:** Optimize admin queue query patterns and indexes for large datasets.
+**Acceptance criteria:**
+- Queue p95 latency meets target under benchmark load.
+- Query cost per page decreases versus baseline.
+
+### KYC-219: Load testing suite for KYC critical paths
+**Description:** Build reproducible load tests for submit, decisioning, queue listing, and ticket sync.
+**Acceptance criteria:**
+- Load suite runs in CI/nightly with historical trend output.
+- Performance regressions beyond threshold fail the gate.
+
+### KYC-220: Data consistency audit job across KYC dependencies
+**Description:** Add recurring integrity checks for case↔ticket↔questionnaire↔signature references.
+**Acceptance criteria:**
+- Audit job outputs a severity-ranked inconsistency report.
+- Report includes deterministic repair recommendations.
+
+### KYC-221: Cross-system repair CLI for reference drift
+**Description:** Provide a CLI to repair broken KYC cross-system references with audit-friendly output.
+**Acceptance criteria:**
+- CLI supports dry-run and apply modes.
+- Applied repairs append timeline and audit records.
+
+### KYC-222: End-to-end certification suite for KYC flows
+**Description:** Build E2E scenarios for happy path, request-info loop, reject path, replay conflicts, and purge.
+**Acceptance criteria:**
+- Certification suite runs in staging against production-like dependencies.
+- Release checklist requires certification pass before deployment.
+
+### KYC-223: Chaos tests for sync and conflict handling
+**Description:** Introduce chaos scenarios for duplicate events, transient store conflicts, and provider timeouts.
+**Acceptance criteria:**
+- Chaos tests verify no invalid terminal transitions occur.
+- Recovery outcomes are visible in metrics and audit logs.
+
+### KYC-224: Compliance evidence bundle export API
+**Description:** Add an export endpoint to generate regulator-ready case bundles (timeline, decisions, evidence refs, purge status).
+**Acceptance criteria:**
+- Export enforces strict authorization and masking policies.
+- Export activity is fully audited with requester and purpose metadata.
+
+### KYC-225: Immutable audit ledger publication
+**Description:** Publish KYC audit events to append-only ledger storage with integrity verification support.
+**Acceptance criteria:**
+- Ledger entries are hash-linked to detect tampering/reordering.
+- Verification tooling validates ledger integrity for a date range.
+
+### KYC-226: Feature flags for phased rollout controls
+**Description:** Add per-tenant and percentage rollout flags for new KYC checks and integrations.
+**Acceptance criteria:**
+- Flags can be toggled without service restart.
+- Rollback procedures are documented and validated in test environment.
+
+### KYC-227: Provider outage degraded-mode handling
+**Description:** Implement graceful degraded flows when third-party verification providers are unavailable.
+**Acceptance criteria:**
+- Cases can continue via fallback/manual-review pathways.
+- Degraded-mode transitions and recovery are clearly audited.
+
+### KYC-228: Notification template system with localization support
+**Description:** Externalize applicant/reviewer notifications for submit, request-info, decision, and expiry warnings.
+**Acceptance criteria:**
+- Templates support locale and channel selection.
+- Notification sends are idempotent and deduplicated.
+
+### KYC-229: Operations runbook v2 and incident drills
+**Description:** Expand KYC runbooks with procedures for queue spikes, sync failures, provider outages, and purge anomalies.
+**Acceptance criteria:**
+- Runbook includes diagnostics, mitigation, rollback, and escalation paths.
+- Incident drills validate at least two runbook scenarios end-to-end.
+
+### KYC-230: Release automation gate for KYC quality checks
+**Description:** Add CI/CD release gate that enforces KYC-specific checks (contract compatibility, E2E pass, migration safety).
+**Acceptance criteria:**
+- Deployment pipeline blocks release when any KYC gate check fails.
+- Gate output provides actionable diagnostics for failed checks.

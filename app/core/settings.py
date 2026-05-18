@@ -908,6 +908,14 @@ class Settings:
     questionnaire_captcha_required_anonymous: bool = os.environ.get("QUESTIONNAIRE_CAPTCHA_REQUIRED_ANONYMOUS", "false").lower() in ("1", "true", "yes", "on")
     questionnaire_captcha_static_token: str = os.environ.get("QUESTIONNAIRE_CAPTCHA_STATIC_TOKEN", "")
     questionnaire_encrypt_sensitive_answers: bool = os.environ.get("QUESTIONNAIRE_ENCRYPT_SENSITIVE_ANSWERS", "false").lower() in ("1", "true", "yes", "on")
+    kyc_cases_table_name: str = os.environ.get("KYC_CASES_TABLE_NAME", "kyc_cases")
+    kyc_cases_owner_index_name: str = os.environ.get("KYC_CASES_OWNER_INDEX_NAME", "owner-updated-index")
+    kyc_cases_status_index_name: str = os.environ.get("KYC_CASES_STATUS_INDEX_NAME", "status-updated-index")
+    kyc_retention_rejected_days: int = int(os.environ.get("KYC_RETENTION_REJECTED_DAYS", "30"))
+    kyc_retention_expired_days: int = int(os.environ.get("KYC_RETENTION_EXPIRED_DAYS", "7"))
+    kyc_retention_approved_days: int = int(os.environ.get("KYC_RETENTION_APPROVED_DAYS", "365"))
+    kyc_review_ticket_space_id: str = os.environ.get("KYC_REVIEW_TICKET_SPACE_ID", "kyc-ops")
+    kyc_review_ticket_category: str = os.environ.get("KYC_REVIEW_TICKET_CATEGORY", "kyc_review")
 
     # Google Calendar integration hardening/tuning
     google_calendar_oauth_require_refresh_token: bool = os.environ.get("GOOGLE_CALENDAR_OAUTH_REQUIRE_REFRESH_TOKEN", "true").lower() in ("1", "true", "yes", "on")

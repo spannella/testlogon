@@ -3,7 +3,10 @@ from __future__ import annotations
 import base64
 import json
 import time
+from collections import Counter
+from time import time
 from typing import Any, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -18,8 +21,12 @@ from app.services.sessions import require_ui_session
 from app.services.tickets import STORE, TicketStateError
 from app.services.payment_incidents_store import DynamoPaymentIncidentRepository
 from app.services.payment_incident_ticket_sync import sync_incident_from_ticket
+from app.services.kyc_cases import STORE as KYC_STORE, KycCaseConflictError, KycCaseValidationError
 
 router = APIRouter(prefix="/tickets", tags=["tickets"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
+_KYC_TICKET_SYNC_COUNTS: Counter[str] = Counter()
+_KYC_TICKET_SYNC_DEADLETTER: list[dict[str, Any]] = []
+_KYC_TICKET_SYNC_DEADLETTER_MAX = 200
 
 
 class ErrorDetail(BaseModel):
@@ -116,6 +123,54 @@ class TicketAdminSummaryEnvelope(BaseModel):
     summary: TicketAdminSummary
 
 
+class TicketKycSyncMetrics(BaseModel):
+    counters: dict[str, int]
+    deadletter_count: int = 0
+    deadletter_oldest_age_seconds: int | None = None
+
+
+class TicketKycSyncMetricsEnvelope(BaseModel):
+    metrics: TicketKycSyncMetrics
+
+
+class TicketKycSyncDeadletterEntry(BaseModel):
+    entry_id: str
+    created_at: int
+    reason: str
+    event_type: str
+    actor_sub: str
+    ticket_id: str | None = None
+    kyc_case_id: str | None = None
+    metadata_case_id: str | None = None
+    inferred_case_id: str | None = None
+    replay_count: int = 0
+    last_replay_at: int | None = None
+    last_replay_outcome: str | None = None
+
+
+class TicketKycSyncDeadletterEnvelope(BaseModel):
+    items: list[TicketKycSyncDeadletterEntry]
+    total_count: int
+
+
+class TicketKycSyncDeadletterClearEnvelope(BaseModel):
+    cleared_count: int
+    remaining_count: int
+
+
+class TicketKycSyncDeadletterReplayEnvelope(BaseModel):
+    replayed: bool
+    removed: bool
+    deadletter_entry_id: str
+
+
+class TicketKycSyncDeadletterBatchReplayEnvelope(BaseModel):
+    attempted_count: int
+    replayed_count: int
+    failed_count: int
+    removed_count: int
+
+
 class CreateTicketReq(BaseModel):
     subject: str = Field(..., min_length=3, max_length=160)
     description: str = Field(..., min_length=1, max_length=4000)
@@ -169,6 +224,10 @@ def _has_api_key_scope(request: Request, scope: str) -> bool:
 
 def _is_admin_actor(request: Request, user: AuthenticatedUser) -> bool:
     return _is_admin(user) or _has_api_key_scope(request, "tickets:admin")
+
+
+def _is_root(user: AuthenticatedUser) -> bool:
+    return normalize_role(user.role) == Role.ROOT
 
 
 def _wrap_ticket(ticket: dict[str, Any]) -> TicketEnvelope:
@@ -312,6 +371,398 @@ def _emit_ticket_alerts(event: str, *, recipients: list[str], actor_sub: str, re
         }
     for recipient in sorted({item for item in recipients if item}):
         audit_event(event, recipient, request, outcome="success", actor_sub=actor_sub, **api_key_fields, **fields)
+
+
+def get_kyc_sync_counters() -> dict[str, int]:
+    return dict(_KYC_TICKET_SYNC_COUNTS)
+
+
+def get_kyc_sync_snapshot() -> dict[str, Any]:
+    deadletter_count = len(_KYC_TICKET_SYNC_DEADLETTER)
+    oldest_age = None
+    if deadletter_count:
+        oldest_created_at = min(int(item.get("created_at") or 0) for item in _KYC_TICKET_SYNC_DEADLETTER)
+        oldest_age = max(0, int(time()) - oldest_created_at)
+    return {
+        "counters": dict(_KYC_TICKET_SYNC_COUNTS),
+        "deadletter_count": deadletter_count,
+        "deadletter_oldest_age_seconds": oldest_age,
+    }
+
+
+def _push_kyc_sync_deadletter(
+    *,
+    reason: str,
+    event_type: str,
+    actor_sub: str,
+    ticket_after: dict[str, Any],
+    case_id: str | None = None,
+    metadata_case_id: str | None = None,
+    inferred_case_id: str | None = None,
+) -> None:
+    _KYC_TICKET_SYNC_DEADLETTER.append(
+        {
+            "entry_id": str(uuid4()),
+            "created_at": int(time()),
+            "reason": reason,
+            "event_type": event_type,
+            "actor_sub": actor_sub,
+            "ticket_id": ticket_after.get("ticket_id"),
+            "kyc_case_id": case_id,
+            "metadata_case_id": metadata_case_id,
+            "inferred_case_id": inferred_case_id,
+            "replay_count": 0,
+            "last_replay_at": None,
+            "last_replay_outcome": None,
+        }
+    )
+    if len(_KYC_TICKET_SYNC_DEADLETTER) > _KYC_TICKET_SYNC_DEADLETTER_MAX:
+        del _KYC_TICKET_SYNC_DEADLETTER[0 : len(_KYC_TICKET_SYNC_DEADLETTER) - _KYC_TICKET_SYNC_DEADLETTER_MAX]
+
+
+def _kyc_case_id_for_ticket(ticket: dict[str, Any]) -> str | None:
+    metadata = ticket.get("metadata") or {}
+    case_id = str(metadata.get("kyc_case_id") or "").strip()
+    if case_id:
+        return case_id
+    ticket_id = str(ticket.get("ticket_id") or "")
+    if ticket_id.startswith("tkt_kyc_"):
+        return ticket_id.removeprefix("tkt_kyc_")
+    return None
+
+
+def _sync_kyc_for_ticket_event(
+    *,
+    ticket_before: dict[str, Any],
+    ticket_after: dict[str, Any],
+    event_type: str,
+    actor_sub: str,
+    request: Request,
+) -> None:
+    metadata_case_id = str(((ticket_after.get("metadata") or {}).get("kyc_case_id") or "")).strip() or None
+    inferred_case_id = None
+    inferred_ticket_id = str(ticket_after.get("ticket_id") or "")
+    if inferred_ticket_id.startswith("tkt_kyc_"):
+        inferred_case_id = inferred_ticket_id.removeprefix("tkt_kyc_")
+    if metadata_case_id and inferred_case_id and metadata_case_id != inferred_case_id:
+        _KYC_TICKET_SYNC_COUNTS["failed_ticket_case_id_mismatch"] += 1
+        _push_kyc_sync_deadletter(
+            reason="ticket_case_id_mismatch",
+            event_type=event_type,
+            actor_sub=actor_sub,
+            ticket_after=ticket_after,
+            case_id=metadata_case_id,
+            metadata_case_id=metadata_case_id,
+            inferred_case_id=inferred_case_id,
+        )
+        audit_event(
+            "kyc_ticket_sync_failed",
+            actor_sub,
+            request,
+            outcome="failure",
+            reason="ticket_case_id_mismatch",
+            kyc_case_id=metadata_case_id,
+            ticket_id=ticket_after.get("ticket_id"),
+            metadata_case_id=metadata_case_id,
+            inferred_case_id=inferred_case_id,
+            correlation_link=f"kyc_case:{metadata_case_id}|ticket:{ticket_after.get('ticket_id')}",
+        )
+        return
+    case_id = _kyc_case_id_for_ticket(ticket_after)
+    if not case_id:
+        _KYC_TICKET_SYNC_COUNTS["ignored_non_kyc_ticket"] += 1
+        return
+    if str((ticket_after.get("metadata") or {}).get("namespace") or "") not in {"", "kyc"}:
+        _KYC_TICKET_SYNC_COUNTS["ignored_non_kyc_namespace"] += 1
+        return
+
+    for _ in range(3):
+        case = KYC_STORE.get_case(case_id)
+        if not case:
+            _KYC_TICKET_SYNC_COUNTS["failed_case_not_found"] += 1
+            _push_kyc_sync_deadletter(
+                reason="case_not_found",
+                event_type=event_type,
+                actor_sub=actor_sub,
+                ticket_after=ticket_after,
+                case_id=case_id,
+            )
+            audit_event(
+                "kyc_ticket_sync_failed",
+                actor_sub,
+                request,
+                outcome="failure",
+                reason="case_not_found",
+                kyc_case_id=case_id,
+                ticket_id=ticket_after.get("ticket_id"),
+                correlation_link=f"kyc_case:{case_id}|ticket:{ticket_after.get('ticket_id')}",
+            )
+            return
+        event_id = f"{event_type}:{ticket_after.get('ticket_id')}:{ticket_after.get('version')}:{ticket_after.get('updated_at')}"
+        try:
+            updated = KYC_STORE.sync_from_ticket_event(
+                case_id=case_id,
+                expected_version=int(case.get("version") or 0),
+                ticket_id=str(ticket_after.get("ticket_id") or ""),
+                sync_event_id=event_id,
+                ticket_status=str(ticket_after.get("status") or ""),
+                ticket_version=(int(ticket_after["version"]) if ticket_after.get("version") is not None else None),
+                ticket_updated_at=(int(ticket_after["updated_at"]) if ticket_after.get("updated_at") is not None else None),
+                assigned_admin_sub=ticket_after.get("assigned_admin_sub"),
+                request_info=(event_type == "message_admin"),
+            )
+            if updated:
+                previous_version = int(case.get("version") or 0)
+                updated_version = int(updated.get("version") or 0)
+                if updated_version == previous_version:
+                    _KYC_TICKET_SYNC_COUNTS["skipped_stale_or_duplicate"] += 1
+                    audit_event(
+                        "kyc_ticket_sync_skipped",
+                        actor_sub,
+                        request,
+                        outcome="success",
+                        reason="stale_or_duplicate_event",
+                        kyc_case_id=case_id,
+                        ticket_id=ticket_after.get("ticket_id"),
+                        event_type=event_type,
+                        event_id=event_id,
+                        correlation_link=f"kyc_case:{case_id}|ticket:{ticket_after.get('ticket_id')}",
+                    )
+                else:
+                    _KYC_TICKET_SYNC_COUNTS["synced"] += 1
+                    audit_event(
+                        "kyc_ticket_synced",
+                        actor_sub,
+                        request,
+                        outcome="success",
+                        kyc_case_id=case_id,
+                        ticket_id=ticket_after.get("ticket_id"),
+                        event_type=event_type,
+                        event_id=event_id,
+                        correlation_link=f"kyc_case:{case_id}|ticket:{ticket_after.get('ticket_id')}",
+                    )
+            return
+        except KycCaseConflictError:
+            _KYC_TICKET_SYNC_COUNTS["retry_conflict"] += 1
+            continue
+        except KycCaseValidationError as exc:
+            _KYC_TICKET_SYNC_COUNTS[f"failed_{str(exc)}"] += 1
+            _push_kyc_sync_deadletter(
+                reason=str(exc),
+                event_type=event_type,
+                actor_sub=actor_sub,
+                ticket_after=ticket_after,
+                case_id=case_id,
+            )
+            audit_event(
+                "kyc_ticket_sync_failed",
+                actor_sub,
+                request,
+                outcome="failure",
+                reason=str(exc),
+                kyc_case_id=case_id,
+                ticket_id=ticket_after.get("ticket_id"),
+                correlation_link=f"kyc_case:{case_id}|ticket:{ticket_after.get('ticket_id')}",
+            )
+            return
+    audit_event(
+        "kyc_ticket_sync_failed",
+        actor_sub,
+        request,
+        outcome="failure",
+        reason="conflict_retry_exhausted",
+        kyc_case_id=case_id,
+        ticket_id=ticket_after.get("ticket_id"),
+        correlation_link=f"kyc_case:{case_id}|ticket:{ticket_after.get('ticket_id')}",
+    )
+    _KYC_TICKET_SYNC_COUNTS["failed_conflict_retry_exhausted"] += 1
+    _push_kyc_sync_deadletter(
+        reason="conflict_retry_exhausted",
+        event_type=event_type,
+        actor_sub=actor_sub,
+        ticket_after=ticket_after,
+        case_id=case_id,
+    )
+
+
+@router.get("/admin/kyc-sync-metrics", response_model=TicketKycSyncMetricsEnvelope, responses=_error_responses())
+def admin_kyc_sync_metrics(
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not _is_admin(user):
+        _raise(403, "admin_role_required", "admin role required")
+    snapshot = get_kyc_sync_snapshot()
+    audit_event(
+        "kyc_ticket_sync_metrics_read",
+        user.sub,
+        request,
+        outcome="success",
+        deadletter_count=int(snapshot.get("deadletter_count") or 0),
+    )
+    return TicketKycSyncMetricsEnvelope(
+        metrics=TicketKycSyncMetrics(
+            counters=snapshot["counters"],
+            deadletter_count=int(snapshot["deadletter_count"] or 0),
+            deadletter_oldest_age_seconds=snapshot.get("deadletter_oldest_age_seconds"),
+        )
+    )
+
+
+@router.get("/admin/kyc-sync-deadletter", response_model=TicketKycSyncDeadletterEnvelope, responses=_error_responses())
+def admin_kyc_sync_deadletter(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    reason: str | None = Query(default=None),
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not _is_admin(user):
+        _raise(403, "admin_role_required", "admin role required")
+    rows = list(_KYC_TICKET_SYNC_DEADLETTER)
+    normalized_reason = str(reason or "").strip()
+    if normalized_reason:
+        rows = [item for item in rows if str(item.get("reason") or "") == normalized_reason]
+    items = rows[-limit:]
+    audit_event(
+        "kyc_ticket_sync_deadletter_listed",
+        user.sub,
+        request,
+        outcome="success",
+        count=len(items),
+        total_count=len(rows),
+        reason_filter=normalized_reason or None,
+    )
+    return TicketKycSyncDeadletterEnvelope(
+        items=[TicketKycSyncDeadletterEntry.model_validate(item) for item in reversed(items)],
+        total_count=len(rows),
+    )
+
+
+@router.delete("/admin/kyc-sync-deadletter", response_model=TicketKycSyncDeadletterClearEnvelope, responses=_error_responses())
+def clear_admin_kyc_sync_deadletter(
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not _is_root(user):
+        _raise(403, "root_role_required", "root role required")
+    cleared_count = len(_KYC_TICKET_SYNC_DEADLETTER)
+    _KYC_TICKET_SYNC_DEADLETTER.clear()
+    audit_event(
+        "kyc_ticket_sync_deadletter_cleared",
+        user.sub,
+        request,
+        outcome="success",
+        cleared_count=cleared_count,
+    )
+    return TicketKycSyncDeadletterClearEnvelope(cleared_count=cleared_count, remaining_count=0)
+
+
+def _replay_deadletter_entry(entry: dict[str, Any], *, actor_sub: str, request: Request) -> tuple[bool, bool]:
+    entry_id = str(entry.get("entry_id") or "")
+    ticket_id = str(entry.get("ticket_id") or "")
+    ticket = STORE.get_ticket(ticket_id) if ticket_id else None
+    if not ticket:
+        _KYC_TICKET_SYNC_COUNTS["deadletter_replay_failed_ticket_not_found"] += 1
+        entry["replay_count"] = int(entry.get("replay_count") or 0) + 1
+        entry["last_replay_at"] = int(time())
+        entry["last_replay_outcome"] = "ticket_not_found"
+        audit_event(
+            "kyc_ticket_sync_deadletter_replay_failed",
+            actor_sub,
+            request,
+            outcome="failure",
+            reason="ticket_not_found",
+            deadletter_entry_id=entry_id,
+            ticket_id=ticket_id,
+        )
+        return False, False
+
+    _sync_kyc_for_ticket_event(
+        ticket_before=ticket,
+        ticket_after=ticket,
+        event_type=f"replay_{str(entry.get('event_type') or 'unknown')}",
+        actor_sub=actor_sub,
+        request=request,
+    )
+    _KYC_TICKET_SYNC_COUNTS["deadletter_replay_success"] += 1
+    audit_event(
+        "kyc_ticket_sync_deadletter_replayed",
+        actor_sub,
+        request,
+        outcome="success",
+        deadletter_entry_id=entry_id,
+        ticket_id=ticket_id,
+        original_event_type=entry.get("event_type"),
+    )
+    _KYC_TICKET_SYNC_DEADLETTER[:] = [item for item in _KYC_TICKET_SYNC_DEADLETTER if str(item.get("entry_id")) != entry_id]
+    return True, True
+
+
+@router.post("/admin/kyc-sync-deadletter/{entry_id}/replay", response_model=TicketKycSyncDeadletterReplayEnvelope, responses=_error_responses())
+def replay_admin_kyc_sync_deadletter(
+    entry_id: str,
+    request: Request,
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not _is_root(user):
+        _raise(403, "root_role_required", "root role required")
+    entry = next((item for item in _KYC_TICKET_SYNC_DEADLETTER if str(item.get("entry_id")) == entry_id), None)
+    if not entry:
+        _KYC_TICKET_SYNC_COUNTS["deadletter_replay_not_found"] += 1
+        _raise(404, "ticket_sync_deadletter_not_found", "deadletter entry not found", details={"entry_id": entry_id})
+    replayed, removed = _replay_deadletter_entry(entry, actor_sub=user.sub, request=request)
+    if not replayed:
+        _raise(
+            409,
+            "ticket_sync_replay_failed",
+            "ticket not found for replay",
+            details={"entry_id": entry_id, "ticket_id": entry.get("ticket_id")},
+        )
+    return TicketKycSyncDeadletterReplayEnvelope(replayed=replayed, removed=removed, deadletter_entry_id=entry_id)
+
+
+@router.post("/admin/kyc-sync-deadletter/replay-batch", response_model=TicketKycSyncDeadletterBatchReplayEnvelope, responses=_error_responses())
+def replay_admin_kyc_sync_deadletter_batch(
+    request: Request,
+    limit: int = Query(default=25, ge=1, le=100),
+    _ctx: dict[str, str] = Depends(require_ui_session),
+    user: AuthenticatedUser = Depends(get_authenticated_user),
+):
+    if not _is_root(user):
+        _raise(403, "root_role_required", "root role required")
+    entries = list(_KYC_TICKET_SYNC_DEADLETTER)[:limit]
+    attempted = len(entries)
+    replayed = 0
+    failed = 0
+    removed = 0
+    for entry in entries:
+        ok, was_removed = _replay_deadletter_entry(entry, actor_sub=user.sub, request=request)
+        if ok:
+            replayed += 1
+        else:
+            failed += 1
+        if was_removed:
+            removed += 1
+    audit_event(
+        "kyc_ticket_sync_deadletter_replay_batch",
+        user.sub,
+        request,
+        outcome="success",
+        attempted_count=attempted,
+        replayed_count=replayed,
+        failed_count=failed,
+        removed_count=removed,
+    )
+    return TicketKycSyncDeadletterBatchReplayEnvelope(
+        attempted_count=attempted,
+        replayed_count=replayed,
+        failed_count=failed,
+        removed_count=removed,
+    )
 
 @router.post("", response_model=TicketEnvelope, responses=_error_responses())
 def create_ticket(
@@ -491,6 +942,7 @@ def assign_ticket(
         ticket_subject=ticket.get("subject", ""),
         assignee_admin_sub=assignee,
     )
+    _sync_kyc_for_ticket_event(ticket_before=ticket, ticket_after=updated, event_type="assigned", actor_sub=user.sub, request=request)
     return _wrap_ticket(updated)
 
 
@@ -526,6 +978,13 @@ def add_ticket_message(
     _emit_ticket_alerts("ticket_replied", recipients=recipients, actor_sub=user.sub, request=request, ticket_id=ticket_id, ticket_subject=ticket.get("subject", ""))
     if ticket.get("status") == "done" and updated.get("status") == "open":
         _emit_ticket_alerts("ticket_reopened", recipients=recipients, actor_sub=user.sub, request=request, ticket_id=ticket_id, ticket_subject=ticket.get("subject", ""))
+    _sync_kyc_for_ticket_event(
+        ticket_before=ticket,
+        ticket_after=updated,
+        event_type=("message_admin" if sender_role == "admin" else "message_user"),
+        actor_sub=user.sub,
+        request=request,
+    )
     return _wrap_ticket(updated)
 
 
@@ -547,4 +1006,5 @@ def set_ticket_status(
         raise HTTPException(status_code=_ticket_state_http_status(exc), detail=_ticket_state_error(exc)) from exc
     sync_incident_from_ticket(DynamoPaymentIncidentRepository(), ticket_id=ticket_id, ticket_status=body.status)
     _emit_ticket_alerts("ticket_status_changed", recipients=[ticket["owner_sub"]], actor_sub=user.sub, request=request, ticket_id=ticket_id, ticket_subject=ticket.get("subject", ""), status=body.status)
+    _sync_kyc_for_ticket_event(ticket_before=ticket, ticket_after=updated, event_type="status_changed", actor_sub=user.sub, request=request)
     return _wrap_ticket(updated)

@@ -212,19 +212,34 @@ class TicketStore:
                 spaces.append(space)
         return {"spaces": spaces, "next_cursor": next_cursor}
 
-    def create_ticket(self, *, owner_sub: str, subject: str, description: str, space_id: str | None = None) -> dict[str, Any]:
+    def create_ticket(
+        self,
+        *,
+        owner_sub: str,
+        subject: str,
+        description: str,
+        space_id: str | None = None,
+        ticket_id: str | None = None,
+        category: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         ts = now_ts()
-        ticket_id = f"tkt_{uuid.uuid4().hex[:12]}"
+        resolved_ticket_id = ticket_id or f"tkt_{uuid.uuid4().hex[:12]}"
+        existing = self.get_ticket(resolved_ticket_id)
+        if existing:
+            return existing
         message_id = f"msg_{uuid.uuid4().hex[:12]}"
         activity_id = f"act_{uuid.uuid4().hex[:12]}"
 
         header = {
-            "pk": _ticket_pk(ticket_id),
+            "pk": _ticket_pk(resolved_ticket_id),
             "sk": "META",
             "entity_type": "ticket_meta",
-            "ticket_id": ticket_id,
+            "ticket_id": resolved_ticket_id,
             "subject": subject,
             "owner_sub": owner_sub,
+            "category": category,
+            "metadata": metadata or {},
             "status": "open",
             "space_id": space_id,
             "assigned_admin_sub": None,
@@ -237,24 +252,24 @@ class TicketStore:
             "last_message_by_role": "user",
             "version": 1,
             "gsi1pk": _owner_index_pk(owner_sub),
-            "gsi1sk": _updated_index_sk(ts, ticket_id),
+            "gsi1sk": _updated_index_sk(ts, resolved_ticket_id),
             "gsi2pk": _status_index_pk("open"),
-            "gsi2sk": _updated_index_sk(ts, ticket_id),
+            "gsi2sk": _updated_index_sk(ts, resolved_ticket_id),
             "gsi3pk": _assignee_index_pk("unassigned"),
-            "gsi3sk": _updated_index_sk(ts, ticket_id),
+            "gsi3sk": _updated_index_sk(ts, resolved_ticket_id),
             "gsi_space_pk": _space_index_pk(space_id) if space_id else None,
-            "gsi_space_sk": _updated_index_sk(ts, ticket_id) if space_id else None,
+            "gsi_space_sk": _updated_index_sk(ts, resolved_ticket_id) if space_id else None,
             "gsi_space_status_pk": _space_status_index_pk(space_id, "open") if space_id else None,
-            "gsi_space_status_sk": _updated_index_sk(ts, ticket_id) if space_id else None,
+            "gsi_space_status_sk": _updated_index_sk(ts, resolved_ticket_id) if space_id else None,
             "gsi_space_assignee_pk": _space_assignee_index_pk(space_id, "unassigned") if space_id else None,
-            "gsi_space_assignee_sk": _updated_index_sk(ts, ticket_id) if space_id else None,
+            "gsi_space_assignee_sk": _updated_index_sk(ts, resolved_ticket_id) if space_id else None,
         }
         self._table.put_item(Item={k: v for k, v in header.items() if v is not None})
         self._table.put_item(Item={
-            "pk": _ticket_pk(ticket_id),
+            "pk": _ticket_pk(resolved_ticket_id),
             "sk": _msg_sk(ts, message_id),
             "entity_type": "ticket_message",
-            "ticket_id": ticket_id,
+            "ticket_id": resolved_ticket_id,
             "message_id": message_id,
             "sender_sub": owner_sub,
             "sender_role": "user",
@@ -263,16 +278,16 @@ class TicketStore:
             "email_alert_queued_for": [],
         })
         self._table.put_item(Item={
-            "pk": _ticket_pk(ticket_id),
+            "pk": _ticket_pk(resolved_ticket_id),
             "sk": _act_sk(ts, activity_id),
             "entity_type": "ticket_activity",
-            "ticket_id": ticket_id,
+            "ticket_id": resolved_ticket_id,
             "activity_id": activity_id,
             "activity_type": "ticket_opened",
             "actor_sub": owner_sub,
             "created_at": ts,
         })
-        return self.get_ticket(ticket_id) or {}
+        return self.get_ticket(resolved_ticket_id) or {}
 
     def _query_partition_prefix(self, *, ticket_id: str, sk_prefix: str) -> list[dict[str, Any]]:
         resp = self._table.query(
@@ -292,6 +307,8 @@ class TicketStore:
             "ticket_id": header["ticket_id"],
             "subject": header.get("subject", ""),
             "owner_sub": header.get("owner_sub", ""),
+            "category": header.get("category"),
+            "metadata": header.get("metadata", {}),
             "status": header.get("status", "open"),
             "space_id": header.get("space_id"),
             "assigned_admin_sub": header.get("assigned_admin_sub"),
