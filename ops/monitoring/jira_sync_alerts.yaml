@@ -1,0 +1,74 @@
+version: 1
+service: jira_sync
+owner_team: ticketing_platform
+slo:
+  availability_percent: 99.5
+  webhook_acceptance_percent: 99.9
+  mirror_freshness_p95_seconds: 600
+  mirror_freshness_p99_seconds: 1800
+alerts:
+  - id: jira_webhook_auth_failure_spike
+    severity: p1
+    expr: |
+      (
+        sum(rate(jira_webhook_auth_failures_total[10m]))
+        /
+        clamp_min(sum(rate(jira_webhook_requests_total[10m])), 1)
+      ) > 0.05
+    for: 10m
+    labels:
+      category: webhook
+      runbook: docs/jira-sync-rollout-runbook.md
+    annotations:
+      summary: "Jira webhook auth failure spike"
+      description: "Auth failures exceed 5% for 10m. Check webhook signing secret and header normalization."
+
+  - id: jira_sync_terminal_failure_spike
+    severity: p1
+    expr: |
+      (
+        sum(rate(jira_sync_events_total{result="failed",error_code=~"jira_terminal_error|conflict_detected"}[15m]))
+        /
+        clamp_min(sum(rate(jira_sync_events_total[15m])), 1)
+      ) > 0.02
+    for: 15m
+    labels:
+      category: sync
+      runbook: docs/jira-sync-rollout-runbook.md
+    annotations:
+      summary: "Jira sync terminal failure spike"
+      description: "Terminal failure rate exceeds 2% for 15m."
+
+  - id: jira_queue_oldest_age_high
+    severity: p1
+    expr: max(jira_queue_oldest_age_seconds{queue=~"jira_webhook|jira_outbound"}) > 900
+    for: 10m
+    labels:
+      category: queue
+      runbook: docs/jira-sync-rollout-runbook.md
+    annotations:
+      summary: "Jira queue backlog is stuck"
+      description: "Oldest message age > 900s for 10m."
+
+  - id: jira_conflict_rate_spike
+    severity: p2
+    expr: |
+      sum(rate(jira_conflicts_detected_total[30m])) > (3 * sum(rate(jira_conflicts_detected_total[7d])))
+    for: 30m
+    labels:
+      category: conflicts
+      runbook: docs/jira-sync-rollout-runbook.md
+    annotations:
+      summary: "Jira conflict rate spike"
+      description: "Conflict rate is >3x baseline for 30m."
+
+  - id: jira_mirror_lag_p95_breach
+    severity: p2
+    expr: histogram_quantile(0.95, sum(rate(jira_mirror_incremental_lag_seconds_bucket[30m])) by (le, workspace_id)) > 900
+    for: 30m
+    labels:
+      category: mirror
+      runbook: docs/jira-sync-rollout-runbook.md
+    annotations:
+      summary: "Jira mirror lag P95 breach"
+      description: "P95 incremental mirror lag exceeds 15 minutes for 30m."

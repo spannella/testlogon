@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import json
+import time
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -9,6 +12,7 @@ from app.auth.deps import AuthenticatedUser, get_authenticated_user
 from app.auth.roles import Role, normalize_role
 from app.core.tables import T
 from app.services.alerts import audit_event
+from app.services.jira_ticket_sync_store import JiraTicketSyncStore
 from app.services.sessions import require_ui_session
 from app.services.tickets import STORE, TicketStateError
 from app.services.payment_incidents_store import DynamoPaymentIncidentRepository
@@ -66,8 +70,37 @@ class TicketEnvelope(BaseModel):
 
 
 class TicketListEnvelope(BaseModel):
-    items: list[TicketOut]
+    items: list["TicketListItemOut"]
     next_cursor: str | None = None
+
+
+class SyncFreshnessOut(BaseModel):
+    ingested_at: int | None = None
+    updated_at_remote: str | None = None
+    staleness_seconds: int | None = None
+    sync_state: str | None = None
+
+
+class TicketListItemOut(BaseModel):
+    ticket_id: str | None = None
+    external_issue_id: str | None = None
+    external_issue_key: str | None = None
+    subject: str
+    owner_sub: str | None = None
+    status: str
+    space_id: str | None = None
+    assigned_admin_sub: str | None = None
+    assigned_to_sub: str | None = None
+    assigned_by: str | None = None
+    assigned_at: int | None = None
+    created_at: int
+    updated_at: int
+    version: int | None = None
+    messages: list[TicketMessage] = []
+    activity: list[TicketActivity] = []
+    source: Literal["internal", "jira"]
+    project_key: str | None = None
+    sync_freshness: SyncFreshnessOut
 
 
 class TicketAdminSummary(BaseModel):
@@ -124,8 +157,100 @@ def _wrap_ticket(ticket: dict[str, Any]) -> TicketEnvelope:
     return TicketEnvelope(ticket=TicketOut.model_validate(ticket))
 
 
+def _ticket_list_item_from_internal(ticket: dict[str, Any]) -> TicketListItemOut:
+    return TicketListItemOut.model_validate(
+        {
+            **ticket,
+            "source": "internal",
+            "sync_freshness": {"sync_state": "not_applicable"},
+        }
+    )
+
+
+def _ticket_list_item_from_jira(mirror: dict[str, Any], now: int) -> TicketListItemOut:
+    ingested_at = int(mirror.get("ingested_at") or 0) or None
+    freshness = {
+        "ingested_at": ingested_at,
+        "updated_at_remote": mirror.get("updated_at_remote"),
+        "staleness_seconds": (max(0, now - ingested_at) if ingested_at else None),
+        "sync_state": "mirrored",
+    }
+    return TicketListItemOut.model_validate(
+        {
+            "external_issue_id": str(mirror.get("external_issue_id") or ""),
+            "external_issue_key": str(mirror.get("external_issue_key") or ""),
+            "subject": str(mirror.get("summary") or ""),
+            "status": str(mirror.get("status") or ""),
+            "created_at": int(mirror.get("ingested_at") or mirror.get("updated_at") or 0),
+            "updated_at": int(mirror.get("updated_at") or mirror.get("ingested_at") or 0),
+            "source": "jira",
+            "project_key": str(mirror.get("project_key") or "") or None,
+            "sync_freshness": freshness,
+        }
+    )
+
+
 def _wrap_ticket_list(payload: dict[str, Any]) -> TicketListEnvelope:
-    return TicketListEnvelope(items=[TicketOut.model_validate(item) for item in payload.get("tickets", [])], next_cursor=payload.get("next_cursor"))
+    now = int(time.time())
+    items: list[TicketListItemOut] = []
+    for item in payload.get("tickets", []):
+        if str(item.get("source") or "internal") == "jira":
+            items.append(_ticket_list_item_from_jira(item, now))
+        else:
+            items.append(_ticket_list_item_from_internal(item))
+    return TicketListEnvelope(items=items, next_cursor=payload.get("next_cursor"))
+
+
+def _encode_unified_cursor(*, updated_at: int, source: str, stable_id: str) -> str:
+    raw = json.dumps({"updated_at": int(updated_at), "source": source, "stable_id": stable_id}, separators=(",", ":")).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("utf-8")
+
+
+def _decode_unified_cursor(cursor: str | None) -> dict[str, Any] | None:
+    if not cursor:
+        return None
+    try:
+        raw = base64.urlsafe_b64decode(cursor.encode("utf-8")).decode("utf-8")
+        value = json.loads(raw)
+        if isinstance(value, dict):
+            return value
+    except Exception:
+        return None
+    return None
+
+
+def _sort_unified_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _stable_id(item: dict[str, Any]) -> str:
+        return str(item.get("ticket_id") or item.get("external_issue_id") or "")
+
+    return sorted(
+        items,
+        key=lambda item: (
+            -int(item.get("updated_at") or 0),
+            str(item.get("source") or "internal"),
+            _stable_id(item),
+        ),
+    )
+
+
+def _apply_unified_cursor(items: list[dict[str, Any]], cursor: str | None) -> list[dict[str, Any]]:
+    token = _decode_unified_cursor(cursor)
+    if not token:
+        return items
+    cursor_updated_at = int(token.get("updated_at") or 0)
+    cursor_source = str(token.get("source") or "")
+    cursor_id = str(token.get("stable_id") or "")
+    out: list[dict[str, Any]] = []
+    for item in items:
+        key = (
+            -int(item.get("updated_at") or 0),
+            str(item.get("source") or "internal"),
+            str(item.get("ticket_id") or item.get("external_issue_id") or ""),
+        )
+        cursor_key = (-cursor_updated_at, cursor_source, cursor_id)
+        if key > cursor_key:
+            out.append(item)
+    return out
 
 
 def _ticket_or_404(ticket_id: str) -> dict:
@@ -177,6 +302,13 @@ def create_ticket(
 @router.get("", response_model=TicketListEnvelope, responses=_error_responses())
 def list_tickets(
     status: Literal["open", "in_progress", "waiting_on_user", "done"] | None = None,
+    source: Literal["internal", "jira", "unified"] = "internal",
+    workspace_id: str | None = None,
+    jira_project_key: str | None = None,
+    jira_status: str | None = None,
+    jira_assignee_account_id: str | None = None,
+    jira_reporter_account_id: str | None = None,
+    jira_issue_key: str | None = None,
     assignee_admin_sub: str | None = None,
     owner_sub: str | None = None,
     cursor: str | None = None,
@@ -184,6 +316,77 @@ def list_tickets(
     _ctx: dict[str, str] = Depends(require_ui_session),
     user: AuthenticatedUser = Depends(get_authenticated_user),
 ):
+    if source in {"jira", "unified"} and not _is_admin(user):
+        _raise(403, "admin_role_required", "admin role required")
+    if source in {"jira", "unified"} and not (workspace_id or "").strip():
+        _raise(400, "workspace_id_required", "workspace_id is required for jira and unified source filters")
+
+    if source == "jira":
+        repo = JiraTicketSyncStore()
+        mirrors = repo.list_issue_mirrors_for_workspace(workspace_id=str(workspace_id), limit=200)
+        filtered = []
+        for row in mirrors:
+            if jira_project_key and str(row.get("project_key") or "") != jira_project_key:
+                continue
+            if jira_status and str(row.get("status") or "") != jira_status:
+                continue
+            if jira_assignee_account_id and str(row.get("assignee_account_id") or "") != jira_assignee_account_id:
+                continue
+            if jira_reporter_account_id and str(row.get("reporter_account_id") or "") != jira_reporter_account_id:
+                continue
+            if jira_issue_key and str(row.get("external_issue_key") or "") != jira_issue_key:
+                continue
+            filtered.append({**row, "source": "jira"})
+        sorted_rows = _sort_unified_items(filtered)
+        page_rows = _apply_unified_cursor(sorted_rows, cursor)
+        page_items = page_rows[:limit]
+        next_cursor = None
+        if len(page_rows) > limit and page_items:
+            last = page_items[-1]
+            next_cursor = _encode_unified_cursor(
+                updated_at=int(last.get("updated_at") or 0),
+                source="jira",
+                stable_id=str(last.get("external_issue_id") or ""),
+            )
+        return _wrap_ticket_list({"tickets": page_items, "next_cursor": next_cursor})
+
+    if source == "unified":
+        repo = JiraTicketSyncStore()
+        mirrors = repo.list_issue_mirrors_for_workspace(workspace_id=str(workspace_id), limit=200)
+        jira_rows = []
+        for row in mirrors:
+            if jira_project_key and str(row.get("project_key") or "") != jira_project_key:
+                continue
+            if jira_status and str(row.get("status") or "") != jira_status:
+                continue
+            if jira_assignee_account_id and str(row.get("assignee_account_id") or "") != jira_assignee_account_id:
+                continue
+            if jira_reporter_account_id and str(row.get("reporter_account_id") or "") != jira_reporter_account_id:
+                continue
+            if jira_issue_key and str(row.get("external_issue_key") or "") != jira_issue_key:
+                continue
+            jira_rows.append({**row, "source": "jira"})
+        internal_rows = STORE.list_tickets(
+            limit=100,
+            cursor=None,
+            status=status,
+            assignee_sub=(assignee_admin_sub or "").strip() or None,
+            owner_sub=(owner_sub or "").strip() or None,
+        ).get("tickets", [])
+        combined = [*[{**item, "source": "internal"} for item in internal_rows], *jira_rows]
+        sorted_rows = _sort_unified_items(combined)
+        page_rows = _apply_unified_cursor(sorted_rows, cursor)
+        page_items = page_rows[:limit]
+        next_cursor = None
+        if len(page_rows) > limit and page_items:
+            last = page_items[-1]
+            next_cursor = _encode_unified_cursor(
+                updated_at=int(last.get("updated_at") or 0),
+                source=str(last.get("source") or "internal"),
+                stable_id=str(last.get("ticket_id") or last.get("external_issue_id") or ""),
+            )
+        return _wrap_ticket_list({"tickets": page_items, "next_cursor": next_cursor})
+
     if _is_admin(user):
         payload = STORE.list_tickets(
             limit=limit,

@@ -402,6 +402,9 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": S.tickets_space_status_index_name, "partition_key": "gsi_space_status_pk", "sort_key": "gsi_space_status_sk"},
                 {"index_name": S.tickets_space_assignee_index_name, "partition_key": "gsi_space_assignee_pk", "sort_key": "gsi_space_assignee_sk"},
                 {"index_name": S.tickets_member_spaces_index_name, "partition_key": "gsi_member_pk", "sort_key": "gsi_member_sk"},
+                {"index_name": S.tickets_jira_workspace_index_name, "partition_key": "gsi_jira_workspace_pk", "sort_key": "gsi_jira_workspace_sk"},
+                {"index_name": S.tickets_jira_issue_index_name, "partition_key": "gsi_jira_issue_pk", "sort_key": "gsi_jira_issue_sk"},
+                {"index_name": S.tickets_jira_sync_state_index_name, "partition_key": "gsi_jira_sync_state_pk", "sort_key": "gsi_jira_sync_state_sk"},
             ],
         ),
         # Messaging extended tables (from PR 127 compliance/visibility features)

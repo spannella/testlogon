@@ -22,6 +22,7 @@ import {
   type Ticket,
   type TicketStatus,
 } from "@/api/endpoints/tickets";
+import { JiraLinkedPanel } from "./JiraLinkedPanel";
 
 const POLL_MS = 15000;
 
@@ -274,6 +275,8 @@ export default function TicketsPage() {
                   <Textarea rows={3} value={replyBody} onChange={(e) => setReplyBody(e.target.value)} placeholder="Reply to ticket..." />
                   <Button onClick={() => replyMut.mutate()} disabled={!replyBody.trim() || replyMut.isPending}>Send reply</Button>
                 </div>
+
+                <JiraLinkedPanel ticketId={selectedTicket.ticket_id} currentTicket={selectedTicket as unknown as Record<string, unknown>} />
               </>
             ) : (
               <p className="text-sm text-muted-foreground">No ticket selected.</p>

@@ -209,3 +209,281 @@
 **Acceptance criteria:**
 - Load tests meet defined sync throughput/latency targets.
 - Hardening changes are documented with before/after metrics.
+# Jira ↔ Internal Ticketing Sync — Implementation Tickets
+
+### JTS-001: Finalize Jira integration API contract
+**Description:** Define and freeze request/response schemas for Jira connect, callback, project discovery, link/unlink, sync status, and webhook endpoints.
+**Acceptance criteria:**
+- OpenAPI spec is updated with all Jira integration endpoints and error codes.
+- API contract includes pagination, filtering, and idempotency semantics.
+
+### JTS-002: Define Jira field mapping specification
+**Description:** Document canonical mapping between internal ticket fields and Jira fields (summary, description, status, assignee, priority, labels, comments).
+**Status:** Implemented (2026-04-05) via `docs/jira-field-mapping-spec.md`.
+**Acceptance criteria:**
+- Mapping spec includes data types, required/optional flags, and null-handling rules.
+- Status and priority mapping strategy is explicitly defined per workspace/project.
+
+### JTS-003: Create DB migration plan for Jira entities
+**Description:** Author migration design for `jira_connections`, `ticket_external_links`, `jira_issue_mirror`, and `ticket_sync_events` entities using current storage strategy.
+**Status:** Implemented (2026-04-05) via `docs/jira-db-migration-plan.md`.
+**Acceptance criteria:**
+- Migration plan includes forward and rollback procedures.
+- Retention and archival policy for sync event history is documented.
+
+### JTS-004: Add migration scripts for Jira persistence keys/indexes
+**Description:** Implement migration scripts (or infra updates) needed to provision Jira-related indexes and entity keys in all environments.
+**Status:** Implemented (2026-04-05) via `scripts/migrations/20260405_jira_ticket_indexes_migration.py` and `scripts/verify_jira_ticket_indexes.py`.
+**Acceptance criteria:**
+- Migrations apply cleanly in local, staging, and production dry-run.
+- Migration verification script confirms required indexes exist.
+
+### JTS-005: Implement Jira integration health startup checks
+**Description:** Add startup checks that validate required Jira integration environment configuration when feature flags are enabled.
+**Status:** Implemented (2026-04-05) via `app/services/jira_feature_flags.py` + `tests/test_jira_feature_flags.py`.
+**Acceptance criteria:**
+- Service fails fast on invalid Jira integration config with actionable error messages.
+- Startup checks are covered by unit tests.
+
+### JTS-006: Build OAuth connect initiation endpoint
+**Description:** Implement endpoint that starts Jira OAuth flow and safely stores correlation state.
+**Status:** Implemented (2026-04-05) via `app/routers/jira_integrations.py` + `app/services/jira_oauth.py`.
+**Acceptance criteria:**
+- Endpoint returns redirect URL with CSRF-safe state value.
+- Invalid/missing OAuth config returns structured 4xx/5xx errors.
+
+### JTS-007: Implement OAuth callback and token exchange
+**Description:** Implement callback handler that exchanges code for token and persists secure references.
+**Status:** Implemented (2026-04-05) via `app/routers/jira_integrations.py` + `app/services/jira_oauth_exchange.py`.
+**Acceptance criteria:**
+- Successful callback creates/updates Jira connection metadata.
+- Expired/invalid codes return deterministic error responses.
+
+### JTS-008: Implement token refresh and revocation handling
+**Description:** Add token refresh flow and revoke/disconnect behavior for broken credentials.
+**Status:** Implemented (2026-04-05) via `app/services/jira_token_lifecycle.py` + `app/services/jira_oauth_exchange.py`.
+**Acceptance criteria:**
+- Access token refresh occurs transparently when expired.
+- Invalid refresh token transitions connection state to degraded/disconnected.
+
+### JTS-009: Add Jira site/project discovery endpoint
+**Description:** Implement endpoint to list available Jira projects for connected user/site.
+**Status:** Implemented (2026-04-05) via `app/services/jira_projects.py` + `app/routers/jira_integrations.py`.
+**Acceptance criteria:**
+- Endpoint supports pagination and permission-aware filtering.
+- Errors from Jira API are normalized to internal error model.
+
+### JTS-010: Implement Jira API client with retries and rate-limit handling
+**Description:** Build typed Jira client wrapper with timeout, retry, and 429 backoff policies.
+**Status:** Implemented (2026-04-05) via `app/services/jira_api_client.py` and integration in `app/services/jira_projects.py`.
+**Acceptance criteria:**
+- Retry behavior is bounded and configurable.
+- Metrics for request count, latency, retries, and failures are emitted.
+
+### JTS-011: Add connection storage repository methods
+**Description:** Implement repository methods for creating, reading, and listing Jira connection records.
+**Status:** Implemented (2026-04-05) via `app/services/jira_ticket_sync_store.py` + `tests/test_jira_ticket_sync_store.py`.
+**Acceptance criteria:**
+- Repository supports lookup by workspace and user.
+- CRUD behavior is covered by unit tests.
+
+### JTS-012: Add external link repository methods
+**Description:** Implement repository methods for creating, listing, and deleting links between internal tickets and Jira issues.
+**Status:** Implemented (2026-04-05) via `app/services/jira_ticket_sync_store.py` + `tests/test_jira_ticket_sync_store.py`.
+**Acceptance criteria:**
+- Links can be queried by internal ticket and external issue key/id.
+- Duplicate active link constraints are enforced.
+
+### JTS-013: Add Jira issue mirror repository methods
+**Description:** Implement repository methods for storing and retrieving mirrored Jira issue snapshots.
+**Status:** Implemented (2026-04-05) via `app/services/jira_ticket_sync_store.py` + `tests/test_jira_ticket_sync_store.py`.
+**Acceptance criteria:**
+- Mirror upsert is idempotent by external issue id.
+- Mirror records include remote update timestamp and ingestion timestamp.
+
+### JTS-014: Add immutable sync event repository methods
+**Description:** Implement append-only sync event persistence for inbound/outbound operations.
+**Status:** Implemented (2026-04-05) via `app/services/jira_ticket_sync_store.py` + `tests/test_jira_ticket_sync_store.py`.
+**Acceptance criteria:**
+- Events are immutable and queryable by ticket/workspace/time.
+- Event records include direction, outcome, trace id, and error code.
+
+### JTS-015: Implement Jira webhook endpoint skeleton
+**Description:** Add webhook endpoint for Jira events with payload validation and dispatch to processing queue.
+**Status:** Implemented (2026-04-05) via `app/routers/jira_integrations.py`, `app/services/jira_webhook.py`, and `tests/test_jira_webhook.py`.
+**Acceptance criteria:**
+- Unsupported event types are acknowledged and logged safely.
+- Valid events are enqueued with trace metadata.
+
+### JTS-016: Add webhook signature verification and replay protection
+**Description:** Validate webhook signatures/secrets and reject replayed payloads.
+**Status:** Implemented (2026-04-05) via `app/services/jira_webhook.py`, `app/routers/jira_integrations.py`, and `tests/test_jira_webhook.py`.
+**Acceptance criteria:**
+- Invalid signatures return 401/403 and are audited.
+- Duplicate webhook deliveries are deduplicated by replay protection keys.
+
+### JTS-017: Build mirror ingestion worker (initial backfill)
+**Description:** Implement worker that performs initial Jira issue import for selected projects.
+**Status:** Implemented (2026-04-05) via `app/services/jira_mirror_backfill.py`, `app/services/jira_ticket_sync_store.py`, and tests.
+**Acceptance criteria:**
+- Worker imports all pages for configured projects.
+- Progress checkpoints allow resume after failure.
+
+### JTS-018: Build mirror ingestion worker (incremental sync)
+**Description:** Implement incremental polling based on Jira updated timestamp.
+**Status:** Implemented (2026-04-05) via `app/services/jira_mirror_incremental.py`, `app/services/jira_ticket_sync_store.py`, and tests.
+**Acceptance criteria:**
+- Incremental sync fetches only changed issues since last checkpoint.
+- Polling cadence is configurable and observable.
+
+### JTS-019: Implement ticket link creation API (create Jira issue)
+**Description:** Add endpoint to create a new Jira issue from an internal ticket and persist link metadata.
+**Status:** Implemented (2026-04-05) via `app/routers/jira_integrations.py`, `app/services/jira_link_creation.py`, and tests.
+**Acceptance criteria:**
+- Endpoint creates Jira issue and local link atomically or compensates on failure.
+- Returned payload includes Jira key/id and sync status.
+
+### JTS-020: Implement ticket link creation API (link existing Jira issue)
+**Description:** Add endpoint to link an existing Jira issue to an internal ticket.
+**Status:** Implemented (2026-04-05) via `app/routers/jira_integrations.py`, `app/services/jira_link_creation.py`, and tests.
+**Acceptance criteria:**
+- Endpoint validates external issue existence and permissions.
+- Link operation is idempotent for repeated requests.
+
+### JTS-021: Implement unlink API and historical audit retention
+**Description:** Add endpoint to unlink Jira issue from internal ticket while retaining audit history.
+**Status:** Implemented (2026-04-05) via `app/routers/jira_integrations.py`, `app/services/jira_link_creation.py`, and `app/services/jira_ticket_sync_store.py`.
+**Acceptance criteria:**
+- Unlink deactivates sync without deleting historical events.
+- Unlink action is captured in audit trail.
+
+### JTS-022: Implement outbound sync producer on ticket mutations
+**Description:** Emit outbound sync tasks for mapped field changes on linked tickets.
+**Status:** Implemented (2026-04-05) via `app/services/jira_outbound_sync.py` + `tests/test_jira_outbound_sync.py`.
+**Acceptance criteria:**
+- Producer emits tasks for create/update/status/comment changes.
+- Producer skips non-linked tickets and unchanged mapped fields.
+
+### JTS-023: Implement outbound sync worker with idempotency
+**Description:** Process outbound tasks and update Jira with dedupe safeguards.
+**Status:** Implemented (2026-04-05) via `app/services/jira_outbound_worker.py` + `tests/test_jira_outbound_worker.py`.
+**Acceptance criteria:**
+- Worker applies idempotency keys to prevent duplicate updates.
+- Retryable and terminal failures are classified and logged.
+
+### JTS-024: Implement inbound sync apply engine
+**Description:** Apply inbound Jira deltas to linked internal tickets based on mapping rules.
+**Status:** Implemented (2026-04-05) via `app/services/jira_inbound_apply.py`, `app/services/jira_ticket_sync_store.py`, and tests.
+**Acceptance criteria:**
+- Inbound updates modify mapped internal fields correctly.
+- Apply engine updates sync status and last-synced metadata.
+
+### JTS-025: Implement sync loop prevention metadata handling
+**Description:** Add origin/update token tracking to ignore webhook echoes of local outbound writes.
+**Status:** Implemented (2026-04-05) via `app/services/jira_outbound_worker.py`, `app/services/jira_inbound_apply.py`, and `app/services/jira_ticket_sync_store.py`.
+**Acceptance criteria:**
+- Echoed updates are skipped deterministically.
+- Non-echo updates continue through apply pipeline.
+
+### JTS-026: Implement conflict detection and persistence model
+**Description:** Detect concurrent edits to same mapped field and persist conflict payload.
+**Status:** Implemented (2026-04-05) via `app/services/jira_inbound_apply.py`, `app/services/jira_ticket_sync_store.py`, and tests.
+**Acceptance criteria:**
+- Conflict records include both local and remote candidate values.
+- Ticket/link state transitions to conflict when detected.
+
+### JTS-027: Implement conflict resolution API actions
+**Description:** Add API endpoints/actions to resolve conflicts by choosing internal or Jira value.
+**Status:** Implemented (2026-04-05) via `app/routers/jira_integrations.py`, `app/services/jira_conflict_resolution.py`, and tests.
+**Acceptance criteria:**
+- `keep_internal` and `keep_jira` actions are both supported.
+- Conflict resolution triggers follow-up sync and clears conflict state.
+
+### JTS-028: Extend ticket list API for source filtering
+**Description:** Add `source=internal|jira|unified` and Jira-specific filters to ticket list endpoint.
+**Status:** Implemented (2026-04-05) via `app/routers/tickets.py` and route tests.
+**Acceptance criteria:**
+- Unified listing supports stable sorting and pagination.
+- Response includes source marker and sync freshness metadata.
+
+### JTS-029: Add sync status endpoint for ticket details
+**Description:** Implement endpoint returning link state, last sync info, and active conflict details.
+**Acceptance criteria:**
+- Endpoint returns normalized sync-state enum.
+- Missing linkage returns explicit not-linked status.
+
+### JTS-030: Build frontend Jira integration settings page
+**Description:** Implement UI for connect/disconnect, project preferences, and integration status.
+**Status:** Implemented (2026-04-05) via Jira integration settings UI, Jira settings API endpoints, and persistence for project preferences.
+**Acceptance criteria:**
+- Users can initiate OAuth and view connection state from settings UI.
+- Validation and error states are clearly surfaced.
+
+### JTS-031: Add frontend ticket source filters and badges
+**Description:** Update ticket list UI with Internal/Jira/Unified filters and source badges.
+**Acceptance criteria:**
+- Source filter state persists across navigation.
+- Jira and unified rows render consistently and accessibly.
+
+### JTS-032: Add frontend linked Jira panel on ticket detail
+**Description:** Display linked Jira issue metadata and sync status in ticket details.
+**Status:** Implemented (2026-04-05) via `frontend/src/pages/tickets/JiraLinkedPanel.tsx`, ticket detail wiring, and sync-status enrichment in `app/routers/jira_integrations.py`.
+**Acceptance criteria:**
+- Detail panel shows Jira key, status, and last sync timestamp.
+- Link/unlink actions are available with confirmation flows.
+
+### JTS-033: Add frontend conflict resolution modal
+**Description:** Implement UI modal for reviewing and resolving sync conflicts.
+**Status:** Implemented (2026-04-05) via conflict-resolution modal in Jira ticket panel and sync-status conflict payload exposure.
+**Acceptance criteria:**
+- Modal presents both internal and Jira values for conflicting fields.
+- Resolution action updates UI state without full-page reload.
+
+### JTS-034: Add backend unit tests for Jira client and mapping logic
+**Description:** Add focused unit coverage for Jira client retries, mapping transforms, and validation helpers.
+**Status:** Implemented (2026-04-05) via expanded unit coverage in Jira API client, mapping helpers, and link validation tests.
+**Acceptance criteria:**
+- Tests cover success, timeout, 429, and non-retryable error paths.
+- Mapping tests cover empty/null/edge-case values.
+
+### JTS-035: Add backend integration tests for OAuth + webhook flows
+**Description:** Add integration tests for OAuth callback lifecycle and webhook verification/apply behavior.
+**Status:** Implemented (2026-04-05) via integration tests for callback persistence, webhook signature+replay handling, and inbound apply/link metadata updates.
+**Acceptance criteria:**
+- Tests validate signature verification and replay rejection.
+- End-to-end inbound path updates mirrored/linked records as expected.
+
+### JTS-036: Add backend integration tests for bidirectional sync lifecycle
+**Description:** Add tests for create link, outbound updates, inbound updates, and conflict transitions.
+**Status:** Implemented (2026-04-05) via lifecycle integration tests covering create-link, outbound worker, inbound apply, conflict detect, and conflict resolve.
+**Acceptance criteria:**
+- Test suite verifies both outbound and inbound direction correctness.
+- Conflict detection and resolution paths are covered.
+
+### JTS-037: Add frontend tests for Jira settings and list/detail UX
+**Description:** Add component/integration tests for settings page, source filters, linked panel, and conflict modal.
+**Status:** Implemented (2026-04-05) via new frontend component tests for Jira settings and ticket detail linked panel/conflict modal UX.
+**Acceptance criteria:**
+- Tests cover loading, empty, success, and error states.
+- Key flows pass in CI test environment.
+
+### JTS-038: Add migration/deployment runbook for Jira sync rollout
+**Description:** Create runbook describing migration sequence, feature-flag rollout, and rollback steps.
+**Status:** Implemented (2026-04-05) via `docs/jira-sync-rollout-runbook.md` with preflight, rollout, rollback, and incident response playbooks.
+**Acceptance criteria:**
+- Runbook includes preflight checks and rollback procedures.
+- On-call/operator playbook includes incident actions.
+
+### JTS-039: Add observability dashboards and alerts for sync pipeline
+**Description:** Add dashboards and alerts for webhook throughput, sync latency, failures, conflicts, and queue depth.
+**Status:** Implemented (2026-04-05) via `docs/jira-observability-dashboards-and-alerts.md` and `ops/monitoring/jira_sync_alerts.yaml`.
+**Acceptance criteria:**
+- Alert thresholds align with agreed SLO/error budget.
+- Dashboards include drill-down dimensions by workspace and direction.
+
+### JTS-040: Execute staged rollout and GA readiness review
+**Description:** Roll out by environment/workspace cohorts and perform GA decision review using defined success metrics.
+**Status:** Implemented (2026-04-05) via staged rollout success gates in `docs/jira-sync-rollout-runbook.md` and GA sign-off template in `docs/jira-ga-readiness-review.md`.
+**Acceptance criteria:**
+- Pilot cohort meets sync latency and failure rate targets.
+- GA checklist is signed off by engineering, security, and support owners.
