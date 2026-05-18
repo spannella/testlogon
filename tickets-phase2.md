@@ -793,3 +793,242 @@
 **Acceptance criteria:**
 - Scorecard includes explicit metrics and owner approvals.
 - GA enablement requires completed sign-off and rollback plan reference.
+### JTS-101: Add webhook policy outcome metrics and alert hooks
+**Description:** Instrument webhook source-IP policy decisions (allow, deny, monitor, misconfigured) with labeled metrics and alert metadata.
+**Acceptance criteria:**
+- Metrics capture outcome and reason dimensions without high-cardinality labels.
+- Alert rule examples are provided for deny and misconfigured spikes.
+
+### JTS-102: Implement workspace-scoped webhook policy overrides
+**Description:** Add workspace-level overrides for webhook policy mode and allowlist with strict validation.
+**Acceptance criteria:**
+- Override API validates CIDR syntax and policy mode values.
+- Override changes are audited with actor, reason, and before/after values.
+
+### JTS-103: Build effective-policy resolver for webhook security
+**Description:** Implement deterministic resolution of global defaults vs workspace overrides for webhook source policy.
+**Acceptance criteria:**
+- Resolver behavior is unit-tested across all override combinations.
+- Effective policy is exposed in diagnostics response for operators.
+
+### JTS-104: Add webhook authentication failure taxonomy conformance tests
+**Description:** Ensure all webhook auth failures map to documented error codes and response schema.
+**Acceptance criteria:**
+- Contract tests validate code/message pairs for each auth failure type.
+- CI fails when undocumented webhook auth codes are emitted.
+
+### JTS-105: Implement dead-letter queue replay governance controls
+**Description:** Add approval workflow and replay guardrails for DLQ event reprocessing.
+**Acceptance criteria:**
+- Replay requires explicit scope, owner, and reason.
+- Replay job emits completion report with success/failure breakdown.
+
+### JTS-106: Add retry budget exhaustion triage flow
+**Description:** Route jobs that exceed retry budgets into triage queues with actionable metadata.
+**Acceptance criteria:**
+- Triage records include last error family and retry history.
+- Operators can filter and bulk-triage exhausted jobs by workspace.
+
+### JTS-107: Implement mirror checkpoint consistency verifier
+**Description:** Verify checkpoint monotonicity and cursor consistency before incremental runs.
+**Acceptance criteria:**
+- Inconsistent checkpoints are flagged and blocked from unsafe continuation.
+- Recovery guidance includes nearest valid checkpoint and replay range.
+
+### JTS-108: Add selective remirror orchestration API
+**Description:** Expose API to trigger scoped remirror jobs for specific workspaces/projects/issues.
+**Acceptance criteria:**
+- Scoped remirror requests validate ownership and project permissions.
+- Job status endpoint reports progress and reconciliation summary.
+
+### JTS-109: Implement outbound payload diff minimization
+**Description:** Build field-level diffing to send minimal outbound Jira updates and reduce update conflicts.
+**Acceptance criteria:**
+- Unchanged fields are omitted from outbound payloads.
+- Diff logic is tested for nested field and array structures.
+
+### JTS-110: Add idempotency-key lifecycle observability
+**Description:** Track idempotency-key creation, reuse, and collision events across outbound pipeline.
+**Acceptance criteria:**
+- Metrics show key hit/miss/collision rates by direction.
+- Collision events include traceable correlation identifiers.
+
+### JTS-111: Implement worker fairness across workspace cohorts
+**Description:** Ensure sync workers process tasks fairly across workspace cohorts under load.
+**Acceptance criteria:**
+- Fair scheduling policy is configurable and benchmarked.
+- Saturation tests show no cohort starvation over sustained load.
+
+### JTS-112: Add adaptive concurrency controls for sync workers
+**Description:** Auto-tune worker concurrency from queue age/depth and processing latency signals.
+**Acceptance criteria:**
+- Concurrency scales up/down within safe configured bounds.
+- Scaling decisions are logged with reason codes.
+
+### JTS-113: Implement conflict severity scoring and routing
+**Description:** Assign severity scores to conflicts and route high-severity conflicts for prioritized handling.
+**Acceptance criteria:**
+- Severity score is persisted with each conflict record.
+- Routing rules prioritize high-severity conflicts in triage views.
+
+### JTS-114: Add conflict resolution preview endpoint
+**Description:** Provide non-mutating preview endpoint for keep-internal/keep-jira conflict outcomes.
+**Acceptance criteria:**
+- Preview response includes field-level before/after values.
+- Preview endpoint never mutates link or ticket state.
+
+### JTS-115: Implement optimistic-lock retry utility for sync store writes
+**Description:** Centralize optimistic-lock retry behavior for concurrent link/sync metadata updates.
+**Acceptance criteria:**
+- Retry helper uses bounded attempts with jitter.
+- Store callers adopt helper and emit lock-collision metrics.
+
+### JTS-116: Add Jira project permission preflight cache
+**Description:** Cache project permission checks to reduce repeated discovery latency during enablement.
+**Acceptance criteria:**
+- Cached permission checks expire safely on configurable TTL.
+- Stale cache invalidation can be triggered by admin action.
+
+### JTS-117: Implement OAuth scope drift alarms
+**Description:** Detect and alert when granted Jira OAuth scopes fall below required minimum.
+**Acceptance criteria:**
+- Scope drift transitions connection health to degraded state.
+- Alerts include missing scopes and impacted capabilities.
+
+### JTS-118: Add token refresh jitter and backpressure
+**Description:** Prevent token refresh stampedes by introducing jitter and in-flight refresh backpressure.
+**Acceptance criteria:**
+- Refresh jobs are distributed over configured jitter windows.
+- Backpressure limits concurrent refreshes per tenant/workspace.
+
+### JTS-119: Implement secret rotation rehearsal automation
+**Description:** Automate periodic rehearsals for webhook and OAuth secret rotations.
+**Acceptance criteria:**
+- Rehearsals produce pass/fail artifacts and rollback timing.
+- Rehearsal outcomes are stored for audit and readiness reporting.
+
+### JTS-120: Add SIEM export mapping for Jira security events
+**Description:** Normalize Jira integration security events to SIEM schema contracts.
+**Acceptance criteria:**
+- SIEM payload mapping is contract-tested in CI.
+- Export failures are retried and surfaced on security dashboard.
+
+### JTS-121: Implement SLO burn-rate deployment gate
+**Description:** Block cohort promotions when sync SLO burn-rate exceeds policy thresholds.
+**Acceptance criteria:**
+- Promotion workflow enforces burn-rate checks automatically.
+- Override path requires owner approval and incident linkage.
+
+### JTS-122: Add queue anomaly early-warning detector
+**Description:** Detect anomalous queue growth trends before critical backlog thresholds are breached.
+**Acceptance criteria:**
+- Detector emits warnings with confidence score and trend window.
+- False-positive suppression strategy is documented and configurable.
+
+### JTS-123: Implement synthetic full-path canaries
+**Description:** Run synthetic canaries through webhook, outbound, inbound, and conflict flows per environment.
+**Acceptance criteria:**
+- Canary failures capture traces/logs and alert on-call.
+- Canary health history is visible by environment and workspace cohort.
+
+### JTS-124: Add multi-project isolation integration tests
+**Description:** Validate that one Jira project’s failures do not block other projects within same workspace.
+**Acceptance criteria:**
+- Tests cover isolated failure and independent recovery paths.
+- Health APIs surface project-scoped status independently.
+
+### JTS-125: Implement high-cardinality pagination stress harness
+**Description:** Stress-test sync history pagination under high event cardinality and concurrent writes.
+**Acceptance criteria:**
+- Cursor stability is maintained under concurrent ingest.
+- Performance report includes p95/p99 latency for key endpoints.
+
+### JTS-126: Add attachment quarantine and review workflow
+**Description:** Quarantine risky synced attachments and provide operator review/approval actions.
+**Acceptance criteria:**
+- Quarantined artifacts are excluded from default user views.
+- Review decisions are audited with actor and rationale.
+
+### JTS-127: Implement sensitive-field mirror redaction policies
+**Description:** Enforce field-level redaction policies for sensitive Jira data before mirror persistence.
+**Acceptance criteria:**
+- Redacted fields are never written to mirror storage.
+- Redaction events are counted and included in audit trails.
+
+### JTS-128: Add signed compliance audit export bundles
+**Description:** Export sync audit logs in signed, tamper-evident bundles for compliance workflows.
+**Acceptance criteria:**
+- Export supports workspace/time-range/event filters.
+- Integrity verification utility validates bundle signatures and manifest hashes.
+
+### JTS-129: Implement support triage console views
+**Description:** Build support-focused views for recent failures, conflict queues, and replay actions.
+**Acceptance criteria:**
+- Views support filter by workspace, error family, and severity.
+- Each failure row links to runbook remediation guidance.
+
+### JTS-130: Add customer-facing integration diagnostics summary
+**Description:** Provide redacted diagnostics summary endpoint for workspace admins.
+**Acceptance criteria:**
+- Endpoint enforces scoped permissions and strict rate limits.
+- Response includes actionable health hints without leaking sensitive data.
+
+### JTS-131: Implement deployment preflight verifier for Jira dependencies
+**Description:** Verify required queues, indexes, secrets, and feature flags before deployment proceeds.
+**Acceptance criteria:**
+- Deploy pipeline fails with actionable diagnostics when checks fail.
+- Preflight results include owner mapping for each failed dependency.
+
+### JTS-132: Add blue/green worker traffic shift automation
+**Description:** Automate progressive traffic shifting between old/new worker pools with rollback triggers.
+**Acceptance criteria:**
+- Shift supports cohort-based ramp percentages.
+- Rollback restores prior pool without event loss.
+
+### JTS-133: Implement migration rollback simulation suite
+**Description:** Simulate partial index migration failures and verify rollback playbook correctness.
+**Acceptance criteria:**
+- Simulations cover interrupted migration and mixed index state.
+- Verified rollback steps are reflected in runbook docs.
+
+### JTS-134: Add OpenAPI webhook error examples
+**Description:** Document concrete webhook auth/replay/source-policy error examples in OpenAPI.
+**Acceptance criteria:**
+- Examples cover all documented webhook auth error codes.
+- Contract tests validate example payload schema conformance.
+
+### JTS-135: Implement error catalog drift checker
+**Description:** Add CI checker to ensure runtime Jira error codes match documented taxonomy.
+**Acceptance criteria:**
+- CI fails for undocumented or deprecated runtime codes.
+- Report identifies source module and owner for each drift.
+
+### JTS-136: Add nightly end-to-end lifecycle regression suite
+**Description:** Execute nightly end-to-end Jira lifecycle tests from connect through unlink.
+**Acceptance criteria:**
+- Suite runs against isolated sandbox tenants and publishes artifacts.
+- Flaky scenarios are tracked with quarantine ownership.
+
+### JTS-137: Implement chaos test matrix for Jira dependency failures
+**Description:** Expand chaos tests for 429 floods, latency spikes, and intermittent Jira outages.
+**Acceptance criteria:**
+- Matrix validates correctness and recovery behavior per scenario.
+- Results include measured recovery time and backlog drain metrics.
+
+### JTS-138: Add long-running soak validation pipeline
+**Description:** Run 24h soak pipelines to validate stability, memory trends, and convergence.
+**Acceptance criteria:**
+- Soak output includes trend charts for latency, errors, and queue depth.
+- No sustained divergence or unbounded backlog growth is tolerated.
+
+### JTS-139: Implement incident timeline auto-assembly
+**Description:** Auto-generate incident timelines from metrics, logs, alerts, and deployment metadata.
+**Acceptance criteria:**
+- Timeline captures key events, mitigations, and decision points.
+- Timeline artifact is consumable by postmortem templates.
+
+### JTS-140: Add GA readiness scorecard and sign-off automation
+**Description:** Automate GA readiness scoring and required owner sign-offs for final release decisions.
+**Acceptance criteria:**
+- Scorecard aggregates reliability, security, support, and rollout metrics.
+- GA status remains blocked until all required sign-offs are recorded.

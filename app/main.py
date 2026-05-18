@@ -80,6 +80,9 @@ from app.services.provider_oauth import validate_google_drive_mount_oauth_config
 from app.services.filemanager_mount_reconcile import start_filemgr_mount_reconcile_task
 from app.services.api_usage_entitlements import enforce_api_package_entitlement_pre_request
 from app.services.calendar_integrations.registry import initialize_calendar_integration_registry
+from app.services.jira_feature_flags import validate_jira_integration_startup_config
+from app.routers.admin_jira_integration import router as admin_jira_integration_router
+from app.routers.jira_integrations import router as jira_integrations_router
 
 
 def _api_usage_metering_middleware():
@@ -202,6 +205,7 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", validate_startup_root_invariant)
     app.add_event_handler("startup", validate_google_drive_mount_oauth_configuration)
     app.add_event_handler("startup", lambda: setattr(app.state, "calendar_integration_registry", initialize_calendar_integration_registry()))
+    app.add_event_handler("startup", validate_jira_integration_startup_config)
     if _S.dev_mode:
         _dev_buckets = [b for b in [
             _S.filemgr_bucket,
@@ -229,6 +233,8 @@ def create_app() -> FastAPI:
     app.include_router(tickets_router)
     app.include_router(ticket_spaces_router)
     app.include_router(internal_devtools_router)
+    app.include_router(admin_jira_integration_router)
+    app.include_router(jira_integrations_router)
     app.include_router(browser_ssh_terminal_router)
     app.include_router(questionnaires_router)
     app.include_router(vnc_sessions_router)

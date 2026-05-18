@@ -315,6 +315,32 @@ class Settings:
     tickets_space_status_index_name: str = os.environ.get("TICKETS_SPACE_STATUS_INDEX_NAME", "space_status-updated_at-index")
     tickets_space_assignee_index_name: str = os.environ.get("TICKETS_SPACE_ASSIGNEE_INDEX_NAME", "space_assignee-updated_at-index")
     tickets_member_spaces_index_name: str = os.environ.get("TICKETS_MEMBER_SPACES_INDEX_NAME", "member_sub-space_id-index")
+    tickets_jira_workspace_index_name: str = os.environ.get("TICKETS_JIRA_WORKSPACE_INDEX_NAME", "jira_workspace-updated_at-index")
+    tickets_jira_issue_index_name: str = os.environ.get("TICKETS_JIRA_ISSUE_INDEX_NAME", "jira_issue-index")
+    tickets_jira_sync_state_index_name: str = os.environ.get("TICKETS_JIRA_SYNC_STATE_INDEX_NAME", "jira_sync_state-updated_at-index")
+
+    # Jira integration feature flags and guardrails
+    jira_sync_enabled: bool = os.environ.get("JIRA_SYNC_ENABLED", "false").lower() == "true"
+    jira_sync_read_enabled: bool = os.environ.get("JIRA_SYNC_READ_ENABLED", "false").lower() == "true"
+    jira_sync_outbound_enabled: bool = os.environ.get("JIRA_SYNC_OUTBOUND_ENABLED", "false").lower() == "true"
+    jira_sync_inbound_enabled: bool = os.environ.get("JIRA_SYNC_INBOUND_ENABLED", "false").lower() == "true"
+    jira_sync_outbound_kill_switch: bool = os.environ.get("JIRA_SYNC_OUTBOUND_KILL_SWITCH", "false").lower() == "true"
+    jira_sync_workspace_allowlist: str = os.environ.get("JIRA_SYNC_WORKSPACE_ALLOWLIST", "")
+    jira_sync_require_workspace_allowlist: bool = os.environ.get("JIRA_SYNC_REQUIRE_WORKSPACE_ALLOWLIST", "true").lower() == "true"
+    jira_sync_require_oauth_config: bool = os.environ.get("JIRA_SYNC_REQUIRE_OAUTH_CONFIG", "true").lower() == "true"
+    jira_sync_oauth_client_id: str = os.environ.get("JIRA_SYNC_OAUTH_CLIENT_ID", "")
+    jira_sync_oauth_client_secret_ref: str = os.environ.get("JIRA_SYNC_OAUTH_CLIENT_SECRET_REF", "")
+    jira_sync_oauth_client_secret_value: str = os.environ.get("JIRA_SYNC_OAUTH_CLIENT_SECRET_VALUE", "")
+    jira_sync_oauth_authorize_url: str = os.environ.get("JIRA_SYNC_OAUTH_AUTHORIZE_URL", "https://auth.atlassian.com/authorize")
+    jira_sync_oauth_token_url: str = os.environ.get("JIRA_SYNC_OAUTH_TOKEN_URL", "https://auth.atlassian.com/oauth/token")
+    jira_sync_oauth_resources_url: str = os.environ.get("JIRA_SYNC_OAUTH_RESOURCES_URL", "https://api.atlassian.com/oauth/token/accessible-resources")
+    jira_sync_oauth_audience: str = os.environ.get("JIRA_SYNC_OAUTH_AUDIENCE", "api.atlassian.com")
+    jira_sync_oauth_scopes: str = os.environ.get("JIRA_SYNC_OAUTH_SCOPES", "read:jira-work write:jira-work offline_access")
+    jira_sync_oauth_state_ttl_seconds: int = int(os.environ.get("JIRA_SYNC_OAUTH_STATE_TTL_SECONDS", "600"))
+    jira_api_base_url: str = os.environ.get("JIRA_API_BASE_URL", "https://api.atlassian.com")
+    jira_api_timeout_seconds: int = int(os.environ.get("JIRA_API_TIMEOUT_SECONDS", "15"))
+    jira_api_max_retries: int = int(os.environ.get("JIRA_API_MAX_RETRIES", "2"))
+    jira_api_backoff_base_seconds: float = float(os.environ.get("JIRA_API_BACKOFF_BASE_SECONDS", "0.25"))
 
     # Profile
     profile_table_name: str = os.environ.get("PROFILE_TABLE_NAME", "profiles")

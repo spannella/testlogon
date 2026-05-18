@@ -955,3 +955,104 @@ def test_space_reply_and_status_alert_fanout_targets_participants_assignee_and_c
     assert status.status_code == 200
     status_recipients = [c.args[1] for c in audit_status.call_args_list if c.args[0] == "ticket_status_changed"]
     assert set(status_recipients) == {"user-1", "user-2"}
+
+
+def test_admin_can_list_jira_source_with_filters_and_freshness_metadata(monkeypatch):
+    admin_client = _build_client(_user("admin-1", Role.ADMIN))
+
+    mirrors = [
+        {
+            "external_issue_id": "10001",
+            "external_issue_key": "PROJ-1",
+            "summary": "First",
+            "status": "To Do",
+            "project_key": "PROJ",
+            "assignee_account_id": "acct-1",
+            "reporter_account_id": "acct-r",
+            "ingested_at": 1_000,
+            "updated_at": 1_000,
+            "updated_at_remote": "2026-04-01T00:00:00Z",
+        },
+        {
+            "external_issue_id": "10002",
+            "external_issue_key": "OPS-1",
+            "summary": "Second",
+            "status": "Done",
+            "project_key": "OPS",
+            "assignee_account_id": "acct-2",
+            "reporter_account_id": "acct-r2",
+            "ingested_at": 2_000,
+            "updated_at": 2_000,
+            "updated_at_remote": "2026-04-02T00:00:00Z",
+        },
+    ]
+    monkeypatch.setattr(
+        "app.routers.tickets.JiraTicketSyncStore.list_issue_mirrors_for_workspace",
+        lambda self, *, workspace_id, limit=200: mirrors,
+    )
+
+    resp = admin_client.get(
+        "/tickets",
+        params={"source": "jira", "workspace_id": "ws_1", "jira_project_key": "PROJ", "jira_assignee_account_id": "acct-1"},
+    )
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert len(payload["items"]) == 1
+    item = payload["items"][0]
+    assert item["source"] == "jira"
+    assert item["external_issue_key"] == "PROJ-1"
+    assert item["sync_freshness"]["ingested_at"] == 1000
+    assert item["sync_freshness"]["sync_state"] == "mirrored"
+
+
+def test_unified_listing_is_stably_sorted_and_paginates(monkeypatch):
+    admin_client = _build_client(_user("admin-1", Role.ADMIN))
+    t1 = _build_client(_user("user-1", Role.USER)).post("/tickets", json={"subject": "T1", "description": "d"}).json()["ticket"]
+    t2 = _build_client(_user("user-1", Role.USER)).post("/tickets", json={"subject": "T2", "description": "d"}).json()["ticket"]
+    assert t1["ticket_id"] != t2["ticket_id"]
+
+    mirrors = [
+        {
+            "external_issue_id": "20001",
+            "external_issue_key": "PROJ-9",
+            "summary": "J1",
+            "status": "To Do",
+            "project_key": "PROJ",
+            "assignee_account_id": "acct-1",
+            "reporter_account_id": "acct-r",
+            "ingested_at": 1_500,
+            "updated_at": 1_500,
+            "updated_at_remote": "2026-04-01T00:00:00Z",
+        }
+    ]
+    monkeypatch.setattr(
+        "app.routers.tickets.JiraTicketSyncStore.list_issue_mirrors_for_workspace",
+        lambda self, *, workspace_id, limit=200: mirrors,
+    )
+
+    page1 = admin_client.get("/tickets", params={"source": "unified", "workspace_id": "ws_1", "limit": 2})
+    assert page1.status_code == 200
+    p1 = page1.json()
+    assert len(p1["items"]) == 2
+    assert p1["next_cursor"]
+
+    page2 = admin_client.get(
+        "/tickets",
+        params={"source": "unified", "workspace_id": "ws_1", "limit": 2, "cursor": p1["next_cursor"]},
+    )
+    assert page2.status_code == 200
+    p2 = page2.json()
+    assert len(p2["items"]) == 1
+
+    combined = p1["items"] + p2["items"]
+    keys = [(-int(item["updated_at"]), item["source"], item.get("ticket_id") or item.get("external_issue_id")) for item in combined]
+    assert keys == sorted(keys)
+    assert {item["source"] for item in combined} == {"internal", "jira"}
+
+
+def test_non_admin_cannot_use_jira_or_unified_source_filters():
+    user_client = _build_client(_user("user-1", Role.USER))
+    jira_resp = user_client.get("/tickets", params={"source": "jira", "workspace_id": "ws_1"})
+    assert jira_resp.status_code == 403
+    unified_resp = user_client.get("/tickets", params={"source": "unified", "workspace_id": "ws_1"})
+    assert unified_resp.status_code == 403

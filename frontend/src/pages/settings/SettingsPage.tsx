@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Account } from "./Account";
 import { Appearance } from "./Appearance";
+import { JiraIntegrationSettings } from "./JiraIntegrationSettings";
 
 export default function SettingsPage() {
   return (
@@ -23,6 +24,8 @@ export default function SettingsPage() {
       </Card>
 
       <Account />
+
+      <JiraIntegrationSettings />
     </div>
   );
 }
