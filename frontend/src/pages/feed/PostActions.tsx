@@ -12,26 +12,28 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { ReportContentModal, type ReportContentPayload } from "@/components/shared/ReportContentModal";
-import { deletePost, hidePost, reportFeedContent } from "@/api/endpoints/newsfeed";
+import { cancelScheduledPost, deletePost, hidePost, reportFeedContent } from "@/api/endpoints/newsfeed";
 import { ApiError } from "@/api/client";
 
 interface PostActionsProps {
   postId: string;
+  postStatus?: "scheduled" | "published" | "cancelled";
   isOwn: boolean;
   onEdit: () => void;
 }
 
-export function PostActions({ postId, isOwn, onEdit }: PostActionsProps) {
+export function PostActions({ postId, postStatus, isOwn, onEdit }: PostActionsProps) {
   const queryClient = useQueryClient();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportServerError, setReportServerError] = useState<string | null>(null);
 
   const deleteMut = useMutation({
-    mutationFn: () => deletePost(postId),
+    mutationFn: () => (postStatus === "scheduled" ? cancelScheduledPost(postId) : deletePost(postId)),
     onSuccess: () => {
-      toast.success("Post deleted");
+      toast.success(postStatus === "scheduled" ? "Scheduled post cancelled" : "Post deleted");
       void queryClient.invalidateQueries({ queryKey: ["feed"] });
+      void queryClient.invalidateQueries({ queryKey: ["scheduled-posts"] });
       setDeleteOpen(false);
     },
     onError: () => toast.error("Failed to delete post"),

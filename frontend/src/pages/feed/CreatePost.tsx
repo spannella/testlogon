@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOfflineStore } from "@/stores/offlineStore";
-import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip } from "lucide-react";
+import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip, Clock, Globe } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -18,6 +18,7 @@ import {
 import { downloadUrl, getFileInfo } from "@/api/endpoints/files";
 import { ApiError } from "@/api/client";
 import { FilePickerDialog } from "@/pages/messages/FilePickerDialog";
+import { newsfeedSchedulingUiEnabled } from "@/lib/featureFlags";
 import { MarkdownComposer, type EditorMode, type RichDoc, buildContentPayload } from "./MarkdownComposer";
 import type { CreateDraftPostReq, DraftPost, FileEntry } from "@/api/types";
 import { reportDraftLifecycleEvent } from "@/lib/newsfeedDraftTelemetry";
@@ -102,6 +103,7 @@ function telemetryReasonCodeFromError(err: unknown): string {
 
 export function CreatePost() {
   const draftsFeatureEnabled = isNewsfeedDraftsEnabled();
+  const schedulingUiEnabled = newsfeedSchedulingUiEnabled;
   const queryClient = useQueryClient();
   const addToQueue = useOfflineStore((s) => s.addToQueue);
   const isOnline = useOfflineStore((s) => s.isOnline);
@@ -125,6 +127,30 @@ export function CreatePost() {
   const [legacyMigrationRan, setLegacyMigrationRan] = useState(false);
   const autosaveDebounceRef = useRef<number | null>(null);
   const autosaveRetryRef = useRef<number | null>(null);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleTimezone, setScheduleTimezone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+  const [scheduledInput, setScheduledInput] = useState<string>("");
+  const [scheduledAt, setScheduledAt] = useState<Date | null>(null);
+
+  const parseDateTimeInTz = (localStr: string, tz: string): Date => {
+    const [datePart, timePart] = localStr.split("T");
+    const [y, m, d] = (datePart || "").split("-").map(Number);
+    const [hh, mm] = (timePart || "").split(":").map(Number);
+    const utcGuess = new Date(Date.UTC(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0));
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).formatToParts(utcGuess);
+    const get = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? "0");
+    const tzAsUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), 0);
+    const targetAsUtc = Date.UTC(y, (m || 1) - 1, d || 1, hh || 0, mm || 0, 0);
+    return new Date(utcGuess.getTime() + (targetAsUtc - tzAsUtc));
+  };
 
   const unlockPriceCents = (() => {
     if (!lockEnabled || !lockPrice.trim()) return undefined;
@@ -223,6 +249,9 @@ export function CreatePost() {
     setActiveDraftBaseline(null);
     setLastSavedSnapshot(null);
     setAutosaveStatus("idle");
+    setScheduleOpen(false);
+    setScheduledInput("");
+    setScheduledAt(null);
   };
 
   const draftsQuery = useQuery({
@@ -243,10 +272,20 @@ export function CreatePost() {
         ...(imageUrls.length > 0 ? { image_urls: imageUrls } : {}),
         ...(pendingFiles.length > 0 ? { file_paths: pendingFiles.map((f) => f.path) } : {}),
         ...(unlockPriceCents ? { unlock_price_cents: unlockPriceCents } : {}),
+        ...(schedulingUiEnabled && scheduledAt
+          ? {
+              publish_at: Math.floor(scheduledAt.getTime() / 1000),
+              schedule_timezone: scheduleTimezone,
+              scheduled_at_local: scheduledInput || undefined,
+            }
+          : {}),
       });
     },
-    onSuccess: (_post, target) => {
+    onSuccess: (resp, target) => {
       queryClient.invalidateQueries({ queryKey: ["feed"] });
+      if (schedulingUiEnabled) {
+        queryClient.invalidateQueries({ queryKey: ["scheduled-posts"] });
+      }
       const publishedDraftId = target?.draftId ?? activeDraftId;
       if (draftsFeatureEnabled && publishedDraftId) {
         queryClient.setQueryData<{ items: DraftPost[]; next_cursor?: string } | undefined>(["feed-drafts"], (prev) => {
@@ -257,7 +296,7 @@ export function CreatePost() {
         reportDraftLifecycleEvent("publish_from_draft", "success");
       }
       resetComposer();
-      toast.success("Post published");
+      toast.success(resp.status === "scheduled" ? "Post scheduled" : "Post published");
     },
     onError: (err: unknown, target) => {
       if (err instanceof ApiError && err.status === 409) {
@@ -553,6 +592,13 @@ export function CreatePost() {
         ...(imageUrls.length > 0 ? { image_urls: imageUrls } : {}),
         ...(pendingFiles.length > 0 ? { file_paths: pendingFiles.map((f) => f.path) } : {}),
         ...(unlockPriceCents ? { unlock_price_cents: unlockPriceCents } : {}),
+        ...(schedulingUiEnabled && scheduledAt
+          ? {
+              publish_at: Math.floor(scheduledAt.getTime() / 1000),
+              schedule_timezone: scheduleTimezone,
+              scheduled_at_local: scheduledInput || undefined,
+            }
+          : {}),
       };
       addToQueue({ type: "create_post", payload: queuedPayload });
       toast.info("You're offline — post queued and will publish when reconnected");
@@ -682,6 +728,71 @@ export function CreatePost() {
             rows={3}
           />
 
+          {schedulingUiEnabled && (
+            <div className="rounded-md border border-border/60 bg-muted/20 p-2.5">
+            <div className="flex items-center justify-between">
+              <button
+                type="button"
+                className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+                onClick={() => setScheduleOpen((v) => !v)}
+              >
+                <Clock className="h-3.5 w-3.5" />
+                {scheduledAt ? "Scheduled post" : "Schedule post"}
+              </button>
+              {scheduledAt && (
+                <button
+                  type="button"
+                  className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                  onClick={() => {
+                    setScheduledAt(null);
+                    setScheduledInput("");
+                  }}
+                >
+                  Remove schedule
+                </button>
+              )}
+            </div>
+            {scheduleOpen && (
+              <div className="mt-2 space-y-2">
+                <input
+                  type="datetime-local"
+                  value={scheduledInput}
+                  className="w-full rounded border border-input bg-background px-2 py-1.5 text-xs"
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setScheduledInput(val);
+                    if (val) {
+                      setScheduledAt(parseDateTimeInTz(val, scheduleTimezone));
+                    } else {
+                      setScheduledAt(null);
+                    }
+                  }}
+                />
+                <div className="flex items-center gap-1.5">
+                  <Globe className="h-3.5 w-3.5 text-muted-foreground" />
+                  <input
+                    type="text"
+                    value={scheduleTimezone}
+                    onChange={(e) => {
+                      const tz = e.target.value;
+                      setScheduleTimezone(tz);
+                      if (scheduledInput) setScheduledAt(parseDateTimeInTz(scheduledInput, tz));
+                    }}
+                    className="w-full rounded border border-input bg-background px-2 py-1.5 text-xs"
+                    placeholder="Timezone (e.g. America/New_York)"
+                  />
+                </div>
+              </div>
+            )}
+            {scheduledAt && (
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                Publishes: {scheduledAt.toLocaleString(undefined, { timeZoneName: "short" })}
+              </p>
+            )}
+            </div>
+          )}
+
+          {/* Upload progress */}
           {uploading && (
             <div className="space-y-1">
               <div className="flex items-center gap-2 text-xs text-muted-foreground">

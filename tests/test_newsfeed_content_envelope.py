@@ -10,12 +10,15 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
     def setUp(self):
         self._orig_markdown_flag = getattr(newsfeed.S, "newsfeed_markdown_enabled", False)
         self._orig_rich_flag = getattr(newsfeed.S, "newsfeed_richtext_enabled", False)
+        self._orig_schedule_api_flag = getattr(newsfeed.S, "newsfeed_scheduling_api_enabled", True)
         object.__setattr__(newsfeed.S, "newsfeed_markdown_enabled", True)
         object.__setattr__(newsfeed.S, "newsfeed_richtext_enabled", True)
+        object.__setattr__(newsfeed.S, "newsfeed_scheduling_api_enabled", True)
 
     def tearDown(self):
         object.__setattr__(newsfeed.S, "newsfeed_markdown_enabled", self._orig_markdown_flag)
         object.__setattr__(newsfeed.S, "newsfeed_richtext_enabled", self._orig_rich_flag)
+        object.__setattr__(newsfeed.S, "newsfeed_scheduling_api_enabled", self._orig_schedule_api_flag)
 
     def test_create_post_request_accepts_legacy_body(self):
         req = newsfeed.CreatePostRequest(body="Legacy plain")
@@ -28,6 +31,47 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
         self.assertIsNone(content["body_rich"])
         self.assertEqual(content["body_format"], "plain")
         self.assertEqual(content["body_version"], 1)
+
+    def test_create_post_request_schema_exposes_scheduling_fields(self):
+        schema = newsfeed.CreatePostRequest.model_json_schema()
+        props = schema["properties"]
+
+        self.assertIn("publish_at", props)
+        self.assertEqual(props["publish_at"]["type"], "integer")
+        self.assertEqual(props["publish_at"]["minimum"], 0)
+        self.assertIn("Unix timestamp", props["publish_at"]["description"])
+
+        self.assertIn("schedule_timezone", props)
+        self.assertEqual(props["schedule_timezone"]["type"], "string")
+        self.assertEqual(props["schedule_timezone"]["maxLength"], 64)
+        self.assertIn("IANA timezone", props["schedule_timezone"]["description"])
+
+        self.assertIn("scheduled_at_local", props)
+        self.assertEqual(props["scheduled_at_local"]["type"], "string")
+        self.assertEqual(props["scheduled_at_local"]["maxLength"], 32)
+        examples = schema.get("examples", [])
+        self.assertTrue(any("publish_at" in example for example in examples))
+
+    def test_create_post_request_remains_backward_compatible_without_schedule(self):
+        req = newsfeed.CreatePostRequest(body="Immediate post")
+        self.assertIsNone(req.publish_at)
+        self.assertIsNone(req.schedule_timezone)
+        self.assertIsNone(req.scheduled_at_local)
+
+    def test_create_post_route_documents_schedule_validation_errors(self):
+        create_route = next(route for route in newsfeed.router.routes if getattr(route, "path", None) == "/posts" and "POST" in getattr(route, "methods", set()))
+        responses = create_route.responses
+        self.assertIn(400, responses)
+        examples = responses[400]["content"]["application/json"]["examples"]
+        self.assertIn("invalid_timezone", examples)
+        self.assertIn("publish_at_too_soon", examples)
+
+    def test_edit_post_request_schema_exposes_schedule_fields(self):
+        schema = newsfeed.EditPostRequest.model_json_schema()
+        props = schema["properties"]
+        self.assertIn("publish_at", props)
+        self.assertIn("schedule_timezone", props)
+        self.assertIn("scheduled_at_local", props)
 
     def test_create_post_request_accepts_markdown_content(self):
         req = newsfeed.CreatePostRequest(
@@ -232,6 +276,461 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
         self.assertIsNone(resp.body_rich)
         self.assertEqual(resp.body_format, "markdown")
         self.assertEqual(resp.body_version, 1)
+        self.assertEqual(resp.status, "published")
+        self.assertEqual(resp.published_at, "2026-01-01T00:00:00+00:00")
+        self.assertIsNone(resp.publish_at)
+        self.assertIsNone(resp.schedule_timezone)
+        self.assertIsNone(resp.scheduled_at_local)
+
+    def test_create_post_immediate_writes_feed_ref_and_meters(self):
+        req = newsfeed.CreatePostRequest(
+            body="Immediate hello",
+            visibility="followers",
+        )
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_1"),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
+            patch.object(newsfeed, "ddb_put_item") as put_item,
+            patch.object(newsfeed, "_meter_newsfeed_post_publish") as meter_publish,
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            resp = newsfeed.create_post(req, user_id="u1")
+
+        self.assertEqual(resp.status, "published")
+        self.assertEqual(put_item.call_count, 2)
+        self.assertEqual(put_item.call_args_list[0].args[0]["Entity"], "Post")
+        self.assertEqual(put_item.call_args_list[1].args[0]["Entity"], "FeedRef")
+        meter_publish.assert_called_once_with(user_id="u1", post_id="post_1")
+
+    def test_create_post_supports_scheduled_publish_without_feedref_or_metering(self):
+        req = newsfeed.CreatePostRequest(
+            body="Scheduled hello",
+            visibility="followers",
+            publish_at=1767225600,
+            schedule_timezone="America/New_York",
+            scheduled_at_local="2026-12-31T19:00",
+        )
+
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_1"),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
+            patch.object(newsfeed.time, "time", return_value=1767000000),
+            patch.object(newsfeed, "ddb_put_item") as put_item,
+            patch.object(newsfeed, "_meter_newsfeed_post_publish") as meter_publish,
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            resp = newsfeed.create_post(req, user_id="u1")
+
+        self.assertEqual(resp.status, "scheduled")
+        self.assertIsNone(resp.published_at)
+        self.assertEqual(resp.publish_at, 1767225600)
+        self.assertEqual(resp.schedule_timezone, "America/New_York")
+        self.assertEqual(resp.scheduled_at_local, "2026-12-31T19:00")
+        self.assertEqual(put_item.call_count, 2)
+        self.assertEqual(put_item.call_args_list[0].args[0]["Entity"], "Post")
+        self.assertEqual(put_item.call_args_list[1].args[0]["Entity"], "ScheduledPostRef")
+        self.assertEqual(
+            put_item.call_args_list[1].args[0]["sk"],
+            newsfeed.sk_scheduled_post_ref(1767225600, "post_1"),
+        )
+        self.assertEqual(put_item.call_args_list[1].args[0]["owner_user_id"], "u1")
+        self.assertEqual(put_item.call_args_list[1].args[0]["post_id"], "post_1")
+        self.assertEqual(put_item.call_args_list[1].args[0]["publish_at"], 1767225600)
+        self.assertEqual(put_item.call_args_list[1].args[0]["created_at"], "2026-01-01T00:00:00+00:00")
+        self.assertEqual(put_item.call_args_list[1].args[0]["status"], "scheduled")
+        meter_publish.assert_not_called()
+
+    def test_create_post_scheduled_emits_schedule_metric(self):
+        req = newsfeed.CreatePostRequest(
+            body="Scheduled hello",
+            visibility="followers",
+            publish_at=1767225600,
+            schedule_timezone="UTC",
+            scheduled_at_local="2026-12-31T19:00",
+        )
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_1"),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
+            patch.object(newsfeed.time, "time", return_value=1767000000),
+            patch.object(newsfeed, "ddb_put_item"),
+            patch.object(newsfeed, "_meter_newsfeed_post_publish"),
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+            patch.object(newsfeed, "record_newsfeed_schedule_operation") as schedule_metric,
+        ):
+            newsfeed.create_post(req, user_id="u1")
+        schedule_metric.assert_called_with(operation="create", outcome="success")
+
+    def test_create_post_rejects_invalid_schedule_timezone(self):
+        req = newsfeed.CreatePostRequest(
+            body="Scheduled hello",
+            publish_at=1767225600,
+            schedule_timezone="Not/A_Real_Zone",
+        )
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_1"),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
+            patch.object(newsfeed.time, "time", return_value=1767000000),
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            with self.assertRaises(newsfeed.HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["code"], "schedule_timezone_invalid")
+        self.assertEqual(ctx.exception.detail["field"], "schedule_timezone")
+
+    def test_create_post_rejects_publish_at_in_past(self):
+        req = newsfeed.CreatePostRequest(
+            body="Scheduled hello",
+            publish_at=1766999999,
+            schedule_timezone="UTC",
+        )
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_1"),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
+            patch.object(newsfeed.time, "time", return_value=1767000000),
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            with self.assertRaises(newsfeed.HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["code"], "schedule_publish_at_too_soon")
+        self.assertEqual(ctx.exception.detail["field"], "publish_at")
+        self.assertIn("minimum_publish_at", ctx.exception.detail)
+
+    def test_create_post_accepts_valid_timezone_and_minimum_future_publish_at(self):
+        req = newsfeed.CreatePostRequest(
+            body="Scheduled hello",
+            publish_at=1767000006,
+            schedule_timezone="UTC",
+            scheduled_at_local="2026-12-31T19:00",
+        )
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_1"),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
+            patch.object(newsfeed.time, "time", return_value=1767000000),
+            patch.object(newsfeed, "ddb_put_item"),
+            patch.object(newsfeed, "_meter_newsfeed_post_publish") as meter_publish,
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            resp = newsfeed.create_post(req, user_id="u1")
+        self.assertEqual(resp.status, "scheduled")
+        self.assertEqual(resp.publish_at, 1767000006)
+        self.assertEqual(resp.schedule_timezone, "UTC")
+        meter_publish.assert_not_called()
+
+    def test_create_post_rejects_publish_at_equal_to_now_plus_five_seconds(self):
+        req = newsfeed.CreatePostRequest(
+            body="Scheduled hello",
+            publish_at=1767000005,
+            schedule_timezone="UTC",
+        )
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_1"),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
+            patch.object(newsfeed.time, "time", return_value=1767000000),
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            with self.assertRaises(newsfeed.HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["code"], "schedule_publish_at_too_soon")
+        self.assertEqual(ctx.exception.detail["minimum_publish_at"], 1767000006)
+
+    def test_create_post_rejects_publish_at_beyond_max_horizon(self):
+        req = newsfeed.CreatePostRequest(
+            body="Scheduled hello",
+            publish_at=1767004000,
+            schedule_timezone="UTC",
+        )
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_1"),
+            patch.object(newsfeed.time, "time", return_value=1767000000),
+            patch.object(newsfeed, "_schedule_max_horizon_seconds", return_value=3600),
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            with self.assertRaises(newsfeed.HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["code"], "schedule_publish_at_too_far")
+        self.assertEqual(ctx.exception.detail["maximum_publish_at"], 1767003600)
+
+    def test_create_post_rejects_schedule_metadata_without_publish_at(self):
+        req = newsfeed.CreatePostRequest(
+            body="Scheduled hello",
+            schedule_timezone="UTC",
+            scheduled_at_local="2026-12-31T19:00",
+        )
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_1"),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            with self.assertRaises(newsfeed.HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["code"], "schedule_publish_at_required")
+        self.assertEqual(ctx.exception.detail["field"], "publish_at")
+
+    def test_create_post_scheduling_rejected_when_api_flag_disabled(self):
+        object.__setattr__(newsfeed.S, "newsfeed_scheduling_api_enabled", False)
+        req = newsfeed.CreatePostRequest(
+            body="Scheduled hello",
+            publish_at=1767225600,
+            schedule_timezone="UTC",
+            scheduled_at_local="2026-12-31T19:00",
+        )
+        with patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"):
+            with self.assertRaises(newsfeed.HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(ctx.exception.detail["code"], "schedule_feature_disabled")
+
+    def test_create_post_rejects_invalid_scheduled_at_local_format(self):
+        req = newsfeed.CreatePostRequest(
+            body="Scheduled hello",
+            publish_at=1767225600,
+            schedule_timezone="UTC",
+            scheduled_at_local="12/31/2026 19:00",
+        )
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_1"),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
+            patch.object(newsfeed.time, "time", return_value=1767000000),
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+        ):
+            with self.assertRaises(newsfeed.HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["code"], "schedule_local_datetime_invalid")
+        self.assertEqual(ctx.exception.detail["field"], "scheduled_at_local")
+
+    def test_list_scheduled_posts_returns_owner_scheduled_posts(self):
+        scheduled_post = {
+            "pk": newsfeed.pk_post("p-scheduled"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p-scheduled",
+            "user_id": "u1",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "schedule_timezone": "America/New_York",
+            "scheduled_at_local": "2026-12-31T19:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body_plain": "scheduled body",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+        not_scheduled = {
+            "pk": newsfeed.pk_post("p-published"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p-published",
+            "user_id": "u1",
+            "status": "published",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body_plain": "published body",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+        refs = {
+            "Items": [
+                {"pk": newsfeed.pk_user("u1"), "sk": newsfeed.sk_scheduled_post_ref(1767225600, "p-scheduled"), "post_id": "p-scheduled"},
+                {"pk": newsfeed.pk_user("u1"), "sk": newsfeed.sk_scheduled_post_ref(1767229200, "p-published"), "post_id": "p-published"},
+            ],
+            "LastEvaluatedKey": None,
+        }
+        with (
+            patch.object(newsfeed, "ddb_query", return_value=refs),
+            patch.object(newsfeed.ddb, "batch_get_item", return_value={"Responses": {newsfeed.APP_TABLE: [scheduled_post, not_scheduled]}}),
+        ):
+            out = newsfeed.list_scheduled_posts(limit=20, cursor=None, user_id="u1")
+
+        self.assertEqual(len(out["items"]), 1)
+        self.assertEqual(out["items"][0]["post_id"], "p-scheduled")
+        self.assertEqual(out["items"][0]["status"], "scheduled")
+        self.assertEqual(out["items"][0]["publish_at"], 1767225600)
+
+    def test_list_scheduled_posts_rejected_when_api_flag_disabled(self):
+        object.__setattr__(newsfeed.S, "newsfeed_scheduling_api_enabled", False)
+        with self.assertRaises(newsfeed.HTTPException) as ctx:
+            newsfeed.list_scheduled_posts(limit=20, cursor=None, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(ctx.exception.detail["code"], "schedule_feature_disabled")
+
+    def test_list_scheduled_posts_filters_cross_user_posts(self):
+        other_owner_post = {
+            "pk": newsfeed.pk_post("p-other-owner"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p-other-owner",
+            "user_id": "u2",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body_plain": "should not be visible to u1",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+        refs = {
+            "Items": [
+                {
+                    "pk": newsfeed.pk_user("u1"),
+                    "sk": newsfeed.sk_scheduled_post_ref(1767225600, "p-other-owner"),
+                    "post_id": "p-other-owner",
+                }
+            ],
+            "LastEvaluatedKey": None,
+        }
+        with (
+            patch.object(newsfeed, "ddb_query", return_value=refs),
+            patch.object(newsfeed.ddb, "batch_get_item", return_value={"Responses": {newsfeed.APP_TABLE: [other_owner_post]}}),
+        ):
+            out = newsfeed.list_scheduled_posts(limit=20, cursor=None, user_id="u1")
+        self.assertEqual(out["items"], [])
+
+    def test_list_scheduled_posts_supports_cursor_and_stable_order(self):
+        p_early = {
+            "pk": newsfeed.pk_post("p-early"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p-early",
+            "user_id": "u1",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body_plain": "early",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+        p_late = {
+            "pk": newsfeed.pk_post("p-late"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p-late",
+            "user_id": "u1",
+            "status": "scheduled",
+            "publish_at": 1767229200,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body_plain": "late",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+        refs = {
+            "Items": [
+                {"pk": newsfeed.pk_user("u1"), "sk": newsfeed.sk_scheduled_post_ref(1767229200, "p-late"), "post_id": "p-late"},
+                {"pk": newsfeed.pk_user("u1"), "sk": newsfeed.sk_scheduled_post_ref(1767225600, "p-early"), "post_id": "p-early"},
+            ],
+            "LastEvaluatedKey": {"pk": newsfeed.pk_user("u1"), "sk": newsfeed.sk_scheduled_post_ref(1767229200, "p-late")},
+        }
+        with (
+            patch.object(newsfeed, "decode_cursor_or_400", return_value={"pk": "x", "sk": "y"}),
+            patch.object(newsfeed, "ddb_query", return_value=refs),
+            patch.object(newsfeed.ddb, "batch_get_item", return_value={"Responses": {newsfeed.APP_TABLE: [p_late, p_early]}}),
+            patch.object(newsfeed, "encode_cursor", return_value="cursor_2"),
+        ):
+            out = newsfeed.list_scheduled_posts(limit=20, cursor="cursor_1", user_id="u1")
+
+        self.assertEqual([it["post_id"] for it in out["items"]], ["p-early", "p-late"])
+        self.assertEqual(out["next_cursor"], "cursor_2")
+
+    def test_list_scheduled_posts_filters_malformed_and_mismatched_refs(self):
+        scheduled = {
+            "pk": newsfeed.pk_post("p-good"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p-good",
+            "user_id": "u1",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body_plain": "good",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+        refs = {
+            "Items": [
+                {"pk": newsfeed.pk_user("u1"), "sk": newsfeed.sk_scheduled_post_ref(1767225600, "p-good"), "post_id": "p-good"},
+                {"pk": newsfeed.pk_user("u1"), "sk": "SCHEDULEDPOST#bad#p-bad", "post_id": "p-bad"},
+                {"pk": newsfeed.pk_user("u1"), "sk": newsfeed.sk_scheduled_post_ref(1767225601, "p-other"), "post_id": "p-mismatch"},
+            ],
+            "LastEvaluatedKey": None,
+        }
+        with (
+            patch.object(newsfeed, "ddb_query", return_value=refs),
+            patch.object(newsfeed.ddb, "batch_get_item", return_value={"Responses": {newsfeed.APP_TABLE: [scheduled]}}),
+        ):
+            out = newsfeed.list_scheduled_posts(limit=20, cursor=None, user_id="u1")
+        self.assertEqual([it["post_id"] for it in out["items"]], ["p-good"])
+
+    def test_scheduled_ref_key_builder_is_stable_and_parseable(self):
+        key = newsfeed.sk_scheduled_post_ref(12345, "post_abc")
+        self.assertEqual(key, "SCHEDULEDPOST#000000012345#post_abc")
+        parsed = newsfeed.parse_scheduled_post_ref_sk(key)
+        self.assertEqual(parsed, (12345, "post_abc"))
+
+    def test_scheduled_ref_key_parser_rejects_invalid_shapes(self):
+        self.assertIsNone(newsfeed.parse_scheduled_post_ref_sk(""))
+        self.assertIsNone(newsfeed.parse_scheduled_post_ref_sk("SCHEDULEDPOST#abc#post_1"))
+        self.assertIsNone(newsfeed.parse_scheduled_post_ref_sk("WRONG#000000012345#post_1"))
+
+    def test_view_feed_excludes_scheduled_and_cancelled_posts_when_refs_drift(self):
+        refs = {
+            "Items": [
+                {"post_id": "p-published"},
+                {"post_id": "p-scheduled"},
+                {"post_id": "p-cancelled"},
+            ]
+        }
+        p_published = {
+            "pk": newsfeed.pk_post("p-published"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p-published",
+            "user_id": "author_1",
+            "status": "published",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body_plain": "published",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+        p_scheduled = {
+            "pk": newsfeed.pk_post("p-scheduled"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p-scheduled",
+            "user_id": "author_1",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "schedule_timezone": "UTC",
+            "scheduled_at_local": "2026-12-31T19:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body_plain": "scheduled",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+        p_cancelled = {
+            "pk": newsfeed.pk_post("p-cancelled"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p-cancelled",
+            "user_id": "author_1",
+            "status": "cancelled",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body_plain": "cancelled",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+        with (
+            patch.object(newsfeed, "ddb_query", return_value=refs),
+            patch.object(
+                newsfeed.ddb,
+                "batch_get_item",
+                side_effect=[
+                    {"Responses": {newsfeed.APP_TABLE: [p_published, p_scheduled, p_cancelled]}},
+                    {"Responses": {newsfeed.APP_TABLE: []}},
+                ],
+            ),
+            patch.object(newsfeed, "is_hidden", return_value=False),
+            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "is_following", return_value=True),
+            patch.object(newsfeed, "has_unlocked", return_value=False),
+            patch.object(newsfeed, "encode_cursor", return_value=None),
+        ):
+            out = newsfeed.view_feed(limit=20, cursor=None, user_id="viewer_1")
+
+        self.assertEqual([it["post_id"] for it in out["items"]], ["p-published"])
+        self.assertEqual(out["items"][0]["status"], "published")
 
 
     def test_post_serializer_masks_all_format_fields_when_locked(self):
@@ -334,6 +833,52 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
         self.assertEqual(out["body_markdown"], "# Migrated markdown")
         self.assertEqual(out["body_format"], "markdown")
         self.assertIsNotNone(out["body_markdown_html"])
+        self.assertEqual(out["status"], "published")
+        self.assertEqual(out["published_at"], "2026-01-01T00:00:00+00:00")
+
+    def test_post_serializer_includes_schedule_metadata_when_present(self):
+        post = {
+            "post_id": "p-scheduled",
+            "user_id": "author_1",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "schedule_timezone": "America/New_York",
+            "scheduled_at_local": "2026-12-31T19:00",
+            "body_plain": "scheduled body",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+
+        out = newsfeed._post_to_dict(post)
+
+        self.assertEqual(out["status"], "scheduled")
+        self.assertEqual(out["publish_at"], 1767225600)
+        self.assertEqual(out["schedule_timezone"], "America/New_York")
+        self.assertEqual(out["scheduled_at_local"], "2026-12-31T19:00")
+        self.assertIsNone(out["published_at"])
+
+    def test_post_serializer_normalizes_invalid_lifecycle_fields_for_legacy_rows(self):
+        post = {
+            "post_id": "p-legacy",
+            "user_id": "author_1",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "status": "unknown_status",
+            "publish_at": "not-a-number",
+            "schedule_timezone": 1234,
+            "scheduled_at_local": {"bad": "shape"},
+            "body_plain": "legacy body",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+
+        out = newsfeed._post_to_dict(post)
+
+        self.assertEqual(out["status"], "published")
+        self.assertEqual(out["published_at"], "2026-01-01T00:00:00+00:00")
+        self.assertIsNone(out["publish_at"])
+        self.assertIsNone(out["schedule_timezone"])
+        self.assertIsNone(out["scheduled_at_local"])
 
     def test_comment_serializer_falls_back_to_body_plain_for_unknown_format(self):
         item = {
@@ -448,6 +993,394 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
                 self.assertEqual(out["body_markdown"], expected["body_markdown"])
                 self.assertEqual(out["body_format"], expected["body_format"])
                 self.assertEqual(out["body_rich"], expected["body_rich"])
+
+    def test_edit_post_rejects_schedule_update_for_non_scheduled_status(self):
+        existing = {
+            "pk": newsfeed.pk_post("p1"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p1",
+            "user_id": "u1",
+            "status": "published",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        req = newsfeed.EditPostRequest(
+            body="still body",
+            publish_at=1767225600,
+            schedule_timezone="UTC",
+            scheduled_at_local="2026-12-31T19:00",
+        )
+        with patch.object(newsfeed, "ddb_get_item", return_value=existing):
+            with self.assertRaises(newsfeed.HTTPException) as ctx:
+                newsfeed.edit_post("p1", req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "schedule_update_not_allowed")
+
+    def test_edit_post_schedule_update_rejects_non_owner(self):
+        existing = {
+            "pk": newsfeed.pk_post("p1"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p1",
+            "user_id": "u2",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "schedule_timezone": "UTC",
+            "scheduled_at_local": "2026-12-31T19:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        req = newsfeed.EditPostRequest(
+            body="rescheduled",
+            publish_at=1767229200,
+            schedule_timezone="UTC",
+            scheduled_at_local="2026-12-31T20:00",
+        )
+        with patch.object(newsfeed, "ddb_get_item", return_value=existing):
+            with self.assertRaises(newsfeed.HTTPException) as ctx:
+                newsfeed.edit_post("p1", req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail, "Not your post")
+
+    def test_edit_post_accepts_schedule_update_for_scheduled_status(self):
+        existing = {
+            "pk": newsfeed.pk_post("p1"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p1",
+            "user_id": "u1",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "schedule_timezone": "UTC",
+            "scheduled_at_local": "2026-12-31T19:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        req = newsfeed.EditPostRequest(
+            body="rescheduled",
+            publish_at=1767229200,
+            schedule_timezone="America/New_York",
+            scheduled_at_local="2026-12-31T20:00",
+        )
+        updated = {
+            "post_id": "p1",
+            "user_id": "u1",
+            "status": "scheduled",
+            "publish_at": 1767229200,
+            "schedule_timezone": "America/New_York",
+            "scheduled_at_local": "2026-12-31T20:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body_plain": "rescheduled",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+        with (
+            patch.object(newsfeed.time, "time", return_value=1767000000),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-02T00:00:00+00:00"),
+            patch.object(newsfeed.ddb.meta.client, "transact_write_items") as txn,
+            patch.object(newsfeed, "ddb_get_item", side_effect=[existing, updated]),
+        ):
+            out = newsfeed.edit_post("p1", req, user_id="u1")
+        self.assertEqual(out["publish_at"], 1767229200)
+        self.assertEqual(out["schedule_timezone"], "America/New_York")
+        self.assertEqual(out["scheduled_at_local"], "2026-12-31T20:00")
+        self.assertEqual(txn.call_count, 1)
+        tx_items = txn.call_args.kwargs["TransactItems"]
+        self.assertEqual(len(tx_items), 3)
+        self.assertIn("Update", tx_items[0])
+        self.assertIn("Delete", tx_items[1])
+        self.assertIn("Put", tx_items[2])
+        update_values = tx_items[0]["Update"]["ExpressionAttributeValues"]
+        self.assertIn(":sdpk", update_values)
+        self.assertIn(":sdsk", update_values)
+    
+    def test_edit_post_schedule_update_emits_metric(self):
+        existing = {
+            "pk": newsfeed.pk_post("p1"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p1",
+            "user_id": "u1",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "schedule_timezone": "UTC",
+            "scheduled_at_local": "2026-12-31T19:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        updated = {
+            **existing,
+            "publish_at": 1767229200,
+            "schedule_timezone": "America/New_York",
+            "scheduled_at_local": "2026-12-31T20:00",
+            "body_plain": "rescheduled",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+        req = newsfeed.EditPostRequest(
+            body="rescheduled",
+            publish_at=1767229200,
+            schedule_timezone="America/New_York",
+            scheduled_at_local="2026-12-31T20:00",
+        )
+        with (
+            patch.object(newsfeed.time, "time", return_value=1767000000),
+            patch.object(newsfeed.ddb.meta.client, "transact_write_items"),
+            patch.object(newsfeed, "ddb_get_item", side_effect=[existing, updated]),
+            patch.object(newsfeed, "record_newsfeed_schedule_operation") as schedule_metric,
+        ):
+            newsfeed.edit_post("p1", req, user_id="u1")
+        schedule_metric.assert_called_with(operation="edit", outcome="success")
+
+    def test_edit_post_schedule_update_same_publish_at_keeps_scheduled_ref_stable(self):
+        existing = {
+            "pk": newsfeed.pk_post("p1"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p1",
+            "user_id": "u1",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "schedule_timezone": "UTC",
+            "scheduled_at_local": "2026-12-31T19:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        req = newsfeed.EditPostRequest(
+            body="same publish, different timezone",
+            publish_at=1767225600,
+            schedule_timezone="America/New_York",
+            scheduled_at_local="2026-12-31T14:00",
+        )
+        updated = {
+            **existing,
+            "schedule_timezone": "America/New_York",
+            "scheduled_at_local": "2026-12-31T14:00",
+            "body_plain": "same publish, different timezone",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+        with (
+            patch.object(newsfeed.time, "time", return_value=1767000000),
+            patch.object(newsfeed.ddb.meta.client, "transact_write_items") as txn,
+            patch.object(newsfeed, "ddb_get_item", side_effect=[existing, updated]),
+        ):
+            out = newsfeed.edit_post("p1", req, user_id="u1")
+        self.assertEqual(out["publish_at"], 1767225600)
+        self.assertEqual(out["schedule_timezone"], "America/New_York")
+        tx_items = txn.call_args.kwargs["TransactItems"]
+        self.assertEqual(len(tx_items), 1)
+        self.assertIn("Update", tx_items[0])
+
+    def test_edit_post_schedule_conflict_returns_deterministic_code(self):
+        existing = {
+            "pk": newsfeed.pk_post("p1"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p1",
+            "user_id": "u1",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "schedule_timezone": "UTC",
+            "scheduled_at_local": "2026-12-31T19:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        req = newsfeed.EditPostRequest(
+            body="rescheduled",
+            publish_at=1767229200,
+            schedule_timezone="America/New_York",
+            scheduled_at_local="2026-12-31T20:00",
+        )
+        err = newsfeed.ClientError({"Error": {"Code": "TransactionCanceledException", "Message": "conflict"}}, "TransactWriteItems")
+        with (
+            patch.object(newsfeed, "ddb_get_item", return_value=existing),
+            patch.object(newsfeed.time, "time", return_value=1767000000),
+            patch.object(newsfeed.ddb.meta.client, "transact_write_items", side_effect=err),
+        ):
+            with self.assertRaises(newsfeed.HTTPException) as ctx:
+                newsfeed.edit_post("p1", req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "schedule_edit_conflict")
+
+    def test_edit_post_rejects_publish_at_beyond_max_horizon(self):
+        existing = {
+            "pk": newsfeed.pk_post("p1"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p1",
+            "user_id": "u1",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "schedule_timezone": "UTC",
+            "scheduled_at_local": "2026-12-31T19:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        req = newsfeed.EditPostRequest(
+            body="rescheduled",
+            publish_at=1767004000,
+            schedule_timezone="UTC",
+            scheduled_at_local="2026-12-31T20:00",
+        )
+        with (
+            patch.object(newsfeed, "ddb_get_item", return_value=existing),
+            patch.object(newsfeed.time, "time", return_value=1767000000),
+            patch.object(newsfeed, "_schedule_max_horizon_seconds", return_value=3600),
+        ):
+            with self.assertRaises(newsfeed.HTTPException) as ctx:
+                newsfeed.edit_post("p1", req, user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["code"], "schedule_publish_at_too_far")
+        self.assertEqual(ctx.exception.detail["maximum_publish_at"], 1767003600)
+
+    def test_cancel_scheduled_post_transitions_and_cleans_scheduled_ref(self):
+        existing = {
+            "pk": newsfeed.pk_post("p1"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p1",
+            "user_id": "u1",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "schedule_timezone": "UTC",
+            "scheduled_at_local": "2026-12-31T19:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        cancelled = {
+            **existing,
+            "status": "cancelled",
+            "publish_at": None,
+            "schedule_timezone": None,
+            "scheduled_at_local": None,
+            "published_at": None,
+            "updated_at": "2026-01-02T00:00:00+00:00",
+        }
+        with (
+            patch.object(newsfeed, "now_iso", return_value="2026-01-02T00:00:00+00:00"),
+            patch.object(newsfeed, "ddb_get_item", side_effect=[existing, cancelled]),
+            patch.object(newsfeed.ddb.meta.client, "transact_write_items") as txn,
+        ):
+            out = newsfeed.cancel_scheduled_post("p1", user_id="u1")
+        self.assertEqual(out["status"], "cancelled")
+        self.assertIsNone(out["publish_at"])
+        self.assertEqual(txn.call_count, 1)
+        tx_items = txn.call_args.kwargs["TransactItems"]
+        self.assertEqual(len(tx_items), 2)
+        self.assertIn("Update", tx_items[0])
+        self.assertIn("Delete", tx_items[1])
+        self.assertIn("GSI_SCHEDULE_PK", tx_items[0]["Update"]["UpdateExpression"])
+        self.assertIn("GSI_SCHEDULE_SK", tx_items[0]["Update"]["UpdateExpression"])
+
+    def test_cancel_scheduled_post_emits_metric(self):
+        existing = {
+            "pk": newsfeed.pk_post("p1"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p1",
+            "user_id": "u1",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "schedule_timezone": "UTC",
+            "scheduled_at_local": "2026-12-31T19:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        cancelled = {**existing, "status": "cancelled", "publish_at": None, "schedule_timezone": None, "scheduled_at_local": None, "published_at": None}
+        with (
+            patch.object(newsfeed, "now_iso", return_value="2026-01-02T00:00:00+00:00"),
+            patch.object(newsfeed, "ddb_get_item", side_effect=[existing, cancelled]),
+            patch.object(newsfeed.ddb.meta.client, "transact_write_items"),
+            patch.object(newsfeed, "record_newsfeed_schedule_operation") as schedule_metric,
+        ):
+            newsfeed.cancel_scheduled_post("p1", user_id="u1")
+        schedule_metric.assert_called_with(operation="cancel", outcome="success")
+
+    def test_cancel_scheduled_post_is_idempotent_for_cancelled_posts(self):
+        cancelled = {
+            "pk": newsfeed.pk_post("p1"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p1",
+            "user_id": "u1",
+            "status": "cancelled",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body_plain": "cancelled",
+            "body_format": "plain",
+            "body_version": 1,
+        }
+        with (
+            patch.object(newsfeed, "ddb_get_item", return_value=cancelled),
+            patch.object(newsfeed.ddb.meta.client, "transact_write_items") as txn,
+        ):
+            out = newsfeed.cancel_scheduled_post("p1", user_id="u1")
+        self.assertEqual(out["status"], "cancelled")
+        txn.assert_not_called()
+
+    def test_cancel_scheduled_post_rejects_non_scheduled_posts(self):
+        published = {
+            "pk": newsfeed.pk_post("p1"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p1",
+            "user_id": "u1",
+            "status": "published",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        with patch.object(newsfeed, "ddb_get_item", return_value=published):
+            with self.assertRaises(newsfeed.HTTPException) as ctx:
+                newsfeed.cancel_scheduled_post("p1", user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "schedule_cancel_not_allowed")
+
+    def test_cancel_scheduled_post_rejects_non_owner(self):
+        existing = {
+            "pk": newsfeed.pk_post("p1"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p1",
+            "user_id": "u2",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "schedule_timezone": "UTC",
+            "scheduled_at_local": "2026-12-31T19:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        with patch.object(newsfeed, "ddb_get_item", return_value=existing):
+            with self.assertRaises(newsfeed.HTTPException) as ctx:
+                newsfeed.cancel_scheduled_post("p1", user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 403)
+        self.assertEqual(ctx.exception.detail, "Not your post")
+
+    def test_cancel_scheduled_post_conflict_is_retry_safe(self):
+        existing = {
+            "pk": newsfeed.pk_post("p1"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p1",
+            "user_id": "u1",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "schedule_timezone": "UTC",
+            "scheduled_at_local": "2026-12-31T19:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        cancelled = {
+            **existing,
+            "status": "cancelled",
+            "publish_at": None,
+            "schedule_timezone": None,
+            "scheduled_at_local": None,
+        }
+        err = newsfeed.ClientError({"Error": {"Code": "TransactionCanceledException", "Message": "conflict"}}, "TransactWriteItems")
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[existing, cancelled]),
+            patch.object(newsfeed.ddb.meta.client, "transact_write_items", side_effect=err),
+        ):
+            out = newsfeed.cancel_scheduled_post("p1", user_id="u1")
+        self.assertEqual(out["status"], "cancelled")
+
+    def test_cancel_scheduled_post_conflict_returns_deterministic_code_when_still_scheduled(self):
+        existing = {
+            "pk": newsfeed.pk_post("p1"),
+            "sk": newsfeed.sk_post(),
+            "post_id": "p1",
+            "user_id": "u1",
+            "status": "scheduled",
+            "publish_at": 1767225600,
+            "schedule_timezone": "UTC",
+            "scheduled_at_local": "2026-12-31T19:00",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+        err = newsfeed.ClientError({"Error": {"Code": "TransactionCanceledException", "Message": "conflict"}}, "TransactWriteItems")
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[existing, existing]),
+            patch.object(newsfeed.ddb.meta.client, "transact_write_items", side_effect=err),
+        ):
+            with self.assertRaises(newsfeed.HTTPException) as ctx:
+                newsfeed.cancel_scheduled_post("p1", user_id="u1")
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "schedule_cancel_conflict")
 
     def test_get_post_unlocked_roundtrip_for_rich_content(self):
         rich_post = {

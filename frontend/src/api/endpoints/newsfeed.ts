@@ -12,6 +12,7 @@ import type {
   CreateDraftPostReq,
   UpdateDraftPostReq,
   ListDraftPostsResp,
+  ScheduledPostsResp,
 } from "@/api/types";
 
 export const getFeed = (cursor?: string) =>
@@ -60,6 +61,18 @@ export const getPost = (postId: string) =>
 
 export const editPost = (postId: string, body: EditPostReq) =>
   api.patch<FeedPost>(`/posts/${postId}`, body);
+
+export const editScheduledPost = (postId: string, body: EditPostReq) =>
+  api.patch<FeedPost>(`/posts/${postId}`, body);
+
+export const getScheduledPosts = (cursor?: string) =>
+  api.get<ScheduledPostsResp>(
+    "/posts/scheduled",
+    cursor ? { cursor } : undefined,
+  );
+
+export const cancelScheduledPost = (postId: string) =>
+  api.post<FeedPost>(`/posts/${postId}/cancel`, {});
 
 export const deletePost = (postId: string) =>
   api.del<{ ok: boolean }>(`/posts/${postId}`);

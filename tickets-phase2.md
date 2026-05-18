@@ -1650,3 +1650,244 @@
 **Acceptance criteria:**
 - Gate fails fast on missing readiness prerequisites.
 - Output includes actionable remediation instructions.
+# Newsfeed Scheduling Phase 2 — Production Readiness Tickets
+
+### NFS-101: Emit publish completion event to notification pipeline
+**Description:** Publish a canonical `newsfeed.post.published` event when scheduled posts transition to `published` so follower notifications can be triggered by the same lifecycle signal as immediate posts.
+**Acceptance criteria:**
+- Scheduled publishes emit one completion event with post/user identifiers and correlation ID.
+- Event emission happens only after successful `scheduled -> published` transaction commit.
+
+### NFS-102: Add notification idempotency for scheduled publish events
+**Description:** Prevent duplicate notification fanout when worker retries or replay paths encounter already-published records.
+**Acceptance criteria:**
+- Notification delivery is idempotent by deterministic event key.
+- Duplicate worker runs do not increase delivered-notification count.
+
+### NFS-103: Integrate scheduled publish with search indexing ingestion
+**Description:** Wire scheduled publish transitions into search indexing so posts are indexed at publish time, not schedule time.
+**Acceptance criteria:**
+- Scheduled posts are absent from search before publish.
+- Published scheduled posts appear in search within configured indexing SLA.
+
+### NFS-104: Integrate scheduled lifecycle with recommendation eligibility
+**Description:** Ensure recommendation jobs use lifecycle-aware eligibility and include scheduled posts only after publication.
+**Acceptance criteria:**
+- `scheduled` and `cancelled` posts are excluded from recommendation candidates.
+- Published scheduled posts become eligible with correct publish timestamp ordering.
+
+### NFS-105: Add scheduler shard partitioning support
+**Description:** Implement deterministic shard partitioning for due-post scans to support horizontal worker scaling.
+**Acceptance criteria:**
+- Worker can run with `shard_index` and `shard_count` parameters.
+- Aggregate processing across shards yields no duplicate publish side effects.
+
+### NFS-106: Add distributed lease/leadership for worker ownership
+**Description:** Introduce lease acquisition/renewal semantics so only one worker owns each shard at a time.
+**Acceptance criteria:**
+- Lease conflicts prevent concurrent mutation processing for the same shard.
+- Lease expiration and takeover behavior is covered by tests.
+
+### NFS-107: Implement adaptive retry/backoff tuning
+**Description:** Dynamically adjust retry/backoff based on throttling and conflict rates to improve throughput during load spikes.
+**Acceptance criteria:**
+- Backoff increases under sustained retryable errors and decays after recovery.
+- Worker logs/metrics expose current effective backoff behavior.
+
+### NFS-108: Add bounded backlog catch-up mode
+**Description:** Add explicit catch-up mode that drains old due items while preserving fairness for newly due items.
+**Acceptance criteria:**
+- Catch-up mode supports max-duration and max-items safeguards.
+- Near-term due posts are not starved when backlog is large.
+
+### NFS-109: Add dead-letter queue for terminal publish failures
+**Description:** Persist retry-exhausted failures to a DLQ entity with structured error metadata for operator triage.
+**Acceptance criteria:**
+- Terminal failures create DLQ records containing failure code/context.
+- DLQ entries are queryable by date range and status.
+
+### NFS-110: Build DLQ replay CLI with dry-run support
+**Description:** Provide operator tooling to inspect and replay DLQ entries safely.
+**Acceptance criteria:**
+- CLI supports `--dry-run` and `--apply` modes.
+- Replay is idempotent and produces deterministic per-item outcome summaries.
+
+### NFS-111: Add schedule/post integrity scanner job
+**Description:** Implement periodic scanner to detect drift among post status, due-index keys, and owner scheduled refs.
+**Acceptance criteria:**
+- Scanner reports mismatches (orphan refs, missing due keys, invalid state combinations).
+- Scanner output includes counts by drift type and remediation hints.
+
+### NFS-112: Add automated drift repair command
+**Description:** Implement repair routine for common drift findings emitted by the integrity scanner.
+**Acceptance criteria:**
+- Repair supports scoped execution and dry-run preview.
+- Re-running repair is safe and idempotent.
+
+### NFS-113: Harden timezone normalization policy
+**Description:** Canonicalize persisted timezone values and reject invalid/non-IANA timezone input aliases.
+**Acceptance criteria:**
+- API returns deterministic validation errors for invalid timezone values.
+- Persisted schedule timezone values are canonical and round-trip in responses.
+
+### NFS-114: Handle DST ambiguous/non-existent local times
+**Description:** Define and enforce API behavior for ambiguous and invalid local datetimes during DST transitions.
+**Acceptance criteria:**
+- DST edge-case behavior is explicitly documented and test-covered.
+- FE schedule picker and BE validation resolve ambiguous times consistently.
+
+### NFS-115: Enforce min lead-time and max horizon limits consistently
+**Description:** Ensure create/edit schedule flows both enforce configurable min lead and max horizon constraints.
+**Acceptance criteria:**
+- Out-of-policy schedules are rejected with stable error codes.
+- Constraint values are visible in API docs and operational config docs.
+
+### NFS-116: Add per-user scheduled-post quota enforcement
+**Description:** Prevent abuse by capping concurrent active scheduled posts per creator.
+**Acceptance criteria:**
+- Create/reschedule requests above quota return deterministic quota errors.
+- Quota violations are exposed through metrics for monitoring.
+
+### NFS-117: Add idempotency-key support for create/edit/cancel APIs
+**Description:** Support idempotency keys on scheduling mutations to safely handle retries from clients and gateways.
+**Acceptance criteria:**
+- Duplicate requests with same key return consistent response bodies.
+- Idempotency storage has TTL and bounded growth policy.
+
+### NFS-118: Add abuse-resistant rate limiting for scheduling endpoints
+**Description:** Apply per-user and per-IP rate limits for schedule create/edit/cancel operations.
+**Acceptance criteria:**
+- Limit breaches return standard 429 response with retry guidance.
+- Rate-limit decision metrics are exported for alerting.
+
+### NFS-119: Expand authorization negative-test matrix
+**Description:** Add comprehensive tests for non-owner and cross-tenant attempts against all scheduling endpoints.
+**Acceptance criteria:**
+- Non-owner list/edit/cancel attempts are consistently denied.
+- CI includes authz regression suite for schedule APIs.
+
+### NFS-120: Add lifecycle audit schema and retention policy
+**Description:** Define canonical audit event schema for create/edit/cancel/publish transitions and retention/access controls.
+**Acceptance criteria:**
+- Schema includes actor, before/after state, source, and correlation IDs.
+- Retention and access policy is documented and approved.
+
+### NFS-121: Persist lifecycle audit events for all schedule mutations
+**Description:** Write audit records for every schedule mutation path and worker publish transition.
+**Acceptance criteria:**
+- Audit writes occur for success and failure transitions.
+- Audit records are queryable by post ID and actor for investigations.
+
+### NFS-122: Add scheduler stale-heartbeat alert rule
+**Description:** Create alerting rule based on scheduler heartbeat freshness to detect worker outages quickly.
+**Acceptance criteria:**
+- Alert triggers when heartbeat age exceeds configured threshold.
+- Alert includes runbook link and owning team metadata.
+
+### NFS-123: Add queue-age percentile metrics and alerts
+**Description:** Track oldest/p95/p99 due-item age and alert when processing lag violates SLO.
+**Acceptance criteria:**
+- Queue age percentiles are available on dashboards.
+- p99 lag alert is tuned and validated in staging.
+
+### NFS-124: Build unified scheduler operational dashboard
+**Description:** Publish a single dashboard for throughput, run outcomes, lag, retries, alerts, heartbeat, and DLQ backlog.
+**Acceptance criteria:**
+- Dashboard has per-environment and per-shard views.
+- On-call can triage top failure classes from dashboard alone.
+
+### NFS-125: Add synthetic canary for scheduled publish lifecycle (staging)
+**Description:** Run periodic staging canary that schedules short-delay posts and validates end-to-end publish behavior.
+**Acceptance criteria:**
+- Canary verifies hidden-before-due and visible-after-publish semantics.
+- Canary failures include actionable diagnostics in logs/alerts.
+
+### NFS-126: Add production-safe synthetic canary
+**Description:** Deploy isolated production canary traffic for continuous verification of scheduler health.
+**Acceptance criteria:**
+- Canary content is isolated from end-user feed experience.
+- Canary failures page on-call with correlation IDs and run context.
+
+### NFS-127: Add multi-user E2E coverage for owner vs non-owner operations
+**Description:** Add E2E tests that validate correct owner access and non-owner denial for list/edit/cancel flows.
+**Acceptance criteria:**
+- E2E suite covers at least two users and cross-user abuse attempts.
+- E2E assertions include API response codes and UI behavior.
+
+### NFS-128: Add E2E coverage for DST boundary scheduling
+**Description:** Add end-to-end tests for scheduling around DST transition boundaries in multiple critical timezones.
+**Acceptance criteria:**
+- Test suite includes ambiguous and non-existent local time scenarios.
+- Expected publish behavior is consistent with documented API policy.
+
+### NFS-129: Add E2E worker downtime and recovery scenario
+**Description:** Validate behavior when worker is paused and later resumed with accumulated due backlog.
+**Acceptance criteria:**
+- During downtime posts remain scheduled and hidden from feed.
+- On recovery, posts publish without duplicates and with expected ordering.
+
+### NFS-130: Add API contract tests for downstream consumers
+**Description:** Add contract tests for schedule lifecycle payloads/events used by downstream systems.
+**Acceptance criteria:**
+- Contract tests pin required fields and semantic invariants.
+- Breaking contract changes fail CI with clear diff output.
+
+### NFS-131: Add migration verification command and checklist
+**Description:** Build a verification command that validates due-index readiness and key population after migration/backfill.
+**Acceptance criteria:**
+- Verification reports index status and missing-key counts.
+- Deployment checklist includes pass/fail criteria for go-live.
+
+### NFS-132: Add zero-downtime rollback playbook
+**Description:** Document and automate rollback steps for scheduler worker, API gates, and index usage if incidents occur.
+**Acceptance criteria:**
+- Rollback playbook includes trigger thresholds and command sequence.
+- Dry-run rollback is tested in staging and documented.
+
+### NFS-133: Add scheduler load test suite and baseline
+**Description:** Create repeatable load tests for high-volume due batches and mixed status workloads.
+**Acceptance criteria:**
+- Load tests report throughput, lag, and retry metrics at target QPS.
+- Baseline performance numbers are documented for regression tracking.
+
+### NFS-134: Optimize due-index query pagination strategy
+**Description:** Tune page sizes and batching logic to minimize hot partition pressure and improve steady-state latency.
+**Acceptance criteria:**
+- Query pagination behavior is configurable and benchmarked.
+- Throughput improves without increasing duplicate/conflict outcomes.
+
+### NFS-135: Add feature-flag rollout automation and guardrails
+**Description:** Automate phased enablement for API/UI/worker flags with preflight checks and automatic rollback criteria.
+**Acceptance criteria:**
+- Rollout tool validates prerequisites before each phase transition.
+- Failed guardrail checks halt rollout and emit actionable status output.
+
+### NFS-136: Add schedule metadata privacy/redaction policy
+**Description:** Define and implement redaction rules for schedule metadata in logs, exports, and analytics sinks.
+**Acceptance criteria:**
+- Sensitive schedule metadata is redacted or minimized per policy.
+- Privacy behavior is validated by automated tests.
+
+### NFS-137: Add scheduler incident runbook for on-call
+**Description:** Create runbook for diagnosing lag spikes, retry storms, stale heartbeat, and DLQ growth.
+**Acceptance criteria:**
+- Runbook includes symptom-to-action decision tree and example commands.
+- On-call tabletop exercise confirms runbook completeness.
+
+### NFS-138: Publish API reference updates for scheduling lifecycle
+**Description:** Expand API docs with request/response examples, error codes, limits, and DST behavior notes.
+**Acceptance criteria:**
+- Docs include create/edit/cancel/list examples with schedule fields.
+- Documented error codes match implementation and tests.
+
+### NFS-139: Add release-readiness checklist for scheduling GA
+**Description:** Create final checklist spanning reliability, security, observability, migration health, and support readiness.
+**Acceptance criteria:**
+- Checklist includes required sign-offs from backend, frontend, SRE, and security.
+- GA decision criteria include sustained SLO compliance window.
+
+### NFS-140: Add post-GA monitoring review cadence
+**Description:** Define recurring review process for scheduler KPIs, incident trends, and capacity planning after launch.
+**Acceptance criteria:**
+- Monthly review template includes lag, error, DLQ, and quota trends.
+- Action items from each review are tracked with owners and due dates.

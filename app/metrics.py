@@ -447,6 +447,43 @@ MASS_MESSAGE_LIMIT_EVENTS = Counter(
     "Mass messaging abuse/rate-limit evaluations",
     ["scope", "limit_name", "outcome"],
 )
+NEWSFEED_SCHEDULE_OPERATIONS = Counter(
+    "newsfeed_schedule_operations_total",
+    "Newsfeed scheduled-post lifecycle operations by step and outcome",
+    ["operation", "outcome"],
+)
+NEWSFEED_SCHEDULE_PUBLISH_LAG = Histogram(
+    "newsfeed_schedule_publish_lag_seconds",
+    "Lag between scheduled publish_at and actual scheduler publish",
+    buckets=(0, 1, 2, 5, 10, 30, 60, 120, 300, 600, 1800, 3600),
+)
+NEWSFEED_SCHEDULE_BACKLOG = Gauge(
+    "newsfeed_schedule_backlog_due",
+    "Count of scheduled posts currently due for publish",
+)
+NEWSFEED_SCHEDULE_OLDEST_DUE_AGE = Gauge(
+    "newsfeed_schedule_oldest_due_age_seconds",
+    "Age in seconds of the oldest currently due scheduled post",
+)
+NEWSFEED_SCHEDULE_ALERTS = Counter(
+    "newsfeed_schedule_alerts_total",
+    "Count of scheduler lag/error threshold alert breaches",
+    ["alert_type"],
+)
+NEWSFEED_SCHEDULE_RUNS = Counter(
+    "newsfeed_schedule_runs_total",
+    "Newsfeed scheduler run outcomes",
+    ["outcome"],
+)
+NEWSFEED_SCHEDULE_RUN_DURATION = Histogram(
+    "newsfeed_schedule_run_duration_seconds",
+    "Newsfeed scheduler run duration in seconds",
+    buckets=(0.001, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60),
+)
+NEWSFEED_SCHEDULE_LAST_RUN_UNIX = Gauge(
+    "newsfeed_schedule_last_run_unix",
+    "Unix timestamp of the most recent scheduler run heartbeat",
+)
 USAGE_METERING_EVENTS = Counter(
     "usage_metering_events_total",
     "Usage metering event outcomes",
@@ -1462,6 +1499,39 @@ def record_mass_message_limit_event(*, scope: str, limit_name: str, outcome: str
     ).inc()
 
 
+def record_newsfeed_schedule_operation(*, operation: str, outcome: str) -> None:
+    NEWSFEED_SCHEDULE_OPERATIONS.labels(
+        operation=(operation or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).inc()
+
+
+def record_newsfeed_schedule_publish_lag(*, elapsed_seconds: float) -> None:
+    NEWSFEED_SCHEDULE_PUBLISH_LAG.observe(max(0.0, float(elapsed_seconds)))
+
+
+def set_newsfeed_schedule_backlog(*, due_count: int) -> None:
+    NEWSFEED_SCHEDULE_BACKLOG.set(max(0, int(due_count)))
+
+
+def set_newsfeed_schedule_oldest_due_age(*, elapsed_seconds: float) -> None:
+    NEWSFEED_SCHEDULE_OLDEST_DUE_AGE.set(max(0.0, float(elapsed_seconds)))
+
+
+def record_newsfeed_schedule_alert(*, alert_type: str) -> None:
+    NEWSFEED_SCHEDULE_ALERTS.labels(alert_type=(alert_type or "unknown").lower()).inc()
+
+
+def record_newsfeed_schedule_run(*, outcome: str) -> None:
+    NEWSFEED_SCHEDULE_RUNS.labels(outcome=(outcome or "unknown").lower()).inc()
+
+
+def record_newsfeed_schedule_run_duration(*, elapsed_seconds: float) -> None:
+    NEWSFEED_SCHEDULE_RUN_DURATION.observe(max(0.0, float(elapsed_seconds)))
+
+
+def set_newsfeed_schedule_last_run(*, unix_seconds: float) -> None:
+    NEWSFEED_SCHEDULE_LAST_RUN_UNIX.set(max(0.0, float(unix_seconds)))
 
 def record_project_count_delta(delta: int) -> None:
     global _PROJECT_COUNT_ESTIMATE
