@@ -459,6 +459,10 @@ class Settings:
         "DDB_MESSAGE_THREADS",
         "MessageThreads",
     )
+    message_call_sessions_table_name: str = os.environ.get(
+        "DDB_MESSAGE_CALL_SESSIONS",
+        "MessageCallSessions",
+    )
     content_reports_table_name: str = os.environ.get(
         "DDB_CONTENT_REPORTS",
         "ContentReports",
@@ -918,6 +922,16 @@ class Settings:
     messaging_dm_lottery_kill_switch: bool = os.environ.get("MESSAGING_DM_LOTTERY_KILL_SWITCH", "false").lower() == "true"
     # Canonical profile rollout flags (UPR-020)
     profile_lookup_audience_filtering_enabled: bool = os.environ.get("PROFILE_LOOKUP_AUDIENCE_FILTERING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    messaging_webrtc_direct_call_enabled: bool = os.environ.get("MESSAGING_WEBRTC_DIRECT_CALL_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    messaging_webrtc_direct_call_kill_switch: bool = os.environ.get("MESSAGING_WEBRTC_DIRECT_CALL_KILL_SWITCH", "false").lower() in ("1", "true", "yes", "on")
+    messaging_webrtc_direct_call_mode: str = os.environ.get("MESSAGING_WEBRTC_DIRECT_CALL_MODE", "enabled")
+    messaging_webrtc_direct_call_enabled_tenant_ids: str = os.environ.get("MESSAGING_WEBRTC_DIRECT_CALL_ENABLED_TENANT_IDS", "")
+    messaging_webrtc_direct_call_internal_tenant_ids: str = os.environ.get("MESSAGING_WEBRTC_DIRECT_CALL_INTERNAL_TENANT_IDS", "internal")
+    messaging_webrtc_direct_call_enabled_cohorts: str = os.environ.get("MESSAGING_WEBRTC_DIRECT_CALL_ENABLED_COHORTS", "")
+    messaging_webrtc_turn_enabled: bool = os.environ.get("MESSAGING_WEBRTC_TURN_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+    messaging_webrtc_turn_urls: str = os.environ.get("MESSAGING_WEBRTC_TURN_URLS", "")
+    messaging_webrtc_turn_secret: str = os.environ.get("MESSAGING_WEBRTC_TURN_SECRET", "")
+    messaging_webrtc_turn_ttl_seconds: int = int(os.environ.get("MESSAGING_WEBRTC_TURN_TTL_SECONDS", "600"))
     # Subscriptions
     subscriptions_table_name: str = os.environ.get("SUBSCRIPTIONS_TABLE_NAME", "subscriptions")
     questionnaire_table_name: str = os.environ.get("QUESTIONNAIRE_TABLE_NAME", "questionnaires")

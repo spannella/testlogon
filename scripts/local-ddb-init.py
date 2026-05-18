@@ -508,6 +508,17 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={THREAD_FIELD_CREATED_AT: "N"},
         ),
+        # MessageCallSessions: pk=call_id, GSIs by conversation + participant
+        TableDef(
+            _resolve_table_name(S.message_call_sessions_table_name, "MessageCallSessions"),
+            "call_id",
+            gsi=[
+                {"index_name": "ByConversationStartedAt", "partition_key": "conversation_id", "sort_key": "start_ts_sort"},
+                {"index_name": "ByCallerStartedAt", "partition_key": "caller_user_id", "sort_key": "start_ts_sort"},
+                {"index_name": "ByCalleeStartedAt", "partition_key": "callee_user_id", "sort_key": "start_ts_sort"},
+            ],
+            attr_types={"start_ts_sort": "N"},
+        ),
         # MessageLegalHolds: pk=hold_id, GSIs ByConversationStatusCreatedAt + ByStatusCreatedAt
         TableDef(
             _resolve_table_name(S.message_legal_holds_table_name, "MessageLegalHolds"),

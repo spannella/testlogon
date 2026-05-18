@@ -3041,3 +3041,125 @@
 **Acceptance criteria:**
 - Releases are blocked automatically when mandatory readiness checks fail.
 - Gate output is versioned per release with immutable evidence links.
+
+# WebRTC Direct Calls — Phase 2 Follow-up Tickets
+
+### WRTC-201: End-to-end synthetic probe for audio call establishment
+**Description:** Implement a scheduled synthetic journey that creates a direct-message call, validates signaling + TURN credential issuance, connects audio media, and tears down cleanly.
+**Acceptance criteria:**
+- Synthetic run executes on schedule in staging and production canary with pass/fail status.
+- Failures emit stage-level diagnostics (invite, signaling, TURN, media connect, teardown).
+
+### WRTC-202: End-to-end synthetic probe for video call establishment
+**Description:** Add a dedicated synthetic flow for video-enabled calls to validate camera track negotiation and connection stability.
+**Acceptance criteria:**
+- Probe verifies successful video track negotiation and connected state within target latency.
+- Results are segmented independently from audio probes in monitoring dashboards.
+
+### WRTC-203: Cross-browser permission revoke regression suite
+**Description:** Expand automated browser tests for permission revocation mid-call and denied-permission recovery paths.
+**Acceptance criteria:**
+- CI covers Chromium, Firefox, and Safari permission revoke/deny scenarios.
+- Client state machine transitions remain deterministic and user fallback messaging is verified.
+
+### WRTC-204: Multi-tab conflict resolution hardening
+**Description:** Ensure deterministic winner/loser behavior when the same user accepts or starts calls from multiple tabs/devices.
+**Acceptance criteria:**
+- Simultaneous accept/start races converge to one authoritative active session.
+- Losing tabs/devices receive explicit terminal reason and no ghost UI remains.
+
+### WRTC-205: Lifecycle transition latency telemetry v2
+**Description:** Add metrics for lifecycle transition segments to expose where setup delays occur.
+**Acceptance criteria:**
+- Histograms exist for invite→ringing, ringing→accepted, and accepted→connected.
+- Alerts are configured for p95 regressions beyond agreed thresholds.
+
+### WRTC-206: Signaling reject taxonomy dashboard panelization
+**Description:** Publish reject-reason metrics and dashboard panels for signaling validation failures.
+**Acceptance criteria:**
+- Metrics include schema/auth/replay/stale-sequence/unknown-type categories.
+- Dashboard shows reject trends by environment and browser/platform where available.
+
+### WRTC-207: TURN regional failover readiness
+**Description:** Add multi-region TURN endpoint preference and failover behavior validation under regional outages.
+**Acceptance criteria:**
+- Credential issuance supports region-priority with documented fallback order.
+- Failover drill proves uninterrupted call setup through secondary region.
+
+### WRTC-208: Retry/backoff tuning under intermittent TURN failures
+**Description:** Improve and validate retry behavior when TURN allocation intermittently fails.
+**Acceptance criteria:**
+- Automated reliability tests simulate intermittent TURN failure and verify bounded retry policy.
+- Recovery vs terminal-failure outcomes emit correct reason taxonomy metrics.
+
+### WRTC-209: Per-user call invite rate limiting
+**Description:** Implement per-user invite burst limits to reduce abuse and accidental invite storms.
+**Acceptance criteria:**
+- API enforces configurable user-level thresholds with deterministic error responses.
+- Limit hits are surfaced in abuse-monitoring metrics and logs.
+
+### WRTC-210: Per-conversation ringing cooldown controls
+**Description:** Introduce conversation-level cooldown after repeated invite attempts or rapid declines.
+**Acceptance criteria:**
+- Cooldown blocks repeated invite attempts for configured duration.
+- Caller receives retry timing in structured API response payload.
+
+### WRTC-211: Suspicious signaling audit trail expansion
+**Description:** Create immutable audit events for replay attempts, signature mismatches, and malformed envelope bursts.
+**Acceptance criteria:**
+- Audit records include actor, conversation, reason, and correlation ID.
+- Security review workflow can query and filter these events by reason/time window.
+
+### WRTC-212: Mid-call authorization revocation enforcement
+**Description:** Enforce conversation membership and block-state checks during active calls, not only at call start.
+**Acceptance criteria:**
+- Membership revocation or block events terminate affected participant access within defined SLA.
+- Termination reason is propagated consistently to client UI and timeline events.
+
+### WRTC-213: Timeline deduplication contract for call events
+**Description:** Define and enforce deterministic dedupe keys for call-related timeline system messages.
+**Acceptance criteria:**
+- Timeline writes are idempotent under retries and duplicate deliveries.
+- Automated tests verify no duplicate call lifecycle entries are persisted.
+
+### WRTC-214: Timeline ordering guarantees for same-timestamp events
+**Description:** Implement deterministic tie-break rules for timeline event ordering when timestamps collide.
+**Acceptance criteria:**
+- Ordering rules are documented and applied consistently in read/write paths.
+- Tests cover race scenarios with identical timestamps and validate stable order.
+
+### WRTC-215: Mobile Safari interruption and resume reliability
+**Description:** Close remaining iOS Safari gaps for interruption handling, audio route changes, and resume behavior.
+**Acceptance criteria:**
+- Supported interruption/resume scenarios recover without stuck call state.
+- Unsupported cases have explicit fallback UX copy and documented behavior.
+
+### WRTC-216: Android Chrome background/foreground call continuity tests
+**Description:** Add automated coverage for Android Chrome lifecycle transitions while a call is active.
+**Acceptance criteria:**
+- Tests verify track continuity and deterministic state transitions across background/foreground cycles.
+- Failures capture lifecycle diagnostics for root-cause analysis.
+
+### WRTC-217: Call metadata retention and redaction automation
+**Description:** Implement scheduled retention cleanup/redaction for call diagnostics and metadata fields.
+**Acceptance criteria:**
+- Job runs idempotently and enforces policy-defined retention windows.
+- Metrics report scanned, redacted, and deleted record counts per run.
+
+### WRTC-218: SLO definition for call setup and in-call continuity
+**Description:** Formalize SLIs/SLOs and error budgets for setup success, setup latency, and continuity.
+**Acceptance criteria:**
+- SLO document defines objectives, measurement windows, and burn-rate policy.
+- Alert rules map directly to SLO burn rates with linked runbook actions.
+
+### WRTC-219: High-concurrency call setup load testing and capacity model
+**Description:** Run burst load scenarios to profile call setup bottlenecks and produce capacity guidance.
+**Acceptance criteria:**
+- Load tests report p50/p95/p99 latency and failure rates under burst patterns.
+- Capacity recommendations and scaling triggers are documented for rollout gates.
+
+### WRTC-220: GA readiness gate, sign-off, and launch evidence package
+**Description:** Build final production readiness checklist and evidence package for broad rollout approval.
+**Acceptance criteria:**
+- Checklist requires sign-off from Engineering, QA, SRE, Security, and Product.
+- Launch evidence includes unresolved risks with owner, mitigation, and acceptance decision.

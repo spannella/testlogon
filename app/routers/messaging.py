@@ -12005,3 +12005,70 @@ def unlock_message(
         unlock_payment_id=unlock_payment_id,
         amount_cents=amount_cents,
     )
+
+
+class TurnIceServerOut(BaseModel):
+    urls: list[str]
+    username: str
+    credential: str
+
+
+class TurnCredentialsOut(BaseModel):
+    ttl_seconds: int
+    expires_at: int
+    ice_servers: list[TurnIceServerOut]
+
+
+class TurnCredentialErrorDetailOut(BaseModel):
+    code: str
+    message: str
+
+
+class TurnCredentialErrorOut(BaseModel):
+    detail: TurnCredentialErrorDetailOut
+
+
+TURN_CREDENTIAL_ERROR_STATUS_MAP = {
+    "feature_disabled": 403,
+    "turn_not_configured": 503,
+    "turn_invalid_url": 503,
+    "turn_invalid_ttl": 503,
+    "participant_lookup_failed": 503,
+    "call_not_found": 404,
+    "forbidden": 403,
+    "call_participant_mismatch": 409,
+    "invalid_state": 409,
+    "validation_error": 400,
+}
+TURN_CREDENTIAL_ENDPOINT_RESPONSES = {
+    400: {"model": TurnCredentialErrorOut, "description": "Invalid TURN credential request"},
+    403: {"model": TurnCredentialErrorOut, "description": "Forbidden or feature disabled"},
+    404: {"model": TurnCredentialErrorOut, "description": "Call session not found"},
+    409: {"model": TurnCredentialErrorOut, "description": "Call state or participant mismatch"},
+    503: {"model": TurnCredentialErrorOut, "description": "TURN service/configuration unavailable"},
+}
+
+
+@router.post(
+    "/messages/calls/{call_id}/turn-credentials",
+    response_model=TurnCredentialsOut,
+    responses=TURN_CREDENTIAL_ENDPOINT_RESPONSES,
+)
+async def issue_turn_credentials_endpoint(
+    call_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    from app.services.messaging_turn_credentials import TurnCredentialIssueError, issue_turn_credentials
+
+    try:
+        creds = issue_turn_credentials(call_id=call_id, actor_user_id=user_id)
+        return TurnCredentialsOut(
+            ttl_seconds=creds.ttl_seconds,
+            expires_at=creds.expires_at,
+            ice_servers=[TurnIceServerOut(**server) for server in creds.ice_servers],
+        )
+    except TurnCredentialIssueError as exc:
+        raise HTTPException(
+            status_code=TURN_CREDENTIAL_ERROR_STATUS_MAP.get(exc.code, 400),
+            detail={"code": exc.code, "message": str(exc)},
+        )

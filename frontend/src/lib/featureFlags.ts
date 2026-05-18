@@ -31,6 +31,52 @@ export const isMessagingGalleryEnabled = () => messagingGalleryEnabled && !messa
 export const messagingDmLotteryEnabled = toBool(env.VITE_MESSAGING_DM_LOTTERY_ENABLED, false);
 export const messagingDmLotteryKillSwitch = toBool(env.VITE_MESSAGING_DM_LOTTERY_KILL_SWITCH, false);
 export const isMessagingDmLotteryEnabled = () => messagingDmLotteryEnabled && !messagingDmLotteryKillSwitch;
+
+export const messagingWebrtcDirectCallEnabled = toBool(env.VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED, false);
+export const messagingWebrtcDirectCallKillSwitch = toBool(env.VITE_MESSAGING_WEBRTC_DIRECT_CALL_KILL_SWITCH, false);
+export const messagingWebrtcDirectCallMode = String(env.VITE_MESSAGING_WEBRTC_DIRECT_CALL_MODE ?? "enabled").trim().toLowerCase();
+
+const csvSet = (value: unknown): Set<string> => {
+  if (typeof value !== "string") return new Set<string>();
+  return new Set(
+    value
+      .split(",")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0),
+  );
+};
+
+const webrtcEnabledTenantIds = csvSet(env.VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED_TENANT_IDS);
+const webrtcInternalTenantIds = csvSet(env.VITE_MESSAGING_WEBRTC_DIRECT_CALL_INTERNAL_TENANT_IDS ?? "internal");
+const webrtcEnabledCohorts = new Set(Array.from(csvSet(env.VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED_COHORTS)).map((v) => v.toLowerCase()));
+
+export const isMessagingWebrtcDirectCallEnabled = (params?: { tenantId?: string | null; cohort?: string | null }) => {
+  if (!messagingWebrtcDirectCallEnabled || messagingWebrtcDirectCallKillSwitch) return false;
+
+  if (["enabled", "on", "true", "1"].includes(messagingWebrtcDirectCallMode)) return true;
+  if (["disabled", "off", "false", "0", ""].includes(messagingWebrtcDirectCallMode)) return false;
+
+  const tenantId = (params?.tenantId ?? env.VITE_TENANT_ID ?? "").toString().trim();
+  const cohort = (params?.cohort ?? env.VITE_ROLLOUT_COHORT ?? "").toString().trim().toLowerCase();
+
+  if (["internal", "pilot_internal"].includes(messagingWebrtcDirectCallMode)) {
+    return tenantId.length > 0 && webrtcInternalTenantIds.has(tenantId);
+  }
+
+  if (["selective", "tenant", "cohort"].includes(messagingWebrtcDirectCallMode)) {
+    const tenantAllowed = tenantId.length > 0 && webrtcEnabledTenantIds.has(tenantId);
+    const cohortAllowed = cohort.length > 0 && webrtcEnabledCohorts.has(cohort);
+
+    if (webrtcEnabledTenantIds.size > 0 && webrtcEnabledCohorts.size > 0) {
+      return tenantAllowed || cohortAllowed;
+    }
+    if (webrtcEnabledTenantIds.size > 0) return tenantAllowed;
+    if (webrtcEnabledCohorts.size > 0) return cohortAllowed;
+    return false;
+  }
+
+  return false;
+};
 export const messagingOnceMediaComposerEnabled = toBool(env.VITE_CLIENT_ONCE_MEDIA_COMPOSER_ENABLED, true);
 export const messagingOnceMediaImageEnabled = toBool(env.VITE_MESSAGING_ONCE_MEDIA_IMAGE_ENABLED, true);
 export const messagingOnceMediaVideoEnabled = toBool(env.VITE_MESSAGING_ONCE_MEDIA_VIDEO_ENABLED, true);
