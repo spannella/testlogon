@@ -2951,3 +2951,93 @@
 **Acceptance criteria:**
 - Deployment pipeline blocks release when any KYC gate check fails.
 - Gate output provides actionable diagnostics for failed checks.
+
+### VWD-201: Production persistent entitlement/revocation store rollout
+**Description:** Replace process-local replay/revocation state with a durable, low-latency datastore (multi-AZ), including migration, TTL cleanup, and safe fallback behavior.
+**Acceptance criteria:**
+- Replay/revocation decisions are consistent across replicas and survive restarts.
+- Dual-read/dual-write migration plan is implemented with rollback procedure and runbook.
+
+### VWD-202: KMS-backed playback signing keyset with `kid` rotation
+**Description:** Introduce managed keysets for playback entitlement signing, emit `kid` in token headers, and validate against active/previous keys during rotation windows.
+**Acceptance criteria:**
+- Keys rotate without playback downtime and without invalidating in-flight tokens before policy expiry.
+- Compromise response runbook supports key revocation and emergency rotation under 15 minutes.
+
+### VWD-203: Entitlement middleware/route parity and defense-in-depth tests
+**Description:** Add end-to-end API tests validating middleware behavior and router behavior are aligned for success/error paths across issue/revoke/protected endpoints.
+**Acceptance criteria:**
+- E2E tests cover missing bearer, revoked token, revoked session, replay, and audience mismatch.
+- Error code/status combinations are documented and snapshot-tested.
+
+### VWD-204: Structured security telemetry for entitlement and DRM failures
+**Description:** Emit structured logs/events for validation failures, revocations, replay detections, and DRM provider failures with safe redaction.
+**Acceptance criteria:**
+- Every denial path emits a machine-parseable event with reason, tenant, and correlation IDs.
+- Telemetry is scrubbed of secrets/token bodies and passes privacy review.
+
+### VWD-205: Prometheus metrics for entitlement + DRM SLOs
+**Description:** Add counters/histograms for issue/validate/revoke/license flows (latency, outcome, error_code) and define initial SLO dashboards.
+**Acceptance criteria:**
+- Metrics expose p50/p95/p99 latency and error-rate slices by endpoint and outcome.
+- Alert rules for sustained elevated denial/error rates are deployed and tested.
+
+### VWD-206: Idempotent revoke API semantics and dedupe keys
+**Description:** Make revocation operations idempotent with request identifiers and deterministic responses for duplicate revoke requests.
+**Acceptance criteria:**
+- Repeating identical revoke requests does not create duplicate state or noisy alerts.
+- API contract explicitly documents idempotent response behavior.
+
+### VWD-207: DRM provider resilience policy (timeouts/retries/circuit breaker)
+**Description:** Implement bounded retries with jitter, circuit-breaker state machine, and per-provider timeout budgets, including fallback controls.
+**Acceptance criteria:**
+- Provider outages trigger controlled fail-fast behavior after threshold and recover automatically on sustained health.
+- Circuit state transitions are observable via metrics and audit events.
+
+### VWD-208: Multi-provider DRM routing and policy-based failover
+**Description:** Add policy engine for provider selection (region, tenant tier, DRM family), with active health-aware failover and safe failback.
+**Acceptance criteria:**
+- Failover occurs automatically within defined RTO and is reversible after stability window.
+- Routing decisions are traceable per request in logs/headers.
+
+### VWD-209: Playback token claim contract versioning
+**Description:** Add versioned claim schema for playback tokens and compatibility logic for forward/backward validation across rollout phases.
+**Acceptance criteria:**
+- Validators support at least two adjacent schema versions concurrently.
+- Deprecation schedule and migration checks are documented.
+
+### VWD-210: Watermark asset malware/scanner and SVG sanitizer integration
+**Description:** Integrate antivirus and sanitizer pipeline for uploaded watermark assets, including quarantine/approval workflow.
+**Acceptance criteria:**
+- Unsafe uploads are blocked with explicit remediation guidance.
+- Scan outcomes and hashes are persisted for auditability.
+
+### VWD-211: High-volume load/soak tests for entitlement and DRM paths
+**Description:** Build repeatable load scenarios (burst, sustained, mixed tenants/devices) and automate baseline capture in CI/preprod.
+**Acceptance criteria:**
+- Capacity envelope and saturation thresholds are published with reproducible test profiles.
+- Regressions beyond defined thresholds fail the release gate.
+
+### VWD-212: Chaos testing for entitlement/DRM dependencies
+**Description:** Add fault injection for datastore latency, provider 5xx, DNS/TLS failures, and partial regional outages.
+**Acceptance criteria:**
+- Recovery behavior is validated against documented RTO/RPO/SLO targets.
+- Chaos reports are archived and linked to incident/readiness reviews.
+
+### VWD-213: API and runbook documentation hardening
+**Description:** Expand docs for all entitlement/DRM error codes, retry guidance, client integration examples, and operator troubleshooting playbooks.
+**Acceptance criteria:**
+- Public API docs include complete error matrix and concrete request/response examples.
+- On-call runbook includes clear triage steps for top 10 failure modes.
+
+### VWD-214: End-to-end encrypted reference playback pipeline test
+**Description:** Add a deterministic E2E test that runs ingest -> package -> entitlement -> license -> playback validation using fixture assets.
+**Acceptance criteria:**
+- Test validates manifest correctness, entitlement acceptance, license issuance, and protected access end-to-end.
+- CI artifacts include manifests/logs for failed steps with reproducible repro command.
+
+### VWD-215: Release orchestration gate for video/DRM readiness
+**Description:** Build a single go/no-go gate aggregating canary results, SLO health, security checks, and migration status for release approval.
+**Acceptance criteria:**
+- Releases are blocked automatically when mandatory readiness checks fail.
+- Gate output is versioned per release with immutable evidence links.

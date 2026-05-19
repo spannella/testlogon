@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.internal/schemas/drm-license-contract-v1.json",
+  "title": "DRM Entitlement and License Contract v1",
+  "type": "object",
+  "properties": {
+    "contract_version": { "const": "2026-03-drm-entitlement-v1" },
+    "profile": { "enum": ["widevine", "fairplay", "playready", "multi_drm"] },
+    "asset_id": { "type": "string", "minLength": 1 },
+    "tenant_id": { "type": "string", "minLength": 1 },
+    "session_id": { "type": "string", "minLength": 1 },
+    "device_id": { "type": "string", "minLength": 1 },
+    "challenge_b64": { "type": "string", "minLength": 1 },
+    "key_id": { "type": "string", "minLength": 1 },
+    "license_b64": { "type": "string", "minLength": 1 },
+    "issued_at_epoch": { "type": "integer", "minimum": 0 },
+    "expires_at_epoch": { "type": "integer", "minimum": 0 },
+    "key_rotation_seconds": { "type": "integer", "minimum": 60 },
+    "per_content_key": { "type": "boolean" },
+    "offline_allowed": { "type": "boolean" },
+    "renewal_url": { "type": ["string", "null"] }
+  },
+  "required": ["contract_version", "profile", "asset_id", "tenant_id", "session_id", "device_id"],
+  "additionalProperties": true
+}

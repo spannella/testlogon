@@ -1,0 +1,38 @@
+[
+  {
+    "name": "1080p",
+    "width": 1920,
+    "height": 1080,
+    "fps": 30,
+    "video_bitrate": "6000k",
+    "audio_bitrate": "192k",
+    "gop_seconds": 2
+  },
+  {
+    "name": "720p",
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "video_bitrate": "3500k",
+    "audio_bitrate": "128k",
+    "gop_seconds": 2
+  },
+  {
+    "name": "540p",
+    "width": 960,
+    "height": 540,
+    "fps": 30,
+    "video_bitrate": "2200k",
+    "audio_bitrate": "128k",
+    "gop_seconds": 2
+  },
+  {
+    "name": "360p",
+    "width": 640,
+    "height": 360,
+    "fps": 30,
+    "video_bitrate": "1200k",
+    "audio_bitrate": "96k",
+    "gop_seconds": 2
+  }
+]

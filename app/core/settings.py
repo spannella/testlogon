@@ -334,6 +334,28 @@ class Settings:
     billing_dunning_retry_schedule_seconds: str = os.environ.get("BILLING_DUNNING_RETRY_SCHEDULE_SECONDS", "3600,86400,172800")
     billing_dunning_scan_limit: int = int(os.environ.get("BILLING_DUNNING_SCAN_LIMIT", "200"))
 
+    # Playback entitlement issuance and validation (VWD-018)
+    playback_entitlement_secret: str = os.environ.get("PLAYBACK_ENTITLEMENT_SECRET", "")
+    playback_entitlement_max_ttl_seconds: int = int(os.environ.get("PLAYBACK_ENTITLEMENT_MAX_TTL_SECONDS", "300"))
+    playback_entitlement_expected_audience: str = os.environ.get("PLAYBACK_ENTITLEMENT_EXPECTED_AUDIENCE", "playback")
+    playback_entitlement_max_clock_skew_seconds: int = int(os.environ.get("PLAYBACK_ENTITLEMENT_MAX_CLOCK_SKEW_SECONDS", "30"))
+    playback_entitlement_replay_protection_enabled: bool = os.environ.get("PLAYBACK_ENTITLEMENT_REPLAY_PROTECTION_ENABLED", "0") not in ("0", "false", "False")
+    playback_entitlement_max_token_length: int = int(os.environ.get("PLAYBACK_ENTITLEMENT_MAX_TOKEN_LENGTH", "4096"))
+    playback_entitlement_max_claim_length: int = int(os.environ.get("PLAYBACK_ENTITLEMENT_MAX_CLAIM_LENGTH", "256"))
+    playback_entitlement_replay_cache_max_entries: int = int(os.environ.get("PLAYBACK_ENTITLEMENT_REPLAY_CACHE_MAX_ENTRIES", "100000"))
+    playback_entitlement_revocation_jti_cache_max_entries: int = int(os.environ.get("PLAYBACK_ENTITLEMENT_REVOCATION_JTI_CACHE_MAX_ENTRIES", "100000"))
+    playback_entitlement_revocation_session_cache_max_entries: int = int(os.environ.get("PLAYBACK_ENTITLEMENT_REVOCATION_SESSION_CACHE_MAX_ENTRIES", "100000"))
+
+    # DRM provider integration (VWD-017)
+    drm_license_provider_mode: str = os.environ.get("DRM_LICENSE_PROVIDER_MODE", "mock")
+    drm_provider_license_endpoint: str = os.environ.get("DRM_PROVIDER_LICENSE_ENDPOINT", "").strip()
+    drm_provider_api_key: str = os.environ.get("DRM_PROVIDER_API_KEY", "")
+    drm_provider_api_key_secret_name: str = os.environ.get("DRM_PROVIDER_API_KEY_SECRET_NAME", "DRM_PROVIDER_API_KEY")
+    drm_provider_timeout_seconds: int = int(os.environ.get("DRM_PROVIDER_TIMEOUT_SECONDS", "5"))
+    drm_key_rotation_enabled: bool = os.environ.get("DRM_KEY_ROTATION_ENABLED", "1") not in ("0", "false", "False")
+    drm_key_rotation_seconds: int = int(os.environ.get("DRM_KEY_ROTATION_SECONDS", "300"))
+    drm_key_rotation_salt: str = os.environ.get("DRM_KEY_ROTATION_SALT", "")
+
     # Tickets
     tickets_table_name: str = os.environ.get("TICKETS_TABLE_NAME", "tickets")
     tickets_owner_index_name: str = os.environ.get("TICKETS_OWNER_INDEX_NAME", "owner_sub-updated_at-index")

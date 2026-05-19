@@ -56,6 +56,7 @@ from app.routers.catalog import router as catalog_router
 from app.routers.subscription_server import router as subscription_server_router
 from app.routers.admin_usage import router as admin_usage_router
 from app.routers.admin_entitlements import router as admin_entitlements_router
+from app.routers.admin_tenant_watermark_assets import router as admin_tenant_watermark_assets_router
 from app.routers.ups import router as ups_router
 from app.routers.projects import router as projects_router
 from app.routers.contacts import router as contacts_router
@@ -71,6 +72,7 @@ from app.routers.browser_ssh_terminal import (
 from app.routers.questionnaires import router as questionnaires_router
 from app.routers.vnc_sessions import router as vnc_sessions_router
 from app.routers.kyc_cases import router as kyc_cases_router
+from app.routers.playback_entitlements import router as playback_entitlements_router
 from app.routers.moderation import router as moderation_router, compat_router as moderation_compat_router
 from app.routers.admin_moderation import router as admin_moderation_router
 from app.services.billing_reconcile import start_billing_reconcile_task
@@ -94,6 +96,7 @@ from app.services.api_key_route_scope_registry import (
     summarize_registry_drift,
 )
 from app.services.api_key_rollout import validate_api_key_rollout_settings
+from app.services.playback_entitlements import validate_playback_entitlement, PlaybackEntitlementError
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +123,25 @@ def _api_usage_metering_middleware():
         except Exception:
             pass
         return response
+    return _middleware
+
+def _playback_entitlement_middleware():
+    async def _middleware(request: Request, call_next):
+        path = request.url.path or ""
+        if path.startswith("/v1/playback/protected"):
+            auth = request.headers.get("authorization", "")
+            if not auth.lower().startswith("bearer "):
+                return JSONResponse(status_code=401, content={"detail": {"code": "missing_bearer", "message": "missing bearer token"}})
+            token = auth.split(" ", 1)[1].strip()
+            try:
+                claims = validate_playback_entitlement(
+                    token=token,
+                    expected_audience=(getattr(Settings(), "playback_entitlement_expected_audience", "playback") or "playback"),
+                )
+                request.state.playback_claims = claims
+            except PlaybackEntitlementError as exc:
+                return JSONResponse(status_code=401, content={"detail": {"code": exc.code, "message": exc.message}})
+        return await call_next(request)
     return _middleware
 
 def _security_headers_middleware(default_csp: str):
@@ -177,6 +199,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(CORSMiddleware, **_build_cors_options())
     app.middleware("http")(_api_usage_metering_middleware())
+    app.middleware("http")(_playback_entitlement_middleware())
     if METRICS_ENABLED:
         app.middleware("http")(metrics_middleware)
         set_app_info(app.title, app.version)
@@ -248,6 +271,7 @@ def create_app() -> FastAPI:
     app.include_router(subscription_server_router)
     app.include_router(admin_usage_router)
     app.include_router(admin_entitlements_router)
+    app.include_router(admin_tenant_watermark_assets_router)
     app.include_router(ups_router)
     app.include_router(projects_router)
     app.include_router(contacts_router)
@@ -260,6 +284,7 @@ def create_app() -> FastAPI:
     app.include_router(questionnaires_router)
     app.include_router(kyc_cases_router)
     app.include_router(vnc_sessions_router)
+    app.include_router(playback_entitlements_router)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)
     app.add_event_handler("startup", start_filemgr_mount_reconcile_task)
