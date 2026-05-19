@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+from collections import deque
+import hashlib
 import json
 import logging
 import re
@@ -53,6 +56,7 @@ UPLOAD_BUCKET = os.environ.get("UPLOAD_BUCKET")
 EVENTS_SQS_URL = os.environ.get("EVENTS_SQS_URL")
 
 tbl = ddb.Table(APP_TABLE)
+_ddb_type_serializer = TypeSerializer()
 
 s3 = s3_client() if UPLOAD_BUCKET else None
 sqs = sqs_client() if EVENTS_SQS_URL else None
@@ -61,6 +65,38 @@ router = APIRouter(tags=["newsfeed"])
 logger = logging.getLogger(__name__)
 _SCHEDULED_LOCAL_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
 _ddb_serializer = TypeSerializer()
+_UNLOCK_ATTEMPT_THROTTLE: Dict[str, deque] = {}
+_UNLOCK_ATTEMPT_THROTTLE_LOCK = threading.Lock()
+
+
+def _csv_values(raw: Optional[str]) -> Set[str]:
+    if not raw:
+        return set()
+    return {v.strip() for v in str(raw).split(",") if v.strip()}
+
+
+def _is_unlock_limit_enabled_for_user(user_id: Optional[str]) -> bool:
+    if not bool(getattr(S, "newsfeed_unlock_limit_enabled", True)):
+        return False
+
+    mode = str(getattr(S, "newsfeed_unlock_limit_rollout_mode", "broad") or "broad").strip().lower()
+    if mode in {"broad", "ga", "all", "on"}:
+        return True
+    if mode in {"off", "disabled"}:
+        return False
+
+    internal_users = _csv_values(getattr(S, "newsfeed_unlock_limit_internal_user_ids", ""))
+    if mode == "internal":
+        return bool(user_id and user_id in internal_users)
+
+    cohort_users = _csv_values(getattr(S, "newsfeed_unlock_limit_cohort_user_ids", ""))
+    if mode == "cohort":
+        if not user_id:
+            return False
+        return user_id in internal_users or user_id in cohort_users
+
+    # Unknown mode: fail open to avoid accidental outage.
+    return True
 
 
 def _emit_newsfeed_content_metric(event: str, **fields: Any) -> None:
@@ -125,6 +161,32 @@ def _require_newsfeed_scheduling_api_enabled() -> None:
     )
 
 
+def _emit_unlock_lifecycle_event(
+    event: str,
+    *,
+    user_id: Optional[str],
+    post_id: Optional[str],
+    reason_code: Optional[str] = None,
+    payment_status: Optional[str] = None,
+    unlock_limit: Optional[int] = None,
+    unlock_count: Optional[int] = None,
+    replayed: Optional[bool] = None,
+) -> None:
+    logger.info(
+        "newsfeed unlock lifecycle",
+        extra={
+            "event": event,
+            "user_id": user_id or "",
+            "post_id": post_id or "",
+            "reason_code": reason_code or "",
+            "payment_status": payment_status or "",
+            "unlock_limit": unlock_limit,
+            "unlock_count": unlock_count,
+            "replayed": replayed,
+        },
+    )
+
+
 def _schedule_min_lead_seconds() -> int:
     try:
         return max(1, int(getattr(S, "newsfeed_scheduling_min_lead_seconds", 5)))
@@ -142,6 +204,51 @@ def _schedule_max_horizon_seconds() -> int:
 
 def _ddb_serialize_map(values: Dict[str, Any]) -> Dict[str, Any]:
     return {key: _ddb_serializer.serialize(value) for key, value in values.items()}
+
+
+def _emit_unlock_replay_event(
+    *,
+    user_id: Optional[str],
+    post_id: str,
+    replay_state: str,
+    reason_code: str,
+    replayed: bool,
+) -> None:
+    _emit_unlock_lifecycle_event(
+        "unlock_replay",
+        user_id=user_id,
+        post_id=post_id,
+        reason_code=reason_code,
+        payment_status=replay_state,
+        replayed=replayed,
+    )
+
+
+def _unlock_attempt_throttled_error(*, retry_after_seconds: int) -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        detail={
+            "code": "unlock_attempt_throttled",
+            "message": "too many unlock attempts; try again shortly",
+            "retry_after_seconds": max(1, int(retry_after_seconds)),
+        },
+    )
+
+
+def _enforce_unlock_attempt_throttle(user_id: str, post_id: str) -> None:
+    window_seconds = max(1, int(getattr(S, "newsfeed_unlock_throttle_window_seconds", 10) or 10))
+    max_attempts = max(1, int(getattr(S, "newsfeed_unlock_throttle_max_attempts", 6) or 6))
+    now_ts = int(time.time())
+    key = f"{user_id}:{post_id}"
+    with _UNLOCK_ATTEMPT_THROTTLE_LOCK:
+        dq = _UNLOCK_ATTEMPT_THROTTLE.setdefault(key, deque())
+        cutoff = now_ts - window_seconds
+        while dq and dq[0] <= cutoff:
+            dq.popleft()
+        if len(dq) >= max_attempts:
+            retry_after = max(1, window_seconds - (now_ts - dq[0]))
+            raise _unlock_attempt_throttled_error(retry_after_seconds=retry_after)
+        dq.append(now_ts)
 
 
 
@@ -338,6 +445,46 @@ def _enforce_draft_count_quota(user_id: str) -> None:
     used_count = len(q.get("Items") or [])
     if used_count >= limit_count:
         raise _draft_quota_error(limit_count=limit_count, used_count=used_count)
+
+
+def _unlock_limit_error(*, status_code: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=status_code, detail={"code": code, "message": message})
+
+
+def _unlock_limit_validation_error(code: str, message: str) -> HTTPException:
+    return _unlock_limit_error(status_code=400, code=code, message=message)
+
+
+def _unlock_limit_reached_error() -> HTTPException:
+    return _unlock_limit_error(
+        status_code=409,
+        code="unlock_limit_reached",
+        message="unlock limit reached",
+    )
+
+
+def _unlock_idempotency_conflict_error() -> HTTPException:
+    return _unlock_limit_error(
+        status_code=409,
+        code="unlock_idempotency_conflict",
+        message="idempotency_key does not match existing unlock attempt",
+    )
+
+
+def _unlock_idempotency_payload_mismatch_error() -> HTTPException:
+    return _unlock_limit_error(
+        status_code=409,
+        code="unlock_idempotency_payload_mismatch",
+        message="idempotency_key replay payload does not match original request",
+    )
+
+
+def _post_lock_expired_error() -> HTTPException:
+    return _unlock_limit_error(
+        status_code=409,
+        code="post_lock_expired",
+        message="post lock expired",
+    )
 
 
 def _parse_newsfeed_post_warning_thresholds() -> List[int]:
@@ -1025,6 +1172,7 @@ class CreatePostRequest(ContentFieldsMixin):
     image_urls: List[str] = Field(default_factory=list)
     visibility: Literal["followers", "public"] = "followers"
     unlock_price_cents: Optional[int] = Field(default=None, ge=0)
+    unlock_limit: Optional[int] = Field(default=None, ge=1)
     file_paths: List[str] = Field(default_factory=list)
     publish_at: Optional[int] = Field(
         default=None,
@@ -1090,7 +1238,11 @@ class PostResponse(BaseModel):
     image_urls: List[str] = Field(default_factory=list)
     visibility: str
     locked: bool
+    lock_expired: bool = False
     unlock_price_cents: Optional[int] = None
+    unlock_limit: Optional[int] = None
+    unlock_count: int = 0
+    unlock_limit_reached: bool = False
     like_count: int = 0
     comment_count: int = 0
 
@@ -1185,11 +1337,17 @@ class HidePostRequest(BaseModel):
     post_id: str
 
 
+class FeedCapabilitiesResponse(BaseModel):
+    unlock_limit_enabled: bool = False
+    unlock_limit_rollout_mode: str = "off"
+
+
 class EditPostRequest(ContentFieldsMixin):
     image_urls: Optional[List[str]] = None
     publish_at: Optional[int] = Field(default=None, ge=0)
     schedule_timezone: Optional[str] = Field(default=None, min_length=1, max_length=64)
     scheduled_at_local: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    unlock_limit: Optional[int] = Field(default=None, ge=1)
 
 
 class DraftPostResponse(BaseModel):
@@ -1327,6 +1485,12 @@ class PresignUploadResponse(BaseModel):
 class UnlockPostRequest(BaseModel):
     post_id: str
     payment_method_id: Optional[str] = None
+    idempotency_key: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9:_.-]+$",
+    )
 
 
 class UnlockPostResponse(BaseModel):
@@ -1383,6 +1547,33 @@ def _coerce_body_text(value: Any) -> Optional[str]:
         text = value.strip()
         return text or None
     return None
+
+
+def _coerce_optional_int(value: Any, *, minimum: Optional[int] = None) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    if minimum is not None and parsed < minimum:
+        return None
+    return parsed
+
+
+def _is_lock_expired(post: Dict[str, Any]) -> bool:
+    raw = post.get("lock_expires_at")
+    if raw is None:
+        return False
+    try:
+        if isinstance(raw, (int, float)):
+            expiry = datetime.fromtimestamp(float(raw), tz=timezone.utc)
+        else:
+            parsed = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            expiry = parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except Exception:
+        return False
+    return expiry <= datetime.now(timezone.utc)
 
 
 def _resolve_read_body_fields(item: Dict[str, Any]) -> Tuple[str, Optional[str], Optional[str], Optional[str], Optional[Dict[str, Any]], BodyFormat, int]:
@@ -1543,6 +1734,11 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         }
         for i, fa in enumerate(raw_attachments)
     ]
+    unlock_limit_feature_on = _is_unlock_limit_enabled_for_user(viewer_id)
+    unlock_limit = _coerce_optional_int(post.get("unlock_limit"), minimum=1) if unlock_limit_feature_on else None
+    unlock_count = (_coerce_optional_int(post.get("unlock_count"), minimum=0) or 0) if unlock_limit_feature_on else 0
+    lock_expired = _is_lock_expired(post)
+    unlock_limit_reached = unlock_limit_feature_on and (not lock_expired) and unlock_limit is not None and unlock_count >= unlock_limit
     return {
         "post_id": post_id,
         "author_id": post.get("user_id", ""),
@@ -1564,7 +1760,11 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "file_attachments": file_attachments,
         "visibility": post.get("visibility", "followers"),
         "locked": bool(post.get("locked")),
+        "lock_expired": lock_expired,
         "unlock_price_cents": post.get("unlock_price_cents"),
+        "unlock_limit": unlock_limit,
+        "unlock_count": unlock_count,
+        "unlock_limit_reached": unlock_limit_reached,
         "unlocked": unlocked,
         "like_count": int(post.get("like_count", 0)),
         "comment_count": int(post.get("comment_count", 0)),
@@ -1771,6 +1971,42 @@ def put_notification(*, recipient_user_id: str, notif_type: str, payload: Dict[s
 # -----------------------------
 # Following / hiding / unlock helpers
 # -----------------------------
+def _notify_author_unlock_limit_reached_once(*, post_id: str, triggered_by_user_id: Optional[str]) -> None:
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()}) or {}
+    author_id = post.get("user_id")
+    if not author_id:
+        return
+    marker_key = {"pk": pk_post(post_id), "sk": "UNLOCK_LIMIT_REACHED_NOTIF"}
+    try:
+        tbl.put_item(
+            Item={
+                **marker_key,
+                "Entity": "PostUnlockLimitReachedNotifMarker",
+                "post_id": post_id,
+                "recipient_user_id": author_id,
+                "created_at": now_iso(),
+            },
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+        )
+    except ClientError as exc:
+        code = exc.response["Error"].get("Code", "")
+        if code == "ConditionalCheckFailedException":
+            return
+        logger.warning("unlock_limit_reached notification marker write failed", extra={"post_id": post_id, "error_code": code})
+        return
+    put_notification(
+        recipient_user_id=author_id,
+        notif_type="post_unlock_limit_reached",
+        payload={
+            "post_id": post_id,
+            "unlock_limit": _coerce_optional_int(post.get("unlock_limit"), minimum=1),
+            "unlock_count": _coerce_optional_int(post.get("unlock_count"), minimum=0),
+            "triggered_by_user_id": triggered_by_user_id or "",
+            "created_at": now_iso(),
+        },
+    )
+
+
 def is_following(viewer_id: str, target_id: str) -> bool:
     it = ddb_get_item({"pk": pk_user(viewer_id), "sk": f"FOLLOWING#{target_id}"})
     return bool(it and it.get("state") == "following")
@@ -1949,6 +2185,305 @@ def _get_draft_or_404(*, user_id: str, draft_id: str) -> Dict[str, Any]:
         # defensive: if key schema ever changes, keep ownership checks explicit
         raise HTTPException(status_code=404, detail="Draft not found")
     return item
+
+
+def _unlock_request_fingerprint(
+    *,
+    post_id: str,
+    payment_method_id: Optional[str],
+    unlock_price_cents: Optional[int] = None,
+    currency: str = "usd",
+) -> str:
+    payload = {
+        "post_id": post_id,
+        "payment_method_id": payment_method_id or "",
+        "unlock_price_cents": int(unlock_price_cents or 0),
+        "currency": currency.lower().strip(),
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _validate_unlock_attempt_idempotency(
+    *,
+    req_idempotency_key: Optional[str],
+    req_request_fingerprint: Optional[str],
+    unlock_attempt: Dict[str, Any],
+) -> None:
+    existing_idempotency_key = unlock_attempt.get("idempotency_key")
+    if req_idempotency_key and existing_idempotency_key and existing_idempotency_key != req_idempotency_key:
+        raise _unlock_idempotency_conflict_error()
+    existing_request_fingerprint = unlock_attempt.get("request_fingerprint")
+    if (
+        req_idempotency_key
+        and existing_idempotency_key == req_idempotency_key
+        and req_request_fingerprint
+        and existing_request_fingerprint
+        and existing_request_fingerprint != req_request_fingerprint
+    ):
+        raise _unlock_idempotency_payload_mismatch_error()
+
+
+def _begin_unlock_attempt(
+    user_id: str,
+    post_id: str,
+    *,
+    idempotency_key: Optional[str] = None,
+    request_fingerprint: Optional[str] = None,
+) -> Literal["new", "already_unlocked", "in_progress"]:
+    key = {"pk": pk_unlock(user_id), "sk": f"POST#{post_id}"}
+    try:
+        tbl.put_item(
+            Item={
+                **key,
+                "Entity": "Unlock",
+                "user_id": user_id,
+                "post_id": post_id,
+                "unlocked": False,
+                "in_progress": True,
+                "updated_at": now_iso(),
+                **({"idempotency_key": idempotency_key} if idempotency_key else {}),
+                **({"request_fingerprint": request_fingerprint} if request_fingerprint else {}),
+            },
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+        )
+        return "new"
+    except ClientError as exc:
+        code = exc.response["Error"].get("Code", "")
+        if code != "ConditionalCheckFailedException":
+            raise HTTPException(status_code=500, detail=f"DynamoDB error: {exc.response['Error'].get('Message','unknown')}") from exc
+        existing = ddb_get_item(key) or {}
+        _validate_unlock_attempt_idempotency(
+            req_idempotency_key=idempotency_key,
+            req_request_fingerprint=request_fingerprint,
+            unlock_attempt=existing,
+        )
+        if bool(existing.get("unlocked")):
+            return "already_unlocked"
+        return "in_progress"
+
+
+def _clear_unlock_attempt_if_not_unlocked(user_id: str, post_id: str) -> bool:
+    try:
+        tbl.delete_item(
+            Key={"pk": pk_unlock(user_id), "sk": f"POST#{post_id}"},
+            ConditionExpression="unlocked = :f",
+            ExpressionAttributeValues={":f": False},
+        )
+        return True
+    except ClientError:
+        # Best-effort cleanup; a concurrent success should keep the record.
+        return False
+
+
+def _finalize_unlock_attempt_success(user_id: str, post_id: str, payment_intent_id: str) -> None:
+    ddb_update_item(
+        key={"pk": pk_unlock(user_id), "sk": f"POST#{post_id}"},
+        update_expr="SET unlocked = :t, in_progress = :f, payment_intent_id = :pi, updated_at = :u",
+        expr_vals={":t": True, ":f": False, ":pi": payment_intent_id, ":u": now_iso()},
+    )
+
+
+def _ddb_av_map(values: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: _ddb_type_serializer.serialize(v) for k, v in values.items()}
+
+
+def _release_reserved_unlock_slot(post_id: str) -> None:
+    try:
+        tbl.update_item(
+            Key={"pk": pk_post(post_id), "sk": sk_post()},
+            UpdateExpression="SET unlock_count = unlock_count - :one",
+            ConditionExpression="attribute_exists(unlock_count) AND unlock_count >= :one",
+            ExpressionAttributeValues={":one": 1},
+            ReturnValues="NONE",
+        )
+    except ClientError:
+        # Best-effort compensation; reconciliation job handles residual drift.
+        pass
+
+
+def _unlock_attempt_is_stale(attempt: Dict[str, Any]) -> bool:
+    if not attempt:
+        return False
+    if bool(attempt.get("unlocked")) or not bool(attempt.get("in_progress")):
+        return False
+    raw_updated_at = attempt.get("updated_at")
+    if not raw_updated_at:
+        return False
+    try:
+        updated = datetime.fromisoformat(str(raw_updated_at).replace("Z", "+00:00"))
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+    except Exception:
+        return False
+    stale_after_seconds = max(1, int(getattr(S, "newsfeed_unlock_attempt_stale_seconds", 300) or 300))
+    return (datetime.now(timezone.utc) - updated).total_seconds() >= stale_after_seconds
+
+
+def _recover_stale_unlock_attempt_if_needed(
+    *,
+    user_id: str,
+    post_id: str,
+    unlock_attempt: Dict[str, Any],
+    unlock_limit_enabled: bool,
+) -> bool:
+    if not _unlock_attempt_is_stale(unlock_attempt):
+        return False
+    cleared = _clear_unlock_attempt_if_not_unlocked(user_id, post_id)
+    if not cleared:
+        return False
+    if unlock_limit_enabled:
+        _release_reserved_unlock_slot(post_id)
+    _emit_unlock_lifecycle_event(
+        "unlock_attempt_stale_recovered",
+        user_id=user_id,
+        post_id=post_id,
+        reason_code="stale_in_progress_timeout",
+    )
+    return True
+
+
+def _unlock_response_for_existing_attempt(
+    *,
+    post_id: str,
+    req_idempotency_key: Optional[str],
+    req_request_fingerprint: Optional[str],
+    unlock_attempt: Dict[str, Any],
+) -> UnlockPostResponse:
+    _validate_unlock_attempt_idempotency(
+        req_idempotency_key=req_idempotency_key,
+        req_request_fingerprint=req_request_fingerprint,
+        unlock_attempt=unlock_attempt,
+    )
+    existing_idempotency_key = unlock_attempt.get("idempotency_key")
+    payment_intent: Dict[str, Any] = {"status": "already_unlocked"}
+    if req_idempotency_key and existing_idempotency_key == req_idempotency_key:
+        payment_intent = {
+            "status": "succeeded",
+            "payment_intent_id": unlock_attempt.get("payment_intent_id"),
+            "replayed": True,
+        }
+    return UnlockPostResponse(post_id=post_id, payment_intent=payment_intent)
+
+
+def _emit_unlock_idempotency_rejection(*, user_id: str, post_id: str, reason_code: str) -> None:
+    _emit_unlock_lifecycle_event(
+        "unlock_payment_failed",
+        user_id=user_id,
+        post_id=post_id,
+        reason_code=reason_code,
+        payment_status="idempotency_rejected",
+    )
+
+
+def _reserve_unlock_slot_or_raise(post_id: str, *, user_id: Optional[str] = None) -> None:
+    try:
+        tbl.update_item(
+            Key={"pk": pk_post(post_id), "sk": sk_post()},
+            UpdateExpression="SET unlock_count = if_not_exists(unlock_count, :z) + :one",
+            ConditionExpression="attribute_not_exists(unlock_limit) OR attribute_not_exists(unlock_count) OR unlock_count < unlock_limit",
+            ExpressionAttributeValues={":z": 0, ":one": 1},
+            ReturnValues="NONE",
+        )
+    except ClientError as exc:
+        code = exc.response["Error"].get("Code", "")
+        if code == "ConditionalCheckFailedException":
+            _emit_unlock_lifecycle_event(
+                "unlock_limit_reached",
+                user_id=user_id,
+                post_id=post_id,
+                reason_code="cap_reached_condition",
+            )
+            _notify_author_unlock_limit_reached_once(post_id=post_id, triggered_by_user_id=user_id)
+            raise _unlock_limit_reached_error() from exc
+        raise HTTPException(status_code=500, detail=f"DynamoDB error: {exc.response['Error'].get('Message','unknown')}") from exc
+
+
+def _begin_unlock_attempt_with_reservation_fallback(
+    user_id: str,
+    post_id: str,
+    *,
+    idempotency_key: Optional[str] = None,
+    request_fingerprint: Optional[str] = None,
+) -> Literal["new", "already_unlocked", "in_progress"]:
+    state = _begin_unlock_attempt(user_id, post_id, idempotency_key=idempotency_key, request_fingerprint=request_fingerprint)
+    if state != "new":
+        return state
+    _reserve_unlock_slot_or_raise(post_id, user_id=user_id)
+    return "new"
+
+
+def _begin_unlock_attempt_with_reservation(
+    user_id: str,
+    post_id: str,
+    *,
+    idempotency_key: Optional[str] = None,
+    request_fingerprint: Optional[str] = None,
+) -> Literal["new", "already_unlocked", "in_progress"]:
+    unlock_key = {"pk": pk_unlock(user_id), "sk": f"POST#{post_id}"}
+    post_key = {"pk": pk_post(post_id), "sk": sk_post()}
+    try:
+        tbl.meta.client.transact_write_items(
+            TransactItems=[
+                {
+                    "Update": {
+                        "TableName": APP_TABLE,
+                        "Key": _ddb_av_map(post_key),
+                        "UpdateExpression": "SET unlock_count = if_not_exists(unlock_count, :z) + :one",
+                        "ConditionExpression": "attribute_not_exists(unlock_limit) OR attribute_not_exists(unlock_count) OR unlock_count < unlock_limit",
+                        "ExpressionAttributeValues": _ddb_av_map({":z": 0, ":one": 1}),
+                    }
+                },
+                {
+                    "Put": {
+                        "TableName": APP_TABLE,
+                        "Item": _ddb_av_map(
+                            {
+                                **unlock_key,
+                                "Entity": "Unlock",
+                                "user_id": user_id,
+                                "post_id": post_id,
+                                "unlocked": False,
+                                "in_progress": True,
+                                "updated_at": now_iso(),
+                                **({"idempotency_key": idempotency_key} if idempotency_key else {}),
+                                **({"request_fingerprint": request_fingerprint} if request_fingerprint else {}),
+                            }
+                        ),
+                        "ConditionExpression": "attribute_not_exists(pk) AND attribute_not_exists(sk)",
+                    }
+                },
+            ]
+        )
+        return "new"
+    except ClientError as exc:
+        code = exc.response["Error"].get("Code", "")
+        if code == "TransactionCanceledException":
+            existing = ddb_get_item(unlock_key) or {}
+            if existing:
+                _validate_unlock_attempt_idempotency(
+                    req_idempotency_key=idempotency_key,
+                    req_request_fingerprint=request_fingerprint,
+                    unlock_attempt=existing,
+                )
+                if bool(existing.get("unlocked")):
+                    return "already_unlocked"
+                return "in_progress"
+            _emit_unlock_lifecycle_event(
+                "unlock_limit_reached",
+                user_id=user_id,
+                post_id=post_id,
+                reason_code="cap_reached_transaction",
+            )
+            _notify_author_unlock_limit_reached_once(post_id=post_id, triggered_by_user_id=user_id)
+            raise _unlock_limit_reached_error() from exc
+        logger.warning("unlock transaction unavailable; using fallback path", extra={"post_id": post_id, "user_id": user_id, "error_code": code})
+        return _begin_unlock_attempt_with_reservation_fallback(
+            user_id,
+            post_id,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
+        )
 
 
 # -----------------------------
@@ -2226,6 +2761,20 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
     Immediate create (no `publish_at`) publishes now and appears in the feed.
     Scheduled create (with `publish_at`) persists with `status=scheduled` and is excluded from feed until publish time.
     """
+    unlock_limit_feature_on = _is_unlock_limit_enabled_for_user(user_id)
+    unlock_price_cents = req.unlock_price_cents if req.unlock_price_cents and req.unlock_price_cents > 0 else None
+    locked = unlock_price_cents is not None
+    if req.unlock_limit is not None and not unlock_limit_feature_on:
+        raise _unlock_limit_validation_error(
+            "unlock_limit_feature_disabled",
+            "unlock_limit is not enabled for this account",
+        )
+    if req.unlock_limit is not None and not locked:
+        raise _unlock_limit_validation_error(
+            "unlock_limit_requires_locked_post",
+            "unlock_limit can only be set for locked posts",
+        )
+    unlock_limit = req.unlock_limit if locked else None
     _enforce_newsfeed_post_quota_precheck(user_id=user_id)
     post_id = new_id("post")
     created_at = now_iso()
@@ -2286,9 +2835,6 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
                 message="scheduled_at_local must use format YYYY-MM-DDTHH:mm",
                 operation="create",
             )
-
-    unlock_price_cents = req.unlock_price_cents if req.unlock_price_cents and req.unlock_price_cents > 0 else None
-    locked = unlock_price_cents is not None
     content = _content_from_payload(req)
     _emit_newsfeed_content_metric("create_post", surface="post", body_format=content.get("body_format", "plain"))
 
@@ -2318,6 +2864,9 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "comment_count": 0,
         "file_attachments": file_attachments,
     }
+    if unlock_limit is not None:
+        post_item["unlock_limit"] = unlock_limit
+        post_item["unlock_count"] = 0
     if is_scheduled:
         post_item.update(schedule_due_index_values(req.publish_at or 0, post_id))
     ddb_put_item(post_item)
@@ -2356,6 +2905,9 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         visibility=req.visibility,
         locked=locked,
         unlock_price_cents=unlock_price_cents,
+        unlock_limit=unlock_limit,
+        unlock_count=0,
+        unlock_limit_reached=False,
         like_count=0,
         comment_count=0,
     )
@@ -2431,6 +2983,24 @@ def edit_post(post_id: str, req: EditPostRequest, user_id: UserIdDep):
         raise HTTPException(status_code=404, detail="Post not found")
     if post.get("user_id") != user_id:
         raise HTTPException(status_code=403, detail="Not your post")
+    unlock_limit_in_payload = "unlock_limit" in req.model_fields_set
+    if unlock_limit_in_payload:
+        if not _is_unlock_limit_enabled_for_user(user_id):
+            raise _unlock_limit_validation_error(
+                "unlock_limit_feature_disabled",
+                "unlock_limit is not enabled for this account",
+            )
+        if not bool(post.get("locked")):
+            raise _unlock_limit_validation_error(
+                "unlock_limit_requires_locked_post",
+                "unlock_limit can only be set for locked posts",
+            )
+        current_unlock_count = max(0, int(post.get("unlock_count", 0)))
+        if req.unlock_limit is not None and req.unlock_limit < current_unlock_count:
+            raise _unlock_limit_validation_error(
+                "unlock_limit_below_unlock_count",
+                "unlock_limit cannot be lower than current unlock_count",
+            )
     content = _content_from_payload(req)
     _emit_newsfeed_content_metric("edit_post", surface="post", body_format=content.get("body_format", "plain"))
     schedule_fields_in_payload = bool({"publish_at", "schedule_timezone", "scheduled_at_local"} & req.model_fields_set)
@@ -2511,6 +3081,7 @@ def edit_post(post_id: str, req: EditPostRequest, user_id: UserIdDep):
         "body_version = :bv",
         "updated_at = :u",
     ]
+    remove_parts: List[str] = []
     expr_vals: Dict[str, Any] = {
         ":b": content["body"],
         ":bp": content["body_plain"],
@@ -2538,13 +3109,21 @@ def edit_post(post_id: str, req: EditPostRequest, user_id: UserIdDep):
         expr_vals[":sdpk"] = due_values[SCHEDULE_DUE_INDEX_PK_ATTR]
         expr_vals[":sdsk"] = due_values[SCHEDULE_DUE_INDEX_SK_ATTR]
 
-    if image_urls_in_payload and req.image_urls:
-        update_expr = f"SET {', '.join(set_parts)}, image_urls = :imgs"
-        expr_vals[":imgs"] = req.image_urls
-    elif image_urls_in_payload:
-        update_expr = f"SET {', '.join(set_parts)} REMOVE image_urls"
-    else:
-        update_expr = f"SET {', '.join(set_parts)}"
+    if image_urls_in_payload:
+        if req.image_urls:
+            set_parts.append("image_urls = :imgs")
+            expr_vals[":imgs"] = req.image_urls
+        else:
+            remove_parts.append("image_urls")
+    if unlock_limit_in_payload:
+        if req.unlock_limit is not None:
+            set_parts.append("unlock_limit = :unlock_limit")
+            expr_vals[":unlock_limit"] = req.unlock_limit
+        else:
+            remove_parts.append("unlock_limit")
+    update_expr = f"SET {', '.join(set_parts)}"
+    if remove_parts:
+        update_expr = f"{update_expr} REMOVE {', '.join(remove_parts)}"
     if schedule_updates:
         condition_expr = "#user = :uid AND #status = :scheduled"
         expr_vals_tx = dict(expr_vals)
@@ -3358,6 +3937,16 @@ def view_feed(
         raise
 
 
+@router.get("/feed/capabilities", response_model=FeedCapabilitiesResponse)
+def feed_capabilities(user_id: UserIdDep):
+    enabled = _is_unlock_limit_enabled_for_user(user_id)
+    mode = str(getattr(S, "newsfeed_unlock_limit_rollout_mode", "off") or "off")
+    return FeedCapabilitiesResponse(
+        unlock_limit_enabled=bool(enabled),
+        unlock_limit_rollout_mode=mode,
+    )
+
+
 @router.get("/posts/{post_id}/attachments/{attachment_id}")
 def download_post_attachment(
     post_id: str,
@@ -3708,15 +4297,226 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep):
     post = ddb_get_item({"pk": pk_post(req.post_id), "sk": sk_post()})
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
+    _emit_unlock_lifecycle_event(
+        "unlock_attempt",
+        user_id=user_id,
+        post_id=req.post_id,
+        reason_code="request_received",
+        unlock_limit=_coerce_optional_int(post.get("unlock_limit"), minimum=1),
+        unlock_count=_coerce_optional_int(post.get("unlock_count"), minimum=0),
+    )
     if not post.get("locked"):
         return UnlockPostResponse(post_id=req.post_id, payment_intent={"status": "not_required"})
     if post.get("user_id") == user_id:
         return UnlockPostResponse(post_id=req.post_id, payment_intent={"status": "not_required"})
-    if has_unlocked(user_id, req.post_id):
+    unlock_key = {"pk": pk_unlock(user_id), "sk": f"POST#{req.post_id}"}
+    request_fingerprint = _unlock_request_fingerprint(
+        post_id=req.post_id,
+        payment_method_id=req.payment_method_id,
+        unlock_price_cents=int(post.get("unlock_price_cents") or 0),
+        currency="usd",
+    )
+    unlock_limit_enabled = _is_unlock_limit_enabled_for_user(user_id)
+    existing_unlock = ddb_get_item(unlock_key) or {}
+    if bool(existing_unlock.get("unlocked")):
+        if req.idempotency_key:
+            try:
+                _validate_unlock_attempt_idempotency(
+                    req_idempotency_key=req.idempotency_key,
+                    req_request_fingerprint=request_fingerprint,
+                    unlock_attempt=existing_unlock,
+                )
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                code = str(detail.get("code") or "")
+                if code in {"unlock_idempotency_conflict", "unlock_idempotency_payload_mismatch"}:
+                    _emit_unlock_idempotency_rejection(user_id=user_id, post_id=req.post_id, reason_code=code)
+                raise
+            _emit_unlock_replay_event(
+                user_id=user_id,
+                post_id=req.post_id,
+                replay_state="already_unlocked",
+                reason_code="existing_unlocked_precheck",
+                replayed=True,
+            )
+            return _unlock_response_for_existing_attempt(
+                post_id=req.post_id,
+                req_idempotency_key=req.idempotency_key,
+                req_request_fingerprint=request_fingerprint,
+                unlock_attempt=existing_unlock,
+            )
+            
+        _emit_unlock_replay_event(
+            user_id=user_id,
+            post_id=req.post_id,
+            replay_state="already_unlocked",
+            reason_code="existing_unlocked_precheck",
+            replayed=False,
+        )
         return UnlockPostResponse(post_id=req.post_id, payment_intent={"status": "already_unlocked"})
+    if req.idempotency_key:
+        if existing_unlock:
+            try:
+                _validate_unlock_attempt_idempotency(
+                    req_idempotency_key=req.idempotency_key,
+                    req_request_fingerprint=request_fingerprint,
+                    unlock_attempt=existing_unlock,
+                )
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                code = str(detail.get("code") or "")
+                if code in {"unlock_idempotency_conflict", "unlock_idempotency_payload_mismatch"}:
+                    _emit_unlock_idempotency_rejection(user_id=user_id, post_id=req.post_id, reason_code=code)
+                raise
+            if bool(existing_unlock.get("unlocked")):
+                return _unlock_response_for_existing_attempt(
+                    post_id=req.post_id,
+                    req_idempotency_key=req.idempotency_key,
+                    req_request_fingerprint=request_fingerprint,
+                    unlock_attempt=existing_unlock,
+                )
+            if bool(existing_unlock.get("in_progress")):
+                recovered = _recover_stale_unlock_attempt_if_needed(
+                    user_id=user_id,
+                    post_id=req.post_id,
+                    unlock_attempt=existing_unlock,
+                    unlock_limit_enabled=unlock_limit_enabled,
+                )
+                if not recovered:
+                    _emit_unlock_replay_event(
+                        user_id=user_id,
+                        post_id=req.post_id,
+                        replay_state="in_progress",
+                        reason_code="existing_in_progress_precheck",
+                        replayed=True,
+                    )
+                    return UnlockPostResponse(post_id=req.post_id, payment_intent={"status": "in_progress", "replayed": True})
+    try:
+        _enforce_unlock_attempt_throttle(user_id, req.post_id)
+    except HTTPException as exc:
+        _emit_unlock_lifecycle_event(
+            "unlock_payment_failed",
+            user_id=user_id,
+            post_id=req.post_id,
+            reason_code="unlock_attempt_throttled",
+            payment_status="throttled",
+        )
+        raise exc
+    if _is_lock_expired(post):
+        raise _post_lock_expired_error()
+    try:
+        if unlock_limit_enabled:
+            attempt_state = _begin_unlock_attempt_with_reservation(
+                user_id,
+                req.post_id,
+                idempotency_key=req.idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+        else:
+            attempt_state = _begin_unlock_attempt(
+                user_id,
+                req.post_id,
+                idempotency_key=req.idempotency_key,
+                request_fingerprint=request_fingerprint,
+            )
+        if attempt_state == "already_unlocked":
+            existing_unlock = ddb_get_item(unlock_key) or {}
+            _emit_unlock_replay_event(
+                user_id=user_id,
+                post_id=req.post_id,
+                replay_state="already_unlocked",
+                reason_code="attempt_state_already_unlocked",
+                replayed=bool(req.idempotency_key),
+            )
+            return _unlock_response_for_existing_attempt(
+                post_id=req.post_id,
+                req_idempotency_key=req.idempotency_key,
+                req_request_fingerprint=request_fingerprint,
+                unlock_attempt=existing_unlock,
+            )
+        if attempt_state == "in_progress":
+            existing_unlock = ddb_get_item(unlock_key) or {}
+            _validate_unlock_attempt_idempotency(
+                req_idempotency_key=req.idempotency_key,
+                req_request_fingerprint=request_fingerprint,
+                unlock_attempt=existing_unlock,
+            )
+            existing_idempotency_key = existing_unlock.get("idempotency_key")
+            if req.idempotency_key and existing_idempotency_key == req.idempotency_key:
+                _emit_unlock_replay_event(
+                    user_id=user_id,
+                    post_id=req.post_id,
+                    replay_state="in_progress",
+                    reason_code="attempt_state_in_progress",
+                    replayed=True,
+                )
+                return UnlockPostResponse(post_id=req.post_id, payment_intent={"status": "in_progress", "replayed": True})
+            recovered = _recover_stale_unlock_attempt_if_needed(
+                user_id=user_id,
+                post_id=req.post_id,
+                unlock_attempt=existing_unlock,
+                unlock_limit_enabled=unlock_limit_enabled,
+            )
+            if recovered:
+                if unlock_limit_enabled:
+                    attempt_state = _begin_unlock_attempt_with_reservation(
+                        user_id,
+                        req.post_id,
+                        idempotency_key=req.idempotency_key,
+                        request_fingerprint=request_fingerprint,
+                    )
+                else:
+                    attempt_state = _begin_unlock_attempt(
+                        user_id,
+                        req.post_id,
+                        idempotency_key=req.idempotency_key,
+                        request_fingerprint=request_fingerprint,
+                    )
+                if attempt_state == "already_unlocked":
+                    latest_unlock = ddb_get_item(unlock_key) or {}
+                    _emit_unlock_replay_event(
+                        user_id=user_id,
+                        post_id=req.post_id,
+                        replay_state="already_unlocked",
+                        reason_code="attempt_state_already_unlocked_after_recover",
+                        replayed=bool(req.idempotency_key),
+                    )
+                    return _unlock_response_for_existing_attempt(
+                        post_id=req.post_id,
+                        req_idempotency_key=req.idempotency_key,
+                        req_request_fingerprint=request_fingerprint,
+                        unlock_attempt=latest_unlock,
+                    )
+                if attempt_state == "in_progress":
+                    latest_unlock = ddb_get_item(unlock_key) or {}
+                    _validate_unlock_attempt_idempotency(
+                        req_idempotency_key=req.idempotency_key,
+                        req_request_fingerprint=request_fingerprint,
+                        unlock_attempt=latest_unlock,
+                    )
+                    latest_idempotency_key = latest_unlock.get("idempotency_key")
+                    replayed = bool(req.idempotency_key and latest_idempotency_key == req.idempotency_key)
+                    _emit_unlock_replay_event(
+                        user_id=user_id,
+                        post_id=req.post_id,
+                        replay_state="in_progress",
+                        reason_code="attempt_state_in_progress_after_recover",
+                        replayed=replayed,
+                    )
+                    return UnlockPostResponse(post_id=req.post_id, payment_intent={"status": "in_progress", "replayed": replayed})
+            else:
+                return UnlockPostResponse(post_id=req.post_id, payment_intent={"status": "in_progress"})
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {}
+        code = str(detail.get("code") or "")
+        if code in {"unlock_idempotency_conflict", "unlock_idempotency_payload_mismatch"}:
+            _emit_unlock_idempotency_rejection(user_id=user_id, post_id=req.post_id, reason_code=code)
+        raise
 
     price = int(post.get("unlock_price_cents") or 0)
     if price <= 0:
+        _release_reserved_unlock_slot(req.post_id)
+        _clear_unlock_attempt_if_not_unlocked(user_id, req.post_id)
         raise HTTPException(status_code=500, detail="Locked post has invalid price")
 
     # Validate payment method belongs to this user
@@ -3732,29 +4532,60 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep):
             if it.get("sk", "").startswith("PM#") and "payment_method_id" in it
         }
         if req.payment_method_id not in pm_ids:
+            _release_reserved_unlock_slot(req.post_id)
+            _clear_unlock_attempt_if_not_unlocked(user_id, req.post_id)
+            _emit_unlock_lifecycle_event(
+                "unlock_payment_failed",
+                user_id=user_id,
+                post_id=req.post_id,
+                reason_code="payment_method_not_found",
+                payment_status="validation_failed",
+            )
             raise HTTPException(status_code=400, detail="Payment method not found")
-
-    pi = payments.create_payment_intent(
-        user_id=user_id,
-        amount_cents=price,
-        currency="usd",
-        metadata={"type": "unlock_post", "post_id": req.post_id},
-    )
-    conf = payments.confirm_payment_intent(payment_intent_id=pi["payment_intent_id"])
+    try:
+        pi = payments.create_payment_intent(
+            user_id=user_id,
+            amount_cents=price,
+            currency="usd",
+            metadata={
+                "type": "unlock_post",
+                "post_id": req.post_id,
+                "idempotency_key": req.idempotency_key or "",
+                "request_fingerprint": request_fingerprint,
+            },
+        )
+        conf = payments.confirm_payment_intent(payment_intent_id=pi["payment_intent_id"])
+    except Exception:
+        _release_reserved_unlock_slot(req.post_id)
+        _clear_unlock_attempt_if_not_unlocked(user_id, req.post_id)
+        _emit_unlock_lifecycle_event(
+            "unlock_payment_failed",
+            user_id=user_id,
+            post_id=req.post_id,
+            reason_code="payment_exception",
+            payment_status="exception",
+        )
+        raise
     if conf.get("status") != "succeeded":
+        _release_reserved_unlock_slot(req.post_id)
+        _clear_unlock_attempt_if_not_unlocked(user_id, req.post_id)
+        _emit_unlock_lifecycle_event(
+            "unlock_payment_failed",
+            user_id=user_id,
+            post_id=req.post_id,
+            reason_code=f"payment_status_{conf.get('status') or 'unknown'}",
+            payment_status=str(conf.get("status") or ""),
+        )
         raise HTTPException(status_code=402, detail="Payment failed")
 
-    item = {
-        "pk": pk_unlock(user_id),
-        "sk": f"POST#{req.post_id}",
-        "Entity": "Unlock",
-        "user_id": user_id,
-        "post_id": req.post_id,
-        "unlocked": True,
-        "created_at": now_iso(),
-        "payment_intent_id": pi["payment_intent_id"],
-    }
-    ddb_put_item(item)
+    _finalize_unlock_attempt_success(user_id, req.post_id, pi["payment_intent_id"])
+    _emit_unlock_lifecycle_event(
+        "unlock_success",
+        user_id=user_id,
+        post_id=req.post_id,
+        reason_code="payment_confirmed",
+        payment_status=str(conf.get("status") or ""),
+    )
 
     # Write billing ledger debit entry (best-effort)
     if S.billing_table_name:
@@ -3775,6 +4606,9 @@ def unlock_post(req: UnlockPostRequest, user_id: UserIdDep):
                 "meta": {
                     "post_id": req.post_id,
                     "payment_method_id": req.payment_method_id,
+                    "idempotency_key": req.idempotency_key or "",
+                    "request_fingerprint": request_fingerprint,
+                    "payment_intent_id": pi.get("payment_intent_id"),
                 },
             })
         except Exception:

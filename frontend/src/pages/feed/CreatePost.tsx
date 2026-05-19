@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   createPost,
+  getFeedCapabilities,
   uploadPostImage,
   createDraftPost,
   listDraftPosts,
@@ -132,6 +133,15 @@ export function CreatePost() {
   const [scheduleTimezone, setScheduleTimezone] = useState(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
   const [scheduledInput, setScheduledInput] = useState<string>("");
   const [scheduledAt, setScheduledAt] = useState<Date | null>(null);
+  const [unlockLimitEnabled, setUnlockLimitEnabled] = useState(false);
+  const [unlockLimit, setUnlockLimit] = useState("");
+  const [unlockLimitError, setUnlockLimitError] = useState<string | null>(null);
+  const { data: capabilities } = useQuery({
+    queryKey: ["feed", "capabilities"],
+    queryFn: getFeedCapabilities,
+    staleTime: 60_000,
+  });
+  const unlockLimitFeatureEnabled = capabilities?.unlock_limit_enabled ?? false;
 
   const parseDateTimeInTz = (localStr: string, tz: string): Date => {
     const [datePart, timePart] = localStr.split("T");
@@ -158,6 +168,25 @@ export function CreatePost() {
     const cents = Math.round(parseFloat(lockPrice) * 100);
     return isNaN(cents) || cents <= 0 ? undefined : cents;
   })();
+  const parsedUnlockLimit = (() => {
+    if (!lockEnabled || !unlockLimitEnabled || !unlockLimitFeatureEnabled) return undefined;
+    const n = Number.parseInt(unlockLimit, 10);
+    if (!Number.isFinite(n) || n < 1) return undefined;
+    return n;
+  })();
+
+  const validateUnlockControls = () => {
+    if (lockEnabled && !unlockPriceCents) {
+      toast.error("Enter a valid lock price greater than $0");
+      return false;
+    }
+    if (lockEnabled && unlockLimitEnabled && !parsedUnlockLimit) {
+      setUnlockLimitError("Unlock limit must be a whole number greater than 0.");
+      return false;
+    }
+    setUnlockLimitError(null);
+    return true;
+  };
 
   const getComposerSnapshot = () =>
     JSON.stringify({
@@ -253,6 +282,9 @@ export function CreatePost() {
     setScheduleOpen(false);
     setScheduledInput("");
     setScheduledAt(null);
+    setUnlockLimitEnabled(false);
+    setUnlockLimit("");
+    setUnlockLimitError(null);
   };
 
   const draftsQuery = useQuery({
@@ -280,6 +312,7 @@ export function CreatePost() {
               scheduled_at_local: scheduledInput || undefined,
             }
           : {}),
+        ...(parsedUnlockLimit ? { unlock_limit: parsedUnlockLimit } : {}),
       });
     },
     onSuccess: async (resp, target) => {
@@ -586,6 +619,7 @@ export function CreatePost() {
     e.preventDefault();
     if (mutation.isPending || saveDraftMutation.isPending) return;
     if (!body.trim() && imageUrls.length === 0 && pendingFiles.length === 0) return;
+    if (!validateUnlockControls()) return;
 
     if (!isOnline) {
       const queuedPayload = {
@@ -600,6 +634,7 @@ export function CreatePost() {
               scheduled_at_local: scheduledInput || undefined,
             }
           : {}),
+        ...(parsedUnlockLimit ? { unlock_limit: parsedUnlockLimit } : {}),
       };
       addToQueue({ type: "create_post", payload: queuedPayload });
       toast.info("You're offline — post queued and will publish when reconnected");
@@ -857,6 +892,47 @@ export function CreatePost() {
                 />
               </div>
               <p className="text-muted-foreground">Viewers must pay this amount to unlock the post.</p>
+              {unlockLimitFeatureEnabled && (
+                <>
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="unlock-limit-enabled-create"
+                      type="checkbox"
+                      checked={unlockLimitEnabled}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setUnlockLimitEnabled(checked);
+                        if (!checked) {
+                          setUnlockLimit("");
+                          setUnlockLimitError(null);
+                        }
+                      }}
+                    />
+                    <label htmlFor="unlock-limit-enabled-create" className="text-muted-foreground">
+                      Limit unlocks to N users
+                    </label>
+                  </div>
+                  {unlockLimitEnabled && (
+                    <div className="space-y-1">
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={unlockLimit}
+                        onChange={(e) => {
+                          setUnlockLimit(e.target.value);
+                          if (unlockLimitError) setUnlockLimitError(null);
+                        }}
+                        placeholder="e.g. 50"
+                        className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                      />
+                      {unlockLimitError && (
+                        <p className="text-[11px] text-destructive">{unlockLimitError}</p>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )}
 
@@ -903,7 +979,25 @@ export function CreatePost() {
                 {pendingFiles.length > 0 && <span className="ml-1 text-xs text-muted-foreground">({pendingFiles.length}/{MAX_FILES})</span>}
               </Button>
 
-              <Button type="button" variant={lockEnabled ? "secondary" : "ghost"} size="sm" onClick={() => setLockEnabled((v) => !v)} disabled={mutation.isPending}>
+              {/* Lock toggle */}
+              <Button
+                type="button"
+                variant={lockEnabled ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() =>
+                  setLockEnabled((v) => {
+                    const next = !v;
+                    if (!next) {
+                      setLockPrice("");
+                      setUnlockLimitEnabled(false);
+                      setUnlockLimit("");
+                      setUnlockLimitError(null);
+                    }
+                    return next;
+                  })
+                }
+                disabled={mutation.isPending}
+              >
                 <Lock className="mr-1 h-3.5 w-3.5" />
                 {lockEnabled ? `Lock · $${lockPrice || "0"}` : "Lock"}
               </Button>

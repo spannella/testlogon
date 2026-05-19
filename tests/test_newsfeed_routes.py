@@ -1,8 +1,13 @@
 import unittest
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import threading
 from unittest.mock import Mock, patch
 
 from fastapi import HTTPException
+from botocore.exceptions import ClientError
+from boto3.dynamodb.types import TypeDeserializer
+from pydantic import ValidationError
 
 from app.routers import newsfeed
 
@@ -521,6 +526,1090 @@ class TestNewsfeedRoutes(unittest.TestCase):
         metric_filter.assert_any_call(mode="profile", filter_name="q")
         metric_filter.assert_any_call(mode="profile", filter_name="has_media")
         logger_mock.info.assert_called_once()
+
+    def test_unlock_post_request_rejects_invalid_idempotency_key_format(self):
+        with self.assertRaises(ValidationError):
+            newsfeed.UnlockPostRequest(post_id="p1", idempotency_key="bad key with spaces")
+        with self.assertRaises(ValidationError):
+            newsfeed.UnlockPostRequest(post_id="p1", idempotency_key="bad\nnewline")
+
+    def test_feed_capabilities_returns_enabled_when_rollout_allows_user(self):
+        with (
+            patch.object(newsfeed, "_is_unlock_limit_enabled_for_user", return_value=True),
+            patch.object(newsfeed, "S") as settings,
+        ):
+            settings.newsfeed_unlock_limit_rollout_mode = "cohort"
+            resp = newsfeed.feed_capabilities(user_id="u1")
+        self.assertTrue(resp.unlock_limit_enabled)
+        self.assertEqual(resp.unlock_limit_rollout_mode, "cohort")
+
+    def test_feed_capabilities_returns_disabled_when_rollout_blocks_user(self):
+        with (
+            patch.object(newsfeed, "_is_unlock_limit_enabled_for_user", return_value=False),
+            patch.object(newsfeed, "S") as settings,
+        ):
+            settings.newsfeed_unlock_limit_rollout_mode = "internal"
+            resp = newsfeed.feed_capabilities(user_id="u_external")
+        self.assertFalse(resp.unlock_limit_enabled)
+        self.assertEqual(resp.unlock_limit_rollout_mode, "internal")
+
+    def test_unlock_limit_rollout_internal_only(self):
+        with patch.object(newsfeed, "S") as settings:
+            settings.newsfeed_unlock_limit_enabled = True
+            settings.newsfeed_unlock_limit_rollout_mode = "internal"
+            settings.newsfeed_unlock_limit_internal_user_ids = "u_internal_1,u_internal_2"
+            settings.newsfeed_unlock_limit_cohort_user_ids = ""
+            self.assertTrue(newsfeed._is_unlock_limit_enabled_for_user("u_internal_1"))
+            self.assertFalse(newsfeed._is_unlock_limit_enabled_for_user("u_external"))
+
+    def test_unlock_limit_rollout_cohort_includes_internal(self):
+        with patch.object(newsfeed, "S") as settings:
+            settings.newsfeed_unlock_limit_enabled = True
+            settings.newsfeed_unlock_limit_rollout_mode = "cohort"
+            settings.newsfeed_unlock_limit_internal_user_ids = "u_internal"
+            settings.newsfeed_unlock_limit_cohort_user_ids = "u_cohort_1,u_cohort_2"
+            self.assertTrue(newsfeed._is_unlock_limit_enabled_for_user("u_internal"))
+            self.assertTrue(newsfeed._is_unlock_limit_enabled_for_user("u_cohort_1"))
+            self.assertFalse(newsfeed._is_unlock_limit_enabled_for_user("u_external"))
+
+    def test_unlock_limit_rollout_disabled_global_flag(self):
+        with patch.object(newsfeed, "S") as settings:
+            settings.newsfeed_unlock_limit_enabled = False
+            settings.newsfeed_unlock_limit_rollout_mode = "broad"
+            settings.newsfeed_unlock_limit_internal_user_ids = ""
+            settings.newsfeed_unlock_limit_cohort_user_ids = ""
+            self.assertFalse(newsfeed._is_unlock_limit_enabled_for_user("u_any"))
+
+    def test_unlock_attempt_throttle_blocks_rapid_retries(self):
+        newsfeed._UNLOCK_ATTEMPT_THROTTLE.clear()
+        with (
+            patch.object(newsfeed, "S") as settings,
+            patch.object(newsfeed.time, "time", side_effect=[100, 101]),
+        ):
+            settings.newsfeed_unlock_throttle_window_seconds = 60
+            settings.newsfeed_unlock_throttle_max_attempts = 1
+            newsfeed._enforce_unlock_attempt_throttle("u1", "p1")
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed._enforce_unlock_attempt_throttle("u1", "p1")
+
+        self.assertEqual(ctx.exception.status_code, 429)
+        self.assertEqual(ctx.exception.detail["code"], "unlock_attempt_throttled")
+
+    def test_unlock_attempt_throttle_allows_attempt_after_window(self):
+        newsfeed._UNLOCK_ATTEMPT_THROTTLE.clear()
+        with (
+            patch.object(newsfeed, "S") as settings,
+            patch.object(newsfeed.time, "time", side_effect=[100, 170]),
+        ):
+            settings.newsfeed_unlock_throttle_window_seconds = 60
+            settings.newsfeed_unlock_throttle_max_attempts = 1
+            newsfeed._enforce_unlock_attempt_throttle("u1", "p1")
+            # second attempt after window should be allowed
+            newsfeed._enforce_unlock_attempt_throttle("u1", "p1")
+
+    def test_reserve_unlock_slot_uses_conditional_expression_with_missing_count_support(self):
+        with patch.object(newsfeed, "tbl") as table:
+            table.update_item.return_value = {}
+            newsfeed._reserve_unlock_slot_or_raise("post_1")
+
+        kwargs = table.update_item.call_args.kwargs
+        self.assertEqual(
+            kwargs["ConditionExpression"],
+            "attribute_not_exists(unlock_limit) OR attribute_not_exists(unlock_count) OR unlock_count < unlock_limit",
+        )
+        self.assertEqual(kwargs["ExpressionAttributeValues"], {":z": 0, ":one": 1})
+
+    def test_reserve_unlock_slot_raises_unlock_limit_reached_on_conditional_failure(self):
+        err = ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "condition failed"}},
+            "UpdateItem",
+        )
+        with patch.object(newsfeed, "tbl") as table:
+            table.update_item.side_effect = err
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed._reserve_unlock_slot_or_raise("post_1")
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "unlock_limit_reached")
+        self.assertEqual(ctx.exception.detail["message"], "unlock limit reached")
+
+    def test_reserve_unlock_slot_does_not_raise_for_uncapped_posts(self):
+        with patch.object(newsfeed, "tbl") as table:
+            table.update_item.return_value = {}
+            newsfeed._reserve_unlock_slot_or_raise("post_uncapped")
+
+        table.update_item.assert_called_once()
+
+    def test_reserve_unlock_slot_parallel_harness_caps_successes_at_limit(self):
+        cap = 5
+        attempts = cap + 17
+        state_lock = threading.Lock()
+        state = {"unlock_count": 0}
+
+        def fake_update_item(**kwargs):
+            with state_lock:
+                if state["unlock_count"] >= cap:
+                    raise ClientError(
+                        {"Error": {"Code": "ConditionalCheckFailedException", "Message": "condition failed"}},
+                        "UpdateItem",
+                    )
+                state["unlock_count"] += 1
+            return {}
+
+        def attempt_once():
+            try:
+                newsfeed._reserve_unlock_slot_or_raise("post_cap")
+                return "ok"
+            except HTTPException as exc:
+                self.assertEqual(exc.status_code, 409)
+                self.assertEqual(exc.detail["code"], "unlock_limit_reached")
+                return "cap_reached"
+
+        with patch.object(newsfeed, "tbl") as table:
+            table.update_item.side_effect = fake_update_item
+            with ThreadPoolExecutor(max_workers=attempts) as executor:
+                results = list(executor.map(lambda _: attempt_once(), range(attempts)))
+
+        self.assertEqual(results.count("ok"), cap)
+        self.assertEqual(results.count("cap_reached"), attempts - cap)
+        self.assertEqual(state["unlock_count"], cap)
+
+    def test_reserve_unlock_slot_parallel_harness_no_overcap_under_repeated_stress(self):
+        cap = 3
+        attempts = cap + 11
+        rounds = 20
+
+        for _ in range(rounds):
+            state_lock = threading.Lock()
+            state = {"unlock_count": 0}
+
+            def fake_update_item(**kwargs):
+                with state_lock:
+                    if state["unlock_count"] >= cap:
+                        raise ClientError(
+                            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "condition failed"}},
+                            "UpdateItem",
+                        )
+                    state["unlock_count"] += 1
+                return {}
+
+            def attempt_once():
+                try:
+                    newsfeed._reserve_unlock_slot_or_raise("post_cap_stress")
+                    return "ok"
+                except HTTPException as exc:
+                    self.assertEqual(exc.status_code, 409)
+                    self.assertEqual(exc.detail["code"], "unlock_limit_reached")
+                    return "cap_reached"
+
+            with patch.object(newsfeed, "tbl") as table:
+                table.update_item.side_effect = fake_update_item
+                with ThreadPoolExecutor(max_workers=attempts) as executor:
+                    results = list(executor.map(lambda _: attempt_once(), range(attempts)))
+
+            self.assertEqual(results.count("ok"), cap)
+            self.assertEqual(results.count("cap_reached"), attempts - cap)
+            self.assertEqual(state["unlock_count"], cap)
+
+    def test_begin_unlock_attempt_returns_already_unlocked_when_unlock_exists(self):
+        err = ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "condition failed"}},
+            "PutItem",
+        )
+        with (
+            patch.object(newsfeed, "tbl") as table,
+            patch.object(newsfeed, "ddb_get_item", return_value={"unlocked": True}),
+        ):
+            table.put_item.side_effect = err
+            state = newsfeed._begin_unlock_attempt("u1", "p1")
+        self.assertEqual(state, "already_unlocked")
+
+    def test_begin_unlock_attempt_raises_idempotency_conflict_when_existing_key_differs(self):
+        err = ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "condition failed"}},
+            "PutItem",
+        )
+        with (
+            patch.object(newsfeed, "tbl") as table,
+            patch.object(newsfeed, "ddb_get_item", return_value={"unlocked": True, "idempotency_key": "idem-existing"}),
+        ):
+            table.put_item.side_effect = err
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed._begin_unlock_attempt("u1", "p1", idempotency_key="idem-new")
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "unlock_idempotency_conflict")
+
+    def test_begin_unlock_attempt_raises_payload_mismatch_for_same_idempotency_key(self):
+        err = ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "condition failed"}},
+            "PutItem",
+        )
+        with (
+            patch.object(newsfeed, "tbl") as table,
+            patch.object(
+                newsfeed,
+                "ddb_get_item",
+                return_value={
+                    "unlocked": True,
+                    "idempotency_key": "idem-1",
+                    "request_fingerprint": "fp-original",
+                },
+            ),
+        ):
+            table.put_item.side_effect = err
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed._begin_unlock_attempt(
+                    "u1",
+                    "p1",
+                    idempotency_key="idem-1",
+                    request_fingerprint="fp-other",
+                )
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "unlock_idempotency_payload_mismatch")
+
+    def test_begin_unlock_attempt_persists_idempotency_key_when_provided(self):
+        with patch.object(newsfeed, "tbl") as table:
+            state = newsfeed._begin_unlock_attempt("u1", "p1", idempotency_key="idem-1")
+
+        self.assertEqual(state, "new")
+        item = table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(item["idempotency_key"], "idem-1")
+
+    def test_begin_unlock_attempt_returns_in_progress_when_pending_exists(self):
+        err = ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "condition failed"}},
+            "PutItem",
+        )
+        with (
+            patch.object(newsfeed, "tbl") as table,
+            patch.object(newsfeed, "ddb_get_item", return_value={"unlocked": False, "in_progress": True}),
+        ):
+            table.put_item.side_effect = err
+            state = newsfeed._begin_unlock_attempt("u1", "p1")
+        self.assertEqual(state, "in_progress")
+
+    def test_unlock_post_reserves_slot_before_payment_intent(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None, idempotency_key="idem-1")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="new") as reserve_with_begin,
+            patch.object(newsfeed, "payments") as payments,
+            patch.object(newsfeed, "_finalize_unlock_attempt_success"),
+            patch.object(newsfeed, "put_notification"),
+            patch.object(newsfeed, "S") as settings,
+        ):
+            settings.billing_table_name = None
+            payments.create_payment_intent.return_value = {"payment_intent_id": "pi_1", "status": "requires_confirmation"}
+            payments.confirm_payment_intent.return_value = {"status": "succeeded"}
+
+            newsfeed.unlock_post(req, user_id="u1")
+
+        reserve_with_begin.assert_called_once()
+        self.assertEqual(reserve_with_begin.call_args.args, ("u1", "post_1"))
+        self.assertEqual(reserve_with_begin.call_args.kwargs["idempotency_key"], "idem-1")
+        self.assertEqual(
+            reserve_with_begin.call_args.kwargs["request_fingerprint"],
+            newsfeed._unlock_request_fingerprint(post_id="post_1", payment_method_id=None, unlock_price_cents=123),
+        )
+        payments.create_payment_intent.assert_called_once()
+        create_kwargs = payments.create_payment_intent.call_args.kwargs
+        self.assertEqual(
+            create_kwargs["metadata"],
+            {
+                "type": "unlock_post",
+                "post_id": "post_1",
+                "idempotency_key": "idem-1",
+                "request_fingerprint": newsfeed._unlock_request_fingerprint(post_id="post_1", payment_method_id=None, unlock_price_cents=123),
+            },
+        )
+
+    def test_unlock_post_returns_in_progress_without_reserve_or_charge(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None)
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="in_progress"),
+            patch.object(newsfeed, "payments") as payments,
+        ):
+            resp = newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(resp.payment_intent["status"], "in_progress")
+        payments.create_payment_intent.assert_not_called()
+
+    def test_unlock_post_already_unlocked_without_idempotency_bypasses_throttle(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None)
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        unlock_record = {"unlocked": True}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, unlock_record]),
+            patch.object(newsfeed, "_enforce_unlock_attempt_throttle") as enforce_throttle,
+        ):
+            resp = newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(resp.payment_intent["status"], "already_unlocked")
+        enforce_throttle.assert_not_called()
+
+    def test_unlock_post_emits_replay_event_for_already_unlocked_without_idempotency(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None)
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        unlock_record = {"unlocked": True}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, unlock_record]),
+            patch.object(newsfeed, "_emit_unlock_lifecycle_event") as emit_event,
+        ):
+            newsfeed.unlock_post(req, user_id="u1")
+
+        emit_event.assert_any_call(
+            "unlock_replay",
+            user_id="u1",
+            post_id="post_1",
+            reason_code="existing_unlocked_precheck",
+            payment_status="already_unlocked",
+            replayed=False,
+        )
+
+    def test_unlock_post_passes_request_fingerprint_metadata_without_idempotency_key(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None)
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="new"),
+            patch.object(newsfeed, "_finalize_unlock_attempt_success"),
+            patch.object(newsfeed, "put_notification"),
+            patch.object(newsfeed, "payments") as payments,
+            patch.object(newsfeed, "S") as settings,
+        ):
+            settings.billing_table_name = None
+            payments.create_payment_intent.return_value = {"payment_intent_id": "pi_1", "status": "requires_confirmation"}
+            payments.confirm_payment_intent.return_value = {"status": "succeeded"}
+            newsfeed.unlock_post(req, user_id="u1")
+
+        create_kwargs = payments.create_payment_intent.call_args.kwargs
+        self.assertEqual(create_kwargs["metadata"]["idempotency_key"], "")
+        self.assertEqual(
+            create_kwargs["metadata"]["request_fingerprint"],
+            newsfeed._unlock_request_fingerprint(post_id="post_1", payment_method_id=None, unlock_price_cents=123),
+        )
+
+    def test_unlock_post_writes_billing_ledger_with_idempotency_context(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None, idempotency_key="idem-1")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="new"),
+            patch.object(newsfeed, "_finalize_unlock_attempt_success"),
+            patch.object(newsfeed, "put_notification"),
+            patch.object(newsfeed, "payments") as payments,
+            patch.object(newsfeed, "ddb") as ddb,
+            patch.object(newsfeed, "S") as settings,
+        ):
+            settings.billing_table_name = "billing"
+            payments.create_payment_intent.return_value = {"payment_intent_id": "pi_1", "status": "requires_confirmation"}
+            payments.confirm_payment_intent.return_value = {"status": "succeeded"}
+            billing_table = Mock()
+            ddb.Table.return_value = billing_table
+
+            newsfeed.unlock_post(req, user_id="u1")
+
+        ledger_item = billing_table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(ledger_item["meta"]["idempotency_key"], "idem-1")
+        self.assertEqual(
+            ledger_item["meta"]["request_fingerprint"],
+            newsfeed._unlock_request_fingerprint(post_id="post_1", payment_method_id=None, unlock_price_cents=123),
+        )
+        self.assertEqual(ledger_item["meta"]["payment_intent_id"], "pi_1")
+
+    def test_unlock_post_returns_in_progress_replay_for_matching_idempotency_key(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None, idempotency_key="idem-1")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        in_progress_attempt = {"in_progress": True, "unlocked": False, "idempotency_key": "idem-1", "updated_at": "2999-01-01T00:00:00+00:00"}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, in_progress_attempt]),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="in_progress"),
+            patch.object(newsfeed, "payments") as payments,
+        ):
+            resp = newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(resp.payment_intent["status"], "in_progress")
+        self.assertTrue(resp.payment_intent["replayed"])
+        payments.create_payment_intent.assert_not_called()
+
+    def test_unlock_post_replay_bypasses_throttle_for_already_unlocked(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None, idempotency_key="idem-1")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        existing_unlock = {"unlocked": True, "idempotency_key": "idem-1", "payment_intent_id": "pi_1"}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, existing_unlock]),
+            patch.object(newsfeed, "_enforce_unlock_attempt_throttle") as enforce_throttle,
+        ):
+            resp = newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(resp.payment_intent["status"], "succeeded")
+        self.assertTrue(resp.payment_intent["replayed"])
+        enforce_throttle.assert_not_called()
+
+    def test_unlock_post_emits_replay_event_for_already_unlocked_replay(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None, idempotency_key="idem-1")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        unlock_record = {"unlocked": True, "idempotency_key": "idem-1", "payment_intent_id": "pi_1"}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, unlock_record]),
+            patch.object(newsfeed, "_emit_unlock_lifecycle_event") as emit_event,
+        ):
+            newsfeed.unlock_post(req, user_id="u1")
+
+        emit_event.assert_any_call(
+            "unlock_replay",
+            user_id="u1",
+            post_id="post_1",
+            reason_code="existing_unlocked_precheck",
+            payment_status="already_unlocked",
+            replayed=True,
+        )
+
+    def test_unlock_post_replay_bypasses_throttle_for_in_progress(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None, idempotency_key="idem-1")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        existing_unlock = {"in_progress": True, "unlocked": False, "idempotency_key": "idem-1"}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, existing_unlock]),
+            patch.object(newsfeed, "_enforce_unlock_attempt_throttle") as enforce_throttle,
+        ):
+            resp = newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(resp.payment_intent["status"], "in_progress")
+        self.assertTrue(resp.payment_intent["replayed"])
+        enforce_throttle.assert_not_called()
+
+    def test_unlock_post_emits_replay_event_for_in_progress_precheck(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None, idempotency_key="idem-1")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        existing_unlock = {"in_progress": True, "unlocked": False, "idempotency_key": "idem-1"}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, existing_unlock]),
+            patch.object(newsfeed, "_emit_unlock_lifecycle_event") as emit_event,
+        ):
+            newsfeed.unlock_post(req, user_id="u1")
+
+        emit_event.assert_any_call(
+            "unlock_replay",
+            user_id="u1",
+            post_id="post_1",
+            reason_code="existing_in_progress_precheck",
+            payment_status="in_progress",
+            replayed=True,
+        )
+
+    def test_unlock_post_emits_replay_event_for_in_progress_attempt_state(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None, idempotency_key="idem-1")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        in_progress_unlock = {"in_progress": True, "unlocked": False, "idempotency_key": "idem-1"}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, {}, in_progress_unlock]),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="in_progress"),
+            patch.object(newsfeed, "_emit_unlock_lifecycle_event") as emit_event,
+        ):
+            newsfeed.unlock_post(req, user_id="u1")
+
+        emit_event.assert_any_call(
+            "unlock_replay",
+            user_id="u1",
+            post_id="post_1",
+            reason_code="attempt_state_in_progress",
+            payment_status="in_progress",
+            replayed=True,
+        )
+
+    def test_unlock_post_replay_stale_in_progress_recovers_then_continues_flow(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None, idempotency_key="idem-1")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        stale_unlock = {
+            "in_progress": True,
+            "unlocked": False,
+            "idempotency_key": "idem-1",
+            "updated_at": "2000-01-01T00:00:00+00:00",
+        }
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, stale_unlock]),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="new") as begin_with_reservation,
+            patch.object(newsfeed, "_clear_unlock_attempt_if_not_unlocked", return_value=True) as clear_attempt,
+            patch.object(newsfeed, "_release_reserved_unlock_slot") as release_slot,
+            patch.object(newsfeed, "_finalize_unlock_attempt_success"),
+            patch.object(newsfeed, "payments") as payments,
+            patch.object(newsfeed, "put_notification"),
+            patch.object(newsfeed, "S") as settings,
+        ):
+            settings.billing_table_name = None
+            settings.newsfeed_unlock_attempt_stale_seconds = 300
+            payments.create_payment_intent.return_value = {"payment_intent_id": "pi_1", "status": "requires_confirmation"}
+            payments.confirm_payment_intent.return_value = {"status": "succeeded"}
+
+            resp = newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(resp.payment_intent["payment_intent_id"], "pi_1")
+        begin_with_reservation.assert_called_once()
+        clear_attempt.assert_called_once_with("u1", "post_1")
+        release_slot.assert_called_once_with("post_1")
+
+    def test_unlock_post_raises_conflict_for_in_progress_mismatched_idempotency_key(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None, idempotency_key="idem-new")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        in_progress_attempt = {"in_progress": True, "unlocked": False, "idempotency_key": "idem-existing", "updated_at": "2999-01-01T00:00:00+00:00"}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, in_progress_attempt]),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="in_progress"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "unlock_idempotency_conflict")
+
+    def test_unlock_post_emits_event_for_idempotency_conflict(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None, idempotency_key="idem-new")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        in_progress_attempt = {"in_progress": True, "unlocked": False, "idempotency_key": "idem-existing", "updated_at": "2999-01-01T00:00:00+00:00"}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, in_progress_attempt]),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="in_progress"),
+            patch.object(newsfeed, "_emit_unlock_lifecycle_event") as emit_event,
+        ):
+            with self.assertRaises(HTTPException):
+                newsfeed.unlock_post(req, user_id="u1")
+
+        emit_event.assert_any_call(
+            "unlock_payment_failed",
+            user_id="u1",
+            post_id="post_1",
+            reason_code="unlock_idempotency_conflict",
+            payment_status="idempotency_rejected",
+        )
+
+    def test_unlock_post_raises_payload_mismatch_for_in_progress_same_key(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id="pm_new", idempotency_key="idem-1")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        in_progress_attempt = {
+            "in_progress": True,
+            "unlocked": False,
+            "idempotency_key": "idem-1",
+            "request_fingerprint": newsfeed._unlock_request_fingerprint(post_id="post_1", payment_method_id="pm_old", unlock_price_cents=123),
+            "updated_at": "2999-01-01T00:00:00+00:00",
+        }
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, in_progress_attempt]),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="in_progress"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "unlock_idempotency_payload_mismatch")
+
+    def test_unlock_post_emits_event_for_idempotency_payload_mismatch(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id="pm_new", idempotency_key="idem-1")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        in_progress_attempt = {
+            "in_progress": True,
+            "unlocked": False,
+            "idempotency_key": "idem-1",
+            "request_fingerprint": newsfeed._unlock_request_fingerprint(post_id="post_1", payment_method_id="pm_old", unlock_price_cents=123),
+            "updated_at": "2999-01-01T00:00:00+00:00",
+        }
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, in_progress_attempt]),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="in_progress"),
+            patch.object(newsfeed, "_emit_unlock_lifecycle_event") as emit_event,
+        ):
+            with self.assertRaises(HTTPException):
+                newsfeed.unlock_post(req, user_id="u1")
+
+        emit_event.assert_any_call(
+            "unlock_payment_failed",
+            user_id="u1",
+            post_id="post_1",
+            reason_code="unlock_idempotency_payload_mismatch",
+            payment_status="idempotency_rejected",
+        )
+
+    def test_unlock_post_recovers_stale_in_progress_attempt_and_retries(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None)
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        stale_attempt = {
+            "in_progress": True,
+            "unlocked": False,
+            "updated_at": "2000-01-01T00:00:00+00:00",
+        }
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, {}, stale_attempt]),
+            patch.object(newsfeed, "_is_unlock_limit_enabled_for_user", return_value=True),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", side_effect=["in_progress", "new"]) as begin_with_reservation,
+            patch.object(newsfeed, "_clear_unlock_attempt_if_not_unlocked", return_value=True) as clear_attempt,
+            patch.object(newsfeed, "_release_reserved_unlock_slot") as release_slot,
+            patch.object(newsfeed, "_finalize_unlock_attempt_success"),
+            patch.object(newsfeed, "payments") as payments,
+            patch.object(newsfeed, "put_notification"),
+            patch.object(newsfeed, "S") as settings,
+        ):
+            settings.billing_table_name = None
+            settings.newsfeed_unlock_attempt_stale_seconds = 300
+            payments.create_payment_intent.return_value = {"payment_intent_id": "pi_1", "status": "requires_confirmation"}
+            payments.confirm_payment_intent.return_value = {"status": "succeeded"}
+
+            resp = newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(resp.payment_intent["payment_intent_id"], "pi_1")
+        self.assertEqual(begin_with_reservation.call_count, 2)
+        clear_attempt.assert_called_once_with("u1", "post_1")
+        release_slot.assert_called_once_with("post_1")
+
+    def test_unlock_post_keeps_fresh_in_progress_attempt(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None)
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        fresh_attempt = {
+            "in_progress": True,
+            "unlocked": False,
+            "updated_at": "2999-01-01T00:00:00+00:00",
+        }
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, {}, fresh_attempt]),
+            patch.object(newsfeed, "_is_unlock_limit_enabled_for_user", return_value=True),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="in_progress"),
+            patch.object(newsfeed, "_clear_unlock_attempt_if_not_unlocked") as clear_attempt,
+            patch.object(newsfeed, "_release_reserved_unlock_slot") as release_slot,
+            patch.object(newsfeed, "payments") as payments,
+            patch.object(newsfeed, "S") as settings,
+        ):
+            settings.newsfeed_unlock_attempt_stale_seconds = 300
+            resp = newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(resp.payment_intent["status"], "in_progress")
+        clear_attempt.assert_not_called()
+        release_slot.assert_not_called()
+        payments.create_payment_intent.assert_not_called()
+
+    def test_unlock_post_returns_replayed_success_for_matching_idempotency_key(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None, idempotency_key="idem-1")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        unlock_record = {"unlocked": True, "idempotency_key": "idem-1", "payment_intent_id": "pi_1"}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, unlock_record]),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="already_unlocked"),
+        ):
+            resp = newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(resp.payment_intent["status"], "succeeded")
+        self.assertTrue(resp.payment_intent["replayed"])
+        self.assertEqual(resp.payment_intent["payment_intent_id"], "pi_1")
+
+    def test_unlock_post_raises_idempotency_conflict_for_already_unlocked_mismatched_key(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None, idempotency_key="idem-new")
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        unlock_record = {"unlocked": True, "idempotency_key": "idem-existing", "payment_intent_id": "pi_1"}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", side_effect=[post, unlock_record]),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="already_unlocked"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "unlock_idempotency_conflict")
+
+    def test_unlock_post_clears_attempt_when_reservation_fails(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None)
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+        reservation_error = HTTPException(status_code=409, detail={"code": "unlock_limit_reached", "message": "unlock limit reached"})
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", side_effect=reservation_error),
+            patch.object(newsfeed, "_clear_unlock_attempt_if_not_unlocked") as clear_attempt,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        clear_attempt.assert_not_called()
+
+    def test_unlock_post_releases_slot_and_clears_attempt_on_payment_failure(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None)
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="new"),
+            patch.object(newsfeed, "_release_reserved_unlock_slot") as release_slot,
+            patch.object(newsfeed, "_clear_unlock_attempt_if_not_unlocked") as clear_attempt,
+            patch.object(newsfeed, "payments") as payments,
+            patch.object(newsfeed, "S") as settings,
+        ):
+            settings.billing_table_name = None
+            payments.create_payment_intent.return_value = {"payment_intent_id": "pi_1", "status": "requires_confirmation"}
+            payments.confirm_payment_intent.return_value = {"status": "requires_payment_method"}
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(ctx.exception.status_code, 402)
+        release_slot.assert_called_once_with("post_1")
+        clear_attempt.assert_called_once_with("u1", "post_1")
+
+    def test_unlock_post_emits_unlock_payment_failed_event_on_confirm_failure(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None)
+        post = {"post_id": "post_1", "user_id": "author_1", "locked": True, "unlock_price_cents": 123}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="new"),
+            patch.object(newsfeed, "_release_reserved_unlock_slot"),
+            patch.object(newsfeed, "_clear_unlock_attempt_if_not_unlocked"),
+            patch.object(newsfeed, "payments") as payments,
+            patch.object(newsfeed, "_emit_unlock_lifecycle_event") as emit_event,
+            patch.object(newsfeed, "S") as settings,
+        ):
+            settings.billing_table_name = None
+            payments.create_payment_intent.return_value = {"payment_intent_id": "pi_1", "status": "requires_confirmation"}
+            payments.confirm_payment_intent.return_value = {"status": "requires_payment_method"}
+            with self.assertRaises(HTTPException):
+                newsfeed.unlock_post(req, user_id="u1")
+
+        event_names = [call.args[0] for call in emit_event.call_args_list]
+        self.assertIn("unlock_attempt", event_names)
+        self.assertIn("unlock_payment_failed", event_names)
+
+    def test_begin_unlock_attempt_with_reservation_falls_back_when_transaction_unavailable(self):
+        err = ClientError({"Error": {"Code": "ProvisionedThroughputExceededException", "Message": "throttled"}}, "TransactWriteItems")
+        with (
+            patch.object(newsfeed, "tbl") as table,
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation_fallback", return_value="new") as fallback,
+        ):
+            table.meta.client.transact_write_items.side_effect = err
+            state = newsfeed._begin_unlock_attempt_with_reservation("u1", "p1", idempotency_key="idem-1")
+        self.assertEqual(state, "new")
+        fallback.assert_called_once_with("u1", "p1", idempotency_key="idem-1", request_fingerprint=None)
+
+    def test_begin_unlock_attempt_with_reservation_persists_idempotency_key_in_transaction_put(self):
+        with patch.object(newsfeed, "tbl") as table:
+            state = newsfeed._begin_unlock_attempt_with_reservation("u1", "p1", idempotency_key="idem-1")
+
+        self.assertEqual(state, "new")
+        transact_items = table.meta.client.transact_write_items.call_args.kwargs["TransactItems"]
+        put_item = transact_items[1]["Put"]["Item"]
+        deserializer = TypeDeserializer()
+        python_item = {k: deserializer.deserialize(v) for k, v in put_item.items()}
+        self.assertEqual(python_item["idempotency_key"], "idem-1")
+
+    def test_begin_unlock_attempt_with_reservation_emits_cap_reached_event(self):
+        err = ClientError({"Error": {"Code": "TransactionCanceledException", "Message": "cancelled"}}, "TransactWriteItems")
+        with (
+            patch.object(newsfeed, "tbl") as table,
+            patch.object(newsfeed, "ddb_get_item", return_value=None),
+            patch.object(newsfeed, "_emit_unlock_lifecycle_event") as emit_event,
+        ):
+            table.meta.client.transact_write_items.side_effect = err
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed._begin_unlock_attempt_with_reservation("u1", "p1")
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        emit_event.assert_any_call(
+            "unlock_limit_reached",
+            user_id="u1",
+            post_id="p1",
+            reason_code="cap_reached_transaction",
+        )
+
+    def test_begin_unlock_attempt_with_reservation_raises_idempotency_conflict_on_existing_key_mismatch(self):
+        err = ClientError({"Error": {"Code": "TransactionCanceledException", "Message": "cancelled"}}, "TransactWriteItems")
+        with (
+            patch.object(newsfeed, "tbl") as table,
+            patch.object(newsfeed, "ddb_get_item", return_value={"unlocked": True, "idempotency_key": "idem-existing"}),
+        ):
+            table.meta.client.transact_write_items.side_effect = err
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed._begin_unlock_attempt_with_reservation("u1", "p1", idempotency_key="idem-new")
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "unlock_idempotency_conflict")
+
+    def test_notify_author_unlock_limit_reached_once_deduplicates(self):
+        conditional_fail = ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "duplicate"}},
+            "PutItem",
+        )
+        post = {"post_id": "p1", "user_id": "author_1", "unlock_limit": 1, "unlock_count": 1}
+        with (
+            patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "tbl") as table,
+            patch.object(newsfeed, "put_notification") as notify,
+        ):
+            table.put_item.side_effect = [None, conditional_fail]
+            newsfeed._notify_author_unlock_limit_reached_once(post_id="p1", triggered_by_user_id="u2")
+            newsfeed._notify_author_unlock_limit_reached_once(post_id="p1", triggered_by_user_id="u3")
+
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args.kwargs["recipient_user_id"], "author_1")
+        self.assertEqual(notify.call_args.kwargs["notif_type"], "post_unlock_limit_reached")
+
+    def test_create_post_rejects_unlock_limit_for_unlocked_posts(self):
+        req = newsfeed.CreatePostRequest(body="hello", unlock_limit=2)
+
+        with (
+            patch.object(newsfeed, "_is_unlock_limit_enabled_for_user", return_value=True),
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck") as quota_precheck,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["code"], "unlock_limit_requires_locked_post")
+        self.assertEqual(ctx.exception.detail["message"], "unlock_limit can only be set for locked posts")
+        quota_precheck.assert_not_called()
+
+    def test_edit_post_rejects_unlock_limit_for_unlocked_posts(self):
+        req = newsfeed.EditPostRequest(body="updated", unlock_limit=2)
+        post = {"post_id": "p1", "user_id": "u1", "locked": False}
+
+        with (
+            patch.object(newsfeed, "_is_unlock_limit_enabled_for_user", return_value=True),
+            patch.object(newsfeed, "ddb_get_item", return_value=post),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.edit_post("p1", req, user_id="u1")
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["code"], "unlock_limit_requires_locked_post")
+        self.assertEqual(ctx.exception.detail["message"], "unlock_limit can only be set for locked posts")
+
+    def test_edit_post_rejects_unlock_limit_below_unlock_count(self):
+        req = newsfeed.EditPostRequest(body="updated", unlock_limit=1)
+        post = {"post_id": "p1", "user_id": "u1", "locked": True, "unlock_count": 2}
+
+        with (
+            patch.object(newsfeed, "_is_unlock_limit_enabled_for_user", return_value=True),
+            patch.object(newsfeed, "ddb_get_item", return_value=post),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.edit_post("p1", req, user_id="u1")
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["code"], "unlock_limit_below_unlock_count")
+        self.assertEqual(ctx.exception.detail["message"], "unlock_limit cannot be lower than current unlock_count")
+
+    def test_create_post_rejects_unlock_limit_when_feature_disabled_for_user(self):
+        req = newsfeed.CreatePostRequest(body="hello", unlock_price_cents=123, unlock_limit=2)
+
+        with patch.object(newsfeed, "_is_unlock_limit_enabled_for_user", return_value=False):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.create_post(req, user_id="u1")
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["code"], "unlock_limit_feature_disabled")
+
+    def test_edit_post_rejects_unlock_limit_when_feature_disabled_for_user(self):
+        req = newsfeed.EditPostRequest(body="updated", unlock_limit=2)
+        post = {"post_id": "p1", "user_id": "u1", "locked": True, "unlock_count": 0}
+
+        with (
+            patch.object(newsfeed, "_is_unlock_limit_enabled_for_user", return_value=False),
+            patch.object(newsfeed, "ddb_get_item", return_value=post),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.edit_post("p1", req, user_id="u1")
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["code"], "unlock_limit_feature_disabled")
+
+    def test_create_post_persists_unlock_limit_and_initial_unlock_count_when_capped(self):
+        req = newsfeed.CreatePostRequest(body="hello", unlock_price_cents=250, unlock_limit=3)
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_1"),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
+            patch.object(newsfeed, "ddb_put_item") as put_item,
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+            patch.object(newsfeed, "_meter_newsfeed_post_publish"),
+            patch.object(newsfeed, "_meter_newsfeed_attachment_uploads"),
+        ):
+            newsfeed.create_post(req, user_id="u1")
+
+        post_item = put_item.call_args_list[0].args[0]
+        self.assertEqual(post_item["unlock_limit"], 3)
+        self.assertEqual(post_item["unlock_count"], 0)
+
+    def test_create_post_omits_unlock_limit_fields_for_unlocked_posts(self):
+        req = newsfeed.CreatePostRequest(body="hello")
+        with (
+            patch.object(newsfeed, "new_id", return_value="post_2"),
+            patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
+            patch.object(newsfeed, "ddb_put_item") as put_item,
+            patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
+            patch.object(newsfeed, "_meter_newsfeed_post_publish"),
+            patch.object(newsfeed, "_meter_newsfeed_attachment_uploads"),
+        ):
+            newsfeed.create_post(req, user_id="u1")
+
+        post_item = put_item.call_args_list[0].args[0]
+        self.assertNotIn("unlock_limit", post_item)
+        self.assertNotIn("unlock_count", post_item)
+
+    def test_edit_post_sets_unlock_limit_without_affecting_image_fields(self):
+        req = newsfeed.EditPostRequest(body="updated", unlock_limit=5)
+        post = {"post_id": "p1", "user_id": "u1", "locked": True, "unlock_count": 0}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "ddb_update_item", return_value=post) as update_item,
+            patch.object(newsfeed, "_post_to_dict", return_value={"ok": True}),
+        ):
+            newsfeed.edit_post("p1", req, user_id="u1")
+
+        update_expr = update_item.call_args.kwargs["update_expr"]
+        expr_vals = update_item.call_args.kwargs["expr_vals"]
+        self.assertIn("unlock_limit = :unlock_limit", update_expr)
+        self.assertNotIn("REMOVE unlock_limit", update_expr)
+        self.assertNotIn("image_urls", update_expr)
+        self.assertEqual(expr_vals[":unlock_limit"], 5)
+
+    def test_edit_post_clears_unlock_limit_without_affecting_image_fields(self):
+        req = newsfeed.EditPostRequest(body="updated", unlock_limit=None)
+        post = {"post_id": "p1", "user_id": "u1", "locked": True, "unlock_count": 0}
+
+        with (
+            patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "ddb_update_item", return_value=post) as update_item,
+            patch.object(newsfeed, "_post_to_dict", return_value={"ok": True}),
+        ):
+            newsfeed.edit_post("p1", req, user_id="u1")
+
+        update_expr = update_item.call_args.kwargs["update_expr"]
+        expr_vals = update_item.call_args.kwargs["expr_vals"]
+        self.assertIn("REMOVE unlock_limit", update_expr)
+        self.assertNotIn("image_urls", update_expr)
+        self.assertNotIn(":unlock_limit", expr_vals)
+
+    def test_post_to_dict_includes_unlock_limit_fields(self):
+        post = {
+            "post_id": "post_1",
+            "user_id": "author_1",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body": "hello",
+            "locked": True,
+            "unlock_price_cents": 250,
+            "unlock_limit": 3,
+            "unlock_count": 2,
+        }
+
+        payload = newsfeed._post_to_dict(post)
+
+        self.assertEqual(payload["unlock_limit"], 3)
+        self.assertEqual(payload["unlock_count"], 2)
+        self.assertFalse(payload["unlock_limit_reached"])
+
+    def test_post_to_dict_unlock_limit_reached_when_count_meets_limit(self):
+        post = {
+            "post_id": "post_2",
+            "user_id": "author_2",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body": "hello",
+            "locked": True,
+            "unlock_price_cents": 250,
+            "unlock_limit": 2,
+            "unlock_count": 2,
+        }
+
+        payload = newsfeed._post_to_dict(post)
+        self.assertTrue(payload["unlock_limit_reached"])
+
+    def test_post_to_dict_unlock_limit_defaults_for_legacy_posts(self):
+        post = {
+            "post_id": "post_legacy",
+            "user_id": "author_legacy",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body": "hello",
+            "locked": False,
+        }
+
+        payload = newsfeed._post_to_dict(post)
+        self.assertIsNone(payload["unlock_limit"])
+        self.assertEqual(payload["unlock_count"], 0)
+        self.assertFalse(payload["unlock_limit_reached"])
+
+    def test_post_to_dict_unlock_limit_defaults_for_malformed_storage_values(self):
+        post = {
+            "post_id": "post_bad",
+            "user_id": "author_bad",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body": "hello",
+            "locked": True,
+            "unlock_limit": "not-a-number",
+            "unlock_count": "not-a-number",
+        }
+
+        payload = newsfeed._post_to_dict(post)
+        self.assertIsNone(payload["unlock_limit"])
+        self.assertEqual(payload["unlock_count"], 0)
+        self.assertFalse(payload["unlock_limit_reached"])
+
+    def test_post_to_dict_marks_lock_expired_and_prioritizes_over_sold_out(self):
+        post = {
+            "post_id": "post_expired",
+            "user_id": "author_expired",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "body": "hello",
+            "locked": True,
+            "unlock_limit": 1,
+            "unlock_count": 1,
+            "lock_expires_at": "2000-01-01T00:00:00+00:00",
+        }
+
+        payload = newsfeed._post_to_dict(post)
+        self.assertTrue(payload["lock_expired"])
+        self.assertFalse(payload["unlock_limit_reached"])
+
+    def test_unlock_post_returns_lock_expired_before_sold_out(self):
+        req = newsfeed.UnlockPostRequest(post_id="post_1", payment_method_id=None)
+        post = {
+            "post_id": "post_1",
+            "user_id": "author_1",
+            "locked": True,
+            "unlock_price_cents": 123,
+            "unlock_limit": 1,
+            "unlock_count": 1,
+            "lock_expires_at": "2000-01-01T00:00:00+00:00",
+        }
+        with (
+            patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "_begin_unlock_attempt_with_reservation") as begin_with_reservation,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                newsfeed.unlock_post(req, user_id="u1")
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "post_lock_expired")
+        self.assertEqual(ctx.exception.detail["message"], "post lock expired")
+        begin_with_reservation.assert_not_called()
 
     def test_meter_newsfeed_post_publish_builds_deterministic_idempotency_key(self):
         table = Mock()

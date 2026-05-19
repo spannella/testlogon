@@ -1320,3 +1320,205 @@ Create deployment plan covering migration order, feature-flag enablement, canary
 - Runbook defines ordered steps: migration/backfill, backend deploy, frontend deploy, flag enablement.
 - Includes post-release checks for key metrics, logs, and error budgets.
 - Includes rollback steps and owner on-call responsibilities.
+### NUL-001: Finalize unlock-limit API contract and error model
+**Description:** Define and document request/response fields and error payloads for capped unlocks (`unlock_limit`, `unlock_count`, `unlock_limit_reached`) and standardize error codes such as `unlock_limit_requires_locked_post`, `unlock_limit_below_unlock_count`, and `unlock_limit_reached`.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- API contract includes field types, nullability, and behavior for locked vs unlocked posts.
+- Error payload schema is consistent across create/edit/unlock endpoints.
+
+### NUL-002: Add backend model validation for unlock-limit create/edit rules
+**Description:** Enforce server-side validation that `unlock_limit` is only valid for locked posts and cannot be lowered below current `unlock_count`.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Create requests with `unlock_limit` on non-locked posts return deterministic 4xx with code.
+- Edit requests that set `unlock_limit < unlock_count` return deterministic 4xx with code.
+
+### NUL-003: Ensure post serialization includes unlock-limit state everywhere
+**Description:** Include `unlock_limit`, `unlock_count`, and derived `unlock_limit_reached` in all post serialization paths (single post, feed list, and mutation responses).
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- All post read surfaces expose the three fields with backward-compatible defaults.
+- Derived `unlock_limit_reached` is correct for capped and uncapped posts.
+
+### NUL-004: Persist unlock-limit fields on post creation
+**Description:** Update post creation flow to persist `unlock_limit` (when applicable) and initialize `unlock_count` deterministically.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Creating locked posts with `unlock_limit` stores cap value and initializes count.
+- Creating unlocked or uncapped posts preserves existing behavior.
+
+### NUL-005: Add edit-path support to set/clear unlock_limit safely
+**Description:** Extend post edit update expressions to support setting and removing `unlock_limit` without breaking existing image/content updates.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Edit requests can set `unlock_limit` for locked posts.
+- Explicit null clears `unlock_limit` and leaves unrelated fields unaffected.
+
+### NUL-006: Implement concurrency-safe unlock slot reservation
+**Description:** Add conditional atomic increment of `unlock_count` during unlock flow using DynamoDB conditions so at most `N` users can unlock a capped post.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Unlock reservation succeeds only when `unlock_count < unlock_limit` or cap is unset.
+- Cap exhaustion returns explicit `unlock_limit_reached` response.
+
+### NUL-007: Add idempotency guard for duplicate unlock attempts
+**Description:** Ensure repeated unlock requests by the same user/post pair do not double-increment `unlock_count` or create duplicate unlock records.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Retries after successful unlock are side-effect free.
+- Duplicate concurrent requests for same user/post do not over-count.
+
+### NUL-008: Implement payment + reservation consistency strategy
+**Description:** Implement and document chosen ordering/compensation strategy so payment failures do not leak unlock slots and successful unlocks are never unpaid.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Payment failure path does not leave permanent slot consumption.
+- Observed invariants documented in code and runbook.
+
+### NUL-009: Evaluate and add transactional write path for unlock consistency
+**Description:** Add DynamoDB transaction (or documented equivalent) to atomically write unlock record and count update where feasible.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Unlock record and `unlock_count` cannot diverge on successful unlocks.
+- Fallback behavior is documented for transaction failures.
+
+### NUL-010: Enforce unlock state precedence for expiry and sold-out conditions
+**Description:** Standardize precedence between lock expiry and cap exhaustion in unlock endpoint and read surfaces.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Expired lock returns expiration error regardless of remaining cap.
+- Non-expired capped lock returns sold-out error when cap reached.
+
+### NUL-011: Add backend telemetry for unlock lifecycle events
+**Description:** Emit structured metrics/logs for `unlock_attempt`, `unlock_success`, `unlock_limit_reached`, and `unlock_payment_failed` with reason codes.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Events are emitted for all major unlock outcomes.
+- Telemetry includes enough dimensions to segment payment vs cap failures.
+
+### NUL-012: Add optional author notification when cap is reached
+**Description:** Notify post authors once when their capped post first reaches unlock limit, with deduplication to prevent notification spam.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Author receives at most one cap-reached notification per post.
+- Repeated blocked unlock attempts do not emit duplicates.
+
+### NUL-013: Add abuse controls for repeated unlock attempts
+**Description:** Add per-user/post throttling or dedupe guard to reduce noisy repeated unlock calls while preserving valid unlock UX.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Excess rapid retries are throttled with clear response.
+- Normal unlock flow is unaffected for non-abusive traffic.
+
+### NUL-014: Add frontend composer controls for unlock limit
+**Description:** Add UI control to enable/disable unlock caps and input `N` in post create/edit forms, with client-side validation.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Authors can set valid unlock caps in create/edit flows.
+- Invalid input is blocked pre-submit with clear inline messaging.
+
+### NUL-015: Add frontend post display for remaining slots and sold-out state
+**Description:** Show unlock progress (`unlock_count / unlock_limit`) and sold-out state across feed and post detail views.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Remaining slots are computed/displayed correctly and never negative.
+- Sold-out state is consistently visible across all post surfaces.
+
+### NUL-016: Update unlock CTA behavior for sold-out and expired posts
+**Description:** Disable or adapt unlock CTA and map backend error codes to user-facing messages for cap reached vs lock expired.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- CTA reflects non-actionable states without misleading retry prompts.
+- Error handling distinguishes sold-out and expired outcomes.
+
+### NUL-017: Update frontend API types and data stores for unlock-limit fields
+**Description:** Ensure client types/state include unlock-limit fields end-to-end and are backward-compatible with older payloads.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Type definitions include all unlock-limit fields for create/edit/read contracts.
+- Existing pages compile and function with mixed old/new payloads.
+
+### NUL-018: Add backend unit tests for validation and unlock-cap logic
+**Description:** Add tests covering create/edit validation, cap reached behavior, uncapped behavior, and explicit error code mapping.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Unit tests cover positive and negative paths with deterministic assertions.
+- Tests verify error payload codes/messages for all validation/cap failures.
+
+### NUL-019: Add backend concurrency tests for capped unlock races
+**Description:** Build a parallel unlock test harness (`N+K` attempts) to prove only `N` successful unlocks for cap `N`.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Concurrency test consistently passes with exactly `N` successes.
+- No over-cap success occurs under repeated stress runs.
+
+### NUL-020: Add frontend unit/integration tests for unlock-limit UX
+**Description:** Test composer validation, sold-out display, CTA disabled states, and error mapping for unlock flow.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Tests cover create/edit form validation and display logic.
+- Tests verify correct handling of `unlock_limit_reached` and expiry errors.
+
+### NUL-021: Add end-to-end scenario for capped unlock journey
+**Description:** Add E2E flow where author creates capped locked post, first `N` users unlock successfully, and additional users are blocked.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- E2E test verifies success for first `N` users and rejection for `N+1`.
+- E2E includes UI assertions for sold-out state visibility.
+
+### NUL-022: Add migration/backfill tooling for legacy posts
+**Description:** Provide optional migration/backfill scripts to normalize legacy posts with missing unlock-limit fields and verify data integrity.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Backfill can run idempotently with dry-run and progress logging.
+- Data checks confirm expected field defaults after backfill.
+
+### NUL-023: Add reconciliation job for unlock_count integrity
+**Description:** Create periodic integrity check comparing post `unlock_count` against unlock-record cardinality and alert on drift.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Drift anomalies are emitted to logs/metrics.
+- Runbook includes investigation and optional repair procedure.
+
+### NUL-024: Add feature flag and staged rollout controls
+**Description:** Gate unlock-limit behavior behind a feature flag and implement phased rollout (internal, cohort, broad) with rollback.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Feature can be toggled without deploy rollback.
+- Rollout checklist includes explicit go/no-go criteria per phase.
+
+### NUL-025: Add deployment runbook, dashboards, and alarms
+**Description:** Document deployment steps, dashboards, and alert thresholds for unlock failures, payment failures, and contention metrics.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Runbook covers launch, rollback, and on-call response actions.
+- Monitoring and alerting are in place before production rollout.
+
+### NUL-026: Conduct production readiness review and sign-off
+**Description:** Execute readiness review across backend/frontend/ops/security/QA and record sign-off plus follow-up actions.
+**Status:** ✅ Implemented (2026-04-05)
+**Acceptance criteria:**
+- Readiness checklist is completed with named owners.
+- Any open risks are tracked with mitigation tickets before GA.
+
+### NUL-027: Automate unlock-limit dashboard/alarm provisioning
+**Description:** Provision unlock-limit monitoring dashboards and alarms via environment automation instead of manual setup.
+**Status:** 🟡 Open
+**Acceptance criteria:**
+- Dashboards and alarm rules are created from code/config in each target environment.
+- Alarm routing is tested and verified during deployment checks.
+
+### NUL-028: Schedule periodic unlock-count reconciliation in production
+**Description:** Run `reconcile_newsfeed_unlock_counts.py` on a fixed cadence with reporting and escalation on drift.
+**Status:** 🟡 Open
+**Acceptance criteria:**
+- Reconciliation runs automatically on schedule with logs retained.
+- Drift findings generate a ticket/alert path to on-call.
+
+### NUL-029: Add unlock-limit E2E to nightly stable CI lane
+**Description:** Ensure capped unlock journey E2E runs nightly with owner-based triage on failures.
+**Status:** 🟡 Open
+**Acceptance criteria:**
+- `frontend/e2e/feed-unlock-limit.spec.ts` is included in nightly CI lane.
+- Failures page the designated QA/engineering owner for triage.
