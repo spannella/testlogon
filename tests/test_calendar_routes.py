@@ -88,18 +88,22 @@ def test_create_event_requires_calendar_owner():
 def test_create_event_all_day():
     meta = {"calendar_id": "cal123", "sk": "meta", "owner_user_sub": "user", "timezone": "UTC"}
     table = build_calendar_table(meta=meta)
-    with patch.object(calendar_router, "T", SimpleNamespace(calendar=table)):
-        with patch.object(calendar_router.uuid, "uuid4", return_value=SimpleNamespace(hex="evt123")):
-            resp = run_async(calendar_router.create_event(
-                "cal123",
-                EventCreateIn(
-                    name="Holiday",
-                    description="Office closed",
-                    all_day=True,
-                    all_day_date="2024-05-01",
-                ),
-                ctx=build_ctx(),
-            ))
+    with (
+        patch.object(calendar_router, "T", SimpleNamespace(calendar=table)),
+        patch.object(calendar_router.uuid, "uuid4", return_value=SimpleNamespace(hex="evt123")),
+        patch.object(calendar_router, "enqueue_google_calendar_outbound_sync_job"),
+        patch.object(calendar_router, "get_event_mapping", return_value={}),
+    ):
+        resp = run_async(calendar_router.create_event(
+            "cal123",
+            EventCreateIn(
+                name="Holiday",
+                description="Office closed",
+                all_day=True,
+                all_day_date="2024-05-01",
+            ),
+            ctx=build_ctx(),
+        ))
 
     assert resp.event_id == "evt123"
     assert resp.all_day is True
@@ -113,6 +117,7 @@ def test_create_event_enqueues_outbound_sync_job_once():
         patch.object(calendar_router, "T", SimpleNamespace(calendar=table)),
         patch.object(calendar_router.uuid, "uuid4", return_value=SimpleNamespace(hex="evt123")),
         patch.object(calendar_router, "enqueue_google_calendar_outbound_sync_job") as enqueue,
+        patch.object(calendar_router, "get_event_mapping", return_value={}),
     ):
         run_async(calendar_router.create_event(
             "cal123",
@@ -197,13 +202,16 @@ def test_list_events_returns_items():
         },
     ]
     table = build_calendar_table(meta=meta, events=events)
-    with patch.object(calendar_router, "T", SimpleNamespace(calendar=table)):
+    with (
+        patch.object(calendar_router, "T", SimpleNamespace(calendar=table)),
+        patch.object(calendar_router, "get_event_mapping", return_value={}),
+    ):
         resp = run_async(calendar_router.list_events("cal123", ctx=build_ctx()))
 
-    assert len(resp) == 1
-    assert resp[0].event_id == "evt1"
-    assert resp[0].name == "Standup"
-    assert resp[0].description == "Daily sync"
+    assert len(resp.events) == 1
+    assert resp.events[0].event_id == "evt1"
+    assert resp.events[0].name == "Standup"
+    assert resp.events[0].description == "Daily sync"
 
 
 def test_openings_merge_overlapping_events():
@@ -359,7 +367,11 @@ def test_update_event_updates_times():
         "created_at_utc": "2024-01-01T08:00:00Z",
     }
     table = build_calendar_table_with_event(meta=meta, event=event)
-    with patch.object(calendar_router, "T", SimpleNamespace(calendar=table)):
+    with (
+        patch.object(calendar_router, "T", SimpleNamespace(calendar=table)),
+        patch.object(calendar_router, "enqueue_google_calendar_outbound_sync_job"),
+        patch.object(calendar_router, "get_event_mapping", return_value={}),
+    ):
         resp = run_async(calendar_router.update_event(
             "cal123",
             "evt1",
@@ -390,6 +402,7 @@ def test_update_event_enqueues_outbound_sync_job_once():
     with (
         patch.object(calendar_router, "T", SimpleNamespace(calendar=table)),
         patch.object(calendar_router, "enqueue_google_calendar_outbound_sync_job") as enqueue,
+        patch.object(calendar_router, "get_event_mapping", return_value={}),
     ):
         run_async(calendar_router.update_event(
             "cal123",
@@ -414,7 +427,10 @@ def test_delete_event_removes_item():
         "all_day": False,
     }
     table = build_calendar_table_with_event(meta=meta, event=event)
-    with patch.object(calendar_router, "T", SimpleNamespace(calendar=table)):
+    with (
+        patch.object(calendar_router, "T", SimpleNamespace(calendar=table)),
+        patch.object(calendar_router, "enqueue_google_calendar_outbound_sync_job"),
+    ):
         resp = run_async(calendar_router.delete_event("cal123", "evt1", ctx=build_ctx()))
 
     assert resp == {"ok": True}

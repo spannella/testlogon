@@ -53,6 +53,7 @@ def test_fill_tamper_attempt_is_denied_and_audited():
     with (
         patch.object(signature_packets, "get_packet", return_value={"packet_id": "sp_1", "owner_user_id": "owner", "status": "sent"}),
         patch.object(signature_packets, "get_packet_signer", return_value={"signer_id": "u1", "status": "pending"}),
+        patch.object(signature_packets, "_signer_requires_legal_notice_ack", return_value=False),
         patch.object(signature_packets, "get_packet_field", return_value={"field_id": "f1", "field_type": "signature", "assigned_signer_id": "u2"}),
         patch.object(signature_packets, "append_packet_event") as append_event,
     ):

@@ -72,6 +72,7 @@ def test_policy_enforcement_audits_scope_deny(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(svc, "require_api_key_principal", _principal)
     monkeypatch.setattr(svc, "requires_scope_for_request_from_registry", _deny)
     monkeypatch.setattr(svc, "route_id_from_request", lambda request: "GET:/v1/files")
+    monkeypatch.setattr(svc, "get_route_scope_policy", lambda _rid: None)
     monkeypatch.setattr(svc, "audit_event", lambda _event, _user, _req, **fields: audit_calls.append(fields))
 
     with pytest.raises(HTTPException) as exc:

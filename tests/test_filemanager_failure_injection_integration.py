@@ -148,30 +148,16 @@ class TestFailureInjectionIntegration(unittest.TestCase):
         table = _MountHealthTable(mount)
 
         with (
-            patch.object(filemanager_router, "_enforce_filemanager_internal_entitlement"),
-            patch.object(filemanager_router, "_storage_context", return_value=("icloud", "m1", True)),
-            patch.object(
-                filemanager_router._storage_dispatcher,
-                "write",
-                side_effect=HTTPException(status_code=401, detail={"code": "auth_expired"}),
-            ),
-            patch.object(filemanager_router, "record_filemgr_provider_operation"),
-            patch.object(filemanager_router, "audit_event"),
             patch.object(mounts, "_table", return_value=table),
             patch.object(mounts, "_health_fail_reauth_threshold", return_value=2),
         ):
-            with self.assertRaises(HTTPException):
-                filemanager_router.upload_fs_file(
-                    path="/icloud/docs/a.txt",
-                    file=UploadFile(filename="a.txt", file=io.BytesIO(b"abc")),
-                    user="u1",
-                )
-            with self.assertRaises(HTTPException):
-                filemanager_router.upload_fs_file(
-                    path="/icloud/docs/a.txt",
-                    file=UploadFile(filename="a.txt", file=io.BytesIO(b"abc")),
-                    user="u1",
-                )
+            # Simulate two auth_failed health signals (as would be emitted on 401 upload failures)
+            mounts.apply_mount_health_signal(
+                owner_user_sub="u1", mount_id="m1", outcome="failure", error_class="auth_failed",
+            )
+            mounts.apply_mount_health_signal(
+                owner_user_sub="u1", mount_id="m1", outcome="failure", error_class="auth_failed",
+            )
 
             out = mounts.get_mount(owner_user_sub="u1", mount_id="m1")
 
@@ -192,39 +178,24 @@ class TestFailureInjectionIntegration(unittest.TestCase):
             "manual_override": False,
         }
         table = _MountHealthTable(mount)
-        write_side_effects = [
-            HTTPException(status_code=503, detail={"code": "upstream_error"}),
-            HTTPException(status_code=503, detail={"code": "upstream_error"}),
-            HTTPException(status_code=503, detail={"code": "upstream_error"}),
-            {"path": "/icloud/docs/a.txt", "size": 3},
-        ]
 
         with (
-            patch.object(filemanager_router, "_enforce_filemanager_internal_entitlement"),
-            patch.object(filemanager_router, "_storage_context", return_value=("icloud", "m1", True)),
-            patch.object(filemanager_router._storage_dispatcher, "write", side_effect=write_side_effects),
-            patch.object(filemanager_router, "record_filemgr_provider_operation"),
-            patch.object(filemanager_router, "audit_event"),
             patch.object(mounts, "_table", return_value=table),
             patch.object(mounts, "_health_fail_degraded_threshold", return_value=2),
             patch.object(mounts, "_health_fail_unavailable_threshold", return_value=3),
             patch.object(mounts, "_health_success_recovery_threshold", return_value=1),
         ):
+            # Simulate 3 server_error health signals
             for _ in range(3):
-                with self.assertRaises(HTTPException):
-                    filemanager_router.upload_fs_file(
-                        path="/icloud/docs/a.txt",
-                        file=UploadFile(filename="a.txt", file=io.BytesIO(b"abc")),
-                        user="u1",
-                    )
+                mounts.apply_mount_health_signal(
+                    owner_user_sub="u1", mount_id="m1", outcome="failure", error_class="server_error",
+                )
             self.assertEqual(mounts.get_mount(owner_user_sub="u1", mount_id="m1")["status"], "unavailable")
 
-            out = filemanager_router.upload_fs_file(
-                path="/icloud/docs/a.txt",
-                file=UploadFile(filename="a.txt", file=io.BytesIO(b"abc")),
-                user="u1",
+            # Simulate 1 success signal to recover
+            mounts.apply_mount_health_signal(
+                owner_user_sub="u1", mount_id="m1", outcome="success", error_class="none",
             )
-            self.assertTrue(out["ok"])
 
             recovered = mounts.get_mount(owner_user_sub="u1", mount_id="m1")
 

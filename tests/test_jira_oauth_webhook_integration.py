@@ -95,7 +95,7 @@ def test_webhook_route_maps_source_ip_auth_error_code(monkeypatch) -> None:
         headers={"X-Jira-Event": "jira:issue_updated"},
     )
     assert resp.status_code == 403
-    assert resp.json()["error"]["code"] == "jira_webhook_source_ip_not_allowed"
+    assert resp.json()["detail"]["error"]["code"] == "jira_webhook_source_ip_not_allowed"
 
 
 def test_webhook_route_maps_signature_required_error_code(monkeypatch) -> None:
@@ -112,7 +112,7 @@ def test_webhook_route_maps_signature_required_error_code(monkeypatch) -> None:
         headers={"X-Jira-Event": "jira:issue_updated"},
     )
     assert resp.status_code == 401
-    assert resp.json()["error"]["code"] == "jira_webhook_signature_required"
+    assert resp.json()["detail"]["error"]["code"] == "jira_webhook_signature_required"
 
 
 def test_inbound_apply_end_to_end_updates_link_sync_metadata() -> None:

@@ -957,6 +957,19 @@ def list_mass_message_campaigns(
     if normalized_mode and normalized_mode not in {"immediate", "scheduled"}:
         raise HTTPException(status_code=400, detail="Invalid mode filter")
 
+    def _sanitize_cursor_key(key: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Coerce Decimal values from DynamoDB LastEvaluatedKey to native Python types for JSON serialization."""
+        if not key:
+            return key
+        from decimal import Decimal as _Dec
+        out: dict[str, Any] = {}
+        for k, v in key.items():
+            if isinstance(v, _Dec):
+                out[k] = int(v) if v == int(v) else float(v)
+            else:
+                out[k] = v
+        return out
+
     filtered: list[MassMessageCampaignSummary] = []
     scan_key = decoded_cursor
     resume_key: dict[str, Any] | None = None
@@ -1019,9 +1032,9 @@ def list_mass_message_campaigns(
             break
         if next_key == scan_key:
             has_more = True
-            resume_key = next_key
+            resume_key = _sanitize_cursor_key(next_key)
             break
-        scan_key = next_key
+        scan_key = _sanitize_cursor_key(next_key)
 
     next_cursor = encode_cursor(resume_key if has_more else None)
     return MassMessageCampaignListResponse(items=filtered, next_cursor=next_cursor)

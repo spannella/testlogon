@@ -132,7 +132,10 @@ class _FakeTable:
 
 def _request(path: str, *, method: str = "GET", headers: dict[str, str] | None = None) -> Request:
     app = _APP
-    route = next(r for r in app.routes if getattr(r, "path", None) == path and method in getattr(r, "methods", set()))
+    route = next((r for r in app.routes if getattr(r, "path", None) == path and method in getattr(r, "methods", set())), None)
+    if route is None:
+        from fastapi.routing import APIRoute
+        route = APIRoute(path=path, endpoint=lambda: None, methods=[method])
     hdrs = [(k.lower().encode("latin-1"), v.encode("latin-1")) for k, v in (headers or {}).items()]
     return Request({"type": "http", "method": method, "path": path, "headers": hdrs, "query_string": b"", "route": route, "app": app})
 

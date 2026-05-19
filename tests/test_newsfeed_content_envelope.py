@@ -34,23 +34,35 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
         self.assertEqual(content["body_format"], "plain")
         self.assertEqual(content["body_version"], 1)
 
+    def _get_schema_type_info(self, prop):
+        """Extract type info from a Pydantic V2 schema property, handling anyOf for Optional fields."""
+        if "anyOf" in prop:
+            # Optional fields in Pydantic V2 use anyOf: [{actual_type_info}, {type: null}]
+            non_null = [variant for variant in prop["anyOf"] if variant.get("type") != "null"]
+            if non_null:
+                return non_null[0]
+        return prop
+
     def test_create_post_request_schema_exposes_scheduling_fields(self):
         schema = newsfeed.CreatePostRequest.model_json_schema()
         props = schema["properties"]
 
         self.assertIn("publish_at", props)
-        self.assertEqual(props["publish_at"]["type"], "integer")
-        self.assertEqual(props["publish_at"]["minimum"], 0)
+        publish_at_info = self._get_schema_type_info(props["publish_at"])
+        self.assertEqual(publish_at_info["type"], "integer")
+        self.assertEqual(publish_at_info["minimum"], 0)
         self.assertIn("Unix timestamp", props["publish_at"]["description"])
 
         self.assertIn("schedule_timezone", props)
-        self.assertEqual(props["schedule_timezone"]["type"], "string")
-        self.assertEqual(props["schedule_timezone"]["maxLength"], 64)
+        schedule_tz_info = self._get_schema_type_info(props["schedule_timezone"])
+        self.assertEqual(schedule_tz_info["type"], "string")
+        self.assertEqual(schedule_tz_info["maxLength"], 64)
         self.assertIn("IANA timezone", props["schedule_timezone"]["description"])
 
         self.assertIn("scheduled_at_local", props)
-        self.assertEqual(props["scheduled_at_local"]["type"], "string")
-        self.assertEqual(props["scheduled_at_local"]["maxLength"], 32)
+        scheduled_local_info = self._get_schema_type_info(props["scheduled_at_local"])
+        self.assertEqual(scheduled_local_info["type"], "string")
+        self.assertEqual(scheduled_local_info["maxLength"], 32)
         examples = schema.get("examples", [])
         self.assertTrue(any("publish_at" in example for example in examples))
 
@@ -724,12 +736,12 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
                 ],
             ),
             patch.object(newsfeed, "is_hidden", return_value=False),
-            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "can_view_post", return_value=True),
             patch.object(newsfeed, "is_following", return_value=True),
             patch.object(newsfeed, "has_unlocked", return_value=False),
             patch.object(newsfeed, "encode_cursor", return_value=None),
         ):
-            out = newsfeed.view_feed(limit=20, cursor=None, user_id="viewer_1")
+            out = newsfeed.view_feed(limit=20, cursor=None, author_id=None, q=None, from_ts=None, to_ts=None, has_media=None, user_id="viewer_1")
 
         self.assertEqual([it["post_id"] for it in out["items"]], ["p-published"])
         self.assertEqual(out["items"][0]["status"], "published")
@@ -1103,7 +1115,7 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
 
         with (
             patch.object(newsfeed, "ddb_get_item", side_effect=[locked_post, None]),
-            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "can_view_post", return_value=True),
             patch.object(newsfeed, "has_unlocked", return_value=False),
         ):
             out = newsfeed.get_post("p1", user_id="viewer_1")
@@ -1237,7 +1249,7 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
 
         with (
             patch.object(newsfeed, "ddb_get_item", return_value=post_item),
-            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "can_view_post", return_value=True),
             patch.object(newsfeed, "new_id", return_value="cmt_1"),
             patch.object(newsfeed, "now_iso", return_value="2026-01-01T00:00:00+00:00"),
             patch.object(newsfeed, "ddb_put_item"),
@@ -1722,7 +1734,7 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
 
         with (
             patch.object(newsfeed, "ddb_get_item", side_effect=[rich_post, None]),
-            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "can_view_post", return_value=True),
             patch.object(newsfeed, "has_unlocked", return_value=True),
         ):
             out = newsfeed.get_post("p1", user_id="viewer_1")

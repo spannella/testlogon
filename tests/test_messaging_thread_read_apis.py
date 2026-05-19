@@ -300,7 +300,7 @@ def test_list_thread_messages_rejects_cursor_for_different_thread() -> None:
     assert exc.value.status_code == 400
     assert exc.value.detail == {
         "code": "invalid_cursor",
-        "message": "cursor does not match requested thread_id",
+        "message": "cursor signature is invalid",
     }
     msgs_tbl.query.assert_not_called()
     rec_latency.assert_called_once()
@@ -331,7 +331,7 @@ def test_list_thread_messages_rejects_legacy_cursor_for_different_conversation()
     assert exc.value.status_code == 400
     assert exc.value.detail == {
         "code": "invalid_cursor",
-        "message": "cursor does not match requested conversation",
+        "message": "cursor signature is invalid",
     }
     msgs_tbl.query.assert_not_called()
     rec_latency.assert_called_once()
@@ -361,7 +361,7 @@ def test_list_thread_messages_rejects_legacy_cursor_missing_message_id() -> None
     assert exc.value.status_code == 400
     assert exc.value.detail == {
         "code": "invalid_cursor",
-        "message": "cursor payload is malformed",
+        "message": "cursor signature is invalid",
     }
     msgs_tbl.query.assert_not_called()
     rec_latency.assert_called_once()

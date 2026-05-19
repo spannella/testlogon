@@ -471,6 +471,37 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": S.tickets_jira_sync_state_index_name, "partition_key": "gsi_jira_sync_state_pk", "sort_key": "gsi_jira_sync_state_sk"},
             ],
         ),
+        # Broadcast tables
+        TableDef(
+            _resolve_table_name(S.broadcast_profiles_table_name, "BroadcastProfiles"),
+            "profile_id",
+        ),
+        TableDef(
+            _resolve_table_name(S.broadcast_sessions_table_name, "BroadcastSessions"),
+            "session_id",
+            gsi=[
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "ByCreatorCreatedAt", "partition_key": "created_by", "sort_key": "created_at"},
+            ],
+        ),
+        TableDef(
+            _resolve_table_name(S.broadcast_outputs_table_name, "BroadcastOutputs"),
+            "session_id",
+            "scope",
+        ),
+        TableDef(
+            _resolve_table_name(S.broadcast_session_transitions_table_name, "BroadcastSessionTransitions"),
+            "transition_id",
+            "session_id",
+        ),
+        TableDef(
+            _resolve_table_name(S.broadcast_action_audit_table_name, "BroadcastActionAudit"),
+            "audit_id",
+            gsi=[
+                {"index_name": "ByActorCreatedAt", "partition_key": "actor", "sort_key": "created_at"},
+                {"index_name": "ByCreatedAt", "partition_key": "scope", "sort_key": "created_at"},
+            ],
+        ),
         # Messaging extended tables (from PR 127 compliance/visibility features)
         # ConversationPins: pk=(conversation_id, message_id), GSI ByConversationActivePinnedAt
         TableDef(

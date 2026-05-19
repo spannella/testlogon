@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from app.services import drm_license_service
 from app.services.drm_mock_license import issue_entitlement_token
+from app.services.drm_mock_tokens import issue_mock_token
 from app.services.drm_production_provider import (
     DrmKeyRotationController,
     DrmRotationConfig,
@@ -110,16 +111,24 @@ def test_license_orchestrator_can_use_production_mode() -> None:
         transport=transport,
     )
 
-    entitlement = issue_entitlement_token(
-        asset_id="asset-1",
-        tenant_id="tenant-1",
-        session_id="sess-1",
-        device_id="device-1",
-        profile="widevine",
-        key_id="k-entitled",
+    now_epoch = 1_700_009_533
+    token = issue_mock_token(
+        claims={
+            "asset_id": "asset-1",
+            "tenant_id": "tenant-1",
+            "session_id": "sess-1",
+            "device_id": "device-1",
+            "profile": "widevine",
+            "key_id": "k-entitled",
+            "issued_at_epoch": now_epoch,
+            "expires_at_epoch": now_epoch + 300,
+            "key_rotation_seconds": 300,
+        },
         secret="token-secret",
         ttl_seconds=300,
+        now_epoch=now_epoch,
     )
+    entitlement = {"token": token, "expires_at_epoch": now_epoch + 300}
 
     original = drm_license_service.S
     drm_license_service.S = SimpleNamespace(drm_license_provider_mode="production")

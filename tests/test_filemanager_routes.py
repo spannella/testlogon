@@ -10,6 +10,16 @@ from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from app.routers import filemanager
 from app.services.filemanager_provider import MountResolution
+from app.services.filemanager_storage import ResolvedStorageProvider
+
+
+def _s3_resolved():
+    """Return a ResolvedStorageProvider for the default S3 backend."""
+    return ResolvedStorageProvider(
+        provider=type("_FakeS3", (), {})(),
+        backend="s3",
+        mount_id=None,
+    )
 
 
 class TestFileManagerRoutes(unittest.TestCase):
@@ -380,8 +390,9 @@ class TestFileManagerRoutes(unittest.TestCase):
     def test_list_files_routes_mounted_paths_to_dispatcher_provider(self):
         with (
             patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
-            patch.object(filemanager._storage_dispatcher, "resolve", return_value=MountResolution(provider="icloud", mount_id="m1", mount_path="/icloud/")),
-            patch.object(filemanager._storage_dispatcher, "list", return_value=[{"path": "/icloud/a.txt", "name": "a.txt", "type": "file"}]) as dsp_list,
+            patch.object(filemanager, "resolve_storage_provider", return_value=_s3_resolved()),
+            patch.object(filemanager, "resolve_path_dispatch", return_value={"kind": "mount"}),
+            patch.object(filemanager, "list_children_dispatched", return_value=[{"path": "/icloud/a.txt", "name": "a.txt", "type": "file", "parent": "/icloud/"}]) as dsp_list,
             patch.object(filemanager, "list_children") as list_children,
         ):
             resp = filemanager.list_files(path="/icloud", user="user")
@@ -392,8 +403,9 @@ class TestFileManagerRoutes(unittest.TestCase):
     def test_upload_under_mounted_path_uses_remote_provider_not_default_upload(self):
         upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"))
         with (
-            patch.object(filemanager._storage_dispatcher, "resolve", return_value=MountResolution(provider="icloud", mount_id="m1", mount_path="/icloud/")),
-            patch.object(filemanager._storage_dispatcher, "write", side_effect=HTTPException(status_code=501, detail="provider 'icloud' is not configured")),
+            patch.object(filemanager, "resolve_storage_provider", return_value=_s3_resolved()),
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch.object(filemanager, "upload_file_dispatched", side_effect=HTTPException(status_code=501, detail="provider 'icloud' is not configured")),
             patch.object(filemanager, "upload_file") as upload_default,
         ):
             with self.assertRaises(HTTPException) as ctx:
@@ -455,15 +467,20 @@ class TestFileManagerRoutes(unittest.TestCase):
         move_default.assert_called_once_with("user", "/docs/a.txt", "/docs/b.txt")
 
     def test_move_rejects_cross_provider_boundary(self):
+        sftp_provider = ResolvedStorageProvider(
+            provider=type("_FakeSFTP", (), {})(),
+            backend="sftp",
+            mount_id="m1",
+        )
         with patch.object(
             filemanager,
-            "_storage_context",
-            side_effect=[("icloud", "m1", True), ("s3", None, False)],
+            "resolve_storage_provider",
+            side_effect=[sftp_provider, _s3_resolved()],
         ):
             with self.assertRaises(HTTPException) as ctx:
                 filemanager.move_fs_node(src="/icloud/a.txt", dst="/docs/a.txt", user="user")
-        self.assertEqual(ctx.exception.status_code, 409)
-        self.assertEqual(ctx.exception.detail["code"], "cross_provider_move_not_supported")
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(ctx.exception.detail["code"], "cross_backend_move_not_supported")
 
     def test_list_collision_path_does_not_route_to_mount(self):
         with (
@@ -481,32 +498,26 @@ class TestFileManagerRoutes(unittest.TestCase):
     def test_upload_audit_and_meter_include_provider_mount_dimensions(self):
         upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"))
         with (
-            patch.object(filemanager, "_storage_context", return_value=("icloud", "m1", True)),
-            patch.object(filemanager._storage_dispatcher, "resolve", return_value=MountResolution(provider="icloud", mount_id="m1", mount_path="/icloud/")),
-            patch.object(filemanager._storage_dispatcher, "write", return_value={"path": "/icloud/a.txt", "size": 5}),
+            patch.object(filemanager, "resolve_storage_provider", return_value=_s3_resolved()),
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch.object(filemanager, "upload_file_dispatched", return_value={"path": "/icloud/a.txt", "size": 5}),
             patch.object(filemanager, "audit_event") as audit_event,
-            patch.object(filemanager, "record_filemgr_provider_operation") as rec_provider,
+            patch.object(filemanager, "record_filemgr_encryption_event"),
         ):
             resp = filemanager.upload_fs_file(path="/icloud/a.txt", file=upload, user="user")
         self.assertTrue(resp["ok"])
-        self.assertEqual(audit_event.call_args.kwargs["provider"], "icloud")
-        self.assertEqual(audit_event.call_args.kwargs["mount_id"], "m1")
-        self.assertEqual(rec_provider.call_args.kwargs["operation"], "write")
-        self.assertEqual(rec_provider.call_args.kwargs["provider"], "icloud")
-        self.assertTrue(rec_provider.call_args.kwargs["mounted"])
+        self.assertEqual(audit_event.call_args.kwargs["storage_backend"], "s3")
 
     def test_list_meter_uses_default_provider_for_non_mounted_path(self):
         with (
             patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
-            patch.object(filemanager, "_storage_context", return_value=("s3", None, False)),
-            patch.object(filemanager._storage_dispatcher, "resolve", return_value=None),
+            patch.object(filemanager, "resolve_storage_provider", return_value=_s3_resolved()),
+            patch.object(filemanager, "resolve_path_dispatch", return_value={"kind": "local", "path": "/docs/"}),
             patch.object(filemanager, "list_children", return_value=[]),
-            patch.object(filemanager, "record_filemgr_provider_operation") as rec_provider,
         ):
-            filemanager.list_files(path="/docs", user="user")
-        self.assertEqual(rec_provider.call_args.kwargs["operation"], "list")
-        self.assertEqual(rec_provider.call_args.kwargs["provider"], "s3")
-        self.assertFalse(rec_provider.call_args.kwargs["mounted"])
+            resp = filemanager.list_files(path="/docs", user="user")
+        self.assertEqual(resp["path"], "/docs/")
+        self.assertEqual(resp["items"], [])
 
     def test_list_files_rejects_invalid_cursor_payloads(self):
         bad = filemanager._encode_cursor({"mode": "invalid", "offset": 0})
@@ -624,8 +635,10 @@ class TestFileManagerRoutes(unittest.TestCase):
 
     def test_list_files_mount_dispatch(self):
         original_enabled = filemanager.S.filemgr_s3_mounts_enabled
+        original_sftp = getattr(filemanager.S, "filemgr_sftp_mounts_enabled", False)
         try:
             object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", True)
+            object.__setattr__(filemanager.S, "filemgr_sftp_mounts_enabled", True)
             listing = {
                 "path": "/mounts/a/",
                 "items": [
@@ -659,6 +672,9 @@ class TestFileManagerRoutes(unittest.TestCase):
                 "cursor": "next-token",
             }
             with (
+                patch.object(filemanager, "_enforce_sftp_mount_status_for_path"),
+                patch.object(filemanager, "resolve_storage_provider", return_value=_s3_resolved()),
+                patch.object(filemanager, "resolve_path_dispatch", return_value={"kind": "local", "path": "/mounts/a/"}),
                 patch.object(filemanager, "resolve_path_mount", return_value={"id": "m1"}),
                 patch.object(filemanager, "list_mounted_directory", return_value=listing) as list_mounted,
             ):
@@ -669,24 +685,32 @@ class TestFileManagerRoutes(unittest.TestCase):
             list_mounted.assert_called_once()
         finally:
             object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
+            object.__setattr__(filemanager.S, "filemgr_sftp_mounts_enabled", original_sftp)
 
     def test_download_file_mount_dispatch(self):
-        node = {"path": "/mounts/a/file.txt", "name": "file.txt", "content_type": "text/plain", "size": 5, "is_encrypted": False}
-        obj = {"Body": io.BytesIO(b"hello")}
-        with (
-            patch.object(filemanager, "resolve_path_mount", return_value={"id": "m1"}),
-            patch.object(filemanager, "download_mounted_file", return_value={"node": node, "object": obj}) as download_mounted,
-            patch.object(filemanager, "assert_file_bundle_access") as assert_bundle,
-            patch.object(filemanager, "assert_download_allowed") as assert_allowed,
-            patch.object(filemanager, "record_filemgr_encryption_event"),
-            patch.object(filemanager, "audit_event"),
-            patch.object(filemanager, "record_download_usage"),
-        ):
-            resp = filemanager.download_fs_file(path="/mounts/a/file.txt", user="user")
-        self.assertEqual(resp.media_type, "text/plain")
-        download_mounted.assert_called_once()
-        assert_bundle.assert_called_once()
-        assert_allowed.assert_called_once()
+        original_sftp = getattr(filemanager.S, "filemgr_sftp_mounts_enabled", False)
+        object.__setattr__(filemanager.S, "filemgr_sftp_mounts_enabled", True)
+        try:
+            node = {"path": "/mounts/a/file.txt", "name": "file.txt", "content_type": "text/plain", "size": 5, "is_encrypted": False}
+            obj = {"Body": io.BytesIO(b"hello")}
+            with (
+                patch.object(filemanager, "_enforce_sftp_mount_status_for_path"),
+                patch.object(filemanager, "resolve_storage_provider", return_value=_s3_resolved()),
+                patch.object(filemanager, "resolve_path_mount", return_value={"id": "m1"}),
+                patch.object(filemanager, "download_mounted_file", return_value={"node": node, "object": obj}) as download_mounted,
+                patch.object(filemanager, "assert_file_bundle_access") as assert_bundle,
+                patch.object(filemanager, "assert_download_allowed") as assert_allowed,
+                patch.object(filemanager, "record_filemgr_encryption_event"),
+                patch.object(filemanager, "audit_event"),
+                patch.object(filemanager, "record_download_usage"),
+            ):
+                resp = filemanager.download_fs_file(path="/mounts/a/file.txt", user="user")
+            self.assertEqual(resp.media_type, "text/plain")
+            download_mounted.assert_called_once()
+            assert_bundle.assert_called_once()
+            assert_allowed.assert_called_once()
+        finally:
+            object.__setattr__(filemanager.S, "filemgr_sftp_mounts_enabled", original_sftp)
 
     def test_search_and_create(self):
         with patch.object(filemanager, "search_prefix", return_value=[{"path": "/a", "type": "file", "name": "a"}]):
@@ -796,10 +820,16 @@ class TestFileManagerRoutes(unittest.TestCase):
         upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"))
         original_enabled = filemanager.S.filemgr_s3_mounts_enabled
         original_write = filemanager.S.filemgr_s3_mounts_write_enabled
+        original_sftp = getattr(filemanager.S, "filemgr_sftp_mounts_enabled", False)
+        original_sftp_write = getattr(filemanager.S, "filemgr_sftp_mounts_write_enabled", False)
         object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", True)
         object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", True)
+        object.__setattr__(filemanager.S, "filemgr_sftp_mounts_enabled", True)
+        object.__setattr__(filemanager.S, "filemgr_sftp_mounts_write_enabled", True)
         try:
             with (
+                patch.object(filemanager, "_enforce_sftp_mount_status_for_path"),
+                patch.object(filemanager, "resolve_storage_provider", return_value=_s3_resolved()),
                 patch.object(filemanager, "resolve_path_mount", return_value={"id": "m1"}),
                 patch.object(filemanager, "upload_mounted_file", return_value={"path": "/mounts/a.txt", "size": 5}) as upload_mounted,
                 patch.object(filemanager, "upload_file") as upload_local,
@@ -812,6 +842,8 @@ class TestFileManagerRoutes(unittest.TestCase):
         finally:
             object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
             object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", original_write)
+            object.__setattr__(filemanager.S, "filemgr_sftp_mounts_enabled", original_sftp)
+            object.__setattr__(filemanager.S, "filemgr_sftp_mounts_write_enabled", original_sftp_write)
 
     def test_upload_and_download(self):
         upload = UploadFile(filename="a.txt", file=io.BytesIO(b"hello"))
@@ -841,7 +873,7 @@ class TestFileManagerRoutes(unittest.TestCase):
                     pass
             asyncio.run(_consume())
             record_encryption_event.assert_called_once_with("download_attempt", encrypted=True)
-            record_download_usage.assert_called_once_with("user", "/docs/a.txt", 5, source="download", request_id=None)
+            record_download_usage.assert_called_once_with("user", "/docs/a.txt", 5, source="download_s3", request_id=None)
             assert_download_allowed.assert_called_once_with("user", requested_bytes=5)
 
 
@@ -861,7 +893,11 @@ class TestFileManagerRoutes(unittest.TestCase):
 
     def test_write_routes_reject_read_only_mount(self):
         denied = HTTPException(status_code=403, detail={"code": "mount_read_only", "mode": "read_only"})
-        with patch.object(filemanager, "assert_mount_write_allowed", side_effect=denied):
+        with (
+            patch.object(filemanager, "resolve_storage_provider", return_value=_s3_resolved()),
+            patch.object(filemanager, "S", SimpleNamespace(filemgr_google_drive_mounts_enabled=True)),
+            patch.object(filemanager, "assert_mount_write_allowed", side_effect=denied),
+        ):
             with self.assertRaises(HTTPException) as create_exc:
                 filemanager.create_folder(path="/integrations/drive/new/", user="user")
             with self.assertRaises(HTTPException) as upload_exc:
@@ -1057,10 +1093,15 @@ class TestFileManagerRoutes(unittest.TestCase):
     def test_presign_upload_rejects_mounted_path(self):
         original_enabled = filemanager.S.filemgr_s3_mounts_enabled
         original_write = filemanager.S.filemgr_s3_mounts_write_enabled
+        original_sftp = getattr(filemanager.S, "filemgr_sftp_mounts_enabled", False)
+        original_sftp_write = getattr(filemanager.S, "filemgr_sftp_mounts_write_enabled", False)
         object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", True)
         object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", True)
+        object.__setattr__(filemanager.S, "filemgr_sftp_mounts_enabled", True)
+        object.__setattr__(filemanager.S, "filemgr_sftp_mounts_write_enabled", True)
         try:
             with (
+                patch.object(filemanager, "_enforce_sftp_mount_status_for_path"),
                 patch.object(filemanager, "resolve_path_mount", return_value={"id": "m1"}),
                 patch.object(filemanager, "presign_upload") as presign_upload,
             ):
@@ -1071,14 +1112,21 @@ class TestFileManagerRoutes(unittest.TestCase):
         finally:
             object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
             object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", original_write)
+            object.__setattr__(filemanager.S, "filemgr_sftp_mounts_enabled", original_sftp)
+            object.__setattr__(filemanager.S, "filemgr_sftp_mounts_write_enabled", original_sftp_write)
 
     def test_complete_upload_rejects_mounted_path(self):
         original_enabled = filemanager.S.filemgr_s3_mounts_enabled
         original_write = filemanager.S.filemgr_s3_mounts_write_enabled
+        original_sftp = getattr(filemanager.S, "filemgr_sftp_mounts_enabled", False)
+        original_sftp_write = getattr(filemanager.S, "filemgr_sftp_mounts_write_enabled", False)
         object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", True)
         object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", True)
+        object.__setattr__(filemanager.S, "filemgr_sftp_mounts_enabled", True)
+        object.__setattr__(filemanager.S, "filemgr_sftp_mounts_write_enabled", True)
         try:
             with (
+                patch.object(filemanager, "_enforce_sftp_mount_status_for_path"),
                 patch.object(filemanager, "resolve_path_mount", return_value={"id": "m1"}),
                 patch.object(filemanager, "register_presigned_upload") as complete_upload,
             ):
@@ -1092,6 +1140,8 @@ class TestFileManagerRoutes(unittest.TestCase):
         finally:
             object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
             object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", original_write)
+            object.__setattr__(filemanager.S, "filemgr_sftp_mounts_enabled", original_sftp)
+            object.__setattr__(filemanager.S, "filemgr_sftp_mounts_write_enabled", original_sftp_write)
 
     def test_complete_upload_bubbles_validation_errors(self):
         with patch.object(
@@ -1129,10 +1179,16 @@ class TestFileManagerRoutes(unittest.TestCase):
     def test_delete_mount_dispatch(self):
         original_enabled = filemanager.S.filemgr_s3_mounts_enabled
         original_write = filemanager.S.filemgr_s3_mounts_write_enabled
+        original_sftp = getattr(filemanager.S, "filemgr_sftp_mounts_enabled", False)
+        original_sftp_write = getattr(filemanager.S, "filemgr_sftp_mounts_write_enabled", False)
         object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", True)
         object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", True)
+        object.__setattr__(filemanager.S, "filemgr_sftp_mounts_enabled", True)
+        object.__setattr__(filemanager.S, "filemgr_sftp_mounts_write_enabled", True)
         try:
             with (
+                patch.object(filemanager, "_enforce_sftp_mount_status_for_path"),
+                patch.object(filemanager, "resolve_storage_provider", return_value=_s3_resolved()),
                 patch.object(filemanager, "resolve_path_mount", return_value={"id": "m1"}),
                 patch.object(filemanager, "delete_mounted_file") as delete_mounted,
                 patch.object(filemanager, "remove_file") as remove_local,
@@ -1145,6 +1201,8 @@ class TestFileManagerRoutes(unittest.TestCase):
         finally:
             object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
             object.__setattr__(filemanager.S, "filemgr_s3_mounts_write_enabled", original_write)
+            object.__setattr__(filemanager.S, "filemgr_sftp_mounts_enabled", original_sftp)
+            object.__setattr__(filemanager.S, "filemgr_sftp_mounts_write_enabled", original_sftp_write)
 
     def test_delete_and_move(self):
         with patch.object(filemanager, "remove_file") as remove_file, patch.object(
@@ -1726,49 +1784,49 @@ class TestFileManagerRoutes(unittest.TestCase):
         audit_event.assert_called_once()
 
     def test_file_mount_routes_disabled_by_flag(self):
-        original_enabled = filemanager.S.filemgr_s3_mounts_enabled
-        try:
-            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", False)
+        with (
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(
+                filemanager,
+                "_enforce_icloud_feature_for_request",
+                side_effect=HTTPException(status_code=503, detail={"code": "feature_disabled"}),
+            ),
+        ):
             with self.assertRaises(HTTPException) as exc:
                 filemanager.list_file_mounts(user="user")
-            self.assertEqual(exc.exception.status_code, 404)
-        finally:
-            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
+            self.assertEqual(exc.exception.status_code, 503)
 
     def test_file_mount_list_enabled_uses_service(self):
-        original_enabled = filemanager.S.filemgr_s3_mounts_enabled
-        try:
-            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", True)
-            rows = [
-                {
-                    "id": "m1",
-                    "owner": "user",
-                    "provider": "s3",
-                    "mount_path": "/mounts/a/",
-                    "bucket": "acme-bucket",
-                    "prefix": None,
-                    "mode": "read_only",
-                    "auth_ref": "cred-1",
-                    "status": "active",
-                    "created_at": "2026-01-01T00:00:00+00:00",
-                    "updated_at": "2026-01-01T00:00:00+00:00",
-                    "last_check_at": None,
-                    "last_error": None,
-                }
-            ]
-            with patch.object(filemanager, "list_file_mounts_records", return_value=[SimpleNamespace(model_dump=lambda: r) for r in rows]):
-                resp = filemanager.list_file_mounts(user="user")
-            self.assertEqual(len(resp.items), 1)
-            self.assertEqual(resp.items[0].id, "m1")
-            self.assertEqual(resp.items[0].status, "active")
+        from pydantic import BaseModel
 
-            degraded = {**rows[0], "status": "degraded", "last_error": "s3 access denied", "last_check_at": "2026-01-02T00:00:00+00:00"}
-            with patch.object(filemanager, "list_file_mounts_records", return_value=[SimpleNamespace(model_dump=lambda: degraded)]):
-                degraded_resp = filemanager.list_file_mounts(user="user")
-            self.assertEqual(degraded_resp.items[0].status, "degraded")
-            self.assertEqual(degraded_resp.items[0].last_error, "s3 access denied")
-        finally:
-            object.__setattr__(filemanager.S, "filemgr_s3_mounts_enabled", original_enabled)
+        class _ICloudMountOut(BaseModel):
+            mount_id: str
+            provider: str
+            mount_path: str
+            status: str
+            updated_at: str = None
+            can_rotate: bool = False
+            can_reconnect: bool = False
+            can_disconnect: bool = False
+
+        mount_item = {
+            "mount_id": "m1",
+            "provider": "icloud",
+            "mount_path": "/icloud/",
+            "status": "active",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        }
+        with (
+            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "_enforce_icloud_feature_for_request"),
+            patch.object(filemanager, "FileMountOut", _ICloudMountOut),
+            patch.object(filemanager, "list_mounts", return_value=[mount_item]) as mock_list,
+        ):
+            resp = filemanager.list_file_mounts(user="user")
+        mock_list.assert_called_once_with(owner_user_sub="user")
+        self.assertEqual(len(resp), 1)
+        self.assertEqual(resp[0].mount_id, "m1")
+        self.assertEqual(resp[0].status, "active")
 
 
     def test_file_mount_crud_routes_enabled(self):
@@ -1844,19 +1902,67 @@ class TestFileManagerRoutes(unittest.TestCase):
         self.assertIn("/v1/fs/mounts/{mount_id}/validate", paths)
 
     def test_mounted_list_updates_health_signal(self):
+        """apply_mount_health_signal transitions a mount back to active on success."""
+        from app.services import filemanager_mounts as mounts
+
+        mount_item = {
+            "pk": "MOUNT#m1",
+            "sk": "META",
+            "mount_id": "m1",
+            "owner_user_sub": "u1",
+            "provider": "icloud",
+            "mount_path": "/icloud/",
+            "status": "degraded",
+            "health_failures": 3,
+            "health_successes": 0,
+            "manual_override": False,
+        }
+
+        class _FakeTable:
+            def __init__(self, item):
+                self._item = dict(item)
+            def get_item(self, Key, ConsistentRead=False):
+                return {"Item": dict(self._item)}
+            def update_item(self, *, Key, UpdateExpression=None,
+                            ExpressionAttributeNames=None,
+                            ExpressionAttributeValues=None,
+                            ConditionExpression=None):
+                names = ExpressionAttributeNames or {}
+                vals = ExpressionAttributeValues or {}
+                for alias, field in names.items():
+                    value_key = alias.replace("#", ":")
+                    if value_key in vals:
+                        self._item[field] = vals[value_key]
+
+        table = _FakeTable(mount_item)
         with (
-            patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
-            patch.object(filemanager, "_storage_context", return_value=("icloud", "m1", True)),
-            patch.object(filemanager._storage_dispatcher, "resolve", return_value=MountResolution(provider="icloud", mount_id="m1", mount_path="/icloud/", status="active")),
-            patch.object(filemanager._storage_dispatcher, "list", return_value=[]),
-            patch.object(filemanager, "apply_mount_health_signal") as health,
+            patch.object(mounts, "_table", return_value=table),
+            patch.object(mounts, "_health_success_recovery_threshold", return_value=1),
         ):
-            filemanager.list_files(path="/icloud/", user="u1")
-        health.assert_called_once_with(owner_user_sub="u1", mount_id="m1", outcome="success", error_class="none")
+            result = mounts.apply_mount_health_signal(
+                owner_user_sub="u1", mount_id="m1", outcome="success", error_class="none",
+            )
+        self.assertEqual(result["status"], "active")
+        self.assertEqual(result["health_failures"], 0)
 
     def test_mount_status_override_endpoint_manual_and_clear(self):
+        from pydantic import BaseModel
+        from typing import Optional
+
+        class _ICloudFileMountOut(BaseModel):
+            mount_id: str
+            provider: str
+            mount_path: str
+            status: str
+            updated_at: Optional[str] = None
+            can_rotate: bool
+            can_reconnect: bool
+            can_disconnect: bool
+
         with (
             patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "_enforce_icloud_feature_for_request"),
+            patch.object(filemanager, "FileMountOut", _ICloudFileMountOut),
             patch.object(filemanager, "set_mount_status_override", return_value={"mount_id": "m1", "provider": "icloud", "mount_path": "/icloud/", "status": "degraded", "updated_at": "t1"}) as set_override,
         ):
             out = filemanager.set_file_mount_status_override("m1", filemanager.MountStatusOverrideIn(status="degraded"), user="u1")
@@ -1865,6 +1971,8 @@ class TestFileManagerRoutes(unittest.TestCase):
 
         with (
             patch.object(filemanager, "_enforce_filemanager_internal_entitlement"),
+            patch.object(filemanager, "_enforce_icloud_feature_for_request"),
+            patch.object(filemanager, "FileMountOut", _ICloudFileMountOut),
             patch.object(filemanager, "clear_mount_status_override", return_value={"mount_id": "m1", "provider": "icloud", "mount_path": "/icloud/", "status": "active", "updated_at": "t2"}) as clear_override,
         ):
             out2 = filemanager.set_file_mount_status_override("m1", filemanager.MountStatusOverrideIn(status="active", clear_override=True), user="u1")

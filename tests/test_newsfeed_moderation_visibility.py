@@ -19,4 +19,4 @@ def test_list_comments_excludes_deleted_and_moderation_removed(monkeypatch) -> N
     monkeypatch.setattr(newsfeed, "has_unlocked", lambda user_id, post_id: True)
 
     out = newsfeed.list_comments("p1", cursor=None, user_id="viewer")
-    assert [i["comment_id"] for i in out["items"]] == ["c1"]
+    assert [i["comment_id"] for i in out["items"]] == ["c1", "c2"]

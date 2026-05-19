@@ -62,7 +62,6 @@ class _FakeTable:
 
 
 _FAKE_TABLE = _FakeTable()
-questionnaires.REPO._table = _FAKE_TABLE
 
 
 def _build_client(user_sub: str) -> TestClient:
@@ -86,6 +85,7 @@ def _build_anon_client() -> TestClient:
 
 def setup_function():
     _FAKE_TABLE.reset()
+    questionnaires.REPO._table = _FAKE_TABLE
 
 
 def test_e2e_core_workflow_draft_to_pdf_download() -> None:

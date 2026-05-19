@@ -25,7 +25,7 @@ def _build_api_key_client(monkeypatch, *, capabilities: list[str]) -> TestClient
         },
     )
     monkeypatch.setattr(main_app, "enforce_api_package_entitlement_pre_request", lambda _request: {})
-    return TestClient(app)
+    return TestClient(app, headers={"X-Api-Key": "ak_k_shop.secret"})
 
 
 def test_api_key_checkout_requires_idempotency_key(monkeypatch):

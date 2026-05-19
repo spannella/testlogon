@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import unittest
 
 
@@ -8,7 +9,7 @@ class TestGoogleCalendarLaunchReportScript(unittest.TestCase):
     def test_launch_report_script_go_decision(self):
         out = subprocess.check_output(
             [
-                "python",
+                sys.executable,
                 "scripts/google_calendar_launch_report.py",
                 "--cohort",
                 "pilot",
@@ -28,7 +29,7 @@ class TestGoogleCalendarLaunchReportScript(unittest.TestCase):
     def test_launch_report_script_no_go_decision(self):
         out = subprocess.check_output(
             [
-                "python",
+                sys.executable,
                 "scripts/google_calendar_launch_report.py",
                 "--cohort",
                 "broad",

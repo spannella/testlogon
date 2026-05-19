@@ -35,15 +35,14 @@ class TestNewsfeedRoutes(unittest.TestCase):
             self.assertFalse(newsfeed.can_view_post("viewer_1", post))
 
     def test_view_feed_author_filter_only_returns_matching_author_posts(self):
-        refs = [{"post_id": "p1"}, {"post_id": "p2"}]
         posts = [
-            {"post_id": "p1", "user_id": "author_a", "locked": False},
-            {"post_id": "p2", "user_id": "author_b", "locked": False},
+            {"post_id": "p1", "user_id": "author_a", "locked": False, "created_at": "2026-03-20T00:00:00+00:00"},
+            {"post_id": "p2", "user_id": "author_b", "locked": False, "created_at": "2026-03-20T00:00:00+00:00"},
         ]
         likes = [{"post_id": "p1"}, {"post_id": "p2"}]
 
         with (
-            patch.object(newsfeed, "ddb_query", return_value={"Items": refs, "LastEvaluatedKey": None}),
+            patch.object(newsfeed, "ddb_query", return_value={"Items": posts, "LastEvaluatedKey": None}),
             patch.object(newsfeed, "ddb") as ddb,
             patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
             patch.object(newsfeed, "encode_cursor", return_value=None),
@@ -51,6 +50,8 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "can_access_creator", return_value=True),
             patch.object(newsfeed, "is_following", return_value=True),
             patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "parse_filter_window", return_value=(None, None)),
+            patch.object(newsfeed, "rate_limit_feed_query"),
             patch.object(
                 newsfeed,
                 "_post_to_dict",
@@ -58,11 +59,10 @@ class TestNewsfeedRoutes(unittest.TestCase):
             ),
         ):
             ddb.batch_get_item.side_effect = [
-                {"Responses": {newsfeed.APP_TABLE: posts}},
                 {"Responses": {newsfeed.APP_TABLE: likes}},
             ]
 
-            out = newsfeed.view_feed(limit=20, cursor=None, author_id="author_b", user_id="viewer_1")
+            out = newsfeed.view_feed(limit=20, cursor=None, author_id="author_b", q=None, from_ts=None, to_ts=None, has_media=None, user_id="viewer_1")
 
         self.assertEqual(out["next_cursor"], None)
         self.assertEqual([it["post_id"] for it in out["items"]], ["p2"])
@@ -71,8 +71,8 @@ class TestNewsfeedRoutes(unittest.TestCase):
     def test_view_feed_without_author_filter_returns_all_visible_posts(self):
         refs = [{"post_id": "p1"}, {"post_id": "p2"}]
         posts = [
-            {"post_id": "p1", "user_id": "author_a", "locked": False},
-            {"post_id": "p2", "user_id": "author_b", "locked": False},
+            {"post_id": "p1", "user_id": "author_a", "locked": False, "created_at": "2026-03-21T00:00:00+00:00"},
+            {"post_id": "p2", "user_id": "author_b", "locked": False, "created_at": "2026-03-20T00:00:00+00:00"},
         ]
 
         with (
@@ -84,6 +84,8 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "can_access_creator", return_value=True),
             patch.object(newsfeed, "is_following", return_value=True),
             patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "parse_filter_window", return_value=(None, None)),
+            patch.object(newsfeed, "rate_limit_feed_query"),
             patch.object(
                 newsfeed,
                 "_post_to_dict",
@@ -95,12 +97,11 @@ class TestNewsfeedRoutes(unittest.TestCase):
                 {"Responses": {newsfeed.APP_TABLE: []}},
             ]
 
-            out = newsfeed.view_feed(limit=20, cursor=None, author_id=None, user_id="viewer_1")
+            out = newsfeed.view_feed(limit=20, cursor=None, author_id=None, q=None, from_ts=None, to_ts=None, has_media=None, user_id="viewer_1")
 
         self.assertEqual([it["post_id"] for it in out["items"]], ["p1", "p2"])
 
     def test_view_feed_applies_search_and_has_media_filters(self):
-        refs = [{"post_id": "p1"}, {"post_id": "p2"}, {"post_id": "p3"}]
         posts = [
             {"post_id": "p1", "user_id": "author_a", "body": "hello release notes", "image_urls": ["a.png"], "created_at": "2026-03-20T00:00:00+00:00", "locked": False},
             {"post_id": "p2", "user_id": "author_a", "body": "hello world", "image_urls": [], "created_at": "2026-03-20T00:00:00+00:00", "locked": False},
@@ -108,7 +109,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
         ]
 
         with (
-            patch.object(newsfeed, "ddb_query", return_value={"Items": refs, "LastEvaluatedKey": None}),
+            patch.object(newsfeed, "ddb_query", return_value={"Items": posts, "LastEvaluatedKey": None}),
             patch.object(newsfeed, "ddb") as ddb,
             patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
             patch.object(newsfeed, "encode_cursor", return_value=None),
@@ -116,10 +117,11 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "can_access_creator", return_value=True),
             patch.object(newsfeed, "is_following", return_value=True),
             patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "parse_filter_window", return_value=(None, None)),
+            patch.object(newsfeed, "rate_limit_feed_query"),
             patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
         ):
             ddb.batch_get_item.side_effect = [
-                {"Responses": {newsfeed.APP_TABLE: posts}},
                 {"Responses": {newsfeed.APP_TABLE: []}},
             ]
 
@@ -128,6 +130,8 @@ class TestNewsfeedRoutes(unittest.TestCase):
                 cursor=None,
                 author_id="author_a",
                 q="release",
+                from_ts=None,
+                to_ts=None,
                 has_media=True,
                 user_id="viewer_1",
             )
@@ -135,14 +139,16 @@ class TestNewsfeedRoutes(unittest.TestCase):
         self.assertEqual([it["post_id"] for it in out["items"]], ["p1"])
 
     def test_view_feed_applies_date_range_filters(self):
-        refs = [{"post_id": "p1"}, {"post_id": "p2"}, {"post_id": "p3"}]
+        from datetime import datetime, timezone as tz
         posts = [
             {"post_id": "p1", "user_id": "author_a", "body": "a", "created_at": "2026-03-01T00:00:00+00:00", "locked": False},
             {"post_id": "p2", "user_id": "author_a", "body": "b", "created_at": "2026-03-15T00:00:00+00:00", "locked": False},
             {"post_id": "p3", "user_id": "author_a", "body": "c", "created_at": "2026-03-25T00:00:00+00:00", "locked": False},
         ]
+        from_dt = datetime(2026, 3, 10, tzinfo=tz.utc)
+        to_dt = datetime(2026, 3, 20, tzinfo=tz.utc)
         with (
-            patch.object(newsfeed, "ddb_query", return_value={"Items": refs, "LastEvaluatedKey": None}),
+            patch.object(newsfeed, "ddb_query", return_value={"Items": posts, "LastEvaluatedKey": None}),
             patch.object(newsfeed, "ddb") as ddb,
             patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
             patch.object(newsfeed, "encode_cursor", return_value=None),
@@ -150,10 +156,11 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "can_access_creator", return_value=True),
             patch.object(newsfeed, "is_following", return_value=True),
             patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "parse_filter_window", return_value=(from_dt, to_dt)),
+            patch.object(newsfeed, "rate_limit_feed_query"),
             patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
         ):
             ddb.batch_get_item.side_effect = [
-                {"Responses": {newsfeed.APP_TABLE: posts}},
                 {"Responses": {newsfeed.APP_TABLE: []}},
             ]
 
@@ -161,16 +168,16 @@ class TestNewsfeedRoutes(unittest.TestCase):
                 limit=20,
                 cursor=None,
                 author_id="author_a",
+                q=None,
                 from_ts="2026-03-10T00:00:00Z",
                 to_ts="2026-03-20T00:00:00Z",
+                has_media=None,
                 user_id="viewer_1",
             )
 
         self.assertEqual([it["post_id"] for it in out["items"]], ["p2"])
 
     def test_view_feed_fetches_additional_pages_to_fill_filtered_limit(self):
-        first_refs = {"Items": [{"post_id": "p1"}, {"post_id": "p2"}], "LastEvaluatedKey": {"pk": "next1"}}
-        second_refs = {"Items": [{"post_id": "p3"}], "LastEvaluatedKey": None}
         first_posts = [
             {"post_id": "p1", "user_id": "other_author", "created_at": "2026-03-21T00:00:00Z", "locked": False},
             {"post_id": "p2", "user_id": "target_author", "created_at": "2026-03-20T00:00:00Z", "locked": False},
@@ -178,9 +185,11 @@ class TestNewsfeedRoutes(unittest.TestCase):
         second_posts = [
             {"post_id": "p3", "user_id": "target_author", "created_at": "2026-03-19T00:00:00Z", "locked": False},
         ]
+        first_page = {"Items": first_posts, "LastEvaluatedKey": {"pk": "next1"}}
+        second_page = {"Items": second_posts, "LastEvaluatedKey": None}
 
         with (
-            patch.object(newsfeed, "ddb_query", side_effect=[first_refs, second_refs]) as ddb_query,
+            patch.object(newsfeed, "ddb_query", side_effect=[first_page, second_page]) as ddb_query,
             patch.object(newsfeed, "ddb") as ddb,
             patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
             patch.object(newsfeed, "encode_cursor", side_effect=lambda v: v),
@@ -188,16 +197,16 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "can_access_creator", return_value=True),
             patch.object(newsfeed, "is_following", return_value=True),
             patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "parse_filter_window", return_value=(None, None)),
+            patch.object(newsfeed, "rate_limit_feed_query"),
             patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
         ):
             ddb.batch_get_item.side_effect = [
-                {"Responses": {newsfeed.APP_TABLE: first_posts}},
                 {"Responses": {newsfeed.APP_TABLE: []}},
-                {"Responses": {newsfeed.APP_TABLE: second_posts}},
                 {"Responses": {newsfeed.APP_TABLE: []}},
             ]
 
-            out = newsfeed.view_feed(limit=2, cursor=None, author_id="target_author", user_id="viewer_1")
+            out = newsfeed.view_feed(limit=2, cursor=None, author_id="target_author", q=None, from_ts=None, to_ts=None, has_media=None, user_id="viewer_1")
 
         self.assertEqual([it["post_id"] for it in out["items"]], ["p2", "p3"])
         self.assertEqual(out["next_cursor"], None)
@@ -209,12 +218,14 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "S") as settings,
             patch.object(newsfeed, "ddb_query", return_value=first_page),
             patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
+            patch.object(newsfeed, "parse_filter_window", return_value=(None, None)),
+            patch.object(newsfeed, "rate_limit_feed_query"),
             patch.object(newsfeed, "record_newsfeed_feed_budget_hit") as budget_hit,
         ):
             settings.newsfeed_feed_max_scanned_pages = 1
             settings.newsfeed_feed_max_elapsed_ms = 999999
             with self.assertRaises(HTTPException) as exc:
-                newsfeed.view_feed(limit=20, cursor=None, author_id="author_a", user_id="viewer_1")
+                newsfeed.view_feed(limit=20, cursor=None, author_id="author_a", q=None, from_ts=None, to_ts=None, has_media=None, user_id="viewer_1")
 
         self.assertEqual(exc.exception.status_code, 422)
         self.assertEqual(exc.exception.detail["code"], "feed_query_budget_exceeded")
@@ -223,16 +234,26 @@ class TestNewsfeedRoutes(unittest.TestCase):
 
     def test_view_feed_enforces_elapsed_time_budget(self):
         first_page = {"Items": [], "LastEvaluatedKey": {"pk": "next"}}
+        # Mock perf_counter to simulate elapsed time: call 1 = 0 (started),
+        # call 2 = 0 (first loop check, 0ms elapsed, OK), call 3 = 1.0 (second loop
+        # check, 1000ms > 1ms budget → raise), call 4 = 1.0 (error handler latency).
+        counter_values = iter([0.0, 0.0, 1.0, 1.0])
         with (
             patch.object(newsfeed, "S") as settings,
             patch.object(newsfeed, "ddb_query", return_value=first_page),
             patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
+            patch.object(newsfeed, "parse_filter_window", return_value=(None, None)),
+            patch.object(newsfeed, "rate_limit_feed_query"),
             patch.object(newsfeed, "record_newsfeed_feed_budget_hit") as budget_hit,
+            patch.object(newsfeed, "record_newsfeed_feed_error"),
+            patch.object(newsfeed, "record_newsfeed_feed_request"),
+            patch.object(newsfeed, "record_newsfeed_feed_latency"),
+            patch.object(newsfeed.time, "perf_counter", side_effect=counter_values),
         ):
             settings.newsfeed_feed_max_scanned_pages = 100
             settings.newsfeed_feed_max_elapsed_ms = 1
             with self.assertRaises(HTTPException) as exc:
-                newsfeed.view_feed(limit=20, cursor=None, author_id="author_a", user_id="viewer_1")
+                newsfeed.view_feed(limit=20, cursor=None, author_id="author_a", q=None, from_ts=None, to_ts=None, has_media=None, user_id="viewer_1")
 
         self.assertEqual(exc.exception.status_code, 422)
         self.assertEqual(exc.exception.detail["code"], "feed_query_budget_exceeded")
@@ -255,12 +276,14 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "can_access_creator", return_value=True),
             patch.object(newsfeed, "is_following", return_value=True),
             patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "parse_filter_window", return_value=(None, None)),
+            patch.object(newsfeed, "rate_limit_feed_query"),
             patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
         ):
             ddb.batch_get_item.side_effect = [
                 {"Responses": {newsfeed.APP_TABLE: []}},  # likes lookup only
             ]
-            out = newsfeed.view_feed(limit=20, cursor=None, author_id="target_author", user_id="viewer_1")
+            out = newsfeed.view_feed(limit=20, cursor=None, author_id="target_author", q=None, from_ts=None, to_ts=None, has_media=None, user_id="viewer_1")
 
         self.assertEqual([it["post_id"] for it in out["items"]], ["p2"])
         call_kwargs = ddb_query.call_args.kwargs
@@ -284,10 +307,12 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "can_access_creator", return_value=True),
             patch.object(newsfeed, "is_following", return_value=True),
             patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "parse_filter_window", return_value=(None, None)),
+            patch.object(newsfeed, "rate_limit_feed_query"),
             patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
         ):
             ddb.batch_get_item.side_effect = [{"Responses": {newsfeed.APP_TABLE: []}}]
-            out = newsfeed.view_feed(limit=20, cursor=None, author_id="author_a", user_id="viewer_1")
+            out = newsfeed.view_feed(limit=20, cursor=None, author_id="author_a", q=None, from_ts=None, to_ts=None, has_media=None, user_id="viewer_1")
 
         self.assertEqual([it["post_id"] for it in out["items"]], ["p3", "p2"])
 
@@ -299,19 +324,24 @@ class TestNewsfeedRoutes(unittest.TestCase):
             ],
             "LastEvaluatedKey": None,
         }
+
+        def _mock_can_view(viewer_id, post):
+            return post.get("visibility") == "public"
+
         with (
             patch.object(newsfeed, "ddb_query", return_value=refs),
             patch.object(newsfeed, "ddb") as ddb,
             patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
             patch.object(newsfeed, "encode_cursor", return_value=None),
             patch.object(newsfeed, "is_hidden", return_value=False),
-            patch.object(newsfeed, "can_access_creator", return_value=True),
-            patch.object(newsfeed, "is_following", return_value=True),
+            patch.object(newsfeed, "can_view_post", side_effect=_mock_can_view),
             patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "parse_filter_window", return_value=(None, None)),
+            patch.object(newsfeed, "rate_limit_feed_query"),
             patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
         ):
             ddb.batch_get_item.side_effect = [{"Responses": {newsfeed.APP_TABLE: []}}]
-            out = newsfeed.view_feed(limit=20, cursor=None, author_id="author_a", user_id="viewer_b")
+            out = newsfeed.view_feed(limit=20, cursor=None, author_id="author_a", q=None, from_ts=None, to_ts=None, has_media=None, user_id="viewer_b")
 
         self.assertEqual([it["post_id"] for it in out["items"]], ["p_public"])
 
@@ -325,8 +355,11 @@ class TestNewsfeedRoutes(unittest.TestCase):
                 newsfeed.view_feed(
                     limit=20,
                     cursor=None,
+                    author_id=None,
+                    q=None,
                     from_ts="2026-03-20T00:00:00Z",
                     to_ts="2026-03-10T00:00:00Z",
+                    has_media=None,
                     user_id="viewer_1",
                 )
 
@@ -350,8 +383,11 @@ class TestNewsfeedRoutes(unittest.TestCase):
                 newsfeed.view_feed(
                     limit=20,
                     cursor=None,
+                    author_id=None,
+                    q=None,
                     from_ts="2026-03-01T00:00:00Z",
                     to_ts="2026-03-10T00:00:00Z",
+                    has_media=None,
                     user_id="viewer_1",
                 )
 
@@ -412,12 +448,17 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "ddb_query") as ddb_query,
             patch.object(newsfeed, "record_newsfeed_feed_error") as metric_error,
             patch.object(newsfeed, "record_newsfeed_feed_request") as metric_request,
+            patch.object(newsfeed, "parse_filter_window", return_value=(None, None)),
         ):
             with self.assertRaises(HTTPException) as exc:
                 newsfeed.view_feed(
                     limit=20,
                     cursor="bad-cursor",
                     author_id="author_ok",
+                    q=None,
+                    from_ts=None,
+                    to_ts=None,
+                    has_media=None,
                     user_id="viewer_1",
                 )
 
@@ -435,6 +476,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "ddb_query") as ddb_query,
             patch.object(newsfeed, "record_newsfeed_feed_error") as metric_error,
             patch.object(newsfeed, "record_newsfeed_feed_request") as metric_request,
+            patch.object(newsfeed, "parse_filter_window", return_value=(None, None)),
         ):
             settings.newsfeed_feed_max_cursor_chars = 8
             with self.assertRaises(HTTPException) as exc:
@@ -442,6 +484,10 @@ class TestNewsfeedRoutes(unittest.TestCase):
                     limit=20,
                     cursor="x" * 20,
                     author_id="author_ok",
+                    q=None,
+                    from_ts=None,
+                    to_ts=None,
+                    has_media=None,
                     user_id="viewer_1",
                 )
 
@@ -456,6 +502,8 @@ class TestNewsfeedRoutes(unittest.TestCase):
     def test_view_feed_rate_limited_records_semantic_error_and_skips_query(self):
         with (
             patch.object(newsfeed, "ddb_query") as ddb_query,
+            patch.object(newsfeed, "parse_filter_window", return_value=(None, None)),
+            patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
             patch.object(
                 newsfeed,
                 "rate_limit_feed_query",
@@ -473,6 +521,10 @@ class TestNewsfeedRoutes(unittest.TestCase):
                     limit=20,
                     cursor=None,
                     author_id="author_ok",
+                    q=None,
+                    from_ts=None,
+                    to_ts=None,
+                    has_media=None,
                     user_id="viewer_1",
                 )
 
@@ -486,7 +538,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
     def test_view_feed_profile_mode_records_observability_metrics(self):
         refs = {
             "Items": [
-                {"post_id": "p2", "user_id": "target_author", "created_at": "2026-03-20T00:00:00Z", "locked": False},
+                {"post_id": "p2", "user_id": "target_author", "created_at": "2026-03-20T00:00:00Z", "locked": False, "body": "release notes", "image_urls": ["a.png"]},
             ],
             "LastEvaluatedKey": None,
         }
@@ -499,6 +551,8 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "can_access_creator", return_value=True),
             patch.object(newsfeed, "is_following", return_value=True),
             patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "parse_filter_window", return_value=(None, None)),
+            patch.object(newsfeed, "rate_limit_feed_query"),
             patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
             patch.object(newsfeed, "record_newsfeed_feed_request") as metric_request,
             patch.object(newsfeed, "record_newsfeed_feed_latency") as metric_latency,
@@ -514,6 +568,8 @@ class TestNewsfeedRoutes(unittest.TestCase):
                 cursor=None,
                 author_id="target_author",
                 q="release",
+                from_ts=None,
+                to_ts=None,
                 has_media=True,
                 user_id="viewer_1",
             )
@@ -796,6 +852,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
 
         with (
             patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "_enforce_unlock_attempt_throttle"),
             patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="new") as reserve_with_begin,
             patch.object(newsfeed, "payments") as payments,
             patch.object(newsfeed, "_finalize_unlock_attempt_success"),
@@ -881,6 +938,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
 
         with (
             patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "_enforce_unlock_attempt_throttle"),
             patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="new"),
             patch.object(newsfeed, "_finalize_unlock_attempt_success"),
             patch.object(newsfeed, "put_notification"),
@@ -905,6 +963,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
 
         with (
             patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "_enforce_unlock_attempt_throttle"),
             patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="new"),
             patch.object(newsfeed, "_finalize_unlock_attempt_success"),
             patch.object(newsfeed, "put_notification"),
@@ -1047,6 +1106,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
 
         with (
             patch.object(newsfeed, "ddb_get_item", side_effect=[post, stale_unlock]),
+            patch.object(newsfeed, "_enforce_unlock_attempt_throttle"),
             patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="new") as begin_with_reservation,
             patch.object(newsfeed, "_clear_unlock_attempt_if_not_unlocked", return_value=True) as clear_attempt,
             patch.object(newsfeed, "_release_reserved_unlock_slot") as release_slot,
@@ -1162,6 +1222,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
 
         with (
             patch.object(newsfeed, "ddb_get_item", side_effect=[post, {}, stale_attempt]),
+            patch.object(newsfeed, "_enforce_unlock_attempt_throttle"),
             patch.object(newsfeed, "_is_unlock_limit_enabled_for_user", return_value=True),
             patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", side_effect=["in_progress", "new"]) as begin_with_reservation,
             patch.object(newsfeed, "_clear_unlock_attempt_if_not_unlocked", return_value=True) as clear_attempt,
@@ -1194,6 +1255,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
 
         with (
             patch.object(newsfeed, "ddb_get_item", side_effect=[post, {}, fresh_attempt]),
+            patch.object(newsfeed, "_enforce_unlock_attempt_throttle"),
             patch.object(newsfeed, "_is_unlock_limit_enabled_for_user", return_value=True),
             patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="in_progress"),
             patch.object(newsfeed, "_clear_unlock_attempt_if_not_unlocked") as clear_attempt,
@@ -1261,6 +1323,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
 
         with (
             patch.object(newsfeed, "ddb_get_item", return_value=post),
+            patch.object(newsfeed, "_enforce_unlock_attempt_throttle"),
             patch.object(newsfeed, "_begin_unlock_attempt_with_reservation", return_value="new"),
             patch.object(newsfeed, "_release_reserved_unlock_slot") as release_slot,
             patch.object(newsfeed, "_clear_unlock_attempt_if_not_unlocked") as clear_attempt,
@@ -1450,7 +1513,6 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "ddb_put_item") as put_item,
             patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
             patch.object(newsfeed, "_meter_newsfeed_post_publish"),
-            patch.object(newsfeed, "_meter_newsfeed_attachment_uploads"),
         ):
             newsfeed.create_post(req, user_id="u1")
 
@@ -1466,7 +1528,6 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "ddb_put_item") as put_item,
             patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
             patch.object(newsfeed, "_meter_newsfeed_post_publish"),
-            patch.object(newsfeed, "_meter_newsfeed_attachment_uploads"),
         ):
             newsfeed.create_post(req, user_id="u1")
 
@@ -1631,7 +1692,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
 
     def test_create_post_success_records_usage_once(self):
         req = newsfeed.CreatePostRequest(
-            body=newsfeed.RichTextDoc(format="tiptap-json", doc={"type": "doc", "content": []}),
+            body="test content",
         )
 
         with (
@@ -1645,7 +1706,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
         ):
             settings.filemgr_table_name = "FileManager"
             ddb.Table.return_value = Mock()
-            newsfeed.create_post(req, x_user_id="u1")
+            newsfeed.create_post(req, user_id="u1")
 
         self.assertEqual(put_item.call_count, 2)
         record_usage.assert_called_once()
@@ -1655,7 +1716,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
 
     def test_create_post_failed_create_does_not_record_usage(self):
         req = newsfeed.CreatePostRequest(
-            body=newsfeed.RichTextDoc(format="tiptap-json", doc={"type": "doc", "content": []}),
+            body="test content",
         )
 
         with (
@@ -1670,13 +1731,13 @@ class TestNewsfeedRoutes(unittest.TestCase):
             settings.filemgr_table_name = "FileManager"
             ddb.Table.return_value = Mock()
             with self.assertRaises(RuntimeError):
-                newsfeed.create_post(req, x_user_id="u1")
+                newsfeed.create_post(req, user_id="u1")
 
         record_usage.assert_not_called()
 
     def test_create_post_meters_successful_create(self):
         req = newsfeed.CreatePostRequest(
-            body=newsfeed.RichTextDoc(format="tiptap-json", doc={"type": "doc", "content": []}),
+            body="test content",
         )
 
         with (
@@ -1685,18 +1746,16 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "ddb_put_item") as put_item,
             patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
             patch.object(newsfeed, "_meter_newsfeed_post_publish") as meter_post,
-            patch.object(newsfeed, "_meter_newsfeed_attachment_uploads") as meter_attachments,
         ):
-            resp = newsfeed.create_post(req, x_user_id="u1")
+            resp = newsfeed.create_post(req, user_id="u1")
 
         self.assertEqual(put_item.call_count, 2)
         meter_post.assert_called_once_with(user_id="u1", post_id="post_abc")
-        meter_attachments.assert_called_once()
         self.assertEqual(resp.post_id, "post_abc")
 
     def test_create_post_failed_create_does_not_meter(self):
         req = newsfeed.CreatePostRequest(
-            body=newsfeed.RichTextDoc(format="tiptap-json", doc={"type": "doc", "content": []}),
+            body="test content",
         )
 
         with (
@@ -1705,75 +1764,11 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "ddb_put_item", side_effect=RuntimeError("ddb down")),
             patch.object(newsfeed, "_enforce_newsfeed_post_quota_precheck"),
             patch.object(newsfeed, "_meter_newsfeed_post_publish") as meter_post,
-            patch.object(newsfeed, "_meter_newsfeed_attachment_uploads") as meter_attachments,
         ):
             with self.assertRaises(RuntimeError):
-                newsfeed.create_post(req, x_user_id="u1")
+                newsfeed.create_post(req, user_id="u1")
 
         meter_post.assert_not_called()
-        meter_attachments.assert_not_called()
-
-    def test_meter_newsfeed_attachment_uploads_uses_authoritative_content_length(self):
-        table = Mock()
-        attachment = newsfeed.Attachment(
-            attachment_id="att1",
-            filename="a.png",
-            content_type="image/png",
-            s3_key="uploads/u1/att1/a.png",
-        )
-        with (
-            patch.object(newsfeed, "S") as settings,
-            patch.object(newsfeed, "ddb") as ddb,
-            patch.object(newsfeed, "s3") as s3,
-            patch.object(newsfeed, "UPLOAD_BUCKET", "bucket"),
-            patch.object(newsfeed, "record_usage_event_and_aggregates") as record_usage,
-        ):
-            settings.filemgr_table_name = "FileManager"
-            ddb.Table.return_value = table
-            s3.head_object.return_value = {"ContentLength": 321}
-
-            newsfeed._meter_newsfeed_attachment_uploads(
-                user_id="u1",
-                post_id="p1",
-                attachments=[attachment],
-            )
-
-        s3.head_object.assert_called_once_with(Bucket="bucket", Key="uploads/u1/att1/a.png")
-        record_usage.assert_called_once()
-        event = record_usage.call_args.args[1]
-        self.assertEqual(event["source"], "newsfeed_attachment_upload")
-        self.assertEqual(event["bytes"], 321)
-        self.assertEqual(
-            event["idempotency_key"],
-            "u1|newsfeed_attachment_upload|bucket/uploads/u1/att1/a.png|p1",
-        )
-
-    def test_meter_newsfeed_attachment_uploads_skips_nonpositive_head_size(self):
-        table = Mock()
-        attachment = newsfeed.Attachment(
-            attachment_id="att1",
-            filename="a.png",
-            content_type="image/png",
-            s3_key="uploads/u1/att1/a.png",
-        )
-        with (
-            patch.object(newsfeed, "S") as settings,
-            patch.object(newsfeed, "ddb") as ddb,
-            patch.object(newsfeed, "s3") as s3,
-            patch.object(newsfeed, "UPLOAD_BUCKET", "bucket"),
-            patch.object(newsfeed, "record_usage_event_and_aggregates") as record_usage,
-        ):
-            settings.filemgr_table_name = "FileManager"
-            ddb.Table.return_value = table
-            s3.head_object.return_value = {"ContentLength": 0}
-
-            newsfeed._meter_newsfeed_attachment_uploads(
-                user_id="u1",
-                post_id="p1",
-                attachments=[attachment],
-            )
-
-        record_usage.assert_not_called()
 
     def test_record_newsfeed_attachment_download_builds_deterministic_key(self):
         table = Mock()
@@ -1828,7 +1823,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
                 "ContentLength": 5,
                 "ContentType": "image/png",
             }
-            resp = newsfeed.download_post_attachment("p1", "att1", x_user_id="u1", x_request_id="req-1")
+            resp = newsfeed.download_post_attachment("p1", "att1", user_id="u1", x_request_id="req-1")
 
             async def _collect() -> bytes:
                 chunks = []
@@ -1862,7 +1857,7 @@ class TestNewsfeedRoutes(unittest.TestCase):
             patch.object(newsfeed, "has_unlocked", return_value=False),
         ):
             with self.assertRaises(HTTPException) as ctx:
-                newsfeed.download_post_attachment("p1", "att1", x_user_id="u1", x_request_id=None)
+                newsfeed.download_post_attachment("p1", "att1", user_id="u1", x_request_id=None)
 
         self.assertEqual(ctx.exception.status_code, 402)
 

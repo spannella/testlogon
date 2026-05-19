@@ -228,7 +228,7 @@ async def maybe_enforce_api_key_route_policy(request: Request) -> None:
                 route_id=str(route_id or ""),
                 reason=str(detail.get("reason") or "unknown"),
             )
-        raise
+        raise exc
     except Exception as exc:
         record_api_key_policy_decision(
             mode=str(rollout.get("phase") or "enforce"),

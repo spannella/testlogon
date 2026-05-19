@@ -108,6 +108,7 @@ class MassMessageDestinationStatus(BaseModel):
     updated_at: int | None = None
     created_at: int | None = None
     campaign_state: str = Field(min_length=1)
+    idempotency_key: str | None = None
 
 
 class MassMessageCreateCampaignResponse(BaseModel):

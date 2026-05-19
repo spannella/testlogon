@@ -62,7 +62,8 @@ def test_dispatch_emits_once_per_incident_status(monkeypatch):
 def test_clear_marks_matching_alerts_read(monkeypatch):
     repo = _Repo()
     table = _AlertsTable()
-    monkeypatch.setattr(alerts.T, "alerts", table)
+    original = alerts.T.alerts
+    object.__setattr__(alerts.T, "alerts", table)
 
     table.items[("user_1", "a1")] = {
         "user_sub": "user_1",
@@ -82,7 +83,10 @@ def test_clear_marks_matching_alerts_read(monkeypatch):
     }
 
     incident = {"incident_id": "inc_1", "incident_type": "payment_failure", "status": "retry_succeeded", "account_id": "user_1"}
-    cleared = alerts.clear_auto_payment_failure_alerts(repo, incident=incident)
+    try:
+        cleared = alerts.clear_auto_payment_failure_alerts(repo, incident=incident)
+    finally:
+        object.__setattr__(alerts.T, "alerts", original)
 
     assert cleared == 1
     assert table.items[("user_1", "a1")]["read"] is True

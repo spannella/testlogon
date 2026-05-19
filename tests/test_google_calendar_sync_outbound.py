@@ -155,6 +155,7 @@ class TestGoogleCalendarSyncOutbound(unittest.TestCase):
             )),
             patch.object(svc, "map_internal_event_to_google", return_value={"google_event": {"summary": "A"}}),
             patch.object(svc, "create_google_calendar_event", side_effect=retry_exc),
+            patch.object(svc, "emit_google_calendar_audit_event"),
         ):
             first = svc.process_google_calendar_outbound_jobs(owner_user_sub="owner-1", connection_id="google-primary")
             first_stored = table.items[("gcal_outbox#owner-1", "job#retry-1")]
@@ -164,6 +165,12 @@ class TestGoogleCalendarSyncOutbound(unittest.TestCase):
 
             replay_due = dict(first_stored)
             replay_due["next_attempt_at_utc"] = "2000-01-01T00:00:00Z"
+            replay_due.setdefault("type", "google_calendar_outbound_sync_job")
+            replay_due.setdefault("action", "create")
+            replay_due.setdefault("internal_calendar_id", "cal-1")
+            replay_due.setdefault("internal_event_id", "evt-1")
+            replay_due.setdefault("google_calendar_ids", ["gcal-1"])
+            replay_due.setdefault("enqueued_at_utc", "2026-01-01T00:00:00Z")
             table.jobs = [replay_due]
             second = svc.process_google_calendar_outbound_jobs(owner_user_sub="owner-1", connection_id="google-primary")
 

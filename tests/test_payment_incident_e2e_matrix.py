@@ -74,6 +74,12 @@ class _Repo:
     def append_incident_event(self, *, incident_id: str, event_id: str, event_type: str, payload: dict[str, Any] | None = None):
         return {"incident_id": incident_id, "event_id": event_id, "event_type": event_type, "payload": payload or {}}
 
+    def get_ticket_link(self, incident_id: str):
+        return None
+
+    def put_ticket_link(self, **kwargs):
+        return {}
+
 
 def _build_request(*, body: bytes = b"{}", headers: dict[str, str] | None = None):
     from starlette.requests import Request
@@ -150,6 +156,8 @@ def test_integration_webhook_to_incident_to_ticket_with_duplicate_guard(
     monkeypatch.setattr(billing_router, "dispatch_auto_payment_failure_alert", lambda *_a, **_k: True)
     monkeypatch.setattr(billing_router, "clear_auto_payment_failure_alerts", lambda *_a, **_k: 0)
     monkeypatch.setattr(billing_router, "record_incident_created", lambda **_k: None)
+    monkeypatch.setattr(billing_router, "_reject_payment_incident_webhook_replay", lambda **_k: None)
+    monkeypatch.setattr(billing_router, "_mark_payment_incident_webhook_replay", lambda **_k: None)
     if provider == "stripe":
         monkeypatch.setattr(billing_router, "ensure_stripe_configured", lambda: None)
         object.__setattr__(S, "stripe_webhook_secret", "whsec_test")
@@ -341,6 +349,8 @@ def test_failure_mode_retry_storm_is_handled(monkeypatch) -> None:
     monkeypatch.setattr(billing_router, "dispatch_auto_payment_failure_alert", lambda *_a, **_k: True)
     monkeypatch.setattr(billing_router, "clear_auto_payment_failure_alerts", lambda *_a, **_k: 0)
     monkeypatch.setattr(billing_router, "record_retry_attempt", lambda **_k: None)
+    monkeypatch.setattr(billing_router, "ensure_incident_ticket_link", lambda *_a, **_k: None)
+    monkeypatch.setattr(billing_router, "sync_ticket_from_incident", lambda *_a, **_k: None)
 
     for _ in range(10):
         out = billing_router.confirm_and_retry_payment_issue(

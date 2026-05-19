@@ -65,7 +65,7 @@ def build_request():
 
 
 def build_ctx():
-    return {"user_sub": "user", "session_id": "sid"}
+    return {"user_sub": "user", "session_id": "00000000-0000-0000-0000-000000000001"}
 
 
 class TestUiSessionRoutes(unittest.TestCase):
@@ -73,8 +73,8 @@ class TestUiSessionRoutes(unittest.TestCase):
         sessions_table = Mock()
         sessions_table.query.return_value = {
             "Items": [
-                {"session_id": "sid", "created_at": 1, "last_seen_at": 2},
-                {"session_id": "other", "created_at": 2, "last_seen_at": 3},
+                {"session_id": "00000000-0000-0000-0000-000000000001", "created_at": 1, "last_seen_at": 2},
+                {"session_id": "00000000-0000-0000-0000-000000000002", "created_at": 2, "last_seen_at": 3},
             ]
         }
         fake_tables = SimpleNamespace(sessions=sessions_table)
@@ -220,7 +220,6 @@ class TestUiMfaRoutes(unittest.TestCase):
             stack.enter_context(patch.object(ui_mfa, "load_challenge_or_401", return_value=chal))
             stack.enter_context(patch.object(ui_mfa, "totp_verify_any_enabled", return_value="dev"))
             stack.enter_context(patch.object(ui_mfa, "mark_factor_passed"))
-            stack.enter_context(patch.object(ui_mfa, "maybe_finalize", return_value="sid"))
             stack.enter_context(patch.object(ui_mfa, "list_enabled_sms_numbers", return_value=["+14155550100"]))
             stack.enter_context(patch.object(ui_mfa, "list_enabled_emails", return_value=["user@example.com"]))
             stack.enter_context(patch.object(ui_mfa, "can_send_verification", return_value=True))
@@ -355,7 +354,7 @@ class TestMfaDeviceRoutes(unittest.TestCase):
             totp_begin = run_async(mfa_devices.totp_devices_begin(req, TotpDeviceBeginReq(label="l"), ctx=build_ctx()))
             self.assertEqual(totp_begin["device_id"], "d2")
 
-            totp_confirm = run_async(mfa_devices.totp_devices_confirm(req, TotpDeviceConfirmReq(device_id="d2", totp_code="123"), ctx=build_ctx()))
+            totp_confirm = run_async(mfa_devices.totp_devices_confirm(req, TotpDeviceConfirmReq(device_id="d2", totp_code="123", totp_code2="456"), ctx=build_ctx()))
             self.assertEqual(totp_confirm["ok"], True)
 
             totp_remove = run_async(mfa_devices.totp_devices_remove(req, "d2", TotpDeviceRemoveReq(totp_code="123"), ctx=build_ctx()))
@@ -561,7 +560,7 @@ class TestAlertRoutes(unittest.TestCase):
             self.assertIn("sms_event_types", sms_prefs_set)
 
             toast_prefs = run_async(alerts.get_toast_prefs(ctx=build_ctx()))
-            self.assertIn("event_types", toast_prefs)
+            self.assertIn("toast_event_types", toast_prefs)
 
             toast_prefs_set = run_async(alerts.set_toast_prefs(AlertToastPrefsReq(toast_event_types=[]), ctx=build_ctx()))
             self.assertIn("toast_event_types", toast_prefs_set)

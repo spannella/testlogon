@@ -1,76 +1,62 @@
 from __future__ import annotations
 
+import os
+from unittest.mock import patch
+
 from fastapi.testclient import TestClient
 
 from app.main import create_app
 
 
 def test_browser_ssh_form_fields_and_defaults_rendered() -> None:
+    """The root page serves a simple backend info page (SSH UI moved to frontend)."""
     app = create_app()
     client = TestClient(app)
 
     html = client.get("/").text
 
-    assert 'id="browserSshHost"' in html
-    assert 'id="browserSshPort"' in html
-    assert 'value="22"' in html
-    assert 'id="browserSshUsername"' in html
-    assert 'id="browserSshAuthType"' in html
-    assert '<option value="password" selected>Password</option>' in html
-    assert '<option value="private_key">Private key</option>' in html
-    assert 'id="browserSshPasswordRow"' in html
-    assert 'id="browserSshPassword"' in html
-    assert 'id="browserSshPrivateKey"' in html
-    assert 'id="browserSshPrivateKeyFile"' in html
-    assert 'id="browserSshPassphrase"' in html
+    assert "<title>Backend</title>" in html
+    assert "Backend API server" in html
 
 
 def test_browser_ssh_connect_disconnect_button_state_defaults() -> None:
+    """The /browser-ssh route returns 410 Gone when the feature is enabled."""
     app = create_app()
     client = TestClient(app)
 
-    html = client.get("/").text
+    with patch.dict(os.environ, {"BROWSER_SSH_TERMINAL_ENABLED": "true"}):
+        resp = client.get("/browser-ssh")
 
-    assert 'id="browserSshConnectBtn" disabled' in html
-    assert 'id="browserSshDisconnectBtn" class="hidden"' in html
+    assert resp.status_code == 410
+    assert "moved" in resp.json()["detail"].lower()
 
 
 def test_browser_ssh_terminal_view_and_xterm_assets_rendered() -> None:
+    """The /browser-ssh route returns 404 when the feature is disabled."""
     app = create_app()
     client = TestClient(app)
 
-    html = client.get("/").text
+    with patch.dict(os.environ, {"BROWSER_SSH_TERMINAL_ENABLED": "false"}):
+        resp = client.get("/browser-ssh")
 
-    assert 'id="browserSshTerminalViewport"' in html
-    assert 'id="browserSshTerminal"' in html
-    assert 'id="browserSshSize"' in html
-    assert 'cdn.jsdelivr.net/npm/xterm@5.5.0/css/xterm.min.css' in html
-    assert 'cdn.jsdelivr.net/npm/xterm@5.5.0/lib/xterm.min.js' in html
-    assert 'cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js' in html
+    assert resp.status_code == 404
 
 
 def test_browser_ssh_copy_paste_controls_rendered() -> None:
+    """The browser-ssh API router is mounted and responds to requests."""
     app = create_app()
     client = TestClient(app)
 
-    html = client.get("/").text
-
-    assert "id=\"browserSshCopyBtn\"" in html
-    assert "id=\"browserSshPasteBtn\"" in html
-    assert "id=\"browserSshContextMenu\"" in html
-    assert "id=\"browserSshContextCopy\"" in html
-    assert "id=\"browserSshContextPaste\"" in html
+    # The API routes exist — an unauthenticated request should get 403 or 401, not 404
+    resp = client.get("/api/browser-ssh/config")
+    assert resp.status_code != 404
 
 
 def test_browser_ssh_status_badge_and_retry_rendered() -> None:
+    """The root index.html is an HTML document served as a FileResponse."""
     app = create_app()
     client = TestClient(app)
 
-    html = client.get("/").text
-
-    assert "id=\"browserSshStateBadge\"" in html
-    assert ">disconnected<" in html
-    assert "id=\"browserSshRetryBtn\"" in html
-    assert "id=\"browserSshRetryBtn\" type=\"button\" class=\"hidden\"" in html
-    assert ">Reconnect<" in html
-    assert "id=\"browserSshReuseCreds\"" in html
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers.get("content-type", "")

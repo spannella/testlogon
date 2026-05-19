@@ -226,7 +226,7 @@ class TestGoogleCalendarClient(unittest.TestCase):
             patch.object(
                 client,
                 "get_calendar_provider_connection",
-                return_value={"token_payload": {"access_token": "token", "expires_at_utc": "2099-01-01T00:00:00Z"}},
+                return_value={"token_payload": {"access_token": "token", "expires_at_utc": "2100-01-01T00:00:00Z"}},
             ),
             patch.object(client.requests, "request", side_effect=[retryable, retryable]) as req,
             patch.object(client, "_utc_now", return_value=fixed_now),

@@ -72,6 +72,7 @@ def test_status_change_triggers_kyc_sync_hook(monkeypatch) -> None:
     events: list[str] = []
     monkeypatch.setattr(tickets_router.STORE, "get_ticket", lambda ticket_id: _kyc_ticket(status="in_progress", assigned_admin_sub="admin-2"))
     monkeypatch.setattr(tickets_router.STORE, "update_status", lambda **kwargs: _kyc_ticket(status="waiting_on_user", assigned_admin_sub="admin-2", version=3))
+    monkeypatch.setattr(tickets_router, "sync_incident_from_ticket", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         tickets_router,
         "_sync_kyc_for_ticket_event",

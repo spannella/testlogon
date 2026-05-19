@@ -196,7 +196,7 @@ class TestMessagingRoutes(unittest.TestCase):
             "created_at": "123",
             "outcomes": [
                 {
-                    "outcome_id": "o_a",
+                    "outcome_id": f"o_{expected_message_id}_1",
                     "weight_bps": 10000,
                     "payload_type": "text",
                     "text_content": "hello",
@@ -213,6 +213,7 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging.messaging_lottery_store, "get_lottery_config", return_value=existing_cfg),
             patch.object(messaging.messaging_lottery_store, "put_lottery_config") as put_cfg,
             patch.object(messaging, "tbl_msgs") as tbl_msgs,
+            patch("app.routers.messaging._safe_index_message", create=True),
         ):
             tbl_msgs.get_item.return_value = {}
             out = messaging.create_lottery_message(
@@ -302,7 +303,7 @@ class TestMessagingRoutes(unittest.TestCase):
             "created_at": "123",
             "outcomes": [
                 {
-                    "outcome_id": "o_a",
+                    "outcome_id": f"o_{expected_message_id}_1",
                     "weight_bps": 10000,
                     "payload_type": "text",
                     "text_content": "hello",
@@ -548,6 +549,7 @@ class TestMessagingRoutes(unittest.TestCase):
         with (
             patch.object(messaging, "tbl_parts", tbl_parts),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "_load_hidden_message_ids_for_user", return_value=set()),
         ):
             messages = messaging.list_messages("c1", user_id="user-1")
 
@@ -580,6 +582,7 @@ class TestMessagingRoutes(unittest.TestCase):
         with (
             patch.object(messaging, "tbl_parts", tbl_parts),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "_load_hidden_message_ids_for_user", return_value=set()),
             patch.object(
                 messaging,
                 "_get_conversation_or_404",
@@ -665,6 +668,7 @@ class TestMessagingRoutes(unittest.TestCase):
         with (
             patch.object(messaging, "tbl_parts", tbl_parts),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "_load_hidden_message_ids_for_user", return_value=set()),
             patch.object(
                 messaging,
                 "_get_conversation_or_404",
@@ -811,6 +815,7 @@ class TestMessagingRoutes(unittest.TestCase):
         with (
             patch.object(messaging, "tbl_parts", tbl_parts),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "_load_hidden_message_ids_for_user", return_value=set()),
             patch.object(
                 messaging,
                 "_get_conversation_or_404",
@@ -853,6 +858,7 @@ class TestMessagingRoutes(unittest.TestCase):
         with (
             patch.object(messaging, "tbl_parts", tbl_parts),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "_load_hidden_message_ids_for_user", return_value=set()),
             patch.object(
                 messaging,
                 "_get_conversation_or_404",
@@ -992,7 +998,10 @@ class TestMessagingRoutes(unittest.TestCase):
         meter_send.assert_called_once_with(user_id="user-1", conversation_id="c1", message_id="m_xyz")
         self.assertEqual(resp.message_id, "m_xyz")
         self.assertEqual(resp.text, "Hello world")
-        fanout.assert_called_once()
+        # fanout is called twice: once from _send_single_destination_message and
+        # once from _fanout_new_message_event (which adds notification_scope).
+        self.assertEqual(fanout.call_count, 2)
+        # Verify the last call (from _fanout_new_message_event) has the right shape
         self.assertEqual(fanout.call_args.kwargs["event_type"], "message:new")
         payload = fanout.call_args.kwargs["payload"]
         self.assertEqual(payload["message"]["message_id"], "m_xyz")
@@ -1254,7 +1263,9 @@ class TestMessagingRoutes(unittest.TestCase):
         self.assertTrue(stored_item["is_encrypted"])
         self.assertIsNone(stored_item["text"])
         self.assertEqual(stored_item["encryption"]["alg"], "AES-256-GCM")
-        fanout.assert_called_once()
+        # fanout is called twice: once from _send_single_destination_message and
+        # once from _fanout_new_message_event (which adds notification_scope).
+        self.assertEqual(fanout.call_count, 2)
         self.assertEqual(fanout.call_args.kwargs["event_type"], "message:new")
         payload = fanout.call_args.kwargs["payload"]
         self.assertEqual(payload["message"]["message_id"], "m_xyz")
@@ -1311,6 +1322,7 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "new_id", return_value="img"),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
             patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "fanout_event_to_conversation"),
             patch.object(messaging, "_meter_message_send") as meter_send,
             patch.object(messaging, "_meter_messaging_attachment_upload") as meter_upload,
         ):
@@ -2198,7 +2210,7 @@ class TestMessagingRoutes(unittest.TestCase):
     def test_list_conversations_returns_items(self):
         tbl_parts = Mock()
         tbl_convos = Mock()
-        tbl_parts.query.return_value = {"Items": [{"conversation_id": "c1", "status": "active"}]}
+        tbl_parts.query.return_value = {"Items": [{"conversation_id": "c1", "user_id": "u1", "status": "active"}]}
         tbl_convos.get_item.return_value = {
             "Item": {
                 "conversation_id": "c1",
@@ -2210,9 +2222,13 @@ class TestMessagingRoutes(unittest.TestCase):
                 "last_message_preview": "",
             }
         }
+        mock_ddb = Mock()
+        mock_ddb.batch_get_item.return_value = {"Responses": {}}
         with (
             patch.object(messaging, "tbl_parts", tbl_parts),
             patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "ddb", mock_ddb),
+            patch.object(messaging, "_get_conversation_participants_enriched", return_value=[]),
         ):
             resp = messaging.list_conversations(user_id="u1")
         self.assertEqual(len(resp), 1)
@@ -2221,7 +2237,7 @@ class TestMessagingRoutes(unittest.TestCase):
     def test_list_conversations_includes_helpdesk_assignment_fields_for_agent_view(self):
         tbl_parts = Mock()
         tbl_convos = Mock()
-        tbl_parts.query.return_value = {"Items": [{"conversation_id": "c1", "status": "active"}]}
+        tbl_parts.query.return_value = {"Items": [{"conversation_id": "c1", "user_id": "agent-1", "status": "active"}]}
         tbl_convos.get_item.return_value = {
             "Item": {
                 "conversation_id": "c1",
@@ -2237,9 +2253,13 @@ class TestMessagingRoutes(unittest.TestCase):
                 "assignment_version": 3,
             }
         }
+        mock_ddb = Mock()
+        mock_ddb.batch_get_item.return_value = {"Responses": {}}
         with (
             patch.object(messaging, "tbl_parts", tbl_parts),
             patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "ddb", mock_ddb),
+            patch.object(messaging, "_get_conversation_participants_enriched", return_value=[]),
             patch.object(messaging, "_is_helpdesk_group_member", return_value=True),
         ):
             resp = messaging.list_conversations(user_id="agent-1")
@@ -2250,7 +2270,7 @@ class TestMessagingRoutes(unittest.TestCase):
     def test_list_conversations_omits_helpdesk_assignment_fields_for_end_user(self):
         tbl_parts = Mock()
         tbl_convos = Mock()
-        tbl_parts.query.return_value = {"Items": [{"conversation_id": "c1", "status": "active"}]}
+        tbl_parts.query.return_value = {"Items": [{"conversation_id": "c1", "user_id": "customer-1", "status": "active"}]}
         tbl_convos.get_item.return_value = {
             "Item": {
                 "conversation_id": "c1",
@@ -2265,9 +2285,13 @@ class TestMessagingRoutes(unittest.TestCase):
                 "assignment_version": 3,
             }
         }
+        mock_ddb = Mock()
+        mock_ddb.batch_get_item.return_value = {"Responses": {}}
         with (
             patch.object(messaging, "tbl_parts", tbl_parts),
             patch.object(messaging, "tbl_convos", tbl_convos),
+            patch.object(messaging, "ddb", mock_ddb),
+            patch.object(messaging, "_get_conversation_participants_enriched", return_value=[]),
             patch.object(messaging, "_is_helpdesk_group_member", return_value=False),
         ):
             resp = messaging.list_conversations(user_id="customer-1")
@@ -2326,6 +2350,8 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "get_participant_any", return_value={"status": "active"}),
             patch.object(messaging, "tbl_parts", tbl_parts),
             patch.object(messaging, "_get_conversation_or_404", return_value={"routing_mode": "standard"}),
+            patch.object(messaging, "get_profile_identity", return_value={}),
+            patch.object(messaging, "tbl_users", Mock(get_item=Mock(return_value={"Item": {}}))),
         ):
             resp = messaging.list_participants("c1", user_id="u1")
         self.assertEqual(len(resp), 2)
@@ -2371,6 +2397,8 @@ class TestMessagingRoutes(unittest.TestCase):
                 },
             ),
             patch.object(messaging, "_is_helpdesk_group_member", return_value=True),
+            patch.object(messaging, "get_profile_identity", return_value={}),
+            patch.object(messaging, "tbl_users", Mock(get_item=Mock(return_value={"Item": {}}))),
         ):
             resp = messaging.list_participants("c1", user_id="agent-1")
         owner = next(p for p in resp if p.user_id == "agent-1")
@@ -2384,8 +2412,10 @@ class TestMessagingRoutes(unittest.TestCase):
         with (
             patch.object(messaging, "require_participant_active"),
             patch.object(messaging, "s3") as s3,
+            patch.object(messaging, "S") as mock_settings,
             patch.object(messaging, "now_ts", return_value=10),
         ):
+            mock_settings.dev_mode = False
             s3.generate_presigned_url.return_value = "http://upload"
             resp = messaging.presign_image_upload(
                 "c1", messaging.SendImagePresignIn(filename="file.png"), user_id="u1"
@@ -2516,6 +2546,7 @@ class TestMessagingRoutes(unittest.TestCase):
         with (
             patch.object(messaging, "tbl_parts", tbl_parts),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "_load_hidden_message_ids_for_user", return_value=set()),
             patch.object(messaging, "tbl_msg_consumption") as tbl_consumption,
         ):
             tbl_consumption.get_item.return_value = {
@@ -2539,6 +2570,9 @@ class TestMessagingRoutes(unittest.TestCase):
         tbl_parts = Mock()
         tbl_parts.query.return_value = {"Items": [{"user_id": "u1"}, {"user_id": "u2"}]}
         tbl_consumption = Mock()
+        tbl_consumption.get_item.return_value = {
+            "Item": {"consumption_state": "pending", "consumed_at": 0, "media_kind": "image"}
+        }
         with (
             patch.object(messaging, "require_participant_active"),
             patch.object(messaging, "_enforce_message_send_quota_precheck"),
@@ -2548,6 +2582,7 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "tbl_msgs", tbl_msgs),
             patch.object(messaging, "tbl_convos", tbl_convos),
             patch.object(messaging, "tbl_msg_consumption", tbl_consumption),
+            patch.object(messaging, "fanout_event_to_conversation"),
             patch.object(messaging, "_meter_message_send"),
             patch.object(messaging, "_meter_messaging_attachment_upload"),
         ):
@@ -2568,6 +2603,9 @@ class TestMessagingRoutes(unittest.TestCase):
         tbl_parts = Mock()
         tbl_parts.query.return_value = {"Items": [{"user_id": "u1"}, {"user_id": "u2"}]}
         tbl_consumption = Mock()
+        tbl_consumption.get_item.return_value = {
+            "Item": {"consumption_state": "pending", "consumed_at": 0, "media_kind": "audio"}
+        }
         with (
             patch.object(messaging, "require_participant_active"),
             patch.object(messaging, "_enforce_message_send_quota_precheck"),
@@ -2577,6 +2615,7 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "tbl_msgs", tbl_msgs),
             patch.object(messaging, "tbl_convos", tbl_convos),
             patch.object(messaging, "tbl_msg_consumption", tbl_consumption),
+            patch.object(messaging, "fanout_event_to_conversation"),
             patch.object(
                 messaging,
                 "get_node",
@@ -2609,6 +2648,10 @@ class TestMessagingRoutes(unittest.TestCase):
     def test_create_image_message_view_once_records_once_media_send_metric(self):
         tbl_parts = Mock()
         tbl_parts.query.return_value = {"Items": [{"user_id": "u1"}, {"user_id": "u2"}]}
+        tbl_consumption = Mock()
+        tbl_consumption.get_item.return_value = {
+            "Item": {"consumption_state": "pending", "consumed_at": 0, "media_kind": "image"}
+        }
         with (
             patch.object(messaging, "require_participant_active"),
             patch.object(messaging, "_enforce_message_send_quota_precheck"),
@@ -2617,7 +2660,8 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "tbl_parts", tbl_parts),
             patch.object(messaging, "tbl_msgs"),
             patch.object(messaging, "tbl_convos"),
-            patch.object(messaging, "tbl_msg_consumption"),
+            patch.object(messaging, "tbl_msg_consumption", tbl_consumption),
+            patch.object(messaging, "fanout_event_to_conversation"),
             patch.object(messaging, "_meter_message_send"),
             patch.object(messaging, "_meter_messaging_attachment_upload"),
             patch.object(messaging, "audit_event"),
@@ -2777,6 +2821,9 @@ class TestMessagingRoutes(unittest.TestCase):
         tbl_parts = Mock()
         tbl_parts.query.return_value = {"Items": [{"user_id": "u1"}, {"user_id": "u2"}, {"user_id": "u3"}]}
         tbl_consumption = Mock()
+        tbl_consumption.get_item.return_value = {
+            "Item": {"consumption_state": "pending", "consumed_at": 0, "media_kind": "video"}
+        }
         with (
             patch.object(messaging, "require_participant_active"),
             patch.object(messaging, "_enforce_message_send_quota_precheck"),
@@ -2786,6 +2833,7 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "tbl_msgs"),
             patch.object(messaging, "tbl_convos"),
             patch.object(messaging, "tbl_msg_consumption", tbl_consumption),
+            patch.object(messaging, "fanout_event_to_conversation"),
             patch.object(messaging, "get_node", return_value={"type": "file", "path": "/a.mp4", "name": "a.mp4", "size": 1, "content_type": "video/mp4"}),
             patch.object(messaging, "_meter_message_send"),
             patch.object(messaging, "audit_event"),
@@ -2940,6 +2988,8 @@ class TestMessagingRoutes(unittest.TestCase):
 
     def test_revoke_encrypted_message_for_all_supported(self):
         tbl_msgs = Mock()
+        tbl_convos = Mock()
+        tbl_convos.get_item.return_value = {"Item": {"conversation_id": "c1", "last_message_at": 0}}
         encrypted_msg = {
             "conversation_id": "c1",
             "message_id": "m1",
@@ -2963,6 +3013,7 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "_ensure_can_revoke_message"),
             patch.object(messaging, "_get_message_or_404", side_effect=[encrypted_msg, revoked_msg]),
             patch.object(messaging, "tbl_msgs", tbl_msgs),
+            patch.object(messaging, "tbl_convos", tbl_convos),
             patch.object(messaging, "fanout_event_to_conversation") as fanout,
             patch.object(messaging, "now_ts", return_value=10),
             patch.object(messaging, "remove_message_search") as remove_search,
@@ -3738,6 +3789,9 @@ class TestMessagingRoutes(unittest.TestCase):
 
 
     def test_claim_helpdesk_conversation_success(self):
+        tbl_parts = Mock()
+        tbl_parts.get_item.return_value = {}  # No existing participant
+        tbl_convos = Mock()
         with (
             patch.object(messaging, "_get_conversation_or_404", return_value={
                 "conversation_id": "c1",
@@ -3753,6 +3807,8 @@ class TestMessagingRoutes(unittest.TestCase):
             patch.object(messaging, "_apply_helpdesk_routing_transition", return_value={
                 "conversation": {"routing_state": "assigned", "active_agent_user_id": "a1", "assignment_version": 3}
             }),
+            patch.object(messaging, "tbl_parts", tbl_parts),
+            patch.object(messaging, "tbl_convos", tbl_convos),
             patch.object(messaging, "audit_event"),
             patch.object(messaging, "record_helpdesk_claim") as record_claim,
             patch.object(messaging, "record_helpdesk_claim_success") as claim_success,

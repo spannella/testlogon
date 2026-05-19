@@ -708,6 +708,12 @@ def test_stripe_payment_incidents_webhook_creates_and_dedupes(monkeypatch) -> No
             self.rows.append(dict(row))
             return self.rows[-1]
 
+        def get_ticket_link(self, incident_id):
+            return None
+
+        def put_ticket_link(self, **kwargs):
+            return {}
+
     class _Adapter:
         provider_key = "stripe"
 
@@ -743,6 +749,7 @@ def test_stripe_payment_incidents_webhook_creates_and_dedupes(monkeypatch) -> No
             )
 
     repo = _Repo()
+    billing_router._PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE.clear()
     monkeypatch.setattr(billing_router, "ensure_stripe_configured", lambda: None)
     object.__setattr__(S, "stripe_webhook_secret", "whsec_test")
     monkeypatch.setattr(billing_router, "resolve_provider_adapter", lambda _: _Adapter())
@@ -751,6 +758,7 @@ def test_stripe_payment_incidents_webhook_creates_and_dedupes(monkeypatch) -> No
 
     req = build_request(body=b"{}", headers={"stripe-signature": "ok"})
     first = run_async(billing_router.stripe_payment_incidents_webhook(req))
+    billing_router._PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE.clear()
     second = run_async(billing_router.stripe_payment_incidents_webhook(req))
 
     assert first["received"] is True
@@ -792,6 +800,12 @@ def test_paypal_payment_incidents_webhook_creates_and_dedupes(monkeypatch) -> No
             self.rows.append(dict(row))
             return self.rows[-1]
 
+        def get_ticket_link(self, incident_id):
+            return None
+
+        def put_ticket_link(self, **kwargs):
+            return {}
+
     class _Adapter:
         provider_key = "paypal"
 
@@ -827,12 +841,14 @@ def test_paypal_payment_incidents_webhook_creates_and_dedupes(monkeypatch) -> No
             )
 
     repo = _Repo()
+    billing_router._PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE.clear()
     monkeypatch.setattr(billing_router, "resolve_provider_adapter", lambda _: _Adapter())
     monkeypatch.setattr(billing_router, "DynamoPaymentIncidentRepository", lambda: repo)
     monkeypatch.setattr(billing_router, "PaymentIncidentTransitionService", _Service)
 
     req = build_request(body=b"{}", headers={"paypal-transmission-sig": "ok"})
     first = run_async(billing_router.paypal_payment_incidents_webhook(req))
+    billing_router._PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE.clear()
     second = run_async(billing_router.paypal_payment_incidents_webhook(req))
 
     assert first["received"] is True
@@ -874,6 +890,12 @@ def test_ccbill_payment_incidents_webhook_creates_and_dedupes(monkeypatch) -> No
             self.rows.append(dict(row))
             return self.rows[-1]
 
+        def get_ticket_link(self, incident_id):
+            return None
+
+        def put_ticket_link(self, **kwargs):
+            return {}
+
     class _Adapter:
         provider_key = "ccbill"
 
@@ -909,12 +931,14 @@ def test_ccbill_payment_incidents_webhook_creates_and_dedupes(monkeypatch) -> No
             )
 
     repo = _Repo()
+    billing_router._PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE.clear()
     monkeypatch.setattr(billing_router, "resolve_provider_adapter", lambda _: _Adapter())
     monkeypatch.setattr(billing_router, "DynamoPaymentIncidentRepository", lambda: repo)
     monkeypatch.setattr(billing_router, "PaymentIncidentTransitionService", _Service)
 
     req = build_request(body=b"{}", headers={"x-ccbill-signature": "ok"})
     first = run_async(billing_router.ccbill_payment_incidents_webhook(req))
+    billing_router._PAYMENT_INCIDENT_WEBHOOK_REPLAY_CACHE.clear()
     second = run_async(billing_router.ccbill_payment_incidents_webhook(req))
 
     assert first["received"] is True
@@ -1012,13 +1036,14 @@ def test_payment_incident_webhook_rejects_oversized_signature(monkeypatch, provi
             raise AssertionError("parse_webhook_events should not be called for oversized signatures")
 
     webhook_calls = []
-    object.__setattr__(S, "payment_incidents_webhook_max_signature_bytes", 4)
+    object.__setattr__(S, "payment_incidents_webhook_max_signature_bytes", 64)
     object.__setattr__(S, "stripe_webhook_secret", "whsec_test")
     monkeypatch.setattr(billing_router, "ensure_stripe_configured", lambda: None)
     monkeypatch.setattr(billing_router, "resolve_provider_adapter", lambda _: _GuardAdapter())
     monkeypatch.setattr(billing_router, "record_webhook_outcome", lambda **kwargs: webhook_calls.append(kwargs))
 
-    req = build_request(body=b"{}", headers={header: "12345"})
+    oversized_sig = "x" * 65
+    req = build_request(body=b"{}", headers={header: oversized_sig})
     webhook_handler = getattr(billing_router, endpoint)
     with pytest.raises(HTTPException) as exc:
         run_async(webhook_handler(req))
@@ -1099,7 +1124,7 @@ def test_payment_incident_webhook_rejects_oversized_payload(monkeypatch, provide
             raise AssertionError("parse_webhook_events should not be called for oversized payloads")
 
     webhook_calls = []
-    object.__setattr__(S, "payment_incidents_webhook_max_body_bytes", 4)
+    object.__setattr__(S, "payment_incidents_webhook_max_body_bytes", 1024)
     object.__setattr__(S, "stripe_webhook_secret", "whsec_test")
     monkeypatch.setattr(billing_router, "ensure_stripe_configured", lambda: None)
     monkeypatch.setattr(billing_router, "resolve_provider_adapter", lambda _: _GuardAdapter())
@@ -1109,7 +1134,8 @@ def test_payment_incident_webhook_rejects_oversized_payload(monkeypatch, provide
         lambda **kwargs: webhook_calls.append(kwargs),
     )
 
-    req = build_request(body=b"12345", headers={header: "ok", "content-length": "5"})
+    oversized_body = b"x" * 1025
+    req = build_request(body=oversized_body, headers={header: "ok", "content-length": str(len(oversized_body))})
     webhook_handler = getattr(billing_router, endpoint)
     with pytest.raises(HTTPException) as exc:
         run_async(webhook_handler(req))
@@ -1148,6 +1174,12 @@ def test_payment_incident_webhook_rejects_replay_delivery(monkeypatch) -> None:
         def put_incident(self, row):
             self.rows.append(dict(row))
             return self.rows[-1]
+
+        def get_ticket_link(self, incident_id):
+            return None
+
+        def put_ticket_link(self, **kwargs):
+            return {}
 
     class _Service:
         def __init__(self, repository):
@@ -1238,7 +1270,15 @@ def test_payment_incident_webhook_parse_error_does_not_poison_replay_cache(monke
     object.__setattr__(S, "stripe_webhook_secret", "whsec_test")
     monkeypatch.setattr(billing_router, "ensure_stripe_configured", lambda: None)
     monkeypatch.setattr(billing_router, "resolve_provider_adapter", lambda _: adapter)
-    monkeypatch.setattr(billing_router, "DynamoPaymentIncidentRepository", lambda: _Repo())
+
+    class _RepoWithTicketLink(_Repo):
+        def get_ticket_link(self, incident_id):
+            return None
+
+        def put_ticket_link(self, **kwargs):
+            return {}
+
+    monkeypatch.setattr(billing_router, "DynamoPaymentIncidentRepository", lambda: _RepoWithTicketLink())
     monkeypatch.setattr(billing_router, "PaymentIncidentTransitionService", _Service)
 
     req = build_request(body=b"{\"id\":\"evt_parse_retry\"}", headers={"stripe-signature": "sig_parse_retry"})
@@ -1279,6 +1319,12 @@ def test_payment_incident_webhook_transition_error_does_not_poison_replay_cache(
         def put_incident(self, row):
             self.rows.append(dict(row))
             return self.rows[-1]
+
+        def get_ticket_link(self, incident_id):
+            return None
+
+        def put_ticket_link(self, **kwargs):
+            return {}
 
     class _FlakyService:
         calls = 0
@@ -1372,16 +1418,21 @@ def test_payment_incident_webhook_rollout_disabled_returns_ignored(monkeypatch) 
 
     monkeypatch.setattr(billing_router, "ensure_stripe_configured", lambda: None)
     monkeypatch.setattr(billing_router, "resolve_provider_adapter", lambda _: _Adapter())
+    orig_secret = S.stripe_webhook_secret
+    orig_rollout = S.payment_incidents_rollout_enabled
     object.__setattr__(S, "stripe_webhook_secret", "whsec_test")
     object.__setattr__(S, "payment_incidents_rollout_enabled", False)
-
-    req = build_request(body=b"{}", headers={"stripe-signature": "ok"})
-    first = run_async(billing_router.stripe_payment_incidents_webhook(req))
-    second = run_async(billing_router.stripe_payment_incidents_webhook(req))
-    assert first["ignored"] is True
-    assert first["reason"] == "rollout_disabled"
-    assert second["ignored"] is True
-    assert second["reason"] == "rollout_disabled"
+    try:
+        req = build_request(body=b"{}", headers={"stripe-signature": "ok"})
+        first = run_async(billing_router.stripe_payment_incidents_webhook(req))
+        second = run_async(billing_router.stripe_payment_incidents_webhook(req))
+        assert first["ignored"] is True
+        assert first["reason"] == "rollout_disabled"
+        assert second["ignored"] is True
+        assert second["reason"] == "rollout_disabled"
+    finally:
+        object.__setattr__(S, "stripe_webhook_secret", orig_secret)
+        object.__setattr__(S, "payment_incidents_rollout_enabled", orig_rollout)
 
 
 def test_payment_incident_webhook_shadow_mode_validates_without_writes(monkeypatch) -> None:
@@ -1406,17 +1457,22 @@ def test_payment_incident_webhook_shadow_mode_validates_without_writes(monkeypat
     audit_calls = []
     monkeypatch.setattr(billing_router, "resolve_provider_adapter", lambda _: _Adapter())
     monkeypatch.setattr(billing_router, "audit_event", lambda *a, **k: audit_calls.append((a, k)))
+    orig_rollout = S.payment_incidents_rollout_enabled
+    orig_shadow = S.payment_incidents_shadow_mode
     object.__setattr__(S, "payment_incidents_rollout_enabled", True)
     object.__setattr__(S, "payment_incidents_shadow_mode", True)
-
-    req = build_request(body=b"{}", headers={"paypal-transmission-sig": "ok"})
-    first = run_async(billing_router.paypal_payment_incidents_webhook(req))
-    second = run_async(billing_router.paypal_payment_incidents_webhook(req))
-    assert first["ignored"] is True
-    assert first["shadow_validated"] == 1
-    assert second["ignored"] is True
-    assert second["shadow_validated"] == 1
-    assert audit_calls
+    try:
+        req = build_request(body=b"{}", headers={"paypal-transmission-sig": "ok"})
+        first = run_async(billing_router.paypal_payment_incidents_webhook(req))
+        second = run_async(billing_router.paypal_payment_incidents_webhook(req))
+        assert first["ignored"] is True
+        assert first["shadow_validated"] == 1
+        assert second["ignored"] is True
+        assert second["shadow_validated"] == 1
+        assert audit_calls
+    finally:
+        object.__setattr__(S, "payment_incidents_rollout_enabled", orig_rollout)
+        object.__setattr__(S, "payment_incidents_shadow_mode", orig_shadow)
 
 def test_billing_scoped_admin_denied_for_cross_user_with_non_billing_scope(monkeypatch) -> None:
     fake_table = FakeTable()
@@ -1636,6 +1692,12 @@ def test_confirm_and_retry_persists_attempt(monkeypatch) -> None:
 
         def update_incident_status(self, *, incident_id: str, status: str, status_reason: str | None = None):
             return {"incident_id": incident_id, "status": status, "status_reason": status_reason}
+
+        def get_ticket_link(self, incident_id):
+            return None
+
+        def put_ticket_link(self, **kwargs):
+            return {}
 
     class _Adapter:
         def retry_payment(self, *, payment_reference: str, metadata: dict[str, Any] | None = None):

@@ -31,14 +31,27 @@ class _FakeTable:
         if ConditionExpression and "#status = :draft OR #status = :needs_more_info" in ConditionExpression:
             assert str(item.get("status") or "") in {"draft", "needs_more_info"}
 
-        assignments = UpdateExpression.replace("SET", "", 1).strip().split(",")
-        for assignment in assignments:
-            left, right = assignment.strip().split("=")
+        set_part = UpdateExpression.replace("SET", "", 1).strip()
+        remove_part = ""
+        if " REMOVE " in set_part:
+            set_part, _, remove_part = set_part.partition(" REMOVE ")
+        for assignment in set_part.split(","):
+            assignment = assignment.strip()
+            if not assignment:
+                continue
+            left, right = assignment.split("=")
             field = left.strip()
             token = right.strip()
             if ExpressionAttributeNames and field in ExpressionAttributeNames:
                 field = ExpressionAttributeNames[field]
-            item[field] = ExpressionAttributeValues[token]
+            item[field] = ExpressionAttributeValues.get(token, token)
+        if remove_part:
+            for attr_alias in remove_part.split(","):
+                attr_alias = attr_alias.strip()
+                if not attr_alias:
+                    continue
+                attr = (ExpressionAttributeNames or {}).get(attr_alias, attr_alias)
+                item.pop(attr, None)
         self.items[(Key["pk"], Key["sk"])] = item
 
     def query(self, **kwargs):
@@ -206,7 +219,7 @@ def test_submit_case_idempotent_retry_ignores_expected_version_after_submitted()
         case_id=created["kyc_case_id"],
         owner_sub="user_1",
         expected_version=0,
-        evidence_snapshot={"questionnaire": {}, "files": {}, "signature": {}},
+        evidence_snapshot={"questionnaire": {"response_session_id": "r1"}, "files": {"present_types": ["id_front", "selfie"]}, "signature": {"packet_id": "pkt_1"}},
     )
     assert replay is not None
     assert replay["status"] == "submitted"

@@ -277,6 +277,8 @@ class TestAdminUsageRoutes(unittest.TestCase):
 
     def test_admin_api_keys_rollout_state_defaults_registry_drift_threshold_fields(self):
         req = SimpleNamespace(
+            headers={},
+            client=None,
             app=SimpleNamespace(
                 state=SimpleNamespace(
                     api_key_registry_drift={

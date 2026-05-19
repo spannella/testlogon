@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import json
-import time
 from collections import Counter
 from time import time
 from typing import Any, Literal
@@ -268,7 +267,7 @@ def _ticket_list_item_from_jira(mirror: dict[str, Any], now: int) -> TicketListI
 
 
 def _wrap_ticket_list(payload: dict[str, Any]) -> TicketListEnvelope:
-    now = int(time.time())
+    now = int(time())
     items: list[TicketListItemOut] = []
     for item in payload.get("tickets", []):
         if str(item.get("source") or "internal") == "jira":
@@ -790,6 +789,7 @@ def list_tickets(
     owner_sub: str | None = None,
     cursor: str | None = None,
     limit: int = Query(default=25, ge=1, le=100),
+    request: Request = None,  # type: ignore[assignment]
     _ctx: dict[str, str] = Depends(require_ui_session),
     user: AuthenticatedUser = Depends(get_authenticated_user),
 ):

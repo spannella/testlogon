@@ -109,7 +109,7 @@ class TestCalendarSyncConvergenceE2E(unittest.TestCase):
                 }
                 return event_id
 
-            def _caldav_upsert(*, calendar_id: str, resource_url: str, ical_payload: str, if_match: str | None):
+            def _caldav_upsert(*, connection_id: str | None = None, calendar_id: str, resource_url: str, ical_payload: str, if_match: str | None):
                 uid = "uid-1"
                 current = remote_store.get(uid, {})
                 next_etag = "e2" if current.get("etag") == "e1" else "e3"

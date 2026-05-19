@@ -75,7 +75,7 @@ def _wire_state(state):
         state["packet"]["sent_at"] = "2026-01-01T00:05:00+00:00"
         return deepcopy(state["packet"])
 
-    def _fill_field(*, packet_id: str, field_id: str, value: str, filled_by_signer_id: str):
+    def _fill_field(*, packet_id: str, field_id: str, value: str, filled_by_signer_id: str, **kwargs):
         for f in state["fields"]:
             if f["packet_id"] == packet_id and f["field_id"] == field_id:
                 f["value"] = value
@@ -84,7 +84,7 @@ def _wire_state(state):
                 return deepcopy(f)
         raise AssertionError("field not found")
 
-    def _mark_signer_completed(packet_id: str, signer_id: str):
+    def _mark_signer_completed(packet_id: str, signer_id: str, **kwargs):
         signer = _get_signer(packet_id, signer_id)
         signer["status"] = "completed"
         signer["completed_at"] = "2026-01-01T00:07:00+00:00"
@@ -141,6 +141,7 @@ def test_integration_single_signer_completion_flow():
         patch.object(routes, "mark_packet_completed", side_effect=fx["mark_completed"]),
         patch.object(routes, "mark_packet_partially_signed", side_effect=fx["mark_partial"]),
         patch.object(routes, "mark_completion_notices_sent", return_value=True),
+        patch.object(routes, "_signer_requires_legal_notice_ack", return_value=False),
     ):
         send = routes.send_signature_packet("sp_1", user_sub="owner-1")
         assert send["status"] == "sent"
@@ -195,6 +196,7 @@ def test_integration_multi_signer_completion_gate_blocks_early_completion():
         patch.object(routes, "append_packet_event", side_effect=fx["append"]),
         patch.object(routes, "list_packet_signers", side_effect=fx["list_signers"]),
         patch.object(routes, "mark_completion_notices_sent", return_value=True),
+        patch.object(routes, "_signer_requires_legal_notice_ack", return_value=False),
     ):
         first = routes.mark_signature_packet_done("sp_1", user_sub="signer-1")
         assert first["packet_status"] == "partially_signed"

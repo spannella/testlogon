@@ -19,12 +19,12 @@ def test_reconcile_detects_drift_and_transitions_after_sla() -> None:
         aws_channel_arn=None,
         provider_state_snapshot={"drift_first_detected_at": 1_000},
     )
-    provider = SimpleNamespace(status=lambda _s: SimpleNamespace(state="stopped"))
+    provider = SimpleNamespace(name="local", status=lambda _s: SimpleNamespace(state="stopped"))
     fake_settings = SimpleNamespace(broadcast_drift_sla_seconds=10, broadcast_stale_session_seconds=300)
     with (
         patch.object(broadcast_reconciler, "S", fake_settings),
         patch.object(broadcast_reconciler, "get_broadcast_provider", return_value=provider),
-        patch.object(broadcast_reconciler, "list_sessions_by_status", return_value={"items": [_session("s1", "live")]}),
+        patch.object(broadcast_reconciler, "list_sessions_by_status", side_effect=lambda status, **kw: {"items": [_session("s1", "live")]} if status == "live" else {"items": []}),
         patch.object(broadcast_reconciler, "get_output", return_value=output),
         patch.object(broadcast_reconciler, "put_output"),
         patch.object(broadcast_reconciler, "transition_session_status") as transition,
@@ -44,12 +44,12 @@ def test_reconcile_marks_stale_sessions() -> None:
         aws_channel_arn=None,
         provider_state_snapshot={},
     )
-    provider = SimpleNamespace(status=lambda _s: SimpleNamespace(state="provisioning"))
+    provider = SimpleNamespace(name="local", status=lambda _s: SimpleNamespace(state="provisioning"))
     fake_settings = SimpleNamespace(broadcast_drift_sla_seconds=120, broadcast_stale_session_seconds=60)
     with (
         patch.object(broadcast_reconciler, "S", fake_settings),
         patch.object(broadcast_reconciler, "get_broadcast_provider", return_value=provider),
-        patch.object(broadcast_reconciler, "list_sessions_by_status", return_value={"items": [_session("s2", "provisioning", "2026-03-01T00:00:00+00:00")]}),
+        patch.object(broadcast_reconciler, "list_sessions_by_status", side_effect=lambda status, **kw: {"items": [_session("s2", "provisioning", "2026-03-01T00:00:00+00:00")]} if status == "provisioning" else {"items": []}),
         patch.object(broadcast_reconciler, "get_output", return_value=output),
         patch.object(broadcast_reconciler, "put_output"),
         patch.object(broadcast_reconciler, "transition_session_status") as transition,

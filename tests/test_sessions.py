@@ -96,7 +96,7 @@ class TestRequireUiSession(unittest.TestCase):
                 sessions_service.require_ui_session(self.request, user_sub="user", x_session_id="sid")
             )
 
-        self.assertEqual(result, {"user_sub": "user", "session_id": "sid", "role": "user"})
+        self.assertEqual(result, {"user_sub": "user", "session_id": "sid", "role": "user", "ip": ""})
         self.assertEqual(self.request.state.user_sub, "user")
         sessions_table.update_item.assert_called_once()
 

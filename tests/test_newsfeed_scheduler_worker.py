@@ -361,15 +361,20 @@ def test_process_due_scheduled_posts_records_alerts_for_error_lag_and_oldest_due
 
 
 def test_process_due_scheduled_posts_is_noop_when_worker_flag_disabled(monkeypatch) -> None:
-    monkeypatch.setattr(svc.S, "newsfeed_scheduling_worker_enabled", False)
-    out = svc.process_due_scheduled_posts(now_ts=120, page_limit=10, max_batches=1)
+    original = svc.S.newsfeed_scheduling_worker_enabled
+    object.__setattr__(svc.S, "newsfeed_scheduling_worker_enabled", False)
+    try:
+        out = svc.process_due_scheduled_posts(now_ts=120, page_limit=10, max_batches=1)
+    finally:
+        object.__setattr__(svc.S, "newsfeed_scheduling_worker_enabled", original)
     assert out["worker_enabled"] is False
     assert out["scanned"] == 0
     assert out["published"] == 0
 
 
 def test_process_due_scheduled_posts_records_disabled_run_outcome(monkeypatch) -> None:
-    monkeypatch.setattr(svc.S, "newsfeed_scheduling_worker_enabled", False)
+    original = svc.S.newsfeed_scheduling_worker_enabled
+    object.__setattr__(svc.S, "newsfeed_scheduling_worker_enabled", False)
     run_outcomes = []
     durations = []
     heartbeats = []
@@ -377,7 +382,10 @@ def test_process_due_scheduled_posts_records_disabled_run_outcome(monkeypatch) -
     monkeypatch.setattr(svc, "record_newsfeed_schedule_run_duration", lambda **kwargs: durations.append(kwargs["elapsed_seconds"]))
     monkeypatch.setattr(svc, "set_newsfeed_schedule_last_run", lambda **kwargs: heartbeats.append(kwargs["unix_seconds"]))
 
-    out = svc.process_due_scheduled_posts(now_ts=120, page_limit=10, max_batches=1)
+    try:
+        out = svc.process_due_scheduled_posts(now_ts=120, page_limit=10, max_batches=1)
+    finally:
+        object.__setattr__(svc.S, "newsfeed_scheduling_worker_enabled", original)
 
     assert out["worker_enabled"] is False
     assert out["run_exception"] == 0
@@ -389,7 +397,8 @@ def test_process_due_scheduled_posts_records_disabled_run_outcome(monkeypatch) -
 
 
 def test_process_due_scheduled_posts_recovers_from_unhandled_run_exception(monkeypatch) -> None:
-    monkeypatch.setattr(svc.S, "newsfeed_scheduling_worker_enabled", True)
+    original = svc.S.newsfeed_scheduling_worker_enabled
+    object.__setattr__(svc.S, "newsfeed_scheduling_worker_enabled", True)
     monkeypatch.setattr(svc, "_query_due_backlog", lambda **kwargs: 0)
     monkeypatch.setattr(svc, "_query_due_posts", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
     monkeypatch.setattr(svc, "set_newsfeed_schedule_backlog", lambda **kwargs: None)
@@ -401,7 +410,10 @@ def test_process_due_scheduled_posts_recovers_from_unhandled_run_exception(monke
     monkeypatch.setattr(svc, "record_newsfeed_schedule_run_duration", lambda **kwargs: durations.append(kwargs["elapsed_seconds"]))
     monkeypatch.setattr(svc, "set_newsfeed_schedule_last_run", lambda **kwargs: heartbeats.append(kwargs["unix_seconds"]))
 
-    out = svc.process_due_scheduled_posts(now_ts=120, page_limit=10, max_batches=1)
+    try:
+        out = svc.process_due_scheduled_posts(now_ts=120, page_limit=10, max_batches=1)
+    finally:
+        object.__setattr__(svc.S, "newsfeed_scheduling_worker_enabled", original)
 
     assert out["worker_enabled"] is True
     assert out["run_exception"] == 1

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -11,7 +12,7 @@ def test_load_validation_script_generates_report_and_targets() -> None:
         out_path.unlink()
 
     cmd = [
-        "python",
+        sys.executable,
         "scripts/load/calendar_sync_resilience_load.py",
         "--events",
         "500",

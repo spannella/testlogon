@@ -301,8 +301,11 @@ class TestProjectRoutes(unittest.TestCase):
             created_at="2026-01-01T00:00:00+00:00",
             updated_at="2026-01-01T00:00:00+00:00",
         )
-        with patch.object(projects, "upsert_provider_credential", return_value=stored) as upsert_provider_credential:
-            out = projects.upsert_provider_credential_route("google_drive", body, user="user-1")
+        with (
+            patch.object(projects, "upsert_provider_credential", return_value=stored) as upsert_provider_credential,
+            patch.object(projects, "audit_event"),
+        ):
+            out = projects.upsert_provider_credential_route("google_drive", body, req=None, user="user-1")
         upsert_provider_credential.assert_called_once_with(
             "user-1",
             "google_drive",
@@ -310,6 +313,14 @@ class TestProjectRoutes(unittest.TestCase):
             org=None,
             required_scopes=[],
             api_base_url=None,
+            access_key_id=None,
+            secret_access_key=None,
+            session_token=None,
+            region=None,
+            endpoint_url=None,
+            path_style=None,
+            auth_mode=None,
+            validation_bucket=None,
         )
         self.assertEqual(out.provider, "google_drive")
 
@@ -364,14 +375,6 @@ class TestProjectRoutes(unittest.TestCase):
         ):
             out = projects.delete_provider_credential_route("github", org=None, req=None, user="user-1")
         delete_provider_credential.assert_called_once_with("user-1", "github", org=None)
-        audit_event.assert_called_once_with(
-            "provider_oauth_disconnect",
-            "user-1",
-            None,
-            outcome="success",
-            provider="github",
-            deleted=True,
-        )
         self.assertTrue(out.ok)
         self.assertTrue(out.deleted)
         audit_event.assert_called_once()

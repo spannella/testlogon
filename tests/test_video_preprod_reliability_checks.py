@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -21,7 +22,7 @@ def test_preprod_reliability_checks_pass_for_baseline(tmp_path: Path) -> None:
     report = tmp_path / "report.json"
     _write_report(report, _passing_payload())
 
-    subprocess.run(["python", "scripts/video/preprod_reliability_checks.py", "--report", str(report)], check=True)
+    subprocess.run([sys.executable, "scripts/video/preprod_reliability_checks.py", "--report", str(report)], check=True)
 
 
 def test_preprod_reliability_checks_fail_on_threshold_breach(tmp_path: Path) -> None:
@@ -31,7 +32,7 @@ def test_preprod_reliability_checks_fail_on_threshold_breach(tmp_path: Path) -> 
     _write_report(report, payload)
 
     result = subprocess.run(
-        ["python", "scripts/video/preprod_reliability_checks.py", "--report", str(report)],
+        [sys.executable, "scripts/video/preprod_reliability_checks.py", "--report", str(report)],
         capture_output=True,
         text=True,
     )
@@ -44,7 +45,7 @@ def test_preprod_reliability_checks_fail_on_missing_section(tmp_path: Path) -> N
     _write_report(report, {"input_failover": {"recover_ms": 1, "max_rebuffer_ms": 1, "dropped_segments": 0}})
 
     result = subprocess.run(
-        ["python", "scripts/video/preprod_reliability_checks.py", "--report", str(report)],
+        [sys.executable, "scripts/video/preprod_reliability_checks.py", "--report", str(report)],
         capture_output=True,
         text=True,
     )

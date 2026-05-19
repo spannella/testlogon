@@ -9,6 +9,7 @@ from app.main import create_app
 def test_create_app_registry_drift_threshold_state_and_warning() -> None:
     with (
         patch("app.main.validate_api_key_rollout_settings"),
+        patch("app.main.is_route_registered_or_exempt", return_value=True),
         patch(
             "app.main.summarize_registry_drift",
             return_value={
@@ -36,6 +37,7 @@ def test_create_app_registry_drift_threshold_state_and_warning() -> None:
 def test_create_app_registry_drift_threshold_not_exceeded() -> None:
     with (
         patch("app.main.validate_api_key_rollout_settings"),
+        patch("app.main.is_route_registered_or_exempt", return_value=True),
         patch(
             "app.main.summarize_registry_drift",
             return_value={

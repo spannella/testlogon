@@ -24,14 +24,14 @@ def test_field_geometry_validation_rejects_page_zero():
 
 
 def test_normalize_field_value_date_and_signature_constraints():
-    assert routes._normalize_field_value("date", "2026-01-31") == "2026-01-31"
+    assert routes._normalize_field_value("date", routes.SignaturePacketFieldFillIn(value="2026-01-31"))["value"] == "2026-01-31"
 
     with pytest.raises(HTTPException) as empty_sig:
-        routes._normalize_field_value("signature", " ")
+        routes._normalize_field_value("signature", routes.SignaturePacketFieldFillIn(value=" "))
     assert empty_sig.value.detail["code"] == "empty_signature_value"
 
     with pytest.raises(HTTPException) as bad_date:
-        routes._normalize_field_value("date", "31-01-2026")
+        routes._normalize_field_value("date", routes.SignaturePacketFieldFillIn(value="31-01-2026"))
     assert bad_date.value.detail["code"] == "invalid_date_format"
 
 

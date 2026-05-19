@@ -62,7 +62,6 @@ class _FakeTable:
 
 
 _FAKE_TABLE = _FakeTable()
-questionnaires.REPO._table = _FAKE_TABLE
 
 
 def _build_client(user_sub: str) -> TestClient:
@@ -87,6 +86,7 @@ def _build_anon_client() -> TestClient:
 
 def setup_function():
     _FAKE_TABLE.reset()
+    questionnaires.REPO._table = _FAKE_TABLE
 
 
 def test_owner_can_create_read_update_archive_draft() -> None:

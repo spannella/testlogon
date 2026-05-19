@@ -288,17 +288,6 @@ FILEMGR_MOUNT_UPLOAD_METHOD = Counter(
     "Mounted provider upload method usage and outcome",
     ["provider", "method", "outcome"],
 )
-FILEMGR_MOUNT_OPERATION_LATENCY = Histogram(
-    "filemgr_mount_operation_duration_seconds",
-    "Mounted file-manager operation latency in seconds",
-    ["provider", "operation"],
-    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
-)
-FILEMGR_MOUNT_BYTES = Counter(
-    "filemgr_mount_transfer_bytes_total",
-    "Mounted file-manager transfer bytes",
-    ["provider", "direction", "operation"],
-)
 FILEMGR_MOUNT_API_ERRORS = Counter(
     "filemgr_mount_api_errors_total",
     "Mounted provider API errors",
@@ -1542,7 +1531,10 @@ def record_filemgr_bytes(direction: str, operation: str, nbytes: int) -> None:
 
 
 
-def record_filemgr_mount_operation_latency(*, provider: str, mode: str, operation: str, mount_id_hash: str, elapsed_seconds: float) -> None:
+def record_filemgr_mount_operation_latency(
+    provider: str = "", operation: str = "", elapsed_seconds: float = 0.0,
+    *, mode: str = "unknown", mount_id_hash: str = "unknown",
+) -> None:
     FILEMGR_MOUNT_OPERATION_LATENCY.labels(
         provider=(provider or "unknown").lower(),
         mode=(mode or "unknown").lower(),
@@ -1551,8 +1543,11 @@ def record_filemgr_mount_operation_latency(*, provider: str, mode: str, operatio
     ).observe(max(0.0, float(elapsed_seconds)))
 
 
-def record_filemgr_mount_bytes(*, provider: str, mode: str, operation: str, direction: str, mount_id_hash: str, nbytes: int) -> None:
-    if nbytes <= 0:
+def record_filemgr_mount_bytes(
+    provider: str = "", direction: str = "", operation: str = "", nbytes: int = 0,
+    *, mode: str = "unknown", mount_id_hash: str = "unknown",
+) -> None:
+    if int(nbytes or 0) <= 0:
         return
     FILEMGR_MOUNT_BYTES.labels(
         provider=(provider or "unknown").lower(),
@@ -2216,21 +2211,6 @@ def record_filemgr_mount_upload_method(provider: str, method: str, outcome: str)
     FILEMGR_MOUNT_UPLOAD_METHOD.labels(provider=provider, method=method, outcome=outcome).inc()
 
 
-def record_filemgr_mount_operation_latency(provider: str, operation: str, elapsed_seconds: float) -> None:
-    FILEMGR_MOUNT_OPERATION_LATENCY.labels(
-        provider=(provider or "unknown").lower(),
-        operation=(operation or "unknown").lower(),
-    ).observe(max(0.0, float(elapsed_seconds)))
-
-
-def record_filemgr_mount_bytes(provider: str, direction: str, operation: str, nbytes: int) -> None:
-    if int(nbytes or 0) <= 0:
-        return
-    FILEMGR_MOUNT_BYTES.labels(
-        provider=(provider or "unknown").lower(),
-        direction=(direction or "unknown").lower(),
-        operation=(operation or "unknown").lower(),
-    ).inc(float(nbytes))
 
 
 def record_filemgr_mount_api_error(provider: str, operation: str, status_code: int | str, reason: str) -> None:

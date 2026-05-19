@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -49,7 +50,7 @@ def test_ci_validation_script_passes_for_valid_artifacts(tmp_path: Path) -> None
 
     subprocess.run(
         [
-            "python",
+            sys.executable,
             "scripts/video/ci_validate_video_artifacts.py",
             "--root",
             str(tmp_path),
@@ -66,7 +67,7 @@ def test_ci_validation_script_fails_on_missing_rendition(tmp_path: Path) -> None
     master.write_text("#EXTM3U\n1080p/index.m3u8\n720p/index.m3u8\n540p/index.m3u8\n", encoding="utf-8")
 
     result = subprocess.run(
-        ["python", "scripts/video/ci_validate_video_artifacts.py", "--root", str(tmp_path)],
+        [sys.executable, "scripts/video/ci_validate_video_artifacts.py", "--root", str(tmp_path)],
         capture_output=True,
         text=True,
     )
@@ -80,7 +81,7 @@ def test_ci_validation_script_fails_on_segment_continuity(tmp_path: Path) -> Non
     broken.write_text("#EXTM3U\nseg_00001.ts\nseg_00003.ts\n", encoding="utf-8")
 
     result = subprocess.run(
-        ["python", "scripts/video/ci_validate_video_artifacts.py", "--root", str(tmp_path)],
+        [sys.executable, "scripts/video/ci_validate_video_artifacts.py", "--root", str(tmp_path)],
         capture_output=True,
         text=True,
     )
@@ -92,7 +93,7 @@ def test_ci_validation_script_fails_on_missing_watermark_snapshot(tmp_path: Path
     _write_valid_artifacts(tmp_path)
     result = subprocess.run(
         [
-            "python",
+            sys.executable,
             "scripts/video/ci_validate_video_artifacts.py",
             "--root",
             str(tmp_path),

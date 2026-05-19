@@ -119,11 +119,13 @@ def test_immediate_campaign_integration_create_worker_status_with_partial_failur
 
 
 def test_scheduled_campaign_integration_pre_due_and_post_due_dispatch() -> None:
+    import time as _time
+    _future_ts = int(_time.time()) + 600
     req = MassMessageCreateCampaignRequest(
         conversation_ids=["c1"],
         content={"kind": "text", "text": "scheduled hello"},
         mode="scheduled",
-        send_at=1760001000,
+        send_at=_future_ts,
         idempotency_key="idem-int-2",
     )
     convo_table = MagicMock()
@@ -134,14 +136,14 @@ def test_scheduled_campaign_integration_pre_due_and_post_due_dispatch() -> None:
         "sender_id": "u1",
         "mode": "scheduled",
         "status": "scheduled",
-        "send_at": 1760001000,
+        "send_at": _future_ts,
         "total": 0,
         "queued": 0,
         "sent": 0,
         "failed": 0,
         "cancelled": 0,
-        "created_at": 1760000000,
-        "updated_at": 1760000000,
+        "created_at": _future_ts - 1000,
+        "updated_at": _future_ts - 1000,
     }
 
     def _create_or_get(**kwargs):
@@ -179,8 +181,8 @@ def test_scheduled_campaign_integration_pre_due_and_post_due_dispatch() -> None:
         patch.object(messaging.threading, "Thread") as thread_cls,
     ):
         created = messaging.create_mass_message_campaign(req, user_id="u1")
-        pre_due = messaging.dispatch_due_scheduled_mass_campaigns(now_ts_value=1760000900, limit=10)
-        post_due = messaging.dispatch_due_scheduled_mass_campaigns(now_ts_value=1760001001, limit=10)
+        pre_due = messaging.dispatch_due_scheduled_mass_campaigns(now_ts_value=_future_ts - 100, limit=10)
+        post_due = messaging.dispatch_due_scheduled_mass_campaigns(now_ts_value=_future_ts + 1, limit=10)
 
     assert created.mode == "scheduled"
     assert pre_due == {"scanned": 0, "claimed": 0, "skipped": 0}

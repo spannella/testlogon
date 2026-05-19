@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from unittest.mock import patch
 
+import pytest
 from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 
@@ -13,7 +14,15 @@ from app.main import create_app
 from app.services.sessions import require_ui_session
 from app.services.tickets import STORE
 from app.services import api_key_auth_dependency
+from app.routers import tickets as tickets_router
 import app.main as main_app
+
+
+@pytest.fixture(autouse=True)
+def _patch_sync_incident():
+    """Prevent sync_incident_from_ticket from hitting real DynamoDB."""
+    with patch.object(tickets_router, "sync_incident_from_ticket"):
+        yield
 
 
 
@@ -131,11 +140,26 @@ class FakeTicketTable:
             version_attr = names["#version"]
             if item.get(version_attr) != values[":expected_version"]:
                 raise ClientError({"Error": {"Code": "ConditionalCheckFailedException", "Message": "stale"}}, "UpdateItem")
-        if UpdateExpression.startswith("SET "):
-            for assignment in UpdateExpression[4:].split(","):
+        set_part = UpdateExpression
+        remove_part = ""
+        for kw in (" REMOVE ", " ADD ", " DELETE "):
+            if kw in set_part:
+                set_part, _, rest = set_part.partition(kw)
+                if kw.strip() == "REMOVE":
+                    remove_part = rest
+                break
+        if set_part.startswith("SET "):
+            for assignment in set_part[4:].split(","):
                 left, right = assignment.strip().split(" = ", 1)
                 attr = names.get(left, left)
-                item[attr] = values[right]
+                item[attr] = values.get(right, right)
+        if remove_part:
+            for attr_alias in remove_part.split(","):
+                attr_alias = attr_alias.strip()
+                if not attr_alias:
+                    continue
+                attr = names.get(attr_alias, attr_alias)
+                item.pop(attr, None)
         self.items[(Key["pk"], Key["sk"])] = item
         return {}
 
@@ -182,7 +206,7 @@ def _build_api_key_client(monkeypatch, *, key_id: str, owner_sub: str, capabilit
         "enforce_api_package_entitlement_pre_request",
         lambda _request: {},
     )
-    return TestClient(app)
+    return TestClient(app, headers={"x-api-key": f"{key_id}:test-secret"})
 
 
 def setup_function():
@@ -252,7 +276,7 @@ def test_api_key_ticket_lifecycle_enforces_write_and_admin_scopes(monkeypatch):
     assert status.status_code == 200
     assert status.json()["ticket"]["status"] == "done"
 
-    listed = admin.get("/tickets")
+    listed = admin.get("/tickets", params={"status": "done"})
     assert listed.status_code == 200
     assert any(item["ticket_id"] == ticket_id for item in listed.json()["items"])
 
@@ -1073,8 +1097,8 @@ def test_admin_can_list_jira_source_with_filters_and_freshness_metadata(monkeypa
 
 def test_unified_listing_is_stably_sorted_and_paginates(monkeypatch):
     admin_client = _build_client(_user("admin-1", Role.ADMIN))
-    t1 = _build_client(_user("user-1", Role.USER)).post("/tickets", json={"subject": "T1", "description": "d"}).json()["ticket"]
-    t2 = _build_client(_user("user-1", Role.USER)).post("/tickets", json={"subject": "T2", "description": "d"}).json()["ticket"]
+    t1 = _build_client(_user("user-1", Role.USER)).post("/tickets", json={"subject": "Ticket T1", "description": "d"}).json()["ticket"]
+    t2 = _build_client(_user("user-1", Role.USER)).post("/tickets", json={"subject": "Ticket T2", "description": "d"}).json()["ticket"]
     assert t1["ticket_id"] != t2["ticket_id"]
 
     mirrors = [

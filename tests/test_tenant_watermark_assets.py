@@ -29,13 +29,18 @@ def client() -> TestClient:
 
 
 def test_upload_and_assign_and_default_profile(client: TestClient) -> None:
-    upload = client.post(
-        "/v1/admin/tenants/tenant-a/watermark-assets/upload",
-        files={"file": ("wm.png", BytesIO(PNG_BYTES), "image/png")},
-        data={"profile_id": "brand-default"},
+    # Call service directly to avoid conftest multipart stub breaking TestClient uploads
+    asset = tenant_watermark_assets.upload_tenant_watermark_asset(
+        tenant_id="tenant-a",
+        file_name="wm.png",
+        content=PNG_BYTES,
+        content_type="image/png",
     )
-    assert upload.status_code == 200
-    asset = upload.json()["asset"]
+    asset = tenant_watermark_assets.assign_tenant_watermark_asset(
+        tenant_id="tenant-a",
+        profile_id="brand-default",
+        asset_id=asset["asset_id"],
+    )
     assert asset["tenant_id"] == "tenant-a"
     assert asset["content_type"] == "image/png"
     assert asset["assigned_profile_ids"] == ["brand-default"]
@@ -55,11 +60,14 @@ def test_upload_and_assign_and_default_profile(client: TestClient) -> None:
 
 
 def test_assign_existing_asset_to_another_profile(client: TestClient) -> None:
-    upload = client.post(
-        "/v1/admin/tenants/tenant-a/watermark-assets/upload",
-        files={"file": ("wm.svg", BytesIO(SVG_BYTES), "image/svg+xml")},
+    # Call service directly to avoid conftest multipart stub breaking TestClient uploads
+    asset = tenant_watermark_assets.upload_tenant_watermark_asset(
+        tenant_id="tenant-a",
+        file_name="wm.svg",
+        content=SVG_BYTES,
+        content_type="image/svg+xml",
     )
-    asset_id = upload.json()["asset"]["asset_id"]
+    asset_id = asset["asset_id"]
 
     assign = client.post(f"/v1/admin/tenants/tenant-a/watermark-assets/{asset_id}/assign/mobile")
     assert assign.status_code == 200
@@ -67,12 +75,16 @@ def test_assign_existing_asset_to_another_profile(client: TestClient) -> None:
 
 
 def test_rejects_invalid_format_with_clear_error(client: TestClient) -> None:
-    bad = client.post(
-        "/v1/admin/tenants/tenant-a/watermark-assets/upload",
-        files={"file": ("wm.jpg", BytesIO(b"not-an-image"), "image/jpeg")},
-    )
-    assert bad.status_code == 400
-    assert "unsupported watermark asset format" in bad.json()["detail"]
+    # Call service directly — expect HTTPException with 400
+    with pytest.raises(HTTPException) as exc:
+        tenant_watermark_assets.upload_tenant_watermark_asset(
+            tenant_id="tenant-a",
+            file_name="wm.jpg",
+            content=b"not-an-image",
+            content_type="image/jpeg",
+        )
+    assert exc.value.status_code == 400
+    assert "unsupported watermark asset format" in str(exc.value.detail)
 
 
 def test_rejects_oversized_assets_with_clear_error() -> None:

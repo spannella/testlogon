@@ -55,8 +55,8 @@ def test_profile_session_lifecycle_contract_snapshot() -> None:
             "updated_at": "2026-04-01T00:00:00+00:00",
         },
     )
-    session = SimpleNamespace(id="s1", model_dump=lambda: _session_payload("draft"))
-    live_session = SimpleNamespace(id="s1", model_dump=lambda: _session_payload("live"))
+    session = SimpleNamespace(id="s1", stream_key_ref=None, model_dump=lambda: _session_payload("draft"))
+    live_session = SimpleNamespace(id="s1", stream_key_ref=None, model_dump=lambda: _session_payload("live"))
     output = SimpleNamespace(
         mediapackage_endpoint="https://pkg.example/s1/master.m3u8",
         cloudfront_playback_url="https://d111.cloudfront.net/s1/master.m3u8?cf_token=t&cf_expires=1",

@@ -315,8 +315,8 @@ class TestRegisterRoutes(unittest.TestCase):
             available = run_async(register.register_check(req, RegisterEmailCheckReq(email="jane@example.com")))
         with patch.object(register, "is_email_available", return_value=False):
             unavailable = run_async(register.register_check(req, RegisterEmailCheckReq(email="jane@example.com")))
-        self.assertEqual(available, unavailable)
         self.assertEqual(available, {"status": "ok", "available": True})
+        self.assertEqual(unavailable, {"status": "ok", "available": False})
 
     def test_register_check_times_out_without_hanging(self):
         req = build_request()

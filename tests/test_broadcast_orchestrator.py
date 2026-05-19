@@ -9,11 +9,11 @@ from app.services import broadcast_orchestrator
 
 
 def _session(status: str = "draft") -> SimpleNamespace:
-    return SimpleNamespace(id="s1", status=status)
+    return SimpleNamespace(id="s1", status=status, profile_id="p1", stream_key_ref=None)
 
 
 def test_start_session_provisioning_failure_transitions_to_error() -> None:
-    provider = SimpleNamespace(provision=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("aws down")))
+    provider = SimpleNamespace(name="local", provision=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("aws down")))
     with (
         patch.object(broadcast_orchestrator, "get_broadcast_provider", return_value=provider),
         patch.object(broadcast_orchestrator, "get_session", return_value=_session("draft")),
