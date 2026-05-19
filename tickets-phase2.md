@@ -2352,3 +2352,122 @@
 **Acceptance criteria:**
 - Monthly review template and owners are documented.
 - Action items from each review are tracked to closure.
+### LOT-101: Introduce explicit lottery participation endpoint contract
+**Description:** Add a dedicated `POST /posts/{post_id}/lottery/enter` API contract (request/response schemas, route docs, error model) instead of overloading generic tipping behavior.
+**Acceptance criteria:**
+- Endpoint contract clearly separates lottery entry from fixed-price unlock and generic tips.
+- API docs and typed client contracts include success, rejected, and already-won response shapes.
+
+### LOT-102: Implement atomic lottery entry writes with idempotency keys
+**Description:** Add idempotent participation writes that prevent duplicate entry charges and duplicate participation records during retries/timeouts.
+**Acceptance criteria:**
+- Replayed requests with same idempotency key do not create duplicate charges or entries.
+- Storage and ledger state remain consistent under retry storms.
+
+### LOT-103: Build quiet-period resolver service
+**Description:** Create a scheduled resolver that finalizes `open` lotteries after quiet period expiry and determines winner deterministically.
+**Acceptance criteria:**
+- Resolver transitions qualifying posts from `open` to `won` using deterministic ordering rules.
+- Resolver is safe to run concurrently across multiple workers.
+
+### LOT-104: Enforce single-winner invariants with conditional updates
+**Description:** Add strict DynamoDB conditional expressions/version checks so only one winner can ever be committed for a post.
+**Acceptance criteria:**
+- Race conditions cannot produce multiple winners.
+- Conflicting updates produce controlled conflict outcomes and retry guidance.
+
+### LOT-105: Add loser/winner settlement policy and ledger mapping
+**Description:** Define and implement explicit settlement semantics for participant funds and creator payouts (winner only unlocks, losers pay tip).
+**Acceptance criteria:**
+- Ledger entries clearly identify lottery participation, lottery win unlock, and payout settlement reasons.
+- Finance reconciliation checks can distinguish lottery events from fixed-price unlock events.
+
+### LOT-106: Add anti-fraud controls for lottery participation
+**Description:** Add protections against self-dealing, bot bursts, and abusive repeated entries (velocity limits, anomaly flags, payment risk signals).
+**Acceptance criteria:**
+- Per-user and per-post rate limits are enforced on lottery entry endpoints.
+- Suspicious patterns emit structured security events for moderation/risk workflows.
+
+### LOT-107: Add moderation and policy enforcement hooks for lottery posts
+**Description:** Ensure moderation actions (post removal, user suspension, content restrictions) halt participation and resolution safely.
+**Acceptance criteria:**
+- Removed/suspended content cannot continue accepting lottery entries.
+- Resolver skips or closes moderated lotteries with auditable state transitions.
+
+### LOT-108: Add entitlement/subscription gating parity for lottery visibility
+**Description:** Ensure lottery-locked posts respect creator access policies in every read path (feed, post detail, attachments, comments).
+**Acceptance criteria:**
+- Access checks for lottery posts match fixed-price policy behavior.
+- Unauthorized users never receive unlockable lottery details that bypass entitlement gates.
+
+### LOT-109: Add complete API lifecycle integration tests (state machine)
+**Description:** Build integration tests that exercise full lifecycle: create → entries → contested updates → quiet expiry → winner commit → read consistency.
+**Acceptance criteria:**
+- Tests assert state transitions and invariants at each lifecycle stage.
+- Tests include retry/race scenarios to validate idempotency and conditional write handling.
+
+### LOT-110: Add deterministic time-travel test utility for quiet-period logic
+**Description:** Introduce a controllable clock abstraction so resolver and lifecycle tests avoid wall-clock sleeps.
+**Acceptance criteria:**
+- Resolver tests run with deterministic clock control.
+- CI runtime and flakiness are improved versus sleep-based timing.
+
+### LOT-111: Add frontend composer controls for lottery configuration
+**Description:** Implement post composer UI to select lock strategy (`fixed_price` vs `tip_lottery`) and enter lottery-specific parameters.
+**Acceptance criteria:**
+- Users can configure tip amount and quiet period with inline validation and helpful errors.
+- Composer respects feature flag and hides lottery controls when disabled.
+
+### LOT-112: Add participant-facing lottery status UX
+**Description:** Expand post card/detail UX for states (`open`, `won`, `closed`) including who is leading, time remaining, and final winner context.
+**Acceptance criteria:**
+- UI updates status text and CTAs based on current server-provided lottery state.
+- Missing/legacy fields degrade gracefully without runtime errors.
+
+### LOT-113: Add frontend polling/SSE updates for live lottery state
+**Description:** Wire feed/post detail to receive near-real-time lottery state changes via SSE/polling refresh strategy.
+**Acceptance criteria:**
+- UI refreshes when lottery state changes (new entry, winner selected, closed).
+- Refresh strategy has bounded request volume and backoff behavior.
+
+### LOT-114: Add Playwright multi-user contested winner scenarios
+**Description:** Expand E2E tests to include two+ participants competing within quiet period and verifying only one winner unlock outcome.
+**Acceptance criteria:**
+- E2E validates contested case (new entrant before expiry) and uncontested case (quiet-period winner).
+- Existing fixed-price unlock E2E paths remain green.
+
+### LOT-115: Add production dashboards and SLOs for lottery flows
+**Description:** Build dashboards/SLOs for adoption and reliability: creation volume, entry success, resolver lag, invalid config rejects, winner finalization latency.
+**Acceptance criteria:**
+- Metrics are split by lock strategy and environment (dev/stage/prod).
+- SLOs and alert thresholds are defined for resolver lag and elevated error rates.
+
+### LOT-116: Add structured tracing/correlation across create→entry→resolve
+**Description:** Propagate correlation IDs through API logs, payment calls, resolver actions, and notifications for incident debugging.
+**Acceptance criteria:**
+- Engineers can reconstruct complete lifecycle for a post using a single correlation key.
+- Tracing fields are present in both success and failure logs.
+
+### LOT-117: Add performance and cost benchmark suite
+**Description:** Benchmark resolver throughput, hot-partition risk, and DynamoDB RCU/WCU cost under production-like lottery traffic.
+**Acceptance criteria:**
+- Benchmark report includes scaling limits and projected monthly cost at target traffic.
+- Actionable optimization tasks are captured for bottlenecks.
+
+### LOT-118: Add security threat-model extension and penetration checklist
+**Description:** Extend threat model for lottery-specific abuse (economic manipulation, replay, race exploitation, payment spoofing) and define validation checklist.
+**Acceptance criteria:**
+- Threat scenarios are documented with mapped controls and residual risk ratings.
+- Security checklist is executable pre-prod and results are stored with release artifacts.
+
+### LOT-119: Add rollback automation and kill-switch drills
+**Description:** Automate backend/frontend flag rollback procedures and run recurring gameday drills for rapid disable/recovery.
+**Acceptance criteria:**
+- One-command disable path exists for backend and frontend lottery exposure.
+- Drill evidence captures time-to-disable and time-to-stable metrics.
+
+### LOT-120: Add customer support and dispute operations playbook
+**Description:** Create SOP for support teams handling contested outcomes, delayed resolver cases, duplicate charge claims, and refund/escalation flow.
+**Acceptance criteria:**
+- SOP includes decision trees for support, billing, and engineering escalation.
+- Playbook links to dashboards, trace lookup steps, and incident runbook references.

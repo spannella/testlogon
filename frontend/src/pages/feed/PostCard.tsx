@@ -30,6 +30,7 @@ import { ReportContentModal, type ReportContentPayload } from "@/components/shar
 import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 import type { FeedPost, PaymentMethod, PostFileAttachment } from "@/api/types";
 import type { FileEntry } from "@/api/types";
+import { isTipLotteryEnabled } from "@/config/featureFlags";
 
 function formatBytes(bytes?: number): string {
   if (bytes == null) return "";
@@ -272,7 +273,13 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
     },
   });
 
-  const isLocked = !!post.unlock_price_cents && !post.unlocked;
+  const lotteryFeatureEnabled = isTipLotteryEnabled();
+  const isLotteryLock = lotteryFeatureEnabled && post.lock_type === "tip_lottery";
+  const isFixedPriceLock = post.lock_type === "fixed_price" || (!!post.unlock_price_cents && post.lock_type !== "tip_lottery");
+  const isLocked = !!post.locked && !post.unlocked;
+  const lotteryTipText = post.lottery_tip_cents != null ? `$${(post.lottery_tip_cents / 100).toFixed(2)}` : "N/A";
+  const lotteryQuietText = post.lottery_quiet_period_seconds != null ? `${post.lottery_quiet_period_seconds}s` : "N/A";
+  const lotteryStateText = post.lottery_state ?? "open";
   const initials = post.author_id.slice(0, 2).toUpperCase();
   const authorProfilePath = resolveCanonicalProfilePath({ userId: post.author_id, displayName: post.author_id });
 
@@ -380,6 +387,14 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
               </span>
             </div>
           )}
+          {isLotteryLock && (
+            <div className="mb-2 rounded-md border border-amber-300/40 bg-amber-50/40 px-2.5 py-1.5 text-xs text-amber-900 dark:border-amber-700/60 dark:bg-amber-900/20 dark:text-amber-200">
+              <span className="font-medium">Lottery lock</span>
+              <span>{` • Tip ${lotteryTipText}`}</span>
+              <span>{` • Quiet period ${lotteryQuietText}`}</span>
+              <span>{` • State ${lotteryStateText}`}</span>
+            </div>
+          )}
           {isLocked ? (
             <div className="relative">
               <div className="blur-sm select-none">
@@ -402,21 +417,31 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
                   <p className="text-xs text-destructive px-4 text-center">
                     Sold out — no unlock slots remaining.
                   </p>
-                ) : paymentMethods.length === 0 ? (
+                ) : isFixedPriceLock ? (
+                  paymentMethods.length === 0 ? (
+                    <p className="text-xs text-muted-foreground px-4 text-center">
+                      Add a payment method in Billing to unlock this post
+                    </p>
+                  ) : (
+                    <Button
+                      size="sm"
+                      onClick={() => {
+                        const def = paymentMethods.find((m) => m.is_default) ?? paymentMethods[0];
+                        setUnlockPaymentMethodId(def?.payment_method_id ?? null);
+                        setUnlockDialogOpen(true);
+                      }}
+                    >
+                      {`Unlock for $${((post.unlock_price_cents ?? 0) / 100).toFixed(2)}`}
+                    </Button>
+                  )
+                ) : isLotteryLock ? (
                   <p className="text-xs text-muted-foreground px-4 text-center">
-                    Add a payment method in Billing to unlock this post
+                    Lottery lock: tip {lotteryTipText} and stay uncontested for {lotteryQuietText} to unlock.
                   </p>
                 ) : (
-                  <Button
-                    size="sm"
-                    onClick={() => {
-                      const def = paymentMethods.find((m) => m.is_default) ?? paymentMethods[0];
-                      setUnlockPaymentMethodId(def?.payment_method_id ?? null);
-                      setUnlockDialogOpen(true);
-                    }}
-                  >
-                    {`Unlock for $${((post.unlock_price_cents ?? 0) / 100).toFixed(2)}`}
-                  </Button>
+                  <p className="text-xs text-muted-foreground px-4 text-center">
+                    This post is locked.
+                  </p>
                 )}
               </div>
             </div>

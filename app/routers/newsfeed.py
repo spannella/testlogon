@@ -235,6 +235,25 @@ def _unlock_attempt_throttled_error(*, retry_after_seconds: int) -> HTTPExceptio
     )
 
 
+def _emit_newsfeed_lock_validation_reject(
+    reason_code: str,
+    *,
+    lock_type: Optional[str],
+    has_unlock_price: bool,
+    has_lottery_fields: bool,
+) -> None:
+    logger.warning(
+        "newsfeed lock validation reject",
+        extra={
+            "event": "newsfeed_lock_validation_reject",
+            "reason_code": reason_code,
+            "lock_type": lock_type or "none",
+            "has_unlock_price": has_unlock_price,
+            "has_lottery_fields": has_lottery_fields,
+        },
+    )
+
+
 def _enforce_unlock_attempt_throttle(user_id: str, post_id: str) -> None:
     window_seconds = max(1, int(getattr(S, "newsfeed_unlock_throttle_window_seconds", 10) or 10))
     max_attempts = max(1, int(getattr(S, "newsfeed_unlock_throttle_max_attempts", 6) or 6))
@@ -1171,8 +1190,17 @@ def _content_from_payload(req: ContentFieldsMixin) -> Dict[str, Any]:
 class CreatePostRequest(ContentFieldsMixin):
     image_urls: List[str] = Field(default_factory=list)
     visibility: Literal["followers", "public"] = "followers"
+    lock_type: Optional[Literal["fixed_price", "tip_lottery"]] = None
     unlock_price_cents: Optional[int] = Field(default=None, ge=0)
     unlock_limit: Optional[int] = Field(default=None, ge=1)
+    lottery_tip_cents: Optional[int] = Field(default=None, ge=1)
+    lottery_quiet_period_seconds: Optional[int] = Field(default=None, ge=1)
+    lottery_state: Optional[Literal["open", "won", "closed"]] = None
+    lottery_last_tip_at: Optional[str] = None
+    lottery_last_tipper_user_id: Optional[str] = None
+    lottery_winner_user_id: Optional[str] = None
+    lottery_won_at: Optional[str] = None
+    lottery_version: Optional[int] = Field(default=None, ge=0)
     file_paths: List[str] = Field(default_factory=list)
     publish_at: Optional[int] = Field(
         default=None,
@@ -1239,10 +1267,19 @@ class PostResponse(BaseModel):
     visibility: str
     locked: bool
     lock_expired: bool = False
+    lock_type: Optional[Literal["fixed_price", "tip_lottery"]] = None
     unlock_price_cents: Optional[int] = None
     unlock_limit: Optional[int] = None
     unlock_count: int = 0
     unlock_limit_reached: bool = False
+    lottery_tip_cents: Optional[int] = None
+    lottery_quiet_period_seconds: Optional[int] = None
+    lottery_state: Optional[Literal["open", "won", "closed"]] = None
+    lottery_last_tip_at: Optional[str] = None
+    lottery_last_tipper_user_id: Optional[str] = None
+    lottery_winner_user_id: Optional[str] = None
+    lottery_won_at: Optional[str] = None
+    lottery_version: Optional[int] = None
     like_count: int = 0
     comment_count: int = 0
 
@@ -1703,6 +1740,25 @@ def _write_scheduled_post_ref(
     ddb_put_item(scheduled_ref)
 
 
+def _normalized_post_lock_type(post: Dict[str, Any]) -> Optional[str]:
+    raw_lock_type = post.get("lock_type")
+    if raw_lock_type in {"fixed_price", "tip_lottery"}:
+        return raw_lock_type
+    if raw_lock_type is None:
+        unlock_price = int(post["unlock_price_cents"]) if post.get("unlock_price_cents") is not None else 0
+        if unlock_price > 0:
+            logger.info(
+                "newsfeed lock_type fallback",
+                extra={
+                    "event": "newsfeed_lock_type_fallback",
+                    "post_id": post.get("post_id"),
+                    "derived_lock_type": "fixed_price",
+                },
+            )
+            return "fixed_price"
+    return None
+
+
 def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: bool = False, unlocked: bool = False, viewer_id: Optional[str] = None) -> Dict[str, Any]:
     """Map a raw DDB post item to the FeedPost shape expected by the frontend."""
     body, body_plain, body_markdown, body_markdown_html, body_rich, body_format, body_version = _resolve_read_body_fields(post)
@@ -1739,6 +1795,11 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
     unlock_count = (_coerce_optional_int(post.get("unlock_count"), minimum=0) or 0) if unlock_limit_feature_on else 0
     lock_expired = _is_lock_expired(post)
     unlock_limit_reached = unlock_limit_feature_on and (not lock_expired) and unlock_limit is not None and unlock_count >= unlock_limit
+    lock_type = _normalized_post_lock_type(post)
+    unlock_price_cents = int(post["unlock_price_cents"]) if post.get("unlock_price_cents") is not None else None
+    lottery_tip_cents = int(post["lottery_tip_cents"]) if post.get("lottery_tip_cents") is not None else None
+    lottery_quiet_period_seconds = int(post["lottery_quiet_period_seconds"]) if post.get("lottery_quiet_period_seconds") is not None else None
+    lottery_version = int(post["lottery_version"]) if post.get("lottery_version") is not None else None
     return {
         "post_id": post_id,
         "author_id": post.get("user_id", ""),
@@ -1761,10 +1822,19 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "visibility": post.get("visibility", "followers"),
         "locked": bool(post.get("locked")),
         "lock_expired": lock_expired,
-        "unlock_price_cents": post.get("unlock_price_cents"),
+        "lock_type": lock_type,
+        "unlock_price_cents": unlock_price_cents,
         "unlock_limit": unlock_limit,
         "unlock_count": unlock_count,
         "unlock_limit_reached": unlock_limit_reached,
+        "lottery_tip_cents": lottery_tip_cents,
+        "lottery_quiet_period_seconds": lottery_quiet_period_seconds,
+        "lottery_state": post.get("lottery_state"),
+        "lottery_last_tip_at": post.get("lottery_last_tip_at"),
+        "lottery_last_tipper_user_id": post.get("lottery_last_tipper_user_id"),
+        "lottery_winner_user_id": post.get("lottery_winner_user_id"),
+        "lottery_won_at": post.get("lottery_won_at"),
+        "lottery_version": lottery_version,
         "unlocked": unlocked,
         "like_count": int(post.get("like_count", 0)),
         "comment_count": int(post.get("comment_count", 0)),
@@ -2835,8 +2905,103 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
                 message="scheduled_at_local must use format YYYY-MM-DDTHH:mm",
                 operation="create",
             )
+
+    requested_lock_type = req.lock_type
+    unlock_price_cents = req.unlock_price_cents if req.unlock_price_cents and req.unlock_price_cents > 0 else None
+    has_lottery_fields = any(
+        value is not None
+        for value in (
+            req.lottery_tip_cents,
+            req.lottery_quiet_period_seconds,
+            req.lottery_state,
+            req.lottery_last_tip_at,
+            req.lottery_last_tipper_user_id,
+            req.lottery_winner_user_id,
+            req.lottery_won_at,
+            req.lottery_version,
+        )
+    )
+    lock_type: Optional[str] = None
+    lottery_tip_cents: Optional[int] = None
+    lottery_quiet_period_seconds: Optional[int] = None
+    lottery_state: Optional[str] = None
+    lottery_last_tip_at: Optional[str] = None
+    lottery_last_tipper_user_id: Optional[str] = None
+    lottery_winner_user_id: Optional[str] = None
+    lottery_won_at: Optional[str] = None
+    lottery_version: Optional[int] = None
+
+    if requested_lock_type == "tip_lottery":
+        if not bool(getattr(S, "newsfeed_tip_lottery_enabled", True)):
+            _emit_newsfeed_lock_validation_reject(
+                "tip_lottery_feature_disabled",
+                lock_type=requested_lock_type,
+                has_unlock_price=unlock_price_cents is not None,
+                has_lottery_fields=has_lottery_fields,
+            )
+            raise HTTPException(status_code=403, detail="tip_lottery lock strategy is disabled")
+        if unlock_price_cents is not None:
+            _emit_newsfeed_lock_validation_reject(
+                "tip_lottery_with_unlock_price",
+                lock_type=requested_lock_type,
+                has_unlock_price=True,
+                has_lottery_fields=has_lottery_fields,
+            )
+            raise HTTPException(status_code=400, detail="unlock_price_cents is not allowed for tip_lottery lock type")
+        if req.lottery_tip_cents is None or req.lottery_quiet_period_seconds is None:
+            _emit_newsfeed_lock_validation_reject(
+                "tip_lottery_missing_required_fields",
+                lock_type=requested_lock_type,
+                has_unlock_price=False,
+                has_lottery_fields=has_lottery_fields,
+            )
+            raise HTTPException(status_code=400, detail="lottery_tip_cents and lottery_quiet_period_seconds are required for tip_lottery")
+        lock_type = "tip_lottery"
+        lottery_tip_cents = int(req.lottery_tip_cents)
+        lottery_quiet_period_seconds = int(req.lottery_quiet_period_seconds)
+        lottery_state = req.lottery_state or "open"
+        lottery_last_tip_at = req.lottery_last_tip_at
+        lottery_last_tipper_user_id = req.lottery_last_tipper_user_id
+        lottery_winner_user_id = req.lottery_winner_user_id
+        lottery_won_at = req.lottery_won_at
+        lottery_version = int(req.lottery_version or 0)
+    elif requested_lock_type == "fixed_price":
+        if unlock_price_cents is None:
+            _emit_newsfeed_lock_validation_reject(
+                "fixed_price_missing_unlock_price",
+                lock_type=requested_lock_type,
+                has_unlock_price=False,
+                has_lottery_fields=has_lottery_fields,
+            )
+            raise HTTPException(status_code=400, detail="unlock_price_cents must be positive when lock_type is fixed_price")
+        if has_lottery_fields:
+            _emit_newsfeed_lock_validation_reject(
+                "fixed_price_with_lottery_fields",
+                lock_type=requested_lock_type,
+                has_unlock_price=True,
+                has_lottery_fields=has_lottery_fields,
+            )
+            raise HTTPException(status_code=400, detail="lottery_* fields are not allowed when lock_type is fixed_price")
+        lock_type = "fixed_price"
+    elif requested_lock_type is None and has_lottery_fields:
+        _emit_newsfeed_lock_validation_reject(
+            "lottery_fields_without_lock_type",
+            lock_type=requested_lock_type,
+            has_unlock_price=unlock_price_cents is not None,
+            has_lottery_fields=True,
+        )
+        raise HTTPException(status_code=400, detail="lock_type must be tip_lottery when lottery_* fields are provided")
+    elif unlock_price_cents is not None:
+        lock_type = "fixed_price"
+
+    locked = lock_type is not None
     content = _content_from_payload(req)
-    _emit_newsfeed_content_metric("create_post", surface="post", body_format=content.get("body_format", "plain"))
+    _emit_newsfeed_content_metric(
+        "create_post",
+        surface="post",
+        body_format=content.get("body_format", "plain"),
+        lock_type=lock_type or "none",
+    )
 
     # Validate and collect file attachment metadata (max 5)
     file_attachments = _build_file_attachments_for_post(user_id=user_id, file_paths=req.file_paths)
@@ -2859,7 +3024,16 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "image_urls": req.image_urls,
         "visibility": req.visibility,
         "locked": locked,
+        "lock_type": lock_type,
         "unlock_price_cents": unlock_price_cents,
+        "lottery_tip_cents": lottery_tip_cents,
+        "lottery_quiet_period_seconds": lottery_quiet_period_seconds,
+        "lottery_state": lottery_state,
+        "lottery_last_tip_at": lottery_last_tip_at,
+        "lottery_last_tipper_user_id": lottery_last_tipper_user_id,
+        "lottery_winner_user_id": lottery_winner_user_id,
+        "lottery_won_at": lottery_won_at,
+        "lottery_version": lottery_version,
         "like_count": 0,
         "comment_count": 0,
         "file_attachments": file_attachments,
@@ -2904,10 +3078,19 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         image_urls=req.image_urls,
         visibility=req.visibility,
         locked=locked,
+        lock_type=lock_type,
         unlock_price_cents=unlock_price_cents,
         unlock_limit=unlock_limit,
         unlock_count=0,
         unlock_limit_reached=False,
+        lottery_tip_cents=lottery_tip_cents,
+        lottery_quiet_period_seconds=lottery_quiet_period_seconds,
+        lottery_state=lottery_state,
+        lottery_last_tip_at=lottery_last_tip_at,
+        lottery_last_tipper_user_id=lottery_last_tipper_user_id,
+        lottery_winner_user_id=lottery_winner_user_id,
+        lottery_won_at=lottery_won_at,
+        lottery_version=lottery_version,
         like_count=0,
         comment_count=0,
     )

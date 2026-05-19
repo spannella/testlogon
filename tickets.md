@@ -1522,3 +1522,100 @@ Create deployment plan covering migration order, feature-flag enablement, canary
 **Acceptance criteria:**
 - `frontend/e2e/feed-unlock-limit.spec.ts` is included in nightly CI lane.
 - Failures page the designated QA/engineering owner for triage.
+### LOT-001: Add lottery lock fields to post API contracts
+**Description:** Extend backend request/response models and frontend TypeScript types to support lock strategy and lottery metadata (`lock_type`, `lottery_tip_cents`, `lottery_quiet_period_seconds`, lifecycle state, winner metadata, and versioning fields) while preserving fixed-price fields.
+**Acceptance criteria:**
+- Backend post create/read payloads include the new lottery fields when provided.
+- Frontend API typings compile with the new fields for `FeedPost` and create post requests.
+- Existing fixed-price `unlock_price_cents` payloads remain valid and unchanged.
+
+### LOT-002: Implement lock strategy validation for post creation
+**Description:** Add backend validation logic for lock strategy combinations, including required lottery configuration for `tip_lottery` and compatibility rules versus fixed-price unlocks.
+**Acceptance criteria:**
+- `tip_lottery` posts require positive `lottery_tip_cents` and `lottery_quiet_period_seconds`.
+- Invalid combinations (for example fixed-price unlock amount combined with lottery lock type) return a 400 error with clear detail.
+- Non-locked posts and fixed-price posts continue to be creatable with existing behavior.
+
+### LOT-003: Persist lottery configuration on post records
+**Description:** Update post persistence logic to store lottery fields on post entities, initialize defaults (`lottery_state=open`, `lottery_version=0`), and ensure consistent lock status derivation.
+**Acceptance criteria:**
+- Creating a `tip_lottery` post writes all configured lottery attributes to DynamoDB post rows.
+- Creating a fixed-price post writes `lock_type=fixed_price` and keeps existing unlock fields.
+- Read-back of persisted rows returns the same values without schema coercion errors.
+
+### LOT-004: Add serializer normalization for legacy rows
+**Description:** Enhance post serialization to infer lock strategy for legacy rows that have `unlock_price_cents` but no `lock_type`, returning a normalized API shape.
+**Acceptance criteria:**
+- Legacy fixed-price rows are returned as `lock_type=fixed_price` without mutating the original record.
+- Rows already carrying valid `lock_type` values are returned unchanged.
+- Serialization of unlocked/non-locked rows remains backward compatible.
+
+### LOT-005: Add backfill script for legacy lock type normalization
+**Description:** Create an operational script to scan post rows and set `lock_type=fixed_price` where legacy rows contain positive `unlock_price_cents` but lack a valid lock type.
+**Acceptance criteria:**
+- Script supports dry-run and apply modes.
+- Script only updates eligible `Post` entities and is idempotent on repeated runs.
+- Script emits summary stats for scanned, eligible, and updated rows.
+
+### LOT-006: Add unit tests for lottery schema and validation
+**Description:** Add backend unit tests for request validation and persistence behavior across lock strategies.
+**Acceptance criteria:**
+- Tests cover successful `tip_lottery` create with required fields.
+- Tests cover invalid combinations and missing required fields with 400 responses.
+- Tests verify fixed-price and unlocked creation flows remain green.
+
+### LOT-007: Add unit tests for serializer legacy compatibility
+**Description:** Add/extend serializer tests to verify inferred `lock_type` behavior for legacy rows and passthrough behavior for modern rows.
+**Acceptance criteria:**
+- Legacy rows with `unlock_price_cents` and missing lock type serialize as `fixed_price`.
+- Modern rows with explicit `tip_lottery` serialize all lottery metadata.
+- Existing locked-content masking behavior remains unchanged in test coverage.
+
+### LOT-008: Add unit tests for backfill planner logic
+**Description:** Add tests for lock-type backfill helper functions and update planning.
+**Acceptance criteria:**
+- Tests validate eligibility filtering (`Post` rows only).
+- Tests validate inference rules for valid existing lock types and legacy unlock rows.
+- Tests validate no-op behavior when target value is already present.
+
+### LOT-009: Add API integration tests for post create/get schema
+**Description:** Extend API-level tests to verify end-to-end create/get behavior for `tip_lottery` posts and legacy lock-type read compatibility.
+**Acceptance criteria:**
+- Integration tests assert lottery fields are returned after create and on subsequent get/list reads.
+- Integration tests assert fixed-price legacy-style reads include inferred lock type.
+- Integration tests run in CI alongside existing newsfeed suites.
+
+### LOT-010: Add frontend UI support for lock strategy display
+**Description:** Update feed/post UI components to render lock strategy metadata (fixed price vs tip lottery) and show lottery parameters/status safely.
+**Acceptance criteria:**
+- Post cards show lottery tip amount and quiet-period details for `tip_lottery` posts.
+- Existing fixed-price lock UI remains unchanged for non-lottery posts.
+- UI handles missing/legacy fields gracefully without runtime errors.
+
+### LOT-011: Add frontend component and e2e tests for lottery metadata rendering
+**Description:** Add UI test coverage for rendering and state handling of lottery metadata in post views.
+**Acceptance criteria:**
+- Component tests assert correct rendering of lottery fields and fallback behavior.
+- E2E/newsfeed tests verify lottery-configured posts are visible with expected metadata.
+- Tests do not regress existing fixed-price unlock scenarios.
+
+### LOT-012: Add migration runbook and deployment rollout checklist
+**Description:** Provide deployment guidance for schema rollout, backfill execution, and rollback planning across environments.
+**Acceptance criteria:**
+- Runbook documents order: deploy read/write support, run backfill dry-run, execute backfill, verify metrics.
+- Rollback notes cover safe behavior when `lock_type` is absent and how to disable lottery create path.
+- Checklist includes post-deploy validation queries and dashboards/alerts for errors.
+
+### LOT-013: Add observability for lottery schema adoption and failures
+**Description:** Instrument metrics/logs to track lottery post creation volume, validation failures, serializer fallback usage, and backfill progress.
+**Acceptance criteria:**
+- Metrics distinguish fixed-price vs lottery post creation counts.
+- Validation failure logs include structured reason codes.
+- Backfill run outputs are collectable for operational reporting.
+
+### LOT-014: Add feature-flag gating and staged rollout controls
+**Description:** Introduce a feature flag to gate lottery lock creation and UI visibility, enabling phased rollout and quick disable.
+**Acceptance criteria:**
+- Backend rejects `tip_lottery` creates when flag is disabled.
+- Frontend hides lottery configuration controls when flag is disabled.
+- Staged rollout plan supports dev/staging/prod enablement with clear toggle ownership.

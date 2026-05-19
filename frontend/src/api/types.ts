@@ -1706,10 +1706,19 @@ export interface FeedPost {
   image_urls?: string[];
   file_attachments?: PostFileAttachment[];
   lock_expired?: boolean | null;
+  lock_type?: "fixed_price" | "tip_lottery";
   unlock_price_cents?: number | null;
   unlock_limit?: number | null;
   unlock_count?: number | null;
   unlock_limit_reached?: boolean | null;
+  lottery_tip_cents?: number;
+  lottery_quiet_period_seconds?: number;
+  lottery_state?: "open" | "won" | "closed";
+  lottery_last_tip_at?: string;
+  lottery_last_tipper_user_id?: string;
+  lottery_winner_user_id?: string;
+  lottery_won_at?: string;
+  lottery_version?: number;
   like_count: number;
   comment_count: number;
   tip_total_cents?: number;
@@ -1758,11 +1767,20 @@ export interface CreatePostReq {
   body_version?: number;
   image_urls?: string[];
   file_paths?: string[];
+  lock_type?: "fixed_price" | "tip_lottery";
   unlock_price_cents?: number;
   publish_at?: number;
   schedule_timezone?: string;
   scheduled_at_local?: string;
   unlock_limit?: number | null;
+  lottery_tip_cents?: number;
+  lottery_quiet_period_seconds?: number;
+  lottery_state?: "open" | "won" | "closed";
+  lottery_last_tip_at?: string;
+  lottery_last_tipper_user_id?: string;
+  lottery_winner_user_id?: string;
+  lottery_won_at?: string;
+  lottery_version?: number;
 }
 
 export interface CreateCommentReq {
