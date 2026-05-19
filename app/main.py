@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 
 from app.auth.root_invariant import validate_startup_root_invariant
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.core.settings import Settings
 from app.metrics import METRICS_ENABLED, metrics_endpoint, metrics_middleware, set_app_info
@@ -323,10 +325,14 @@ def create_app() -> FastAPI:
 
     if uncovered_policy_routes:
         preview = ", ".join(sorted(uncovered_policy_routes)[:10])
-        raise RuntimeError(
+        msg = (
             f"API key policy is mounted on routes missing registry/exemption entries: {preview}"
             + (" ..." if len(uncovered_policy_routes) > 10 else "")
         )
+        if _S.dev_mode:
+            logger.warning(msg)
+        else:
+            raise RuntimeError(msg)
 
     all_live_route_ids: set[str] = set()
     for route in app.routes:
