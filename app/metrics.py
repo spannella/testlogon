@@ -348,6 +348,43 @@ MESSAGING_GALLERY_CURSOR_PAGE_DEPTH = Histogram(
     ["type"],
     buckets=(0, 1, 2, 3, 5, 8, 13, 21, 34),
 )
+NEWSFEED_FEED_REQUESTS = Counter(
+    "newsfeed_feed_requests_total",
+    "Newsfeed list request outcomes by mode",
+    ["mode", "outcome"],
+)
+NEWSFEED_FEED_LATENCY = Histogram(
+    "newsfeed_feed_latency_seconds",
+    "Newsfeed list request latency by mode/outcome",
+    ["mode", "outcome"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+)
+NEWSFEED_FEED_FILTER_USAGE = Counter(
+    "newsfeed_feed_filter_usage_total",
+    "Newsfeed filter usage by mode/filter name",
+    ["mode", "filter_name"],
+)
+NEWSFEED_FEED_PAGE_DEPTH = Histogram(
+    "newsfeed_feed_page_depth",
+    "Newsfeed pagination depth (# scanned query pages) by mode",
+    ["mode"],
+    buckets=(0, 1, 2, 3, 5, 8, 13, 21, 34),
+)
+NEWSFEED_FEED_ERRORS = Counter(
+    "newsfeed_feed_errors_total",
+    "Newsfeed list error outcomes by mode/error class",
+    ["mode", "error_type"],
+)
+NEWSFEED_FEED_BUDGET_HITS = Counter(
+    "newsfeed_feed_budget_hits_total",
+    "Newsfeed feed query budget guardrail hits by mode/reason",
+    ["mode", "reason"],
+)
+CURSOR_DECODE_RESULTS = Counter(
+    "cursor_decode_results_total",
+    "Cursor decode outcomes by format and key source",
+    ["format", "outcome", "key_source"],
+)
 MESSAGING_MESSAGE_CONTROL_ACTIONS = Counter(
     "messaging_message_control_actions_total",
     "Messaging message-control actions by action/result",
@@ -1422,6 +1459,52 @@ def record_messaging_gallery_cursor_page_depth(*, gallery_type: str, depth: int)
     MESSAGING_GALLERY_CURSOR_PAGE_DEPTH.labels(type=(gallery_type or "unknown").lower()).observe(
         max(0.0, float(depth))
     )
+
+
+def record_newsfeed_feed_request(*, mode: str, outcome: str) -> None:
+    normalized_mode = (mode or "unknown").lower()
+    normalized_outcome = (outcome or "unknown").lower()
+    NEWSFEED_FEED_REQUESTS.labels(mode=normalized_mode, outcome=normalized_outcome).inc()
+
+
+def record_newsfeed_feed_latency(*, mode: str, outcome: str, elapsed_seconds: float) -> None:
+    NEWSFEED_FEED_LATENCY.labels(
+        mode=(mode or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_newsfeed_feed_filter_usage(*, mode: str, filter_name: str) -> None:
+    NEWSFEED_FEED_FILTER_USAGE.labels(
+        mode=(mode or "unknown").lower(),
+        filter_name=(filter_name or "unknown").lower(),
+    ).inc()
+
+
+def record_newsfeed_feed_page_depth(*, mode: str, depth: int) -> None:
+    NEWSFEED_FEED_PAGE_DEPTH.labels(mode=(mode or "unknown").lower()).observe(max(0.0, float(depth)))
+
+
+def record_newsfeed_feed_error(*, mode: str, error_type: str) -> None:
+    NEWSFEED_FEED_ERRORS.labels(
+        mode=(mode or "unknown").lower(),
+        error_type=(error_type or "unknown").lower(),
+    ).inc()
+
+
+def record_newsfeed_feed_budget_hit(*, mode: str, reason: str) -> None:
+    NEWSFEED_FEED_BUDGET_HITS.labels(
+        mode=(mode or "unknown").lower(),
+        reason=(reason or "unknown").lower(),
+    ).inc()
+
+
+def record_cursor_decode_result(*, format_name: str, outcome: str, key_source: str = "none") -> None:
+    CURSOR_DECODE_RESULTS.labels(
+        format=(format_name or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+        key_source=(key_source or "none").lower(),
+    ).inc()
 
 
 def record_messaging_message_control_action(*, action: str, result: str) -> None:

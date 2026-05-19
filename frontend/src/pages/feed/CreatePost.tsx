@@ -23,6 +23,7 @@ import { MarkdownComposer, type EditorMode, type RichDoc, buildContentPayload } 
 import type { CreateDraftPostReq, DraftPost, FileEntry } from "@/api/types";
 import { reportDraftLifecycleEvent } from "@/lib/newsfeedDraftTelemetry";
 import { isNewsfeedDraftsEnabled } from "@/lib/featureFlags";
+import { invalidateFeedCaches } from "@/lib/feedCacheInvalidation";
 
 const MAX_IMAGES = 10;
 const MAX_FILES = 5;
@@ -281,8 +282,8 @@ export function CreatePost() {
           : {}),
       });
     },
-    onSuccess: (resp, target) => {
-      queryClient.invalidateQueries({ queryKey: ["feed"] });
+    onSuccess: async (resp, target) => {
+      await invalidateFeedCaches(queryClient, resp.author_id);
       if (schedulingUiEnabled) {
         queryClient.invalidateQueries({ queryKey: ["scheduled-posts"] });
       }

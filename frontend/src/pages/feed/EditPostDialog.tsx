@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { newsfeedSchedulingUiEnabled } from "@/lib/featureFlags";
 import { MarkdownComposer, type EditorMode, type RichDoc, richDocToPlain, buildContentPayload } from "./MarkdownComposer";
 import { editPost, editScheduledPost, uploadPostImage } from "@/api/endpoints/newsfeed";
+import { invalidateFeedCaches } from "@/lib/feedCacheInvalidation";
 
 const MAX_IMAGES = 10;
 
@@ -99,9 +100,9 @@ export function EditPostDialog({
             }
           : {}),
       }),
-    onSuccess: () => {
+    onSuccess: async (post) => {
       toast.success("Post updated");
-      void queryClient.invalidateQueries({ queryKey: ["feed"] });
+      await invalidateFeedCaches(queryClient, post.author_id);
       if (schedulingUiEnabled) {
         void queryClient.invalidateQueries({ queryKey: ["scheduled-posts"] });
       }

@@ -8,6 +8,520 @@ from app.routers import newsfeed
 
 
 class TestNewsfeedRoutes(unittest.TestCase):
+    def test_can_view_post_public_visibility_allows_non_follower_when_access_ok(self):
+        post = {"user_id": "author_1", "visibility": "public"}
+        with (
+            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "is_following", return_value=False),
+        ):
+            self.assertTrue(newsfeed.can_view_post("viewer_1", post))
+
+    def test_can_view_post_followers_visibility_requires_following(self):
+        post = {"user_id": "author_1", "visibility": "followers"}
+        with (
+            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "is_following", return_value=False),
+        ):
+            self.assertFalse(newsfeed.can_view_post("viewer_1", post))
+
+    def test_can_view_post_blocks_when_creator_access_denied(self):
+        post = {"user_id": "author_1", "visibility": "public"}
+        with patch.object(newsfeed, "can_access_creator", return_value=False):
+            self.assertFalse(newsfeed.can_view_post("viewer_1", post))
+
+    def test_view_feed_author_filter_only_returns_matching_author_posts(self):
+        refs = [{"post_id": "p1"}, {"post_id": "p2"}]
+        posts = [
+            {"post_id": "p1", "user_id": "author_a", "locked": False},
+            {"post_id": "p2", "user_id": "author_b", "locked": False},
+        ]
+        likes = [{"post_id": "p1"}, {"post_id": "p2"}]
+
+        with (
+            patch.object(newsfeed, "ddb_query", return_value={"Items": refs, "LastEvaluatedKey": None}),
+            patch.object(newsfeed, "ddb") as ddb,
+            patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
+            patch.object(newsfeed, "encode_cursor", return_value=None),
+            patch.object(newsfeed, "is_hidden", return_value=False),
+            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "is_following", return_value=True),
+            patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(
+                newsfeed,
+                "_post_to_dict",
+                side_effect=lambda post, **_: {"post_id": post["post_id"], "author_id": post["user_id"]},
+            ),
+        ):
+            ddb.batch_get_item.side_effect = [
+                {"Responses": {newsfeed.APP_TABLE: posts}},
+                {"Responses": {newsfeed.APP_TABLE: likes}},
+            ]
+
+            out = newsfeed.view_feed(limit=20, cursor=None, author_id="author_b", user_id="viewer_1")
+
+        self.assertEqual(out["next_cursor"], None)
+        self.assertEqual([it["post_id"] for it in out["items"]], ["p2"])
+        self.assertEqual([it["author_id"] for it in out["items"]], ["author_b"])
+
+    def test_view_feed_without_author_filter_returns_all_visible_posts(self):
+        refs = [{"post_id": "p1"}, {"post_id": "p2"}]
+        posts = [
+            {"post_id": "p1", "user_id": "author_a", "locked": False},
+            {"post_id": "p2", "user_id": "author_b", "locked": False},
+        ]
+
+        with (
+            patch.object(newsfeed, "ddb_query", return_value={"Items": refs, "LastEvaluatedKey": None}),
+            patch.object(newsfeed, "ddb") as ddb,
+            patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
+            patch.object(newsfeed, "encode_cursor", return_value=None),
+            patch.object(newsfeed, "is_hidden", return_value=False),
+            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "is_following", return_value=True),
+            patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(
+                newsfeed,
+                "_post_to_dict",
+                side_effect=lambda post, **_: {"post_id": post["post_id"], "author_id": post["user_id"]},
+            ),
+        ):
+            ddb.batch_get_item.side_effect = [
+                {"Responses": {newsfeed.APP_TABLE: posts}},
+                {"Responses": {newsfeed.APP_TABLE: []}},
+            ]
+
+            out = newsfeed.view_feed(limit=20, cursor=None, author_id=None, user_id="viewer_1")
+
+        self.assertEqual([it["post_id"] for it in out["items"]], ["p1", "p2"])
+
+    def test_view_feed_applies_search_and_has_media_filters(self):
+        refs = [{"post_id": "p1"}, {"post_id": "p2"}, {"post_id": "p3"}]
+        posts = [
+            {"post_id": "p1", "user_id": "author_a", "body": "hello release notes", "image_urls": ["a.png"], "created_at": "2026-03-20T00:00:00+00:00", "locked": False},
+            {"post_id": "p2", "user_id": "author_a", "body": "hello world", "image_urls": [], "created_at": "2026-03-20T00:00:00+00:00", "locked": False},
+            {"post_id": "p3", "user_id": "author_a", "body": "release checklist", "image_urls": [], "created_at": "2026-03-20T00:00:00+00:00", "locked": False},
+        ]
+
+        with (
+            patch.object(newsfeed, "ddb_query", return_value={"Items": refs, "LastEvaluatedKey": None}),
+            patch.object(newsfeed, "ddb") as ddb,
+            patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
+            patch.object(newsfeed, "encode_cursor", return_value=None),
+            patch.object(newsfeed, "is_hidden", return_value=False),
+            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "is_following", return_value=True),
+            patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
+        ):
+            ddb.batch_get_item.side_effect = [
+                {"Responses": {newsfeed.APP_TABLE: posts}},
+                {"Responses": {newsfeed.APP_TABLE: []}},
+            ]
+
+            out = newsfeed.view_feed(
+                limit=20,
+                cursor=None,
+                author_id="author_a",
+                q="release",
+                has_media=True,
+                user_id="viewer_1",
+            )
+
+        self.assertEqual([it["post_id"] for it in out["items"]], ["p1"])
+
+    def test_view_feed_applies_date_range_filters(self):
+        refs = [{"post_id": "p1"}, {"post_id": "p2"}, {"post_id": "p3"}]
+        posts = [
+            {"post_id": "p1", "user_id": "author_a", "body": "a", "created_at": "2026-03-01T00:00:00+00:00", "locked": False},
+            {"post_id": "p2", "user_id": "author_a", "body": "b", "created_at": "2026-03-15T00:00:00+00:00", "locked": False},
+            {"post_id": "p3", "user_id": "author_a", "body": "c", "created_at": "2026-03-25T00:00:00+00:00", "locked": False},
+        ]
+        with (
+            patch.object(newsfeed, "ddb_query", return_value={"Items": refs, "LastEvaluatedKey": None}),
+            patch.object(newsfeed, "ddb") as ddb,
+            patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
+            patch.object(newsfeed, "encode_cursor", return_value=None),
+            patch.object(newsfeed, "is_hidden", return_value=False),
+            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "is_following", return_value=True),
+            patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
+        ):
+            ddb.batch_get_item.side_effect = [
+                {"Responses": {newsfeed.APP_TABLE: posts}},
+                {"Responses": {newsfeed.APP_TABLE: []}},
+            ]
+
+            out = newsfeed.view_feed(
+                limit=20,
+                cursor=None,
+                author_id="author_a",
+                from_ts="2026-03-10T00:00:00Z",
+                to_ts="2026-03-20T00:00:00Z",
+                user_id="viewer_1",
+            )
+
+        self.assertEqual([it["post_id"] for it in out["items"]], ["p2"])
+
+    def test_view_feed_fetches_additional_pages_to_fill_filtered_limit(self):
+        first_refs = {"Items": [{"post_id": "p1"}, {"post_id": "p2"}], "LastEvaluatedKey": {"pk": "next1"}}
+        second_refs = {"Items": [{"post_id": "p3"}], "LastEvaluatedKey": None}
+        first_posts = [
+            {"post_id": "p1", "user_id": "other_author", "created_at": "2026-03-21T00:00:00Z", "locked": False},
+            {"post_id": "p2", "user_id": "target_author", "created_at": "2026-03-20T00:00:00Z", "locked": False},
+        ]
+        second_posts = [
+            {"post_id": "p3", "user_id": "target_author", "created_at": "2026-03-19T00:00:00Z", "locked": False},
+        ]
+
+        with (
+            patch.object(newsfeed, "ddb_query", side_effect=[first_refs, second_refs]) as ddb_query,
+            patch.object(newsfeed, "ddb") as ddb,
+            patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
+            patch.object(newsfeed, "encode_cursor", side_effect=lambda v: v),
+            patch.object(newsfeed, "is_hidden", return_value=False),
+            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "is_following", return_value=True),
+            patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
+        ):
+            ddb.batch_get_item.side_effect = [
+                {"Responses": {newsfeed.APP_TABLE: first_posts}},
+                {"Responses": {newsfeed.APP_TABLE: []}},
+                {"Responses": {newsfeed.APP_TABLE: second_posts}},
+                {"Responses": {newsfeed.APP_TABLE: []}},
+            ]
+
+            out = newsfeed.view_feed(limit=2, cursor=None, author_id="target_author", user_id="viewer_1")
+
+        self.assertEqual([it["post_id"] for it in out["items"]], ["p2", "p3"])
+        self.assertEqual(out["next_cursor"], None)
+        self.assertEqual(ddb_query.call_count, 2)
+
+    def test_view_feed_enforces_scanned_pages_budget(self):
+        first_page = {"Items": [], "LastEvaluatedKey": {"pk": "next"}}
+        with (
+            patch.object(newsfeed, "S") as settings,
+            patch.object(newsfeed, "ddb_query", return_value=first_page),
+            patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
+            patch.object(newsfeed, "record_newsfeed_feed_budget_hit") as budget_hit,
+        ):
+            settings.newsfeed_feed_max_scanned_pages = 1
+            settings.newsfeed_feed_max_elapsed_ms = 999999
+            with self.assertRaises(HTTPException) as exc:
+                newsfeed.view_feed(limit=20, cursor=None, author_id="author_a", user_id="viewer_1")
+
+        self.assertEqual(exc.exception.status_code, 422)
+        self.assertEqual(exc.exception.detail["code"], "feed_query_budget_exceeded")
+        self.assertEqual(exc.exception.detail["reason"], "max_scanned_pages")
+        budget_hit.assert_called_once_with(mode="profile", reason="max_scanned_pages")
+
+    def test_view_feed_enforces_elapsed_time_budget(self):
+        first_page = {"Items": [], "LastEvaluatedKey": {"pk": "next"}}
+        with (
+            patch.object(newsfeed, "S") as settings,
+            patch.object(newsfeed, "ddb_query", return_value=first_page),
+            patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
+            patch.object(newsfeed, "record_newsfeed_feed_budget_hit") as budget_hit,
+        ):
+            settings.newsfeed_feed_max_scanned_pages = 100
+            settings.newsfeed_feed_max_elapsed_ms = 1
+            with self.assertRaises(HTTPException) as exc:
+                newsfeed.view_feed(limit=20, cursor=None, author_id="author_a", user_id="viewer_1")
+
+        self.assertEqual(exc.exception.status_code, 422)
+        self.assertEqual(exc.exception.detail["code"], "feed_query_budget_exceeded")
+        self.assertEqual(exc.exception.detail["reason"], "max_elapsed_ms")
+        budget_hit.assert_called_once_with(mode="profile", reason="max_elapsed_ms")
+
+    def test_view_feed_author_mode_queries_gsi2_author_index(self):
+        resp = {
+            "Items": [
+                {"post_id": "p2", "user_id": "target_author", "created_at": "2026-03-20T00:00:00Z", "locked": False},
+            ],
+            "LastEvaluatedKey": None,
+        }
+        with (
+            patch.object(newsfeed, "ddb_query", return_value=resp) as ddb_query,
+            patch.object(newsfeed, "ddb") as ddb,
+            patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
+            patch.object(newsfeed, "encode_cursor", return_value=None),
+            patch.object(newsfeed, "is_hidden", return_value=False),
+            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "is_following", return_value=True),
+            patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
+        ):
+            ddb.batch_get_item.side_effect = [
+                {"Responses": {newsfeed.APP_TABLE: []}},  # likes lookup only
+            ]
+            out = newsfeed.view_feed(limit=20, cursor=None, author_id="target_author", user_id="viewer_1")
+
+        self.assertEqual([it["post_id"] for it in out["items"]], ["p2"])
+        call_kwargs = ddb_query.call_args.kwargs
+        self.assertEqual(call_kwargs["IndexName"], "GSI2")
+        self.assertEqual(call_kwargs["ExpressionAttributeValues"][":pk"], "POST_AUTHOR#target_author")
+
+    def test_view_feed_applies_deterministic_ordering_for_same_timestamp(self):
+        refs = {
+            "Items": [
+                {"post_id": "p2", "user_id": "author_a", "created_at": "2026-03-20T00:00:00Z", "locked": False},
+                {"post_id": "p3", "user_id": "author_a", "created_at": "2026-03-20T00:00:00Z", "locked": False},
+            ],
+            "LastEvaluatedKey": None,
+        }
+        with (
+            patch.object(newsfeed, "ddb_query", return_value=refs),
+            patch.object(newsfeed, "ddb") as ddb,
+            patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
+            patch.object(newsfeed, "encode_cursor", return_value=None),
+            patch.object(newsfeed, "is_hidden", return_value=False),
+            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "is_following", return_value=True),
+            patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
+        ):
+            ddb.batch_get_item.side_effect = [{"Responses": {newsfeed.APP_TABLE: []}}]
+            out = newsfeed.view_feed(limit=20, cursor=None, author_id="author_a", user_id="viewer_1")
+
+        self.assertEqual([it["post_id"] for it in out["items"]], ["p3", "p2"])
+
+    def test_view_feed_excludes_private_posts_for_non_owner(self):
+        refs = {
+            "Items": [
+                {"post_id": "p_private", "user_id": "author_a", "created_at": "2026-03-20T00:00:00Z", "visibility": "private", "locked": False},
+                {"post_id": "p_public", "user_id": "author_a", "created_at": "2026-03-19T00:00:00Z", "visibility": "public", "locked": False},
+            ],
+            "LastEvaluatedKey": None,
+        }
+        with (
+            patch.object(newsfeed, "ddb_query", return_value=refs),
+            patch.object(newsfeed, "ddb") as ddb,
+            patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
+            patch.object(newsfeed, "encode_cursor", return_value=None),
+            patch.object(newsfeed, "is_hidden", return_value=False),
+            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "is_following", return_value=True),
+            patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
+        ):
+            ddb.batch_get_item.side_effect = [{"Responses": {newsfeed.APP_TABLE: []}}]
+            out = newsfeed.view_feed(limit=20, cursor=None, author_id="author_a", user_id="viewer_b")
+
+        self.assertEqual([it["post_id"] for it in out["items"]], ["p_public"])
+
+    def test_view_feed_rejects_invalid_date_range(self):
+        with (
+            patch.object(newsfeed, "record_newsfeed_feed_error") as metric_error,
+            patch.object(newsfeed, "record_newsfeed_feed_request") as metric_request,
+            patch.object(newsfeed, "record_newsfeed_feed_latency") as metric_latency,
+        ):
+            with self.assertRaises(HTTPException) as exc:
+                newsfeed.view_feed(
+                    limit=20,
+                    cursor=None,
+                    from_ts="2026-03-20T00:00:00Z",
+                    to_ts="2026-03-10T00:00:00Z",
+                    user_id="viewer_1",
+                )
+
+        metric_error.assert_called_once_with(mode="global", error_type="validation")
+        metric_request.assert_called_once_with(mode="global", outcome="error")
+        metric_latency.assert_called_once()
+
+        self.assertEqual(exc.exception.status_code, 400)
+        self.assertIn("from", str(exc.exception.detail))
+
+    def test_view_feed_rejects_time_window_exceeding_max_days(self):
+        with (
+            patch.object(newsfeed, "S") as settings,
+            patch.object(newsfeed, "rate_limit_feed_query") as rate_limit,
+            patch.object(newsfeed, "ddb_query") as ddb_query,
+            patch.object(newsfeed, "record_newsfeed_feed_error") as metric_error,
+            patch.object(newsfeed, "record_newsfeed_feed_request") as metric_request,
+        ):
+            settings.newsfeed_feed_max_window_days = 7
+            with self.assertRaises(HTTPException) as exc:
+                newsfeed.view_feed(
+                    limit=20,
+                    cursor=None,
+                    from_ts="2026-03-01T00:00:00Z",
+                    to_ts="2026-03-10T00:00:00Z",
+                    user_id="viewer_1",
+                )
+
+        self.assertEqual(exc.exception.status_code, 400)
+        self.assertEqual(exc.exception.detail["code"], "invalid_time_window")
+        self.assertEqual(exc.exception.detail["max_window_days"], 7)
+        rate_limit.assert_not_called()
+        ddb_query.assert_not_called()
+        metric_error.assert_called_once_with(mode="global", error_type="code_invalid_time_window")
+        metric_request.assert_called_once_with(mode="global", outcome="error")
+
+    def test_view_feed_rejects_invalid_author_id(self):
+        with (
+            patch.object(newsfeed, "ddb_query") as ddb_query,
+            patch.object(newsfeed, "record_newsfeed_feed_error") as metric_error,
+            patch.object(newsfeed, "record_newsfeed_feed_request") as metric_request,
+        ):
+            with self.assertRaises(HTTPException) as exc:
+                newsfeed.view_feed(
+                    limit=20,
+                    cursor=None,
+                    author_id="author bad!!",
+                    user_id="viewer_1",
+                )
+
+        self.assertEqual(exc.exception.status_code, 400)
+        self.assertEqual(exc.exception.detail["code"], "invalid_author_id")
+        ddb_query.assert_not_called()
+        metric_error.assert_called_once_with(mode="profile", error_type="code_invalid_author_id")
+        metric_request.assert_called_once_with(mode="profile", outcome="error")
+
+    def test_view_feed_rejects_overlong_query(self):
+        with (
+            patch.object(newsfeed, "S") as settings,
+            patch.object(newsfeed, "ddb_query") as ddb_query,
+            patch.object(newsfeed, "record_newsfeed_feed_error") as metric_error,
+            patch.object(newsfeed, "record_newsfeed_feed_request") as metric_request,
+        ):
+            settings.newsfeed_feed_max_query_chars = 5
+            with self.assertRaises(HTTPException) as exc:
+                newsfeed.view_feed(
+                    limit=20,
+                    cursor=None,
+                    author_id="author_ok",
+                    q="too-long-query",
+                    user_id="viewer_1",
+                )
+
+        self.assertEqual(exc.exception.status_code, 400)
+        self.assertEqual(exc.exception.detail["code"], "invalid_query")
+        ddb_query.assert_not_called()
+        metric_error.assert_called_once_with(mode="profile", error_type="code_invalid_query")
+        metric_request.assert_called_once_with(mode="profile", outcome="error")
+
+    def test_view_feed_rejects_invalid_cursor_without_rate_limit_charge(self):
+        with (
+            patch.object(newsfeed, "rate_limit_feed_query") as rate_limit,
+            patch.object(newsfeed, "ddb_query") as ddb_query,
+            patch.object(newsfeed, "record_newsfeed_feed_error") as metric_error,
+            patch.object(newsfeed, "record_newsfeed_feed_request") as metric_request,
+        ):
+            with self.assertRaises(HTTPException) as exc:
+                newsfeed.view_feed(
+                    limit=20,
+                    cursor="bad-cursor",
+                    author_id="author_ok",
+                    user_id="viewer_1",
+                )
+
+        self.assertEqual(exc.exception.status_code, 400)
+        self.assertEqual(exc.exception.detail["code"], "invalid_cursor")
+        rate_limit.assert_not_called()
+        ddb_query.assert_not_called()
+        metric_error.assert_called_once_with(mode="profile", error_type="code_invalid_cursor")
+        metric_request.assert_called_once_with(mode="profile", outcome="error")
+
+    def test_view_feed_rejects_cursor_exceeding_max_chars(self):
+        with (
+            patch.object(newsfeed, "S") as settings,
+            patch.object(newsfeed, "rate_limit_feed_query") as rate_limit,
+            patch.object(newsfeed, "ddb_query") as ddb_query,
+            patch.object(newsfeed, "record_newsfeed_feed_error") as metric_error,
+            patch.object(newsfeed, "record_newsfeed_feed_request") as metric_request,
+        ):
+            settings.newsfeed_feed_max_cursor_chars = 8
+            with self.assertRaises(HTTPException) as exc:
+                newsfeed.view_feed(
+                    limit=20,
+                    cursor="x" * 20,
+                    author_id="author_ok",
+                    user_id="viewer_1",
+                )
+
+        self.assertEqual(exc.exception.status_code, 400)
+        self.assertEqual(exc.exception.detail["code"], "invalid_cursor")
+        self.assertEqual(exc.exception.detail["max_cursor_chars"], 8)
+        rate_limit.assert_not_called()
+        ddb_query.assert_not_called()
+        metric_error.assert_called_once_with(mode="profile", error_type="code_invalid_cursor")
+        metric_request.assert_called_once_with(mode="profile", outcome="error")
+
+    def test_view_feed_rate_limited_records_semantic_error_and_skips_query(self):
+        with (
+            patch.object(newsfeed, "ddb_query") as ddb_query,
+            patch.object(
+                newsfeed,
+                "rate_limit_feed_query",
+                side_effect=HTTPException(
+                    status_code=429,
+                    detail={"code": "feed_rate_limited"},
+                    headers={"Retry-After": "60"},
+                ),
+            ) as rate_limit,
+            patch.object(newsfeed, "record_newsfeed_feed_error") as metric_error,
+            patch.object(newsfeed, "record_newsfeed_feed_request") as metric_request,
+        ):
+            with self.assertRaises(HTTPException) as exc:
+                newsfeed.view_feed(
+                    limit=20,
+                    cursor=None,
+                    author_id="author_ok",
+                    user_id="viewer_1",
+                )
+
+        self.assertEqual(exc.exception.status_code, 429)
+        self.assertEqual(exc.exception.headers.get("Retry-After"), "60")
+        rate_limit.assert_called_once_with("viewer_1", "profile")
+        ddb_query.assert_not_called()
+        metric_error.assert_called_once_with(mode="profile", error_type="code_feed_rate_limited")
+        metric_request.assert_called_once_with(mode="profile", outcome="error")
+
+    def test_view_feed_profile_mode_records_observability_metrics(self):
+        refs = {
+            "Items": [
+                {"post_id": "p2", "user_id": "target_author", "created_at": "2026-03-20T00:00:00Z", "locked": False},
+            ],
+            "LastEvaluatedKey": None,
+        }
+        with (
+            patch.object(newsfeed, "ddb_query", return_value=refs),
+            patch.object(newsfeed, "ddb") as ddb,
+            patch.object(newsfeed, "decode_cursor_or_400", return_value=None),
+            patch.object(newsfeed, "encode_cursor", return_value=None),
+            patch.object(newsfeed, "is_hidden", return_value=False),
+            patch.object(newsfeed, "can_access_creator", return_value=True),
+            patch.object(newsfeed, "is_following", return_value=True),
+            patch.object(newsfeed, "has_unlocked", return_value=True),
+            patch.object(newsfeed, "_post_to_dict", side_effect=lambda post, **_: {"post_id": post["post_id"]}),
+            patch.object(newsfeed, "record_newsfeed_feed_request") as metric_request,
+            patch.object(newsfeed, "record_newsfeed_feed_latency") as metric_latency,
+            patch.object(newsfeed, "record_newsfeed_feed_page_depth") as metric_depth,
+            patch.object(newsfeed, "record_newsfeed_feed_filter_usage") as metric_filter,
+            patch.object(newsfeed, "logger") as logger_mock,
+        ):
+            ddb.batch_get_item.side_effect = [
+                {"Responses": {newsfeed.APP_TABLE: []}},
+            ]
+            out = newsfeed.view_feed(
+                limit=20,
+                cursor=None,
+                author_id="target_author",
+                q="release",
+                has_media=True,
+                user_id="viewer_1",
+            )
+
+        self.assertEqual([it["post_id"] for it in out["items"]], ["p2"])
+        metric_request.assert_called_once_with(mode="profile", outcome="success")
+        metric_latency.assert_called_once()
+        metric_depth.assert_called_once_with(mode="profile", depth=1)
+        self.assertEqual(metric_filter.call_count, 2)
+        metric_filter.assert_any_call(mode="profile", filter_name="q")
+        metric_filter.assert_any_call(mode="profile", filter_name="has_media")
+        logger_mock.info.assert_called_once()
+
     def test_meter_newsfeed_post_publish_builds_deterministic_idempotency_key(self):
         table = Mock()
         with (

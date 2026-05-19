@@ -2022,3 +2022,94 @@
 **Acceptance criteria:**
 - Runbooks, threat model deltas, and support SOPs are complete and linked.
 - Evidence bundle includes tests, approvals, dashboards, and open-risk decision log.
+# Profile User-Posts Feed — Phase 2 (2XX) Production Readiness Tickets
+
+### PUF-201: Profile feed API contract locking and drift detection
+**Description:** Add contract snapshot tests for `GET /feed` profile-mode query/response behavior (including error payloads) and enforce drift checks in CI.
+**Acceptance criteria:**
+- Contract tests cover all profile query params (`author_id`, `q`, `from`, `to`, `has_media`, `cursor`).
+- CI fails with actionable diff output when contract changes are introduced.
+
+### PUF-202: Cursor rotation and secret rollover support
+**Description:** Extend cursor verification to support signing-key rotation with dual-key verification window and observability for old/new key usage.
+**Acceptance criteria:**
+- Cursors signed with previous and current keys decode during rotation window.
+- Telemetry exposes decode counts by key version and invalid-signature failures.
+
+### PUF-203: High-concurrency pagination correctness harness
+**Description:** Build an integration harness simulating concurrent create/edit/delete activity during pagination traversal in both profile and global modes.
+**Acceptance criteria:**
+- Tests verify no duplicate/skip artifacts across page boundaries under mutation pressure.
+- Deterministic ordering invariants remain true under concurrent writes.
+
+### PUF-204: Query budget adaptive tuning and fallback behavior
+**Description:** Implement adaptive query budget tuning (by mode/filter complexity) and define fallback response behavior for budget-exceeded conditions.
+**Acceptance criteria:**
+- Budget thresholds can be configured by environment and query shape.
+- Budget-exceeded responses are documented, consistent, and telemetry-instrumented.
+
+### PUF-205: Author-index integrity auditing pipeline
+**Description:** Add recurring integrity audit job for `GSI2PK/GSI2SK` completeness and correctness, with automatic report generation.
+**Acceptance criteria:**
+- Audit report includes drift counts, sample records, and trend history.
+- Alert triggers when drift exceeds configured threshold.
+
+### PUF-206: Block/mute enforcement parity hardening
+**Description:** Ensure block/mute relationships are enforced uniformly in profile feed responses, metadata, and counts.
+**Acceptance criteria:**
+- Unauthorized relationship combinations return no hidden content and no leaking counts.
+- Policy matrix tests cover public/followers/private + block/mute permutations.
+
+### PUF-207: Locked/private payload minimization policy
+**Description:** Formalize and enforce allowlisted response fields for locked/private/unauthorized scenarios to prevent metadata leakage.
+**Acceptance criteria:**
+- Payload schemas are constrained by policy and validated in tests.
+- Any non-allowlisted field exposure fails CI.
+
+### PUF-208: Profile feed abuse detection and throttling controls
+**Description:** Add dedicated rate-limit and abuse-detection controls for profile queries (burst, repeated probe patterns, suspicious filters).
+**Acceptance criteria:**
+- 429 behavior is deterministic with retry semantics and reason codes.
+- Abuse events are visible in metrics/logs and can trigger alerting.
+
+### PUF-209: Search relevance and edge-token behavior improvements
+**Description:** Improve search normalization/token handling for emoji, punctuation, unicode, and mixed-case terms within author scope.
+**Acceptance criteria:**
+- Edge-token behavior is documented and verified by unit/integration tests.
+- Latency and relevance metrics improve or remain within baseline budgets.
+
+### PUF-210: Frontend race-condition and stale-state integration tests
+**Description:** Add integration tests for rapid filter toggles, tab switches, and navigation restores to validate cache isolation and UI consistency.
+**Acceptance criteria:**
+- Tests prove no stale bleed between global and profile caches.
+- URL-state restoration is stable after rapid interactions.
+
+### PUF-211: Cross-surface mutation consistency suite
+**Description:** Add conformance tests ensuring post mutations propagate correctly to profile feed, global feed, post detail, and counters.
+**Acceptance criteria:**
+- Mutation outcomes are reflected across all surfaces without manual refresh.
+- Offline queue replay path is covered for invalidation correctness.
+
+### PUF-212: Browser E2E for Profile → Posts lifecycle
+**Description:** Implement browser E2E coverage for profile posts tab, filter application, infinite pagination, refresh/back-forward behavior, and empty/error states.
+**Acceptance criteria:**
+- E2E suite runs in CI on at least one supported browser target.
+- Core journey includes accessibility checks for labels/focus/keyboard navigation.
+
+### PUF-213: Security E2E matrix for viewer-author authorization
+**Description:** Build multi-user E2E/API hybrid security suite validating visibility boundaries (public/followers/private/blocked/muted).
+**Acceptance criteria:**
+- Unauthorized viewers can never render or fetch restricted posts.
+- Failures include structured diagnostics with viewer, author, policy expectation, and response evidence.
+
+### PUF-214: Production SLOs, dashboards, and alert policies
+**Description:** Define profile-feed SLOs and deploy dashboard+alert bundles for latency, errors, budget hits, and filter adoption.
+**Acceptance criteria:**
+- Dashboards and alert rules are versioned and deployable by environment.
+- Runbook links and alert ownership are documented and tested.
+
+### PUF-215: Release automation gate and rollback drill
+**Description:** Add CI/CD release gate requiring profile-feed readiness artifacts and execute periodic rollback/kill-switch drills.
+**Acceptance criteria:**
+- Promotion is blocked when required tests/docs/observability artifacts are missing or stale.
+- Rollback drill report confirms disable/restore procedure meets target RTO.

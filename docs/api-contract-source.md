@@ -8,6 +8,7 @@ For messaging and projects changes, treat this file as the source of truth for r
 
 Companion docs:
 - `docs/project-api-contract.md` (human-readable projects endpoint examples)
+- `docs/profile-user-post-feed-contract-decision.md` (newsfeed profile-mode contract decision and examples)
 
 ## Workflow (temporary)
 

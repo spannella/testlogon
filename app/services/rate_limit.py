@@ -224,6 +224,23 @@ def rate_limit_profile_lookup(requester_user_sub: Optional[str], ip: str) -> Non
             headers={"Retry-After": str(window_seconds)},
         )
 
+def rate_limit_feed_query(user_sub: str, mode: str) -> None:
+    cap = max(1, int(getattr(S, "newsfeed_feed_query_max_per_window", 180) or 180))
+    window = max(1, int(getattr(S, "newsfeed_feed_query_window_seconds", 60) or 60))
+    sid = f"rl#feed_query#{(mode or 'unknown').lower()}"
+    if not _bucket_limit(user_sub, sid, cap, window):
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "code": "feed_rate_limited",
+                "message": "Too many feed queries; try again later",
+                "mode": (mode or "unknown").lower(),
+                "limit": cap,
+                "window_seconds": window,
+            },
+            headers={"Retry-After": str(window)},
+        )
+
 def _lockout_key(user_sub: str, action: str) -> str:
     return f"lockout#{action}"
 
