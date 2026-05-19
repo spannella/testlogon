@@ -1,0 +1,92 @@
+{
+  "title": "Messaging Lottery Unlock Reliability",
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "environment",
+        "type": "query",
+        "query": "label_values(messaging_lottery_unlock_results_total, environment)",
+        "includeAll": true,
+        "multi": true,
+        "current": {"text": "All", "value": "$__all"}
+      },
+      {
+        "name": "client_version",
+        "type": "query",
+        "query": "label_values(messaging_lottery_unlock_results_total{environment=~\"$environment\"}, client_version)",
+        "includeAll": true,
+        "multi": true,
+        "current": {"text": "All", "value": "$__all"}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "Lottery Sends (by outcome)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(messaging_lottery_sends_total{environment=~\"$environment\",client_version=~\"$client_version\"}[5m])) by (outcome)",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "title": "Unlock Attempts vs Success",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "sum(rate(messaging_lottery_unlock_attempts_total{environment=~\"$environment\",client_version=~\"$client_version\"}[5m]))",
+          "legendFormat": "attempts/s"
+        },
+        {
+          "expr": "sum(rate(messaging_lottery_unlock_results_total{environment=~\"$environment\",client_version=~\"$client_version\",outcome=~\"success|idempotent\"}[5m]))",
+          "legendFormat": "success/s"
+        }
+      ]
+    },
+    {
+      "title": "Unlock Error Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "(sum(rate(messaging_lottery_unlock_results_total{environment=~\"$environment\",client_version=~\"$client_version\",outcome!~\"success|idempotent\"}[10m])) / clamp_min(sum(rate(messaging_lottery_unlock_attempts_total{environment=~\"$environment\",client_version=~\"$client_version\"}[10m])), 1))",
+          "legendFormat": "error ratio"
+        }
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 0.05, "color": "yellow"},
+        {"op": "gt", "value": 0.15, "color": "red"}
+      ]
+    },
+    {
+      "title": "Unlock API p95 Latency",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(messaging_lottery_unlock_latency_seconds_bucket{environment=~\"$environment\",client_version=~\"$client_version\",outcome=~\"success|idempotent\"}[5m])) by (le))",
+          "legendFormat": "unlock p95"
+        }
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 1.0, "color": "yellow"},
+        {"op": "gt", "value": 2.5, "color": "red"}
+      ]
+    },
+    {
+      "title": "Reveal p95 Latency",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(messaging_lottery_reveal_latency_seconds_bucket{environment=~\"$environment\",client_version=~\"$client_version\",outcome=~\"success|idempotent\"}[5m])) by (le))",
+          "legendFormat": "reveal p95"
+        }
+      ],
+      "thresholds": [
+        {"op": "gt", "value": 1.8, "color": "yellow"},
+        {"op": "gt", "value": 3.0, "color": "red"}
+      ]
+    }
+  ]
+}

@@ -450,6 +450,14 @@ class Settings:
         "DDB_MESSAGE_LEGAL_HOLDS",
         "MessageLegalHolds",
     )
+    lottery_message_config_table_name: str = os.environ.get(
+        "DDB_LOTTERY_MESSAGE_CONFIG",
+        "LotteryMessageConfig",
+    )
+    lottery_message_unlocks_table_name: str = os.environ.get(
+        "DDB_LOTTERY_MESSAGE_UNLOCKS",
+        "LotteryMessageUnlocks",
+    )
     messaging_hidden_timeline_filter_enabled: bool = os.environ.get(
         "MESSAGING_HIDDEN_TIMELINE_FILTER_ENABLED",
         "true",
@@ -481,6 +489,16 @@ class Settings:
     )
     messaging_report_rate_limit_conversation_max: int = int(
         os.environ.get("MESSAGING_REPORT_RATE_LIMIT_CONVERSATION_MAX", "20")
+    )
+    messaging_dm_lottery_unlock_rate_limit_enabled: bool = os.environ.get(
+        "MESSAGING_DM_LOTTERY_UNLOCK_RATE_LIMIT_ENABLED",
+        "true",
+    ).lower() in ("1", "true", "yes", "on")
+    messaging_dm_lottery_unlock_rate_limit_window_seconds: int = int(
+        os.environ.get("MESSAGING_DM_LOTTERY_UNLOCK_RATE_LIMIT_WINDOW_SECONDS", "60")
+    )
+    messaging_dm_lottery_unlock_rate_limit_max: int = int(
+        os.environ.get("MESSAGING_DM_LOTTERY_UNLOCK_RATE_LIMIT_MAX", "20")
     )
     messaging_compliance_archive_enabled: bool = os.environ.get(
         "MESSAGING_COMPLIANCE_ARCHIVE_ENABLED",
@@ -846,6 +864,8 @@ class Settings:
     messaging_mass_send_campaigns_per_tenant_per_hour: int = int(os.environ.get("MESSAGING_MASS_SEND_CAMPAIGNS_PER_TENANT_PER_HOUR", "500"))
     messaging_mass_send_max_destinations_per_campaign: int = int(os.environ.get("MESSAGING_MASS_SEND_MAX_DESTINATIONS_PER_CAMPAIGN", "100"))
     messaging_mass_send_max_concurrent_workers: int = int(os.environ.get("MESSAGING_MASS_SEND_MAX_CONCURRENT_WORKERS", "8"))
+    messaging_dm_lottery_enabled: bool = os.environ.get("MESSAGING_DM_LOTTERY_ENABLED", "false").lower() == "true"
+    messaging_dm_lottery_kill_switch: bool = os.environ.get("MESSAGING_DM_LOTTERY_KILL_SWITCH", "false").lower() == "true"
     # Canonical profile rollout flags (UPR-020)
     profile_lookup_audience_filtering_enabled: bool = os.environ.get("PROFILE_LOOKUP_AUDIENCE_FILTERING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     # Subscriptions

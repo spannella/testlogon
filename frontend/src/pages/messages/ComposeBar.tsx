@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,7 @@ import {
   isMessagingDraftsEnabled,
 } from "@/lib/featureFlags";
 import { encryptMessage, type MessageEncryptionEnvelope } from "@/lib/messageEncryption";
-import type { Message, PaymentMethod, SendTextMessageReq, FileEntry, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq } from "@/api/types";
+import type { Message, PaymentMethod, SendTextMessageReq, FileEntry, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq, CreateLotteryMessageReq } from "@/api/types";
 import { CalendarPickerDialog } from "./CalendarPickerDialog";
 import { EventPickerDialog } from "./EventPickerDialog";
 import { MeetingPollComposer } from "./MeetingPollComposer";
@@ -58,6 +58,7 @@ interface ComposeBarProps {
   onSendCalendarShare?: (params: SendCalendarShareReq) => void;
   onSendCalendarEvent?: (params: SendCalendarEventReq) => void;
   onSendMeetingPoll?: (params: SendMeetingPollReq) => void;
+  onSendLottery?: (params: Omit<CreateLotteryMessageReq, "conversation_id">) => void;
   sending?: boolean;
   disabled?: boolean;
   onKeystroke?: () => void;
@@ -84,6 +85,7 @@ export function ComposeBar({
   onSendCalendarShare,
   onSendCalendarEvent,
   onSendMeetingPoll,
+  onSendLottery,
   sending,
   disabled,
   onKeystroke,
@@ -121,6 +123,19 @@ export function ComposeBar({
   const [expiresDuration, setExpiresDuration] = React.useState("3600");
   // Gallery mode state
   const [galleryMode, setGalleryMode] = React.useState(false);
+  const [lotteryMode, setLotteryMode] = React.useState(false);
+  const [lotteryOutcomes, setLotteryOutcomes] = React.useState<Array<{
+    id: string;
+    label: string;
+    payload_type: "text" | "image" | "video";
+    text_content: string;
+    media_asset_id: string;
+    weight_bps: number;
+    percent_input: string;
+  }>>([
+    { id: "lo-1", label: "Outcome 1", payload_type: "text", text_content: "", media_asset_id: "", weight_bps: 5000, percent_input: "50.00" },
+    { id: "lo-2", label: "Outcome 2", payload_type: "text", text_content: "", media_asset_id: "", weight_bps: 5000, percent_input: "50.00" },
+  ]);
   const [galleryFreeFiles, setGalleryFreeFiles] = React.useState<File[]>([]);
   const [galleryLockedFiles, setGalleryLockedFiles] = React.useState<File[]>([]);
   const galleryFreeInputRef = React.useRef<HTMLInputElement>(null);
@@ -204,6 +219,33 @@ export function ComposeBar({
     staleTime: 5 * 60 * 1000,
   });
   const hasPaymentMethods = paymentMethods.length > 0;
+  const lotteryTotalBps = React.useMemo(
+    () => lotteryOutcomes.reduce((sum, o) => sum + (Number.isFinite(o.weight_bps) ? Math.max(0, o.weight_bps) : 0), 0),
+    [lotteryOutcomes],
+  );
+  const lotteryOutcomesValid = React.useMemo(() => {
+    if (lotteryOutcomes.length < 2 || lotteryOutcomes.length > 10) return false;
+    if (lotteryTotalBps !== 10_000) return false;
+    return lotteryOutcomes.every((o) =>
+      o.weight_bps > 0 &&
+      o.payload_type === "text"
+        ? o.text_content.trim().length > 0
+        : o.media_asset_id.trim().length > 0,
+    );
+  }, [lotteryOutcomes, lotteryTotalBps]);
+  const lotteryFieldErrors = React.useMemo(() => {
+    return lotteryOutcomes.map((o) => {
+      const weightError = o.weight_bps <= 0
+        ? "Weight must be at least 0.01% (1 bps)."
+        : o.weight_bps > 10_000
+        ? "Weight cannot exceed 100% (10,000 bps)."
+        : undefined;
+      const payloadError = o.payload_type === "text"
+        ? (o.text_content.trim() ? undefined : "Text outcome cannot be empty.")
+        : (o.media_asset_id.trim() ? undefined : "Media asset id is required.");
+      return { weightError, payloadError };
+    });
+  }, [lotteryOutcomes]);
 
   const resetTextArea = () => {
     if (textareaRef.current) {
@@ -462,6 +504,32 @@ export function ComposeBar({
       if (tipEnabled) { setTipEnabled(false); setTipAmount(""); setTipPaymentMethodId(null); }
       if (scheduledAt) { setScheduledAt(null); setScheduledInput(""); setScheduleOpen(false); }
       if (expiresEnabled) { setExpiresEnabled(false); setExpiresDuration("3600"); }
+      return;
+    }
+
+    if (lotteryMode && onSendLottery) {
+      if (!lotteryOutcomesValid) return;
+      onSendLottery({
+        message_type: "lottery_dm",
+        lottery_config: {
+          version: "v1",
+          outcomes: lotteryOutcomes.map((o, idx) => ({
+            outcome_id: `o_${idx + 1}`,
+            display_label: o.label.trim() || undefined,
+            payload_type: o.payload_type,
+            weight_bps: Math.max(1, Math.floor(o.weight_bps)),
+            text_content: o.payload_type === "text" ? o.text_content.trim() : undefined,
+            media_asset_id: o.payload_type !== "text" ? o.media_asset_id.trim() : undefined,
+          })),
+        },
+      });
+      setLotteryMode(false);
+      setLotteryOutcomes([
+        { id: "lo-1", label: "Outcome 1", payload_type: "text", text_content: "", media_asset_id: "", weight_bps: 5000, percent_input: "50.00" },
+        { id: "lo-2", label: "Outcome 2", payload_type: "text", text_content: "", media_asset_id: "", weight_bps: 5000, percent_input: "50.00" },
+      ]);
+      setText("");
+      resetTextArea();
       return;
     }
 
@@ -993,6 +1061,181 @@ export function ComposeBar({
         </div>
       )}
 
+      {lotteryMode && onSendLottery && (
+        <div className="mb-2 rounded-md border border-border bg-muted/30 p-2 text-xs space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-foreground">Lottery message</span>
+            <button
+              type="button"
+              onClick={() => setLotteryMode(false)}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Exit lottery mode"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          <div className="text-[11px] text-muted-foreground">
+            Configure 2-10 outcomes. Total weight must equal 10,000 bps (100%).
+          </div>
+          <div className="text-[10px] text-muted-foreground">
+            Percentage is deterministically converted using: <span className="font-mono">bps = round(percent × 100)</span>.
+          </div>
+
+          {lotteryOutcomes.map((row, idx) => (
+            <div key={row.id} className="rounded border border-border bg-background p-2 space-y-2">
+              <div className="flex items-center gap-2">
+                <input
+                  value={row.label}
+                  onChange={(e) =>
+                    setLotteryOutcomes((prev) => prev.map((o) => o.id === row.id ? { ...o, label: e.target.value } : o))
+                  }
+                  placeholder={`Outcome ${idx + 1} label`}
+                  className="flex-1 rounded border border-input px-2 py-1 text-xs"
+                />
+                <select
+                  value={row.payload_type}
+                  onChange={(e) =>
+                    setLotteryOutcomes((prev) => prev.map((o) => o.id === row.id ? { ...o, payload_type: e.target.value as "text" | "image" | "video" } : o))
+                  }
+                  className="rounded border border-input bg-background px-2 py-1 text-xs"
+                >
+                  <option value="text">Text</option>
+                  <option value="image">Image</option>
+                  <option value="video">Video</option>
+                </select>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step="0.01"
+                  value={row.percent_input}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    setLotteryOutcomes((prev) => prev.map((o) => {
+                      if (o.id !== row.id) return o;
+                      const parsed = Number(raw);
+                      if (!Number.isFinite(parsed)) return { ...o, percent_input: raw, weight_bps: 0 };
+                      const clamped = Math.max(0, Math.min(100, parsed));
+                      const bps = Math.round(clamped * 100);
+                      return { ...o, percent_input: raw, weight_bps: bps };
+                    }));
+                  }}
+                  onBlur={() => {
+                    setLotteryOutcomes((prev) => prev.map((o) => {
+                      if (o.id !== row.id) return o;
+                      if (!o.percent_input.trim()) return { ...o, percent_input: "0.00", weight_bps: 0 };
+                      const parsed = Number(o.percent_input);
+                      const clamped = Number.isFinite(parsed) ? Math.max(0, Math.min(100, parsed)) : 0;
+                      const bps = Math.round(clamped * 100);
+                      return { ...o, weight_bps: bps, percent_input: (bps / 100).toFixed(2) };
+                    }));
+                  }}
+                  className="w-24 rounded border border-input px-2 py-1 text-xs"
+                  aria-label="Weight percent"
+                />
+                <span className="text-[10px] text-muted-foreground">%</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={10000}
+                  value={row.weight_bps}
+                  onChange={(e) =>
+                    setLotteryOutcomes((prev) => prev.map((o) => {
+                      if (o.id !== row.id) return o;
+                      const parsed = Number(e.target.value || 0);
+                      const bps = Number.isFinite(parsed) ? Math.max(0, Math.min(10_000, Math.round(parsed))) : 0;
+                      return { ...o, weight_bps: bps, percent_input: (bps / 100).toFixed(2) };
+                    }))
+                  }
+                  className="w-24 rounded border border-input px-2 py-1 text-xs"
+                  aria-label="Weight bps"
+                />
+                <span className="text-[10px] text-muted-foreground">bps</span>
+                <button
+                  type="button"
+                  onClick={() => setLotteryOutcomes((prev) => prev.filter((o) => o.id !== row.id))}
+                  disabled={lotteryOutcomes.length <= 2}
+                  className="rounded border border-input px-2 py-1 text-[10px] disabled:opacity-50"
+                >
+                  Remove
+                </button>
+              </div>
+              {lotteryFieldErrors[idx]?.weightError && (
+                <p className="text-[10px] text-red-600">{lotteryFieldErrors[idx]?.weightError}</p>
+              )}
+              {row.payload_type === "text" ? (
+                <textarea
+                  value={row.text_content}
+                  onChange={(e) =>
+                    setLotteryOutcomes((prev) => prev.map((o) => o.id === row.id ? { ...o, text_content: e.target.value } : o))
+                  }
+                  placeholder="Text outcome content"
+                  rows={2}
+                  className="w-full rounded border border-input px-2 py-1 text-xs"
+                />
+              ) : (
+                <input
+                  value={row.media_asset_id}
+                  onChange={(e) =>
+                    setLotteryOutcomes((prev) => prev.map((o) => o.id === row.id ? { ...o, media_asset_id: e.target.value } : o))
+                  }
+                  placeholder="Media asset id (from upload pipeline)"
+                  className="w-full rounded border border-input px-2 py-1 text-xs"
+                />
+              )}
+              {lotteryFieldErrors[idx]?.payloadError && (
+                <p className="text-[10px] text-red-600">{lotteryFieldErrors[idx]?.payloadError}</p>
+              )}
+            </div>
+          ))}
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setLotteryOutcomes((prev) => [
+                    ...prev,
+                    { id: `lo-${Date.now()}`, label: `Outcome ${prev.length + 1}`, payload_type: "text", text_content: "", media_asset_id: "", weight_bps: 1000, percent_input: "10.00" },
+                  ].slice(0, 10))
+                }
+                disabled={lotteryOutcomes.length >= 10}
+              >
+                Add outcome
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const n = lotteryOutcomes.length;
+                  if (n <= 0) return;
+                  const base = Math.floor(10_000 / n);
+                  const remainder = 10_000 - (base * n);
+                  setLotteryOutcomes((prev) => prev.map((o, i) => {
+                    const bps = base + (i < remainder ? 1 : 0);
+                    return { ...o, weight_bps: bps, percent_input: (bps / 100).toFixed(2) };
+                  }));
+                }}
+              >
+                Auto-balance
+              </Button>
+            </div>
+            <span className={cn("text-[11px]", lotteryTotalBps === 10_000 ? "text-emerald-600" : "text-amber-600")}>
+              Total: {(lotteryTotalBps / 100).toFixed(2)}% ({lotteryTotalBps}/10000 bps)
+            </span>
+          </div>
+          {lotteryTotalBps !== 10_000 && (
+            <p className="text-[10px] text-amber-600">
+              Total must equal exactly 100.00% (10,000 bps) before you can send.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Reply context */}
       {draftsEnabled && drafts.length > 0 && (
         <div className="mb-2 rounded-lg border border-border bg-muted/20 px-3 py-2">
@@ -1211,7 +1454,7 @@ export function ComposeBar({
               size="icon"
               className="h-9 w-9 shrink-0"
               onClick={() => fileInputRef.current?.click()}
-              disabled={disabled || sending || encrypting || !!pendingFile || galleryMode}
+              disabled={disabled || sending || encrypting || !!pendingFile || galleryMode || lotteryMode}
               aria-label="Attach file"
             >
               <Paperclip className="h-4 w-4" />
@@ -1230,11 +1473,23 @@ export function ComposeBar({
             variant={galleryMode ? "secondary" : "ghost"}
             size="icon"
             className="h-9 w-9 shrink-0"
-            onClick={() => { setGalleryMode((v) => !v); setPendingFile(null); }}
+            onClick={() => { setGalleryMode((v) => !v); setLotteryMode(false); setPendingFile(null); }}
             disabled={disabled || sending || encrypting}
             aria-label="Gallery message"
           >
             <Images className="h-4 w-4" />
+          </Button>
+        )}
+        {onSendLottery && (
+          <Button
+            variant={lotteryMode ? "secondary" : "ghost"}
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            onClick={() => { setLotteryMode((v) => !v); setGalleryMode(false); setPendingFile(null); }}
+            disabled={disabled || sending || encrypting}
+            aria-label="Lottery message"
+          >
+            <Dices className="h-4 w-4" />
           </Button>
         )}
         {onSendFileShare && (
@@ -1321,7 +1576,11 @@ export function ComposeBar({
           }}
           onKeyDown={handleKeyDown}
           onInput={handleInput}
-          placeholder={encryptEnabled ? "Type an encrypted message..." : "Type a message..."}
+          placeholder={
+            lotteryMode
+              ? "Lottery mode enabled — configure outcomes above"
+              : (encryptEnabled ? "Type an encrypted message..." : "Type a message...")
+          }
           rows={1}
           disabled={disabled || sending || encrypting}
           className={cn(
@@ -1412,6 +1671,8 @@ export function ComposeBar({
               : galleryMode
               ? (galleryFreeFiles.length === 0 && galleryLockedFiles.length === 0) ||
                 (galleryLockedFiles.length > 0 && lockEnabled && (!lockPrice || parseFloat(lockPrice) < 0.01))
+              : lotteryMode
+              ? !lotteryOutcomesValid
               : (!text.trim() && !pendingFile)
             ) ||
             (tipEnabled && (!tipAmount || !tipPaymentMethodId))

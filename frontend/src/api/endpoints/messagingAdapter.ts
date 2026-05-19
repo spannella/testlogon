@@ -118,6 +118,7 @@ export function adaptMessage(raw: RawMessage): Message {
     calendar_share: raw.calendar_share,
     calendar_event: raw.calendar_event,
     meeting_poll: raw.meeting_poll,
+    lottery: raw.lottery,
     free_images: raw.free_images,
     locked_images: raw.locked_images,
     locked_image_count: raw.locked_image_count,

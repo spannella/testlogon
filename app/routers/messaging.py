@@ -52,6 +52,11 @@ from app.metrics import (
     record_messaging_gallery_request,
     record_messaging_draft_latency,
     record_messaging_draft_operation,
+    record_messaging_lottery_reveal_latency,
+    record_messaging_lottery_send,
+    record_messaging_lottery_unlock_attempt,
+    record_messaging_lottery_unlock_latency,
+    record_messaging_lottery_unlock_result,
     record_messaging_message_control_action,
     record_messaging_report_validation_error,
     record_messaging_thread_promotion_event,
@@ -141,6 +146,8 @@ from app.services.usage_metering import (
     build_usage_source_idempotency_key,
     record_usage_event_and_aggregates,
 )
+from app.services import messaging_lottery_store
+from app.services.messaging_lottery_rng import choose_weighted_outcome, LotterySelectionError
 
 # -------------------------
 # Config / AWS clients
@@ -2048,6 +2055,7 @@ class PresenceOut(BaseModel):
 class MessagingConfigOut(BaseModel):
     messaging_encrypted_messages_enabled: bool
     messaging_gallery_enabled: bool
+    messaging_dm_lottery_enabled: bool
     messaging_hide_controls_enabled: bool
     messaging_pins_enabled: bool
     messaging_reporting_enabled: bool
@@ -2116,6 +2124,66 @@ class CreateFileMessageIn(BaseModel):
                 "listen_once is only supported for audio file messages",
             )
         return self
+
+
+class LotteryOutcomeIn(BaseModel):
+    display_label: Optional[str] = Field(default=None, max_length=80)
+    weight_bps: int = Field(ge=1, le=10_000)
+    payload_type: Literal["text", "image", "video"]
+    text_content: Optional[str] = Field(default=None, max_length=4000)
+    media_asset_id: Optional[str] = Field(default=None, min_length=1, max_length=256)
+
+
+class LotteryConfigIn(BaseModel):
+    version: str = Field(default="v1", min_length=1, max_length=32)
+    outcomes: List[LotteryOutcomeIn] = Field(default_factory=list)
+
+
+class CreateLotteryMessageIn(BaseModel):
+    message_type: Literal["lottery_dm"] = "lottery_dm"
+    conversation_id: str = Field(min_length=1, max_length=128)
+    lottery_config: LotteryConfigIn
+
+
+class LotteryOutcomeOut(BaseModel):
+    outcome_id: str
+    display_label: Optional[str] = None
+    weight_bps: int
+    payload_type: Literal["text", "image", "video"]
+    text_content: Optional[str] = None
+    media_asset_id: Optional[str] = None
+    media_metadata: Optional[Dict[str, Any]] = None
+
+
+class LotteryConfigOut(BaseModel):
+    version: str
+    outcomes: List[LotteryOutcomeOut]
+
+
+class LotterySelectedOutcomeOut(BaseModel):
+    outcome_id: str
+    payload_type: Literal["text", "image", "video"]
+    text_content: Optional[str] = None
+    media_asset_id: Optional[str] = None
+
+
+class LotteryMessageOut(BaseModel):
+    message_id: str
+    conversation_id: str
+    sender_id: str
+    message_type: Literal["lottery_dm"] = "lottery_dm"
+    lock_state: Literal["locked", "unlocked"]
+    lottery_config: LotteryConfigOut
+    selected_outcome: Optional[LotterySelectedOutcomeOut] = None
+    idempotent: bool = False
+    created_at: int
+
+
+class LotteryUnlockOut(BaseModel):
+    message_id: str
+    lock_state: Literal["unlocked"] = "unlocked"
+    selected_outcome: LotterySelectedOutcomeOut
+    unlocked_at: int
 
 
 class EditMessageIn(BaseModel):
@@ -2201,6 +2269,7 @@ class MessageOut(BaseModel):
     calendar_share: Optional[Dict[str, Any]] = None
     calendar_event: Optional[Dict[str, Any]] = None
     meeting_poll: Optional[Dict[str, Any]] = None
+    lottery: Optional[Dict[str, Any]] = None
     preview: Optional[Dict[str, Any]] = None
     # Gallery message fields
     free_images: Optional[List[Dict[str, Any]]] = None
@@ -2718,6 +2787,31 @@ def _messaging_gallery_index_enabled() -> bool:
     return bool(enabled and tbl_gallery_index is not None and _aws_credentials_available())
 
 
+def _messaging_dm_lottery_enabled() -> bool:
+    enabled = os.getenv(
+        "MESSAGING_DM_LOTTERY_ENABLED",
+        "true" if S.messaging_dm_lottery_enabled else "false",
+    ) not in ("0", "false", "False")
+    kill_switch = os.getenv(
+        "MESSAGING_DM_LOTTERY_KILL_SWITCH",
+        "true" if S.messaging_dm_lottery_kill_switch else "false",
+    ) not in ("0", "false", "False")
+    return enabled and not kill_switch
+
+
+def _messaging_client_version(req: Request | None) -> str:
+    if not req:
+        return "unknown"
+    headers = req.headers
+    preferred = headers.get("x-client-version") or headers.get("x-app-version")
+    if preferred and preferred.strip():
+        return preferred.strip()
+    user_agent = headers.get("user-agent") or ""
+    if user_agent.strip():
+        return user_agent.strip()[:48]
+    return "unknown"
+
+
 def _messaging_hide_controls_enabled() -> bool:
     return os.getenv(
         "MESSAGING_HIDE_CONTROLS_ENABLED",
@@ -2756,6 +2850,168 @@ def _messaging_compliance_legal_hold_enabled() -> bool:
 def _require_message_controls_capability(enabled: bool, detail: str) -> None:
     if not enabled:
         raise HTTPException(status_code=403, detail=detail)
+
+
+def _require_dm_lottery_enabled() -> None:
+    if not _messaging_dm_lottery_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "feature-disabled", "message": "messaging.dm_lottery is disabled"},
+        )
+
+
+_LOTTERY_UNLOCK_RATE_LIMIT_LOCK = threading.Lock()
+_LOTTERY_UNLOCK_RATE_LIMIT_EVENTS: dict[str, list[int]] = {}
+
+
+def _enforce_lottery_unlock_rate_limit(*, user_id: str, conversation_id: str, message_id: str, now: int) -> None:
+    enabled = os.environ.get(
+        "MESSAGING_DM_LOTTERY_UNLOCK_RATE_LIMIT_ENABLED",
+        "true" if S.messaging_dm_lottery_unlock_rate_limit_enabled else "false",
+    ).lower() in ("1", "true", "yes", "on")
+    if not enabled:
+        return
+
+    window_seconds = max(
+        1,
+        int(
+            os.environ.get(
+                "MESSAGING_DM_LOTTERY_UNLOCK_RATE_LIMIT_WINDOW_SECONDS",
+                str(S.messaging_dm_lottery_unlock_rate_limit_window_seconds),
+            )
+        ),
+    )
+    max_events = max(
+        1,
+        int(
+            os.environ.get(
+                "MESSAGING_DM_LOTTERY_UNLOCK_RATE_LIMIT_MAX",
+                str(S.messaging_dm_lottery_unlock_rate_limit_max),
+            )
+        ),
+    )
+    key = f"{user_id}|{conversation_id}|{message_id}"
+    cutoff = now - window_seconds
+    with _LOTTERY_UNLOCK_RATE_LIMIT_LOCK:
+        events = [ts for ts in _LOTTERY_UNLOCK_RATE_LIMIT_EVENTS.get(key, []) if ts >= cutoff]
+        if len(events) >= max_events:
+            _LOTTERY_UNLOCK_RATE_LIMIT_EVENTS[key] = events
+            record_messaging_message_control_action(action="lottery_unlock", result="rate_limited")
+            audit_event(
+                "messaging_lottery_unlock_rate_limited",
+                user_id,
+                None,
+                outcome="rate_limited",
+                conversation_id=conversation_id,
+                message_id=message_id,
+                count=len(events),
+                window_seconds=window_seconds,
+            )
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "rate_limited",
+                    "message": "Too many lottery unlock attempts. Please retry later.",
+                    "scope": "user_conversation_message",
+                },
+                headers={"Retry-After": str(window_seconds)},
+            )
+        events.append(now)
+        _LOTTERY_UNLOCK_RATE_LIMIT_EVENTS[key] = events
+
+
+def _resolve_and_validate_lottery_media_asset(*, media_asset_id: str, conversation_id: str, owner_user_id: str) -> dict[str, Any]:
+    raw = str(media_asset_id or "").strip()
+    if not raw:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid-media-asset", "message": "media_asset_id is required for media outcomes"},
+        )
+    bucket = S3_BUCKET_IMAGES
+    key = raw
+    if raw.startswith("s3://"):
+        tail = raw[len("s3://") :]
+        if "/" not in tail:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "invalid-media-asset", "message": "media_asset_id must include bucket and key"},
+            )
+        bucket, key = tail.split("/", 1)
+    elif ":" in raw:
+        b, k = raw.split(":", 1)
+        if b and k:
+            bucket, key = b, k
+
+    expected_prefix = f"{conversation_id}/{owner_user_id}/"
+    if not key.startswith(expected_prefix):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "unauthorized", "message": "media asset does not belong to sender or conversation"},
+        )
+    try:
+        head = s3.head_object(Bucket=bucket, Key=key)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid-media-asset", "message": "media asset not found"},
+        ) from exc
+
+    return {
+        "bucket": bucket,
+        "key": key,
+        "content_type": str(head.get("ContentType") or ""),
+        "content_length": int(head.get("ContentLength") or 0),
+        "etag": str(head.get("ETag") or "").strip('"') or None,
+        "last_modified": int(head.get("LastModified").timestamp()) if head.get("LastModified") else None,
+    }
+
+
+def _lottery_dedupe_message_id(*, sender_id: str, conversation_id: str, idempotency_key: str) -> str:
+    digest = hashlib.sha256(f"{sender_id}|{conversation_id}|{idempotency_key}".encode("utf-8")).hexdigest()[:32]
+    return f"m_lottery_{digest}"
+
+
+def _lottery_config_signature(config: Mapping[str, Any]) -> str:
+    payload = {
+        "version": str(config.get("version") or "v1"),
+        "outcomes": [
+            {
+                "outcome_id": str(out.get("outcome_id") or ""),
+                "display_label": (str(out.get("display_label") or "") or None),
+                "weight_bps": int(out.get("weight_bps") or 0),
+                "payload_type": str(out.get("payload_type") or ""),
+                "text_content": (str(out.get("text_content") or "") or None),
+                "media_asset_id": (str(out.get("media_asset_id") or "") or None),
+            }
+            for out in (config.get("outcomes") or [])
+        ],
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _lottery_message_item(
+    *,
+    conversation_id: str,
+    message_id: str,
+    sender_id: str,
+    created_at: int,
+    persisted_cfg: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "sender_id": sender_id,
+        "created_at": created_at,
+        "kind": "text",
+        "text": "🎲 Lottery message",
+        "lottery": {
+            "message_type": "lottery_dm",
+            "lock_state": "locked",
+            "version": persisted_cfg.get("version", "v1"),
+            "outcome_ids": [str(out.get("outcome_id") or "") for out in (persisted_cfg.get("outcomes") or [])],
+        },
+        "reactions": {},
+    }
 
 
 def _encode_gallery_index_cursor(sort_key: str) -> str:
@@ -3364,8 +3620,54 @@ def _project_gallery_image(img_dict: dict) -> dict:
     return out
 
 
+def _lottery_projection_for_viewer(message_item: dict, viewer_user_id: str) -> Optional[Dict[str, Any]]:
+    lottery_meta = message_item.get("lottery") if isinstance(message_item.get("lottery"), dict) else None
+    if not lottery_meta or str(lottery_meta.get("message_type") or "") != "lottery_dm":
+        return None
+
+    message_id = str(message_item.get("message_id") or "")
+    sender_id = str(message_item.get("sender_id") or "")
+    if not message_id:
+        return {"message_type": "lottery_dm", "lock_state": "locked"}
+
+    cfg = messaging_lottery_store.get_lottery_config(message_id=message_id) or {}
+    unlock = None if viewer_user_id == sender_id else messaging_lottery_store.get_lottery_unlock(
+        message_id=message_id,
+        recipient_id=viewer_user_id,
+    )
+
+    if not unlock:
+        return {
+            "message_type": "lottery_dm",
+            "lock_state": "locked",
+        }
+
+    selected_outcome_id = str(unlock.get("selected_outcome_id") or "")
+    selected = next(
+        (o for o in (cfg.get("outcomes") or []) if str(o.get("outcome_id") or "") == selected_outcome_id),
+        None,
+    )
+    if not selected:
+        return {
+            "message_type": "lottery_dm",
+            "lock_state": "locked",
+        }
+    return {
+        "message_type": "lottery_dm",
+        "lock_state": "unlocked",
+        "selected_outcome": {
+            "outcome_id": selected_outcome_id,
+            "payload_type": str(selected.get("payload_type") or "text"),
+            "text_content": (str(selected.get("text_content") or "") or None),
+            "media_asset_id": (str(selected.get("media_asset_id") or "") or None),
+            "media_metadata": (dict(selected.get("media_metadata") or {}) or None),
+        },
+    }
+
+
 def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOut:
     merged_item = _merge_consumption_state(message_item, viewer_user_id)
+    lottery_out = _lottery_projection_for_viewer(merged_item, viewer_user_id)
 
     file_payload = merged_item.get("file")
     if isinstance(file_payload, dict):
@@ -3525,6 +3827,7 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         calendar_share=calendar_share_out,
         calendar_event=calendar_event_out,
         meeting_poll=meeting_poll_out,
+        lottery=lottery_out,
         preview=preview,
         free_images=free_images_out,
         locked_images=locked_images_out,
@@ -10737,10 +11040,472 @@ def messaging_config(user_id: str = Depends(get_messaging_user_id)):
     return MessagingConfigOut(
         messaging_encrypted_messages_enabled=_encrypted_messages_enabled(),
         messaging_gallery_enabled=_messaging_gallery_enabled(),
+        messaging_dm_lottery_enabled=_messaging_dm_lottery_enabled(),
         messaging_hide_controls_enabled=_messaging_hide_controls_enabled(),
         messaging_pins_enabled=_messaging_pins_enabled(),
         messaging_reporting_enabled=_messaging_reporting_enabled(),
         messaging_mass_send_enabled=_messaging_mass_send_enabled(),
+    )
+
+
+@router.post("/messages/lottery", response_model=LotteryMessageOut)
+def create_lottery_message(
+    payload: CreateLotteryMessageIn,
+    req: Request = None,
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+    user_id: str = Depends(get_messaging_user_id),
+):
+    client_version = _messaging_client_version(req)
+    _require_dm_lottery_enabled()
+    _enforce_messaging_internal_entitlement(
+        user_id=user_id,
+        action="send_message",
+        request_id=(req.headers.get("x-request-id") if req else None),
+    )
+    require_participant_active(user_id, payload.conversation_id)
+    convo = _get_conversation_or_404(payload.conversation_id)
+    if str(convo.get("type") or "").strip().lower() != "dm":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "not-dm", "message": "Lottery messages are only supported in DM conversations"},
+        )
+
+    ts = now_ts()
+    normalized_idempotency_key = (idempotency_key or "").strip()
+    if len(normalized_idempotency_key) > 128:
+        record_messaging_lottery_send(outcome="invalid_idempotency_key", client_version=client_version)
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid-idempotency-key", "message": "Idempotency-Key must be <= 128 characters"},
+        )
+    if normalized_idempotency_key and not re.fullmatch(r"[A-Za-z0-9._:-]+", normalized_idempotency_key):
+        record_messaging_lottery_send(outcome="invalid_idempotency_key", client_version=client_version)
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid-idempotency-key",
+                "message": "Idempotency-Key may only contain letters, numbers, dot, underscore, colon, and hyphen",
+            },
+        )
+    message_id = (
+        _lottery_dedupe_message_id(
+            sender_id=user_id,
+            conversation_id=payload.conversation_id,
+            idempotency_key=normalized_idempotency_key,
+        )
+        if normalized_idempotency_key
+        else "m_" + new_id()
+    )
+    normalized_outcomes: list[dict[str, Any]] = []
+    for idx, outcome in enumerate(payload.lottery_config.outcomes):
+        out = outcome.model_dump(exclude_none=True)
+        out.setdefault("outcome_id", f"o_{message_id}_{idx + 1}")
+        payload_type = str(out.get("payload_type") or "")
+        if payload_type in {"image", "video"}:
+            metadata = _resolve_and_validate_lottery_media_asset(
+                media_asset_id=str(out.get("media_asset_id") or ""),
+                conversation_id=payload.conversation_id,
+                owner_user_id=user_id,
+            )
+            out["media_asset_id"] = f"{metadata['bucket']}:{metadata['key']}"
+            out["media_metadata"] = metadata
+        normalized_outcomes.append(out)
+    config_payload = {"version": payload.lottery_config.version, "outcomes": normalized_outcomes}
+
+    if normalized_idempotency_key:
+        existing_cfg = messaging_lottery_store.get_lottery_config(message_id=message_id)
+        if existing_cfg:
+            same_actor = (
+                str(existing_cfg.get("sender_id") or "") == user_id
+                and str(existing_cfg.get("conversation_id") or "") == payload.conversation_id
+            )
+            same_payload = _lottery_config_signature(existing_cfg) == _lottery_config_signature(config_payload)
+            if not (same_actor and same_payload):
+                record_messaging_lottery_send(outcome="idempotency_conflict", client_version=client_version)
+                audit_event(
+                    "messaging_lottery_created",
+                    user_id,
+                    req,
+                    outcome="idempotency_conflict",
+                    conversation_id=payload.conversation_id,
+                    message_id=message_id,
+                    event_ts=ts,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "idempotency-conflict",
+                        "message": "Idempotency-Key replayed with a different lottery payload",
+                    },
+                )
+            existing_created_at = int(existing_cfg.get("created_at") or ts)
+            existing_msg = tbl_msgs.get_item(
+                Key={"conversation_id": payload.conversation_id, "message_id": message_id}
+            ).get("Item")
+            replay_outcome = "idempotent"
+            replay_repair_failed = False
+            if not existing_msg:
+                repaired_message_item = _lottery_message_item(
+                    conversation_id=payload.conversation_id,
+                    message_id=message_id,
+                    sender_id=user_id,
+                    created_at=existing_created_at,
+                    persisted_cfg=existing_cfg,
+                )
+                try:
+                    tbl_msgs.put_item(
+                        Item=repaired_message_item,
+                        ConditionExpression="attribute_not_exists(message_id)",
+                    )
+                    _safe_index_message(repaired_message_item)
+                    replay_outcome = "idempotent_repaired"
+                except Exception:
+                    # If orphan repair fails, surface explicit server error so callers can retry.
+                    logger.exception(
+                        "messaging.create_lottery_message idempotent orphan repair failed",
+                        extra={
+                            "conversation_id": payload.conversation_id,
+                            "message_id": message_id,
+                            "user_id": user_id,
+                        },
+                    )
+                    replay_outcome = "idempotent_orphan_unrepaired"
+                    replay_repair_failed = True
+            record_messaging_lottery_send(outcome=replay_outcome, client_version=client_version)
+            audit_event(
+                "messaging_lottery_created",
+                user_id,
+                req,
+                outcome=replay_outcome,
+                conversation_id=payload.conversation_id,
+                message_id=message_id,
+                event_ts=existing_created_at,
+                outcome_count=len(existing_cfg.get("outcomes") or []),
+                outcome_ids=[str(out.get("outcome_id") or "") for out in (existing_cfg.get("outcomes") or [])],
+                payload_types=[str(out.get("payload_type") or "") for out in (existing_cfg.get("outcomes") or [])],
+                idempotent_replay=True,
+            )
+            if replay_repair_failed:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "code": "idempotent-repair-failed",
+                        "message": "Failed to repair lottery message during idempotent replay",
+                    },
+                )
+            return LotteryMessageOut(
+                message_id=message_id,
+                conversation_id=payload.conversation_id,
+                sender_id=user_id,
+                message_type="lottery_dm",
+                lock_state="locked",
+                lottery_config=LotteryConfigOut(
+                    version=str(existing_cfg.get("version") or "v1"),
+                    outcomes=[
+                        LotteryOutcomeOut(
+                            outcome_id=str(out.get("outcome_id") or ""),
+                            display_label=(str(out.get("display_label") or "") or None),
+                            weight_bps=int(out.get("weight_bps") or 0),
+                            payload_type=str(out.get("payload_type") or "text"),
+                            text_content=(str(out.get("text_content") or "") or None),
+                            media_asset_id=(str(out.get("media_asset_id") or "") or None),
+                            media_metadata=(dict(out.get("media_metadata") or {}) or None),
+                        )
+                        for out in (existing_cfg.get("outcomes") or [])
+                    ],
+                ),
+                selected_outcome=None,
+                idempotent=True,
+                created_at=existing_created_at,
+            )
+
+    try:
+        persisted_cfg = messaging_lottery_store.put_lottery_config(
+            message_id=message_id,
+            conversation_id=payload.conversation_id,
+            sender_id=user_id,
+            lottery_config=config_payload,
+            created_at=ts,
+        )
+    except messaging_lottery_store.LotteryConfigValidationError as exc:
+        record_messaging_lottery_send(outcome="invalid_config", client_version=client_version)
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "invalid-config",
+                "message": str(exc),
+                "issues": exc.issues,
+            },
+        ) from exc
+    except Exception as exc:
+        record_messaging_lottery_send(outcome="config_persist_error", client_version=client_version)
+        raise HTTPException(status_code=500, detail="Failed to persist lottery config") from exc
+
+    message_item = _lottery_message_item(
+        conversation_id=payload.conversation_id,
+        message_id=message_id,
+        sender_id=user_id,
+        created_at=ts,
+        persisted_cfg=persisted_cfg,
+    )
+    try:
+        tbl_msgs.put_item(Item=message_item, ConditionExpression="attribute_not_exists(message_id)")
+    except Exception as exc:
+        try:
+            ddb.Table(S.lottery_message_config_table_name).delete_item(Key={"message_id": message_id})
+        except Exception:
+            pass
+        record_messaging_lottery_send(outcome="message_persist_error", client_version=client_version)
+        raise HTTPException(status_code=500, detail="Failed to create lottery message") from exc
+
+    _safe_index_message(message_item)
+    _emit_message_event(payload.conversation_id, message_id, message_item)
+    _meter_message_send(user_id=user_id, conversation_id=payload.conversation_id, message_id=message_id)
+    record_messaging_lottery_send(outcome="success", client_version=client_version)
+    audit_event(
+        "messaging_lottery_created",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=payload.conversation_id,
+        message_id=message_id,
+        event_ts=ts,
+        outcome_count=len(persisted_cfg.get("outcomes") or []),
+        outcome_ids=[str(out.get("outcome_id") or "") for out in (persisted_cfg.get("outcomes") or [])],
+        payload_types=[str(out.get("payload_type") or "") for out in (persisted_cfg.get("outcomes") or [])],
+    )
+
+    return LotteryMessageOut(
+        message_id=message_id,
+        conversation_id=payload.conversation_id,
+        sender_id=user_id,
+        message_type="lottery_dm",
+        lock_state="locked",
+        lottery_config=LotteryConfigOut(
+            version=str(persisted_cfg.get("version") or "v1"),
+            outcomes=[
+                LotteryOutcomeOut(
+                    outcome_id=str(out.get("outcome_id") or ""),
+                    display_label=(str(out.get("display_label") or "") or None),
+                    weight_bps=int(out.get("weight_bps") or 0),
+                    payload_type=str(out.get("payload_type") or "text"),
+                    text_content=(str(out.get("text_content") or "") or None),
+                    media_asset_id=(str(out.get("media_asset_id") or "") or None),
+                    media_metadata=(dict(out.get("media_metadata") or {}) or None),
+                )
+                for out in (persisted_cfg.get("outcomes") or [])
+            ],
+        ),
+        selected_outcome=None,
+        idempotent=False,
+        created_at=ts,
+    )
+
+
+@router.post("/messages/{message_id}/lottery/unlock", response_model=LotteryUnlockOut)
+def unlock_lottery_message(
+    message_id: str,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    started = time.perf_counter()
+    client_version = _messaging_client_version(req)
+    reveal_latency_header = (req.headers.get("x-lottery-reveal-latency-ms") if req else None) or ""
+    record_messaging_lottery_unlock_attempt(client_version=client_version)
+
+    def _record_unlock_telemetry(outcome: str) -> None:
+        elapsed = max(0.0, time.perf_counter() - started)
+        reveal_elapsed = elapsed
+        if reveal_latency_header:
+            try:
+                parsed_ms = float(reveal_latency_header)
+                if parsed_ms >= 0:
+                    reveal_elapsed = parsed_ms / 1000.0
+            except Exception:
+                reveal_elapsed = elapsed
+        record_messaging_lottery_unlock_result(outcome=outcome, client_version=client_version)
+        record_messaging_lottery_unlock_latency(
+            outcome=outcome,
+            elapsed_seconds=elapsed,
+            client_version=client_version,
+        )
+        record_messaging_lottery_reveal_latency(
+            outcome=outcome,
+            elapsed_seconds=reveal_elapsed,
+            client_version=client_version,
+        )
+
+    _require_dm_lottery_enabled()
+    cfg = messaging_lottery_store.get_lottery_config(message_id=message_id)
+    if not cfg:
+        _record_unlock_telemetry("message_not_found")
+        raise HTTPException(status_code=404, detail={"code": "message-not-found", "message": "Lottery message not found"})
+
+    conversation_id = str(cfg.get("conversation_id") or "")
+    sender_id = str(cfg.get("sender_id") or "")
+    require_participant_active(user_id, conversation_id)
+    if user_id == sender_id:
+        _record_unlock_telemetry("unauthorized_sender")
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "unauthorized", "message": "Sender cannot unlock their own lottery message"},
+        )
+    try:
+        _enforce_lottery_unlock_rate_limit(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            message_id=message_id,
+            now=now_ts(),
+        )
+    except HTTPException:
+        _record_unlock_telemetry("rate_limited")
+        raise
+
+    # Short-circuit existing unlock so repeated calls are deterministic with no reroll.
+    existing_unlock = messaging_lottery_store.get_lottery_unlock(message_id=message_id, recipient_id=user_id)
+    if existing_unlock:
+        selected_outcome_id = str(existing_unlock.get("selected_outcome_id") or "")
+        selected = next((o for o in (cfg.get("outcomes") or []) if str(o.get("outcome_id") or "") == selected_outcome_id), None)
+        if not selected:
+            _record_unlock_telemetry("config_mismatch")
+            raise HTTPException(status_code=500, detail="Lottery outcome configuration mismatch")
+        unlocked_at = int(existing_unlock.get("unlocked_at") or now_ts())
+        audit_event(
+            "messaging_lottery_unlocked",
+            user_id,
+            req,
+            outcome="idempotent",
+            conversation_id=conversation_id,
+            message_id=message_id,
+            event_ts=unlocked_at,
+            selected_outcome_id=selected_outcome_id,
+        )
+        _record_unlock_telemetry("idempotent")
+        return LotteryUnlockOut(
+            message_id=message_id,
+            lock_state="unlocked",
+            selected_outcome=LotterySelectedOutcomeOut(
+                outcome_id=selected_outcome_id,
+                payload_type=str(selected.get("payload_type") or "text"),
+                text_content=(str(selected.get("text_content") or "") or None),
+                media_asset_id=(str(selected.get("media_asset_id") or "") or None),
+            ),
+            unlocked_at=unlocked_at,
+        )
+
+    try:
+        selected, rng_roll = choose_weighted_outcome(cfg.get("outcomes") or [])
+    except LotterySelectionError as exc:
+        _record_unlock_telemetry("invalid_config")
+        raise HTTPException(status_code=422, detail={"code": "invalid-config", "message": str(exc)}) from exc
+
+    try:
+        unlock = messaging_lottery_store.put_lottery_unlock(
+            message_id=message_id,
+            recipient_id=user_id,
+            selected_outcome_id=str(selected.get("outcome_id") or ""),
+            unlocked_at=now_ts(),
+            rng_roll=rng_roll,
+        ).item
+    except Exception as exc:
+        _record_unlock_telemetry("unlock_persist_error")
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "unlock-persist-error", "message": "Failed to persist lottery unlock"},
+        ) from exc
+
+    selected_outcome_id = str(unlock.get("selected_outcome_id") or "")
+    selected_payload = next((o for o in (cfg.get("outcomes") or []) if str(o.get("outcome_id") or "") == selected_outcome_id), None)
+    if not selected_payload:
+        _record_unlock_telemetry("config_mismatch")
+        raise HTTPException(status_code=500, detail="Lottery outcome configuration mismatch")
+    unlocked_at = int(unlock.get("unlocked_at") or now_ts())
+    audit_event(
+        "messaging_lottery_unlocked",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=message_id,
+        event_ts=unlocked_at,
+        selected_outcome_id=selected_outcome_id,
+    )
+    _record_unlock_telemetry("success")
+
+    return LotteryUnlockOut(
+        message_id=message_id,
+        lock_state="unlocked",
+        selected_outcome=LotterySelectedOutcomeOut(
+            outcome_id=selected_outcome_id,
+            payload_type=str(selected_payload.get("payload_type") or "text"),
+            text_content=(str(selected_payload.get("text_content") or "") or None),
+            media_asset_id=(str(selected_payload.get("media_asset_id") or "") or None),
+        ),
+        unlocked_at=unlocked_at,
+    )
+
+
+@router.get("/messages/{message_id}/lottery", response_model=LotteryMessageOut)
+def get_lottery_message(
+    message_id: str,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    _require_dm_lottery_enabled()
+    cfg = messaging_lottery_store.get_lottery_config(message_id=message_id)
+    if not cfg:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "message-not-found", "message": "Lottery message not found"},
+        )
+
+    conversation_id = str(cfg.get("conversation_id") or "")
+    sender_id = str(cfg.get("sender_id") or "")
+    require_participant_active(user_id, conversation_id)
+
+    selected_outcome: Optional[LotterySelectedOutcomeOut] = None
+    lock_state: Literal["locked", "unlocked"] = "locked"
+    if user_id != sender_id:
+        unlock = messaging_lottery_store.get_lottery_unlock(message_id=message_id, recipient_id=user_id)
+        if unlock:
+            selected_outcome_id = str(unlock.get("selected_outcome_id") or "")
+            selected = next(
+                (o for o in (cfg.get("outcomes") or []) if str(o.get("outcome_id") or "") == selected_outcome_id),
+                None,
+            )
+            if not selected:
+                raise HTTPException(status_code=500, detail="Lottery outcome configuration mismatch")
+            selected_outcome = LotterySelectedOutcomeOut(
+                outcome_id=selected_outcome_id,
+                payload_type=str(selected.get("payload_type") or "text"),
+                text_content=(str(selected.get("text_content") or "") or None),
+                media_asset_id=(str(selected.get("media_asset_id") or "") or None),
+            )
+            lock_state = "unlocked"
+
+    return LotteryMessageOut(
+        message_id=str(cfg.get("message_id") or message_id),
+        conversation_id=conversation_id,
+        sender_id=sender_id,
+        message_type="lottery_dm",
+        lock_state=lock_state,
+        lottery_config=LotteryConfigOut(
+            version=str(cfg.get("version") or "v1"),
+            outcomes=[
+                LotteryOutcomeOut(
+                    outcome_id=str(out.get("outcome_id") or ""),
+                    display_label=(str(out.get("display_label") or "") or None),
+                    weight_bps=int(out.get("weight_bps") or 0),
+                    payload_type=str(out.get("payload_type") or "text"),
+                    text_content=(str(out.get("text_content") or "") or None),
+                    media_asset_id=(str(out.get("media_asset_id") or "") or None),
+                    media_metadata=(dict(out.get("media_metadata") or {}) or None),
+                )
+                for out in (cfg.get("outcomes") or [])
+            ],
+        ),
+        selected_outcome=selected_outcome,
+        idempotent=False,
+        created_at=int(cfg.get("created_at") or now_ts()),
     )
 
 

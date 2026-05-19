@@ -89,6 +89,355 @@ class TestMessagingRoutes(unittest.TestCase):
         self.assertEqual(convo_item["routing_state_group_pk"], "awaiting_agent#helpdesk-l1")
         self.assertEqual(convo_item["routing_state_group_sk"], "c_abc")
 
+    def test_get_lottery_message_returns_404_when_missing(self):
+        with patch.object(messaging, "_require_dm_lottery_enabled"), patch.object(
+            messaging.messaging_lottery_store,
+            "get_lottery_config",
+            return_value=None,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.get_lottery_message("m-missing", user_id="user-1")
+
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertEqual(ctx.exception.detail["code"], "message-not-found")
+
+    def test_get_lottery_message_returns_locked_for_sender(self):
+        cfg = {
+            "message_id": "m1",
+            "conversation_id": "c1",
+            "sender_id": "sender-1",
+            "version": "v1",
+            "created_at": "111",
+            "outcomes": [
+                {
+                    "outcome_id": "o1",
+                    "weight_bps": 10000,
+                    "payload_type": "text",
+                    "text_content": "hello",
+                }
+            ],
+        }
+        with (
+            patch.object(messaging, "_require_dm_lottery_enabled"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging.messaging_lottery_store, "get_lottery_config", return_value=cfg),
+            patch.object(messaging.messaging_lottery_store, "get_lottery_unlock") as get_unlock,
+        ):
+            out = messaging.get_lottery_message("m1", user_id="sender-1")
+
+        get_unlock.assert_not_called()
+        self.assertEqual(out.lock_state, "locked")
+        self.assertIsNone(out.selected_outcome)
+        self.assertFalse(out.idempotent)
+        self.assertEqual(out.message_id, "m1")
+
+    def test_get_lottery_message_returns_unlocked_for_recipient_with_unlock(self):
+        cfg = {
+            "message_id": "m1",
+            "conversation_id": "c1",
+            "sender_id": "sender-1",
+            "version": "v1",
+            "created_at": "222",
+            "outcomes": [
+                {
+                    "outcome_id": "o1",
+                    "weight_bps": 6000,
+                    "payload_type": "text",
+                    "text_content": "win",
+                },
+                {
+                    "outcome_id": "o2",
+                    "weight_bps": 4000,
+                    "payload_type": "text",
+                    "text_content": "lose",
+                },
+            ],
+        }
+        unlock = {
+            "message_id": "m1",
+            "recipient_id": "user-2",
+            "selected_outcome_id": "o2",
+            "unlocked_at": "333",
+        }
+        with (
+            patch.object(messaging, "_require_dm_lottery_enabled"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging.messaging_lottery_store, "get_lottery_config", return_value=cfg),
+            patch.object(messaging.messaging_lottery_store, "get_lottery_unlock", return_value=unlock),
+        ):
+            out = messaging.get_lottery_message("m1", user_id="user-2")
+
+        self.assertEqual(out.lock_state, "unlocked")
+        assert out.selected_outcome is not None
+        self.assertEqual(out.selected_outcome.outcome_id, "o2")
+        self.assertEqual(out.selected_outcome.text_content, "lose")
+        self.assertFalse(out.idempotent)
+
+    def test_create_lottery_message_idempotency_replay_returns_existing_message(self):
+        payload = messaging.CreateLotteryMessageIn(
+            conversation_id="c1",
+            lottery_config=messaging.LotteryConfigIn(
+                version="v1",
+                outcomes=[
+                    messaging.LotteryOutcomeIn(payload_type="text", weight_bps=10000, text_content="hello")
+                ],
+            ),
+        )
+        expected_message_id = messaging._lottery_dedupe_message_id(
+            sender_id="user-1",
+            conversation_id="c1",
+            idempotency_key="idem-123",
+        )
+        existing_cfg = {
+            "message_id": expected_message_id,
+            "conversation_id": "c1",
+            "sender_id": "user-1",
+            "version": "v1",
+            "created_at": "123",
+            "outcomes": [
+                {
+                    "outcome_id": "o_a",
+                    "weight_bps": 10000,
+                    "payload_type": "text",
+                    "text_content": "hello",
+                }
+            ],
+        }
+        with (
+            patch.object(messaging, "_require_dm_lottery_enabled"),
+            patch.object(messaging, "_enforce_messaging_internal_entitlement"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_conversation_or_404", return_value={"type": "dm"}),
+            patch.object(messaging, "record_messaging_lottery_send") as record_send,
+            patch.object(messaging, "audit_event") as audit,
+            patch.object(messaging.messaging_lottery_store, "get_lottery_config", return_value=existing_cfg),
+            patch.object(messaging.messaging_lottery_store, "put_lottery_config") as put_cfg,
+            patch.object(messaging, "tbl_msgs") as tbl_msgs,
+        ):
+            tbl_msgs.get_item.return_value = {}
+            out = messaging.create_lottery_message(
+                payload=payload,
+                req=None,
+                idempotency_key="idem-123",
+                user_id="user-1",
+            )
+
+        put_cfg.assert_not_called()
+        tbl_msgs.put_item.assert_called_once()
+        record_send.assert_called_with(outcome="idempotent_repaired", client_version="unknown")
+        self.assertEqual(audit.call_args.kwargs["outcome"], "idempotent_repaired")
+        self.assertEqual(out.message_id, expected_message_id)
+        self.assertEqual(out.lock_state, "locked")
+        self.assertTrue(out.idempotent)
+        self.assertEqual(out.created_at, 123)
+
+    def test_create_lottery_message_idempotency_conflict_returns_409(self):
+        payload = messaging.CreateLotteryMessageIn(
+            conversation_id="c1",
+            lottery_config=messaging.LotteryConfigIn(
+                version="v1",
+                outcomes=[
+                    messaging.LotteryOutcomeIn(payload_type="text", weight_bps=10000, text_content="new payload")
+                ],
+            ),
+        )
+        existing_cfg = {
+            "message_id": "m_lottery_existing",
+            "conversation_id": "c1",
+            "sender_id": "user-1",
+            "version": "v1",
+            "created_at": "123",
+            "outcomes": [
+                {
+                    "outcome_id": "o_a",
+                    "weight_bps": 10000,
+                    "payload_type": "text",
+                    "text_content": "old payload",
+                }
+            ],
+        }
+        with (
+            patch.object(messaging, "_require_dm_lottery_enabled"),
+            patch.object(messaging, "_enforce_messaging_internal_entitlement"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_conversation_or_404", return_value={"type": "dm"}),
+            patch.object(messaging, "_lottery_dedupe_message_id", return_value="m_lottery_existing"),
+            patch.object(messaging, "record_messaging_lottery_send"),
+            patch.object(messaging, "audit_event") as audit,
+            patch.object(messaging.messaging_lottery_store, "get_lottery_config", return_value=existing_cfg),
+            patch.object(messaging, "tbl_msgs"),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.create_lottery_message(
+                    payload=payload,
+                    req=None,
+                    idempotency_key="idem-123",
+                    user_id="user-1",
+                )
+
+        self.assertEqual(ctx.exception.status_code, 409)
+        self.assertEqual(ctx.exception.detail["code"], "idempotency-conflict")
+        self.assertEqual(audit.call_args.kwargs["outcome"], "idempotency_conflict")
+
+    def test_create_lottery_message_idempotent_repair_failure_returns_500(self):
+        payload = messaging.CreateLotteryMessageIn(
+            conversation_id="c1",
+            lottery_config=messaging.LotteryConfigIn(
+                version="v1",
+                outcomes=[
+                    messaging.LotteryOutcomeIn(payload_type="text", weight_bps=10000, text_content="hello")
+                ],
+            ),
+        )
+        expected_message_id = messaging._lottery_dedupe_message_id(
+            sender_id="user-1",
+            conversation_id="c1",
+            idempotency_key="idem-123",
+        )
+        existing_cfg = {
+            "message_id": expected_message_id,
+            "conversation_id": "c1",
+            "sender_id": "user-1",
+            "version": "v1",
+            "created_at": "123",
+            "outcomes": [
+                {
+                    "outcome_id": "o_a",
+                    "weight_bps": 10000,
+                    "payload_type": "text",
+                    "text_content": "hello",
+                }
+            ],
+        }
+        with (
+            patch.object(messaging, "_require_dm_lottery_enabled"),
+            patch.object(messaging, "_enforce_messaging_internal_entitlement"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_conversation_or_404", return_value={"type": "dm"}),
+            patch.object(messaging, "logger") as logger,
+            patch.object(messaging, "record_messaging_lottery_send") as record_send,
+            patch.object(messaging, "audit_event") as audit,
+            patch.object(messaging.messaging_lottery_store, "get_lottery_config", return_value=existing_cfg),
+            patch.object(messaging, "tbl_msgs") as tbl_msgs,
+        ):
+            tbl_msgs.get_item.return_value = {}
+            tbl_msgs.put_item.side_effect = RuntimeError("ddb write failed")
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.create_lottery_message(
+                    payload=payload,
+                    req=None,
+                    idempotency_key="idem-123",
+                    user_id="user-1",
+                )
+
+        self.assertEqual(ctx.exception.status_code, 500)
+        self.assertEqual(ctx.exception.detail["code"], "idempotent-repair-failed")
+        logger.exception.assert_called_once()
+        record_send.assert_called_with(outcome="idempotent_orphan_unrepaired", client_version="unknown")
+        self.assertEqual(audit.call_args.kwargs["outcome"], "idempotent_orphan_unrepaired")
+
+    def test_create_lottery_message_rejects_invalid_idempotency_key_chars(self):
+        payload = messaging.CreateLotteryMessageIn(
+            conversation_id="c1",
+            lottery_config=messaging.LotteryConfigIn(
+                version="v1",
+                outcomes=[
+                    messaging.LotteryOutcomeIn(payload_type="text", weight_bps=10000, text_content="hello")
+                ],
+            ),
+        )
+        with (
+            patch.object(messaging, "_require_dm_lottery_enabled"),
+            patch.object(messaging, "_enforce_messaging_internal_entitlement"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_conversation_or_404", return_value={"type": "dm"}),
+            patch.object(messaging, "record_messaging_lottery_send") as record_send,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.create_lottery_message(
+                    payload=payload,
+                    req=None,
+                    idempotency_key="bad key with spaces",
+                    user_id="user-1",
+                )
+
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertEqual(ctx.exception.detail["code"], "invalid-idempotency-key")
+        record_send.assert_called_with(outcome="invalid_idempotency_key", client_version="unknown")
+
+    def test_create_lottery_message_rejects_overlong_idempotency_key(self):
+        payload = messaging.CreateLotteryMessageIn(
+            conversation_id="c1",
+            lottery_config=messaging.LotteryConfigIn(
+                version="v1",
+                outcomes=[
+                    messaging.LotteryOutcomeIn(payload_type="text", weight_bps=10000, text_content="hello")
+                ],
+            ),
+        )
+        with (
+            patch.object(messaging, "_require_dm_lottery_enabled"),
+            patch.object(messaging, "_enforce_messaging_internal_entitlement"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_get_conversation_or_404", return_value={"type": "dm"}),
+            patch.object(messaging, "record_messaging_lottery_send") as record_send,
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.create_lottery_message(
+                    payload=payload,
+                    req=None,
+                    idempotency_key=("a" * 129),
+                    user_id="user-1",
+                )
+
+        self.assertEqual(ctx.exception.status_code, 422)
+        self.assertEqual(ctx.exception.detail["code"], "invalid-idempotency-key")
+        record_send.assert_called_with(outcome="invalid_idempotency_key", client_version="unknown")
+
+    def test_unlock_lottery_message_returns_structured_error_on_persist_failure(self):
+        cfg = {
+            "message_id": "m1",
+            "conversation_id": "c1",
+            "sender_id": "sender-1",
+            "version": "v1",
+            "outcomes": [
+                {
+                    "outcome_id": "o1",
+                    "weight_bps": 6000,
+                    "payload_type": "text",
+                    "text_content": "win",
+                },
+                {
+                    "outcome_id": "o2",
+                    "weight_bps": 4000,
+                    "payload_type": "text",
+                    "text_content": "lose",
+                },
+            ],
+        }
+        with (
+            patch.object(messaging, "_require_dm_lottery_enabled"),
+            patch.object(messaging, "require_participant_active"),
+            patch.object(messaging, "_enforce_lottery_unlock_rate_limit"),
+            patch.object(messaging.messaging_lottery_store, "get_lottery_config", return_value=cfg),
+            patch.object(messaging.messaging_lottery_store, "get_lottery_unlock", return_value=None),
+            patch.object(
+                messaging,
+                "choose_weighted_outcome",
+                return_value=(cfg["outcomes"][0], 1234),
+            ),
+            patch.object(
+                messaging.messaging_lottery_store,
+                "put_lottery_unlock",
+                side_effect=RuntimeError("ddb unavailable"),
+            ),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                messaging.unlock_lottery_message("m1", req=None, user_id="recipient-1")
+
+        self.assertEqual(ctx.exception.status_code, 500)
+        self.assertEqual(ctx.exception.detail["code"], "unlock-persist-error")
+
 
     def test_start_conversation_standard_requires_participant(self):
         with self.assertRaises(ValidationError):
