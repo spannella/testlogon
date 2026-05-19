@@ -1,0 +1,37 @@
+groups:
+  - name: broadcast-health
+    rules:
+      - alert: BroadcastProvisioningLatencyHigh
+        expr: |
+          histogram_quantile(0.95, sum(rate(broadcast_provision_latency_seconds_bucket[10m])) by (le, provider))
+            > 20
+        for: 10m
+        labels:
+          severity: critical
+          service: broadcast
+          route: nonprod-oncall
+        annotations:
+          summary: "Broadcast provisioning latency p95 is above threshold"
+      - alert: BroadcastStartFailuresHigh
+        expr: |
+          (
+            sum(rate(broadcast_session_actions_total{action="start",result="failure"}[10m]))
+            /
+            clamp_min(sum(rate(broadcast_session_actions_total{action="start"}[10m])), 1e-9)
+          ) > 0.2
+        for: 10m
+        labels:
+          severity: critical
+          service: broadcast
+          route: nonprod-oncall
+        annotations:
+          summary: "Broadcast start failure rate > 20%"
+      - alert: BroadcastDriftIncidentsDetected
+        expr: sum(increase(broadcast_drift_incidents_total[10m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: broadcast
+          route: nonprod-oncall
+        annotations:
+          summary: "Broadcast drift/stale incidents detected"

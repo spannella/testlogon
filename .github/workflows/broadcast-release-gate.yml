@@ -1,0 +1,53 @@
+name: Broadcast Release Gate
+
+on:
+  pull_request:
+    paths:
+      - "app/routers/broadcast.py"
+      - "app/services/broadcast_*.py"
+      - "app/models_broadcast.py"
+      - "app/metrics.py"
+      - "docs/alerts/broadcast-health-alerts.yml"
+      - "scripts/release_gate_broadcast.py"
+      - "tests/contract/**"
+      - "tests/test_broadcast_secrets.py"
+      - "tests/test_broadcast_cloudfront.py"
+      - ".github/workflows/broadcast-release-gate.yml"
+  push:
+    branches: [ main ]
+    paths:
+      - "app/routers/broadcast.py"
+      - "app/services/broadcast_*.py"
+      - "app/models_broadcast.py"
+      - "app/metrics.py"
+      - "docs/alerts/broadcast-health-alerts.yml"
+      - "scripts/release_gate_broadcast.py"
+      - "tests/contract/**"
+      - "tests/test_broadcast_secrets.py"
+      - "tests/test_broadcast_cloudfront.py"
+      - ".github/workflows/broadcast-release-gate.yml"
+  workflow_dispatch:
+
+jobs:
+  release-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run broadcast release gate
+        run: |
+          set -o pipefail
+          python scripts/release_gate_broadcast.py --pytest-timeout-seconds 900 | tee broadcast-release-gate-report.json
+      - name: Upload release gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: broadcast-release-gate-report
+          path: broadcast-release-gate-report.json

@@ -1,0 +1,4 @@
+# Expected markers for BRD-022 local E2E harness
+MASTER_PLAYLIST_MARKER=#EXTM3U
+ENCRYPTION_MARKER=#EXT-X-KEY
+ARCHIVE_PREFIX=s3://broadcast-archive/sessions/devstream/

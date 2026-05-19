@@ -1,0 +1,4 @@
+profile,rendition_ladder,estimated_mediLive_usd_per_hour,estimated_mediaPackage_usd_per_hour,estimated_cloudfront_usd_per_hour,estimated_s3_archive_usd_per_hour,estimated_security_observability_usd_per_hour,estimated_total_usd_per_hour,notes
+mobile_540p,"540p",1.20,0.28,0.45,0.08,0.04,2.05,"low bandwidth profile"
+standard_720p,"720p,540p",2.40,0.42,0.78,0.13,0.06,3.79,"default launch profile"
+premium_1080p,"1080p,720p,540p",4.10,0.66,1.25,0.21,0.09,6.31,"higher quality profile"

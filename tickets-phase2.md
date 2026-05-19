@@ -3163,3 +3163,142 @@
 **Acceptance criteria:**
 - Checklist requires sign-off from Engineering, QA, SRE, Security, and Product.
 - Launch evidence includes unresolved risks with owner, mitigation, and acceptance decision.
+# Video Broadcasting — Phase 2 Follow-up Tickets
+
+### BRD-201: Provider capability matrix enforcement
+**Description:** Add runtime validation that profile settings are compatible with the selected provider’s codec, bitrate, and packaging capabilities.
+**Acceptance criteria:**
+- Incompatible profile/provider combinations are rejected with deterministic API errors.
+- Compatibility rules are covered by unit tests for local and AWS providers.
+
+### BRD-202: Tenant-level broadcast concurrency quotas
+**Description:** Implement configurable per-tenant quotas for provisioning and live sessions to prevent resource starvation.
+**Acceptance criteria:**
+- Requests above quota fail with a stable quota-exceeded error contract.
+- Quota usage is exposed in metrics and admin diagnostics endpoints.
+
+### BRD-203: Idempotent create/start/stop API mutations
+**Description:** Add idempotency keys and persistence for session-creation and lifecycle mutation endpoints.
+**Acceptance criteria:**
+- Retried requests with identical keys return the original outcome.
+- Duplicate downstream provider actions are prevented under retry storms.
+
+### BRD-204: Optimistic locking for mutable broadcast entities
+**Description:** Add revision/version checks for session and output updates to prevent stale-write races.
+**Acceptance criteria:**
+- Concurrent conflicting updates return a documented conflict response.
+- Tests validate write safety under concurrent mutation scenarios.
+
+### BRD-205: Reconciler dead-letter queue and replay tooling
+**Description:** Route unrecoverable reconcile failures into a dead-letter queue and add replay tooling for operators.
+**Acceptance criteria:**
+- DLQ records include session ID, error class, attempt count, and timestamps.
+- Operators can replay DLQ items with audit-traceable actions.
+
+### BRD-206: Adaptive reconciler polling and backpressure controls
+**Description:** Implement state-aware polling intervals and backpressure limits for reconcile workers.
+**Acceptance criteria:**
+- Poll cadence varies by lifecycle state and configured error rate.
+- Load tests show reduced provider API call volume without increased drift.
+
+### BRD-207: Standard retry budget framework for provider calls
+**Description:** Centralize retry policy, jittered backoff, and retry budgets across all provider integrations.
+**Acceptance criteria:**
+- All provider adapters use a shared retry utility.
+- Retry budget exhaustion is surfaced as a metric and actionable error.
+
+### BRD-208: Circuit breaker protection for downstream media APIs
+**Description:** Add circuit breakers around MediaLive/MediaPackage/CloudFront interactions to avoid cascading failure.
+**Acceptance criteria:**
+- Circuit state transitions are emitted via logs and metrics.
+- Sustained downstream failures do not trigger unbounded retries.
+
+### BRD-209: End-to-end correlation ID propagation
+**Description:** Ensure correlation IDs flow through API requests, orchestration, provider calls, audits, and logs.
+**Acceptance criteria:**
+- A single correlation ID can trace one full lifecycle operation end-to-end.
+- Contract tests verify correlation header acceptance and propagation.
+
+### BRD-210: Broadcast lifecycle latency SLO implementation
+**Description:** Define and enforce SLOs for create→ready, start→live, and stop completion latency.
+**Acceptance criteria:**
+- Dashboards expose p50/p95/p99 for each lifecycle stage.
+- Multi-window burn-rate alerts are configured for SLO breaches.
+
+### BRD-211: Metrics cardinality guardrails in CI
+**Description:** Add linting and test checks to block high-cardinality labels in broadcast metrics.
+**Acceptance criteria:**
+- CI fails when disallowed dynamic labels are introduced.
+- Cardinality budget compliance is validated in performance tests.
+
+### BRD-212: Signed audit export pipeline to SIEM
+**Description:** Export immutable, signed broadcast audit events to SIEM-compatible storage with reconciliation checks.
+**Acceptance criteria:**
+- Export schema includes actor, action, resource, reason, and correlation ID.
+- Daily reconciliation detects and reports missing audit events.
+
+### BRD-213: Fine-grained tenant/resource authorization policies
+**Description:** Replace coarse role checks with policy-based tenant/resource/action authorization.
+**Acceptance criteria:**
+- Authorization matrix tests cover allow/deny behavior for all endpoints.
+- Cross-tenant access attempts are denied and audited.
+
+### BRD-214: Automated secret rotation for stream and DRM credentials
+**Description:** Implement scheduled and emergency rotation workflows with overlap windows and rollback safety.
+**Acceptance criteria:**
+- Rotation can execute without disrupting active live sessions.
+- Rotation actions require approvals and generate immutable audit records.
+
+### BRD-215: Playback token replay and tamper protection
+**Description:** Harden playback token validation with nonce/replay checks, strict audience verification, and skew handling.
+**Acceptance criteria:**
+- Replayed or tampered tokens are rejected with stable error codes.
+- Security tests cover replay, expiry boundary, and audience mismatch cases.
+
+### BRD-216: DRM/license abuse detection and rate limits
+**Description:** Add per-tenant and per-client throttling plus anomaly detection hooks for DRM/license endpoints.
+**Acceptance criteria:**
+- License APIs enforce configurable rate limits.
+- Alerts fire for abuse thresholds and mitigation actions are logged.
+
+### BRD-217: Archive integrity verification scheduler
+**Description:** Build scheduled integrity checks for archived media segments, manifests, and checksums.
+**Acceptance criteria:**
+- Integrity reports identify missing/corrupt artifacts by session/output.
+- Failures automatically create remediation tickets with context.
+
+### BRD-218: Retention and legal-hold policy enforcement
+**Description:** Enforce retention lifecycle deletion and legal-hold exceptions for archive artifacts.
+**Acceptance criteria:**
+- Eligible artifacts are deleted on schedule unless legal hold is active.
+- Deletion and legal-hold actions are fully auditable.
+
+### BRD-219: Cloud/local behavioral parity contract suite
+**Description:** Expand contract tests to verify local provider behavior remains aligned with cloud provider semantics.
+**Acceptance criteria:**
+- Identical lifecycle scenarios run against both local and cloud targets.
+- Behavioral drift is reported as actionable contract-test diffs.
+
+### BRD-220: Nightly chaos testing for provider failure modes
+**Description:** Add deterministic chaos tests for timeouts, throttling, partial success, and stale callbacks.
+**Acceptance criteria:**
+- Nightly runs publish pass/fail, recovery time, and unresolved failure classes.
+- System converges to a consistent state after each injected fault.
+
+### BRD-221: 24-hour soak test harness for control-plane stability
+**Description:** Implement long-duration soak tests to track memory growth, error rates, and reconcile lag.
+**Acceptance criteria:**
+- Soak tests run at least 24 hours with trend reporting artifacts.
+- Reports identify regressions and recommended mitigations.
+
+### BRD-222: Concurrency ramp and capacity envelope validation
+**Description:** Add repeatable ramp tests to determine validated maximum concurrent broadcast sessions.
+**Acceptance criteria:**
+- Capacity report defines safe operating envelope and guardrails.
+- Autoscaling and quota defaults are updated from measured bottlenecks.
+
+### BRD-223: Release-readiness CI gate and checklist automation
+**Description:** Implement a CI gate validating docs freshness, alerts/dashboard links, SLO config, and test evidence before release.
+**Acceptance criteria:**
+- CI publishes a machine-readable readiness report per release candidate.
+- Releases are blocked when required readiness checks fail.

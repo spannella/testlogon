@@ -1,0 +1,119 @@
+version: "3.9"
+
+services:
+  rtmp:
+    image: alfg/nginx-rtmp:latest
+    container_name: broadcast-rtmp
+    ports:
+      - "1935:1935"
+      - "8088:8080"
+    volumes:
+      - ./scripts/broadcast-local/nginx-rtmp.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  ffmpeg-worker:
+    image: jrottenberg/ffmpeg:6.0-ubuntu2204
+    container_name: broadcast-ffmpeg-worker
+    depends_on:
+      rtmp:
+        condition: service_healthy
+    environment:
+      BROADCAST_STREAM_KEY: "${BROADCAST_STREAM_KEY:-devstream}"
+      BROADCAST_INPUT_URL: "${BROADCAST_INPUT_URL:-rtmp://rtmp:1935/live/${BROADCAST_STREAM_KEY:-devstream}}"
+      BROADCAST_OUTPUT_ROOT: "/data/hls"
+      BROADCAST_WATERMARK_PATH: "/assets/watermark.ppm"
+      BROADCAST_RESTART_DELAY_SECS: "3"
+      BROADCAST_ARCHIVE_COPY_ROOT: "/data/archive"
+      BROADCAST_FFMPEG_LOG_FILE: "/data/logs/ffmpeg-worker.log"
+    volumes:
+      - ./scripts/broadcast-local/ffmpeg-worker.sh:/opt/ffmpeg-worker.sh:ro
+      - ./assets/broadcast-watermark/watermark.ppm:/assets/watermark.ppm:ro
+      - ./tmp/broadcast-hls:/data/hls
+      - ./tmp/broadcast-archive:/data/archive
+      - ./tmp/broadcast-logs:/data/logs
+    command: ["/bin/bash", "/opt/ffmpeg-worker.sh"]
+
+  hls-origin:
+    image: nginx:1.27-alpine
+    container_name: broadcast-hls-origin
+    depends_on:
+      - ffmpeg-worker
+    ports:
+      - "8089:80"
+    volumes:
+      - ./tmp/broadcast-hls:/usr/share/nginx/html/hls:ro
+    command: >
+      /bin/sh -c "cat > /etc/nginx/conf.d/default.conf <<'CONF'
+      server {
+        listen 80;
+        location /hls/ {
+          types {
+            application/vnd.apple.mpegurl m3u8;
+            video/mp2t ts;
+          }
+          add_header Cache-Control no-cache;
+          root /usr/share/nginx/html;
+        }
+      }
+      CONF
+      && nginx -g 'daemon off;'"
+
+  cache-proxy:
+    image: nginx:1.27-alpine
+    container_name: broadcast-cache-proxy
+    depends_on:
+      - hls-origin
+    ports:
+      - "8090:80"
+    environment:
+      CACHE_TOKEN_SECRET: "${BROADCAST_LOCAL_CACHE_TOKEN_SECRET:-local-cache-secret}"
+    volumes:
+      - ./scripts/broadcast-local/cache-proxy-entrypoint.sh:/opt/cache-proxy-entrypoint.sh:ro
+      - ./tmp/broadcast-cache:/var/cache/nginx
+    command: ["/bin/sh", "/opt/cache-proxy-entrypoint.sh"]
+
+  minio:
+    image: minio/minio:RELEASE.2025-02-28T09-55-16Z
+    container_name: broadcast-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minioadmin}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
+    volumes:
+      - ./tmp/minio-data:/data
+    command: ["server", "/data", "--console-address", ":9001"]
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-02-21T16-00-46Z
+    container_name: broadcast-minio-init
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minioadmin}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
+      BROADCAST_ARCHIVE_BUCKET: "${BROADCAST_LOCAL_ARCHIVE_BUCKET:-broadcast-archive}"
+    volumes:
+      - ./scripts/broadcast-local/minio-init.sh:/opt/minio-init.sh:ro
+    command: ["/bin/sh", "/opt/minio-init.sh"]
+
+  archive-sync:
+    image: minio/mc:RELEASE.2025-02-21T16-00-46Z
+    container_name: broadcast-archive-sync
+    depends_on:
+      - minio-init
+      - ffmpeg-worker
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-minioadmin}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-minioadmin}"
+      BROADCAST_ARCHIVE_BUCKET: "${BROADCAST_LOCAL_ARCHIVE_BUCKET:-broadcast-archive}"
+      BROADCAST_ARCHIVE_PREFIX: "${BROADCAST_LOCAL_ARCHIVE_PREFIX:-sessions}"
+    volumes:
+      - ./tmp/broadcast-archive:/data/archive:ro
+      - ./scripts/broadcast-local/archive-sync.sh:/opt/archive-sync.sh:ro
+    command: ["/bin/sh", "/opt/archive-sync.sh"]

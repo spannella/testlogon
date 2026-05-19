@@ -60,6 +60,8 @@ from app.routers.admin_tenant_watermark_assets import router as admin_tenant_wat
 from app.routers.ups import router as ups_router
 from app.routers.projects import router as projects_router
 from app.routers.contacts import router as contacts_router
+from app.routers.broadcast import router as broadcast_router
+from app.routers.broadcast_devtools import router as broadcast_devtools_router
 from app.routers.entitlements import router as entitlements_router
 from app.routers.commercial_checkout import router as commercial_checkout_router
 from app.routers.tickets import router as tickets_router
@@ -97,6 +99,7 @@ from app.services.api_key_route_scope_registry import (
 )
 from app.services.api_key_rollout import validate_api_key_rollout_settings
 from app.services.playback_entitlements import validate_playback_entitlement, PlaybackEntitlementError
+from app.services.broadcast_reconciler import start_broadcast_reconciler_task
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +200,12 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Not found")
         raise HTTPException(status_code=410, detail="Browser SSH terminal UI has moved to the frontend.")
 
+    @app.get("/broadcast-devtools")
+    async def broadcast_devtools_page():
+        if not (_S.dev_mode and _S.broadcast_devtools_enabled):
+            raise HTTPException(status_code=404, detail="Not found")
+        return FileResponse(static_dir / "broadcast-devtools.html")
+
     app.add_middleware(CORSMiddleware, **_build_cors_options())
     app.middleware("http")(_api_usage_metering_middleware())
     app.middleware("http")(_playback_entitlement_middleware())
@@ -275,6 +284,8 @@ def create_app() -> FastAPI:
     app.include_router(ups_router)
     app.include_router(projects_router)
     app.include_router(contacts_router)
+    app.include_router(broadcast_router)
+    app.include_router(broadcast_devtools_router)
     app.include_router(tickets_router)
     app.include_router(ticket_spaces_router)
     app.include_router(internal_devtools_router)
@@ -288,6 +299,7 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)
     app.add_event_handler("startup", start_filemgr_mount_reconcile_task)
+    app.add_event_handler("startup", start_broadcast_reconciler_task)
 
     uncovered_policy_routes: set[str] = set()
     for route in app.routes:
