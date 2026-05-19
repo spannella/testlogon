@@ -832,7 +832,6 @@ class Settings:
     newsfeed_unlock_attempt_stale_seconds: int = int(os.environ.get("NEWSFEED_UNLOCK_ATTEMPT_STALE_SECONDS", "300"))
     newsfeed_unlock_throttle_window_seconds: int = int(os.environ.get("NEWSFEED_UNLOCK_THROTTLE_WINDOW_SECONDS", "10"))
     newsfeed_unlock_throttle_max_attempts: int = int(os.environ.get("NEWSFEED_UNLOCK_THROTTLE_MAX_ATTEMPTS", "6"))
->>>>>>> 33711ccd (test(newsfeed): cover unlock replay telemetry in-progress paths)
 
     # Messaging feature flags
     messaging_encrypted_messages_enabled: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_ENABLED", "false").lower() == "true"
