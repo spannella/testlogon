@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { ArrowLeft, Images, Users, Clock, MoreHorizontal, EyeOff, Pin } from "lucide-react";
+import { ArrowLeft, Images, Users, Clock, MoreHorizontal, EyeOff, Pin, Phone, Video } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
@@ -19,9 +19,15 @@ import {
   createLotteryMessage,
   markRead,
   claimHelpdeskConversation,
+  createCallInvite,
+  acceptCallInvite,
+  declineCallInvite,
+  endCall,
+  type DirectCallMode,
 } from "@/api/endpoints/messaging";
 import { useAuthStore } from "@/stores/authStore";
 import { useOfflineStore } from "@/stores/offlineStore";
+import { ApiError } from "@/api/client";
 import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq, CreateLotteryMessageReq } from "@/api/types";
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";
@@ -29,7 +35,7 @@ import { PresenceDot } from "./PresenceDot";
 import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 import { TypingIndicator, useTypingSignal } from "./TypingIndicator";
 import { ParticipantsPanel } from "./ParticipantsPanel";
-import { isMessagingDmLotteryEnabled, isMessagingGalleryEnabled } from "@/lib/featureFlags";
+import { isMessagingDmLotteryEnabled, isMessagingGalleryEnabled, isMessagingWebrtcDirectCallEnabled } from "@/lib/featureFlags";
 import { ConversationGallery } from "./ConversationGallery";
 import { ScheduledMessages } from "./ScheduledMessages";
 import { HiddenMessagesPanel } from "./HiddenMessagesPanel";
@@ -37,6 +43,8 @@ import { PinnedMessageBanner } from "./PinnedMessageBanner";
 import { PinnedMessagesPanel } from "./PinnedMessagesPanel";
 import { ThreadPanel } from "./ThreadPanel";
 import { useMessageJump } from "./useMessageJump";
+import { CallSessionOverlay, type CallSessionUi, type CallUiState } from "./CallSessionOverlay";
+import { callStateReducer, createInitialCallMachineState, teardownCallResources } from "./callStateMachine";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -73,6 +81,10 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const [viewedOnceIds, setViewedOnceIds] = React.useState<Set<string>>(new Set());
   const [threadPanelOpen, setThreadPanelOpen] = React.useState(false);
   const [threadAnchorMessage, setThreadAnchorMessage] = React.useState<Message | null>(null);
+  const [callMachine, dispatchCall] = React.useReducer(callStateReducer, undefined, createInitialCallMachineState);
+  const callTimeoutRef = React.useRef<number | null>(null);
+  const callResourcesRef = React.useRef<{ cleanedUp?: boolean } | null>(null);
+  const lastCallEventTsRef = React.useRef<number>(0);
   const handleViewOnce = React.useCallback((id: string) => {
     setViewedOnceIds((prev) => new Set([...prev, id]));
   }, []);
@@ -452,6 +464,153 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const dmPartnerProfilePath = dmPartner
     ? resolveCanonicalProfilePath({ userId: dmPartner.user_id, displayName: dmPartner.display_name })
     : null;
+  const callsEnabled = !isGroup && !!dmPartner && isMessagingWebrtcDirectCallEnabled();
+
+  const clearCallTimeout = React.useCallback(() => {
+    if (callTimeoutRef.current) {
+      window.clearTimeout(callTimeoutRef.current);
+      callTimeoutRef.current = null;
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (callMachine.phase !== "reconnecting") return;
+    const timer = window.setTimeout(() => dispatchCall({ type: "RECONNECT_ATTEMPT" }), 1000);
+    return () => window.clearTimeout(timer);
+  }, [callMachine.phase]);
+
+  React.useEffect(() => {
+    if (["ended", "failed", "failure", "declined", "busy", "timeout", "idle"].includes(callMachine.phase)) {
+      teardownCallResources(callResourcesRef.current);
+    }
+  }, [callMachine.phase]);
+
+  React.useEffect(() => () => {
+    clearCallTimeout();
+    teardownCallResources(callResourcesRef.current);
+  }, [clearCallTimeout]);
+
+  const callMutation = useMutation({
+    mutationFn: (args: { mode: DirectCallMode; calleeUserId: string; conversationId: string }) =>
+      createCallInvite(args.conversationId, {
+        callee_user_id: args.calleeUserId,
+        mode: args.mode,
+        idempotency_key: `ui-invite-${Date.now()}`,
+      }),
+  });
+
+  const callActionMutation = useMutation({
+    mutationFn: async (args: { action: "accept" | "decline" | "end"; callId: string }) => {
+      if (args.action === "accept") return acceptCallInvite(args.callId, `ui-accept-${Date.now()}`);
+      if (args.action === "decline") return declineCallInvite(args.callId, { reason: "declined", idempotency_key: `ui-decline-${Date.now()}` });
+      return endCall(args.callId, { reason: "ended", idempotency_key: `ui-end-${Date.now()}` });
+    },
+  });
+
+  const extractCallErrorCode = (err: unknown): string => {
+    if (err instanceof ApiError) {
+      const body = err.body as { detail?: { code?: string } } | undefined;
+      return body?.detail?.code ?? "";
+    }
+    return "";
+  };
+
+  const startOutgoingCall = (mode: DirectCallMode) => {
+    if (!dmPartner || !callsEnabled) return;
+    clearCallTimeout();
+    dispatchCall({ type: "START_OUTGOING", mode, peerName: dmPartner.display_name ?? dmPartner.user_id });
+    callMutation.mutate(
+      {
+        mode,
+        calleeUserId: dmPartner.user_id,
+        conversationId: convoId,
+      },
+      {
+        onSuccess: (res) => {
+          dispatchCall({ type: "OUTGOING_RINGING", callId: res.call_id });
+          window.setTimeout(() => {
+            dispatchCall({ type: "REMOTE_ACCEPT" });
+          }, 700);
+          callTimeoutRef.current = window.setTimeout(() => {
+            dispatchCall({ type: "REMOTE_DECLINE", reason: "timeout" });
+          }, 30_000);
+        },
+        onError: (err) => {
+          const code = extractCallErrorCode(err);
+          if (code === "call_busy") {
+            dispatchCall({ type: "REMOTE_DECLINE", reason: "busy" });
+            return;
+          }
+          if (code === "call_declined") {
+            dispatchCall({ type: "REMOTE_DECLINE", reason: "declined" });
+            return;
+          }
+          if (code === "call_timeout") {
+            dispatchCall({ type: "REMOTE_DECLINE", reason: "timeout" });
+            return;
+          }
+          dispatchCall({ type: "FAIL", message: "Call failed to connect." });
+        },
+      },
+    );
+  };
+
+  React.useEffect(() => {
+    const onCallEvent = (event: Event) => {
+      const custom = event as CustomEvent<Record<string, unknown>>;
+      const detail = custom.detail ?? {};
+      if (detail.conversation_id !== convoId) return;
+      const eventTs = Number(detail.event_ts ?? detail.created_at ?? 0);
+      if (Number.isFinite(eventTs) && eventTs > 0) {
+        if (eventTs < lastCallEventTsRef.current) return;
+        lastCallEventTsRef.current = eventTs;
+      }
+      const eventType = String(detail.event_type ?? "");
+      const callId = typeof detail.call_id === "string" ? detail.call_id : undefined;
+      const mode = detail.mode === "video" ? "video" : "audio";
+      const reason = typeof detail.reason === "string" ? detail.reason : undefined;
+      const callerId = typeof detail.caller_user_id === "string" ? detail.caller_user_id : undefined;
+      const calleeId = typeof detail.callee_user_id === "string" ? detail.callee_user_id : undefined;
+      const isCurrentUserCallee = !!userId && calleeId === userId;
+      const isCurrentUserCaller = !!userId && callerId === userId;
+      if (eventType === "call.invite" && isCurrentUserCallee) {
+        dispatchCall({
+          type: "INCOMING_INVITE",
+          mode,
+          callId,
+          peerName: dmPartner?.display_name ?? callerId ?? "Unknown caller",
+        });
+      } else if (eventType === "call.accept" && isCurrentUserCaller) {
+        dispatchCall({ type: "REMOTE_ACCEPT" });
+      } else if (eventType === "call.decline" && isCurrentUserCaller) {
+        dispatchCall({ type: "REMOTE_DECLINE", reason: reason === "busy" ? "busy" : "declined" });
+      } else if (eventType === "call.end") {
+        dispatchCall({ type: "END_REMOTE" });
+      }
+    };
+    window.addEventListener("messaging:call-event", onCallEvent as EventListener);
+    return () => window.removeEventListener("messaging:call-event", onCallEvent as EventListener);
+  }, [convoId, dmPartner?.display_name, userId]);
+
+  React.useEffect(() => {
+    const onOffline = () => dispatchCall({ type: "NETWORK_OFFLINE" });
+    const onOnline = () => dispatchCall({ type: "NETWORK_ONLINE" });
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        dispatchCall({ type: "TAB_VISIBLE" });
+      } else {
+        dispatchCall({ type: "TAB_HIDDEN" });
+      }
+    };
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
 
   const latestPinnedMessageId = conversation.latest_pinned_message_id;
   const latestPinnedAt = conversation.latest_pinned_at;
@@ -475,6 +634,18 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   }, [convoId]);
 
   const bannerDismissedForCurrentPin = latestPinnedMessageId && dismissedPinnedMessageId === latestPinnedMessageId;
+  const overlayState: CallUiState =
+    callMachine.phase === "reconnecting" ? "reconnecting"
+      : callMachine.phase === "outgoing_inviting" ? "outgoing_inviting"
+      : callMachine.phase;
+  const overlaySession: CallSessionUi = {
+    state: overlayState,
+    direction: callMachine.role === "callee" ? "incoming" : "outgoing",
+    mode: callMachine.mode,
+    peerName: callMachine.peerName,
+    callId: callMachine.callId,
+    reasonMessage: callMachine.reasonMessage,
+  };
 
 
   // ── Render ──────────────────────────────────────────────────────
@@ -543,6 +714,30 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
             <Images className="mr-1.5 h-4 w-4" />
             Media & Links
           </Button>
+        )}
+        {callsEnabled && (
+          <>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              onClick={() => startOutgoingCall("audio")}
+              aria-label="Start audio call"
+              disabled={callMutation.isPending || callMachine.phase !== "idle"}
+            >
+              <Phone className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              onClick={() => startOutgoingCall("video")}
+              aria-label="Start video call"
+              disabled={callMutation.isPending || callMachine.phase !== "idle"}
+            >
+              <Video className="h-4 w-4" />
+            </Button>
+          </>
         )}
         <Button
           variant="ghost"
@@ -771,6 +966,50 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
           onClose={() => setParticipantsOpen(false)}
         />
       )}
+
+      <CallSessionOverlay
+        session={overlaySession}
+        isBusy={callActionMutation.isPending}
+        onAccept={() => {
+          if (!callMachine.callId) return;
+          dispatchCall({ type: "LOCAL_ACCEPT" });
+          callActionMutation.mutate(
+            { action: "accept", callId: callMachine.callId },
+            {
+              onSuccess: () => dispatchCall({ type: "CONNECT" }),
+              onError: () => dispatchCall({ type: "FAIL" }),
+            },
+          );
+        }}
+        onDecline={() => {
+          if (!callMachine.callId) return;
+          callActionMutation.mutate(
+            { action: "decline", callId: callMachine.callId },
+            {
+              onSuccess: () => dispatchCall({ type: "REMOTE_DECLINE", reason: "declined" }),
+              onError: () => dispatchCall({ type: "FAIL" }),
+            },
+          );
+        }}
+        onEnd={() => {
+          if (!callMachine.callId) {
+            dispatchCall({ type: "END_LOCAL" });
+            return;
+          }
+          callActionMutation.mutate(
+            { action: "end", callId: callMachine.callId },
+            {
+              onSuccess: () => dispatchCall({ type: "END_REMOTE" }),
+              onError: () => dispatchCall({ type: "FAIL" }),
+            },
+          );
+        }}
+        onDismiss={() => {
+          clearCallTimeout();
+          teardownCallResources(callResourcesRef.current);
+          dispatchCall({ type: "RESET" });
+        }}
+      />
     </div>
   );
 }

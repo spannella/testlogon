@@ -4,7 +4,11 @@ import os
 import time
 from typing import Callable, Optional
 
-from fastapi import Request, Response
+try:
+    from fastapi import Request, Response
+except Exception:  # pragma: no cover - tests that import metrics without fastapi installed
+    Request = object  # type: ignore[assignment,misc]
+    Response = object  # type: ignore[assignment,misc]
 
 _APP_ENV = os.environ.get("APP_ENV", "development").lower()
 _PROD_ENVS = {"prod", "production"}
@@ -710,6 +714,55 @@ ONCE_MEDIA_CONFLICT_EVENTS = Counter(
     "Once-media consume conflict/race outcomes by media kind/cohort",
     ["media_kind", "cohort"],
 )
+TURN_CREDENTIAL_ISSUE_EVENTS = Counter(
+    "messaging_turn_credential_issue_total",
+    "TURN credential issuance outcomes by status and reason",
+    ["outcome", "reason"],
+)
+TURN_CREDENTIAL_ISSUE_LATENCY = Histogram(
+    "messaging_turn_credential_issue_latency_seconds",
+    "TURN credential issuance latency by status and reason",
+    ["outcome", "reason"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
+)
+WEBRTC_CALL_SETUP_EVENTS = Counter(
+    "messaging_webrtc_call_setup_total",
+    "WebRTC call setup outcomes segmented by reason/platform/browser",
+    ["outcome", "reason", "platform", "browser"],
+)
+WEBRTC_CALL_SETUP_LATENCY = Histogram(
+    "messaging_webrtc_call_setup_latency_seconds",
+    "WebRTC call setup latency segmented by outcome/platform/browser",
+    ["outcome", "platform", "browser"],
+    buckets=(0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 20, 30, 60),
+)
+WEBRTC_CALL_DURATION = Histogram(
+    "messaging_webrtc_call_duration_seconds",
+    "WebRTC connected-call duration segmented by end reason/network path",
+    ["end_reason", "network_path"],
+    buckets=(1, 5, 10, 30, 60, 120, 300, 600, 900, 1800, 3600, 7200),
+)
+WEBRTC_CALL_FAILURE_EVENTS = Counter(
+    "messaging_webrtc_call_failures_total",
+    "WebRTC call failure taxonomy by reason and stage",
+    ["reason", "stage", "platform", "browser"],
+)
+WEBRTC_CALL_NETWORK_PATH_EVENTS = Counter(
+    "messaging_webrtc_call_network_path_total",
+    "WebRTC connected call network path usage for TURN relay ratio",
+    ["network_path"],
+)
+WEBRTC_SIGNALING_EVENTS = Counter(
+    "messaging_webrtc_signaling_events_total",
+    "WebRTC signaling routing outcomes by result/reason/event type",
+    ["outcome", "reason", "event_type"],
+)
+WEBRTC_SIGNALING_LATENCY = Histogram(
+    "messaging_webrtc_signaling_latency_seconds",
+    "WebRTC signaling routing latency by result/reason/event type",
+    ["outcome", "reason", "event_type"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
+)
 PROJECT_COUNT = Gauge(
     "project_count",
     "Estimated project count in this process",
@@ -1227,6 +1280,13 @@ def _normalize_reason(reason: str) -> str:
     return value[:48]
 
 
+def _normalize_client_dim(value: str, *, fallback: str = "unknown", max_len: int = 32) -> str:
+    val = (value or fallback).strip().lower()
+    if not val:
+        return fallback
+    return val[:max_len]
+
+
 def record_once_media_send(*, media_kind: str, consumption_policy: str, cohort: str = "default") -> None:
     ONCE_MEDIA_SEND_EVENTS.labels(
         media_kind=_normalize_once_media_kind(media_kind),
@@ -1266,6 +1326,90 @@ def record_once_media_conflict(*, media_kind: str, cohort: str = "default") -> N
         media_kind=_normalize_once_media_kind(media_kind),
         cohort=_normalize_cohort(cohort),
     ).inc()
+
+
+def record_turn_credential_issue(*, outcome: str, reason: str = "none") -> None:
+    TURN_CREDENTIAL_ISSUE_EVENTS.labels(
+        outcome=(outcome or "error").strip().lower(),
+        reason=_normalize_reason(reason),
+    ).inc()
+
+
+def record_turn_credential_issue_latency(*, outcome: str, reason: str = "none", elapsed_seconds: float) -> None:
+    TURN_CREDENTIAL_ISSUE_LATENCY.labels(
+        outcome=(outcome or "error").strip().lower(),
+        reason=_normalize_reason(reason),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
+
+def record_webrtc_call_setup(
+    *,
+    outcome: str,
+    reason: str = "none",
+    platform: str = "unknown",
+    browser: str = "unknown",
+    latency_seconds: Optional[float] = None,
+) -> None:
+    normalized_outcome = _normalize_client_dim(outcome, fallback="unknown", max_len=16)
+    normalized_platform = _normalize_client_dim(platform)
+    normalized_browser = _normalize_client_dim(browser)
+    WEBRTC_CALL_SETUP_EVENTS.labels(
+        outcome=normalized_outcome,
+        reason=_normalize_reason(reason),
+        platform=normalized_platform,
+        browser=normalized_browser,
+    ).inc()
+    if latency_seconds is not None:
+        WEBRTC_CALL_SETUP_LATENCY.labels(
+            outcome=normalized_outcome,
+            platform=normalized_platform,
+            browser=normalized_browser,
+        ).observe(max(0.0, float(latency_seconds)))
+
+
+def record_webrtc_call_failure(
+    *,
+    reason: str,
+    stage: str,
+    platform: str = "unknown",
+    browser: str = "unknown",
+) -> None:
+    WEBRTC_CALL_FAILURE_EVENTS.labels(
+        reason=_normalize_reason(reason),
+        stage=_normalize_client_dim(stage, fallback="unknown", max_len=24),
+        platform=_normalize_client_dim(platform),
+        browser=_normalize_client_dim(browser),
+    ).inc()
+
+
+def record_webrtc_call_connected(*, network_path: str = "unknown") -> None:
+    WEBRTC_CALL_NETWORK_PATH_EVENTS.labels(
+        network_path=_normalize_client_dim(network_path, fallback="unknown", max_len=12),
+    ).inc()
+
+
+def record_webrtc_call_duration(*, duration_seconds: float, end_reason: str = "ended", network_path: str = "unknown") -> None:
+    WEBRTC_CALL_DURATION.labels(
+        end_reason=_normalize_reason(end_reason),
+        network_path=_normalize_client_dim(network_path, fallback="unknown", max_len=12),
+    ).observe(max(0.0, float(duration_seconds)))
+
+
+def record_webrtc_signaling_event(*, outcome: str, reason: str = "none", event_type: str = "unknown") -> None:
+    WEBRTC_SIGNALING_EVENTS.labels(
+        outcome=_normalize_client_dim(outcome, fallback="unknown", max_len=16),
+        reason=_normalize_reason(reason),
+        event_type=_normalize_client_dim(event_type, fallback="unknown", max_len=32),
+    ).inc()
+
+
+def record_webrtc_signaling_latency(*, outcome: str, reason: str = "none", event_type: str = "unknown", elapsed_seconds: float) -> None:
+    WEBRTC_SIGNALING_LATENCY.labels(
+        outcome=_normalize_client_dim(outcome, fallback="unknown", max_len=16),
+        reason=_normalize_reason(reason),
+        event_type=_normalize_client_dim(event_type, fallback="unknown", max_len=32),
+    ).observe(max(0.0, float(elapsed_seconds)))
+
 
 def set_app_info(name: str, version: str) -> None:
     APP_INFO.info({"name": name, "version": version})

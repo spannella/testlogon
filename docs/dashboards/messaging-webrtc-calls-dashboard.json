@@ -1,0 +1,124 @@
+{
+  "title": "Messaging WebRTC Calls",
+  "uid": "messaging-webrtc-calls",
+  "timezone": "utc",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": ["messaging", "webrtc", "calls"],
+  "templating": {
+    "list": [
+      {
+        "name": "platform",
+        "type": "query",
+        "query": "label_values(messaging_webrtc_call_setup_total, platform)",
+        "multi": true,
+        "includeAll": true,
+        "current": { "selected": true, "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "browser",
+        "type": "query",
+        "query": "label_values(messaging_webrtc_call_setup_total, browser)",
+        "multi": true,
+        "includeAll": true,
+        "current": { "selected": true, "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Call setup success rate (5m)",
+      "targets": [
+        {
+          "expr": "sum(rate(messaging_webrtc_call_setup_total{outcome=\"success\", platform=~\"$platform\", browser=~\"$browser\"}[5m])) / clamp_min(sum(rate(messaging_webrtc_call_setup_total{outcome=~\"success|failure|attempt\", platform=~\"$platform\", browser=~\"$browser\"}[5m])), 0.0001)",
+          "legendFormat": "success_rate"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Setup latency p50/p95",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(messaging_webrtc_call_setup_latency_seconds_bucket{platform=~\"$platform\", browser=~\"$browser\"}[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(messaging_webrtc_call_setup_latency_seconds_bucket{platform=~\"$platform\", browser=~\"$browser\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Call duration p50/p95",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(messaging_webrtc_call_duration_seconds_bucket[15m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(messaging_webrtc_call_duration_seconds_bucket[15m])) by (le))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "type": "piechart",
+      "title": "TURN relay ratio",
+      "targets": [
+        {
+          "expr": "sum(increase(messaging_webrtc_call_network_path_total[1h])) by (network_path)",
+          "legendFormat": "{{network_path}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Failure taxonomy (rate)",
+      "targets": [
+        {
+          "expr": "sum(rate(messaging_webrtc_call_failures_total{platform=~\"$platform\", browser=~\"$browser\"}[5m])) by (reason, stage)",
+          "legendFormat": "{{reason}}/{{stage}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "TURN credential issuance failures",
+      "targets": [
+        {
+          "expr": "sum(rate(messaging_turn_credential_issue_total{outcome!~\"success|ok\"}[5m])) by (reason)",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "name": "Alert: setup success regression",
+        "expr": "(sum(rate(messaging_webrtc_call_setup_total{outcome=\"success\"}[5m])) / clamp_min(sum(rate(messaging_webrtc_call_setup_total{outcome=~\"success|failure|attempt\"}[5m])), 0.0001)) < 0.92"
+      },
+      {
+        "name": "Alert: setup p95 latency high",
+        "expr": "histogram_quantile(0.95, sum(rate(messaging_webrtc_call_setup_latency_seconds_bucket[5m])) by (le)) > 8"
+      },
+      {
+        "name": "Alert: TURN relay ratio spike",
+        "expr": "sum(rate(messaging_webrtc_call_network_path_total{network_path=\"turn\"}[15m])) / clamp_min(sum(rate(messaging_webrtc_call_network_path_total[15m])), 0.0001) > 0.7"
+      }
+    ]
+  },
+  "alertThresholds": {
+    "setup_success_rate_critical": "< 0.92 for 15m",
+    "setup_success_rate_warning": "< 0.95 for 15m",
+    "setup_p95_latency_critical_seconds": "> 8 for 10m",
+    "turn_relay_ratio_warning": "> 0.70 for 15m",
+    "turn_issue_failure_rate_warning": "> 0.20 for 10m"
+  }
+}

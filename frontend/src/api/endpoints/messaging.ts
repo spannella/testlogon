@@ -239,6 +239,50 @@ export const getLotteryMessage = async (messageId: string) => {
   return api.get<LotteryMessage>(`/messaging/messages/${messageId}/lottery`);
 };
 
+export type DirectCallMode = "audio" | "video";
+
+export interface CallInviteResp {
+  call_id: string;
+  conversation_id: string;
+  state: string;
+  mode: DirectCallMode;
+  caller_user_id?: string;
+  callee_user_id?: string;
+}
+
+export const createCallInvite = (
+  conversationId: string,
+  body: {
+    callee_user_id: string;
+    mode: DirectCallMode;
+    idempotency_key?: string;
+  },
+) =>
+  api.post<CallInviteResp>("/messages/calls/invite", {
+    conversation_id: conversationId,
+    ...body,
+  });
+
+export const acceptCallInvite = (callId: string, idempotency_key?: string) =>
+  api.post<CallInviteResp>(`/messages/calls/${callId}/accept`, {
+    ...(idempotency_key ? { idempotency_key } : {}),
+  });
+
+export const declineCallInvite = (
+  callId: string,
+  body?: { reason?: "declined" | "busy"; idempotency_key?: string },
+) =>
+  api.post<CallInviteResp>(`/messages/calls/${callId}/decline`, {
+    ...(body?.reason ? { reason: body.reason } : {}),
+    ...(body?.idempotency_key ? { idempotency_key: body.idempotency_key } : {}),
+  });
+
+export const endCall = (callId: string, body?: { reason?: string; idempotency_key?: string }) =>
+  api.post<CallInviteResp>(`/messages/calls/${callId}/end`, {
+    ...(body?.reason ? { reason: body.reason } : {}),
+    ...(body?.idempotency_key ? { idempotency_key: body.idempotency_key } : {}),
+  });
+
 const uploadToPresignedUrl = async (uploadUrl: string, file: File, contentType: string) => {
   const resp = await fetch(uploadUrl, {
     method: "PUT",

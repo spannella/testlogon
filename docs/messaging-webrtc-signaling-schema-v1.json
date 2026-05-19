@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/messaging-webrtc-signaling-schema-v1.json",
+  "title": "Messaging WebRTC Signaling Event Envelope v1",
+  "description": "Normative schema for 1:1 WebRTC direct-call signaling events.",
+  "oneOf": [
+    { "$ref": "#/$defs/callInvite" },
+    { "$ref": "#/$defs/callRing" },
+    { "$ref": "#/$defs/callAccept" },
+    { "$ref": "#/$defs/callDecline" },
+    { "$ref": "#/$defs/webrtcOffer" },
+    { "$ref": "#/$defs/webrtcAnswer" },
+    { "$ref": "#/$defs/webrtcIceCandidate" },
+    { "$ref": "#/$defs/callEnd" }
+  ],
+  "$defs": {
+    "baseEnvelope": {
+      "type": "object",
+      "required": [
+        "type",
+        "version",
+        "event_id",
+        "conversation_id",
+        "call_id",
+        "sender_user_id",
+        "recipient_user_id",
+        "created_at",
+        "payload"
+      ],
+      "properties": {
+        "type": { "type": "string" },
+        "version": { "type": "integer", "const": 1 },
+        "event_id": { "type": "string", "format": "uuid" },
+        "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "conversation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "call_id": { "type": "string", "format": "uuid" },
+        "sender_user_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "recipient_user_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "created_at": { "type": "string", "format": "date-time" },
+        "payload": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    "callInvite": {
+      "allOf": [
+        { "$ref": "#/$defs/baseEnvelope" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "call.invite" },
+            "payload": {
+              "type": "object",
+              "required": ["mode"],
+              "properties": {
+                "mode": { "type": "string", "enum": ["audio", "video"] },
+                "ring_timeout_sec": { "type": "integer", "minimum": 5, "maximum": 120, "default": 30 },
+                "client_capabilities": { "type": "object" }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    },
+    "callRing": {
+      "allOf": [
+        { "$ref": "#/$defs/baseEnvelope" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "call.ring" },
+            "payload": {
+              "type": "object",
+              "required": ["expires_at"],
+              "properties": {
+                "expires_at": { "type": "string", "format": "date-time" }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    },
+    "callAccept": {
+      "allOf": [
+        { "$ref": "#/$defs/baseEnvelope" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "call.accept" },
+            "payload": {
+              "type": "object",
+              "required": ["accepted_mode"],
+              "properties": {
+                "accepted_mode": { "type": "string", "enum": ["audio", "video"] }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    },
+    "callDecline": {
+      "allOf": [
+        { "$ref": "#/$defs/baseEnvelope" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "call.decline" },
+            "payload": {
+              "type": "object",
+              "properties": {
+                "reason": { "type": "string", "enum": ["declined", "busy", "blocked"], "default": "declined" }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    },
+    "webrtcOffer": {
+      "allOf": [
+        { "$ref": "#/$defs/baseEnvelope" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "webrtc.offer" },
+            "payload": {
+              "type": "object",
+              "required": ["sdp", "sdp_type"],
+              "properties": {
+                "sdp": { "type": "string", "minLength": 1, "maxLength": 65535 },
+                "sdp_type": { "const": "offer" }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    },
+    "webrtcAnswer": {
+      "allOf": [
+        { "$ref": "#/$defs/baseEnvelope" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "webrtc.answer" },
+            "payload": {
+              "type": "object",
+              "required": ["sdp", "sdp_type"],
+              "properties": {
+                "sdp": { "type": "string", "minLength": 1, "maxLength": 65535 },
+                "sdp_type": { "const": "answer" }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    },
+    "webrtcIceCandidate": {
+      "allOf": [
+        { "$ref": "#/$defs/baseEnvelope" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "webrtc.ice_candidate" },
+            "payload": {
+              "type": "object",
+              "required": ["candidate"],
+              "properties": {
+                "candidate": { "type": "string", "minLength": 1, "maxLength": 8192 },
+                "sdp_mid": { "type": ["string", "null"] },
+                "sdp_mline_index": { "type": ["integer", "null"], "minimum": 0 },
+                "username_fragment": { "type": "string" }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    },
+    "callEnd": {
+      "allOf": [
+        { "$ref": "#/$defs/baseEnvelope" },
+        {
+          "type": "object",
+          "properties": {
+            "type": { "const": "call.end" },
+            "payload": {
+              "type": "object",
+              "required": ["reason"],
+              "properties": {
+                "reason": { "type": "string", "enum": ["ended", "canceled", "failed", "timeout"] },
+                "duration_sec": { "type": "integer", "minimum": 0 }
+              },
+              "additionalProperties": true
+            }
+          }
+        }
+      ]
+    }
+  }
+}

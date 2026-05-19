@@ -43,6 +43,7 @@ class Tables:
     mass_message_campaigns: Any
     mass_message_campaign_destinations: Any
     message_report_context: Any
+    message_call_sessions: Any
     content_reports: Any
     moderation_tickets: Any
     moderation_actions: Any
@@ -103,6 +104,7 @@ T = Tables(
     mass_message_campaigns=ddb.Table(S.mass_message_campaigns_table_name),
     mass_message_campaign_destinations=ddb.Table(S.mass_message_campaign_destinations_table_name),
     message_report_context=ddb.Table(S.message_report_context_table_name),
+    message_call_sessions=ddb.Table(S.message_call_sessions_table_name),
     content_reports=ddb.Table(S.content_reports_table_name),
     moderation_tickets=ddb.Table(S.moderation_tickets_table_name),
     moderation_actions=ddb.Table(S.moderation_actions_table_name),

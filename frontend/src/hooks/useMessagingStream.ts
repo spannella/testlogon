@@ -37,7 +37,8 @@ export function useMessagingStream(enabled = true) {
           eventType === "helpdesk.conversation.alerted" ||
           eventType === "helpdesk.conversation.assigned" ||
           eventType === "helpdesk.conversation.released" ||
-          eventType === "helpdesk.conversation.no_agents_online"
+          eventType === "helpdesk.conversation.no_agents_online" ||
+          eventType.startsWith("call.")
         ) {
           queryClient.invalidateQueries({ queryKey: ["conversations"] });
         }
@@ -64,6 +65,17 @@ export function useMessagingStream(enabled = true) {
             queryClient.invalidateQueries({ queryKey: ["poll", pollId, conversationId] });
           }
         }
+
+        if (eventType.startsWith("call.")) {
+          window.dispatchEvent(
+            new CustomEvent("messaging:call-event", {
+              detail: {
+                ...data,
+                event_type: eventType,
+              },
+            }),
+          );
+        }
       } catch {
         // Ignore parse errors (heartbeat comments, etc.)
       }
@@ -87,6 +99,10 @@ export function useMessagingStream(enabled = true) {
       "helpdesk.conversation.assigned",
       "helpdesk.conversation.released",
       "helpdesk.conversation.no_agents_online",
+      "call.invite",
+      "call.accept",
+      "call.decline",
+      "call.end",
     ];
 
     function connect() {
