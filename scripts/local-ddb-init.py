@@ -83,6 +83,15 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(
+            _resolve_table_name(S.kyc_cases_table_name, "kyc_cases"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": S.kyc_cases_owner_index_name, "partition_key": "gsi_owner_pk", "sort_key": "gsi_owner_sk"},
+                {"index_name": S.kyc_cases_status_index_name, "partition_key": "gsi_status_pk", "sort_key": "gsi_status_sk"},
+            ],
+        ),
+        TableDef(
             _resolve_table_name(S.projects_table_name, "projects"),
             "PK",
             "SK",

@@ -65,6 +65,7 @@ class Tables:
     signature_packet_artifacts: Any
     tickets: Any
     questionnaires: Any
+    kyc_cases: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -124,4 +125,5 @@ T = Tables(
     signature_packet_artifacts=ddb.Table(S.signature_packet_artifacts_table_name),
     tickets=ddb.Table(S.tickets_table_name),
     questionnaires=ddb.Table(S.questionnaire_table_name),
+    kyc_cases=ddb.Table(S.kyc_cases_table_name),
 )
