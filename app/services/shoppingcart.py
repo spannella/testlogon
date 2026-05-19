@@ -425,7 +425,7 @@ def delete_cart(user_sub: str, cart_id: str) -> None:
         batch.delete_item(Key={"PK": cart["PK"], "SK": cart["SK"]})
 
 
-def purchase_cart(user_sub: str, cart_id: str) -> Dict[str, Any]:
+def purchase_cart(user_sub: str, cart_id: str, *, idempotency_key: str | None = None) -> Dict[str, Any]:
     cart = get_cart(user_sub, cart_id)
     if cart.get("status") == "PURCHASED":
         return {
@@ -443,15 +443,16 @@ def purchase_cart(user_sub: str, cart_id: str) -> Dict[str, Any]:
     total_cents = sum(item.get("line_total_cents", 0) for item in items)
     now = _now_iso()
     buyer = _buyer_snapshot(get_profile(user_sub))
-    idempotency_key = _cart_purchase_idempotency_key(user_sub, cart_id)
+    canonical_idempotency_key = _cart_purchase_idempotency_key(user_sub, cart_id)
+    request_idempotency_key = str(idempotency_key or "").strip()
 
     line_items = _commercial_line_items_from_cart_items(items, cart_id)
     order = commerce_order_service.create_order_from_line_items(
         user_id=user_sub,
         source_system="shopping_cart",
-        correlation_id=idempotency_key,
+        correlation_id=canonical_idempotency_key,
         line_items=line_items,
-        metadata={"cart_id": cart_id, "idempotency_key": idempotency_key},
+        metadata={"cart_id": cart_id, "idempotency_key": canonical_idempotency_key, "request_idempotency_key": request_idempotency_key},
     )
     order_id = str(order.get("order_id") or "")
 
@@ -460,14 +461,15 @@ def purchase_cart(user_sub: str, cart_id: str) -> Dict[str, Any]:
     try:
         update_expr = (
             "SET #status = :status, purchased_at = :purchased_at, "
-            "purchased_total_cents = :total, last_order_id = :order_id, purchase_idempotency_key = :idempotency_key"
+            "purchased_total_cents = :total, last_order_id = :order_id, purchase_idempotency_key = :idempotency_key, request_idempotency_key = :request_idempotency_key"
         )
         expr_values = {
             ":status": "PURCHASED",
             ":purchased_at": now,
             ":total": total_cents,
             ":order_id": order_id,
-            ":idempotency_key": idempotency_key,
+            ":idempotency_key": canonical_idempotency_key,
+            ":request_idempotency_key": request_idempotency_key,
             ":open": "OPEN",
         }
         if buyer:

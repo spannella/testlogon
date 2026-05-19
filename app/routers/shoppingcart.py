@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from app.models import (
     CatalogCartItemIn,
@@ -13,6 +13,7 @@ from app.models import (
     ShoppingCartUpdateQtyIn,
 )
 from app.services.alerts import audit_event
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from app.services.sessions import require_ui_session
 from app.services.shoppingcart import (
     add_item,
@@ -28,7 +29,7 @@ from app.services.shoppingcart import (
     start_cart,
 )
 
-router = APIRouter(prefix="/ui/shoppingcart", tags=["shoppingcart"])
+router = APIRouter(prefix="/ui/shoppingcart", tags=["shoppingcart"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 
 
 @router.get("/carts", response_model=list[ShoppingCartSummary])
@@ -154,8 +155,16 @@ async def ui_cart_total(cart_id: str, ctx=Depends(require_ui_session)):
 
 
 @router.post("/carts/{cart_id}/purchase", response_model=ShoppingCartPurchaseOut)
-async def ui_purchase_cart(cart_id: str, req: Request = None, ctx=Depends(require_ui_session)):
-    purchase = purchase_cart(ctx["user_sub"], cart_id)
+async def ui_purchase_cart(
+    cart_id: str,
+    req: Request = None,
+    x_idempotency_key: str = Header(default="", alias="X-Idempotency-Key"),
+    ctx=Depends(require_ui_session),
+):
+    idem = (x_idempotency_key or "").strip()
+    if not idem:
+        raise HTTPException(status_code=400, detail={"code": "idempotency_key_required", "message": "X-Idempotency-Key header required"})
+    purchase = purchase_cart(ctx["user_sub"], cart_id, idempotency_key=idem)
     audit_event(
         "cart_purchased",
         ctx["user_sub"],

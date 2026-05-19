@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import logging
 import os
 
 from app.auth.root_invariant import validate_startup_root_invariant
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.settings import Settings
 from app.metrics import METRICS_ENABLED, metrics_endpoint, metrics_middleware, set_app_info
+from app.metrics import record_api_key_registry_drift
 from app.routers.ui_session import router as ui_session_router
 from app.routers.ui_mfa import router as ui_mfa_router
 from app.routers.mfa_devices import router as mfa_devices_router
@@ -83,6 +86,15 @@ from app.services.calendar_integrations.registry import initialize_calendar_inte
 from app.services.jira_feature_flags import validate_jira_integration_startup_config
 from app.routers.admin_jira_integration import router as admin_jira_integration_router
 from app.routers.jira_integrations import router as jira_integrations_router
+from app.services.api_key_route_scope_registry import (
+    classify_registry_drift,
+    API_KEY_ROUTE_SCOPE_REGISTRY,
+    is_route_registered_or_exempt,
+    summarize_registry_drift,
+)
+from app.services.api_key_rollout import validate_api_key_rollout_settings
+
+logger = logging.getLogger(__name__)
 
 
 def _api_usage_metering_middleware():
@@ -147,6 +159,14 @@ def _build_cors_options() -> dict[str, object]:
 def create_app() -> FastAPI:
     app = FastAPI(title="Security Backend (refactored)", version="0.1.0", redirect_slashes=False)
     settings = Settings()
+    validate_api_key_rollout_settings()
+    static_dir = Path(__file__).resolve().parent / "static"
+
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+    @app.get("/")
+    async def index():
+        return FileResponse(static_dir / "index.html")
 
     @app.get("/browser-ssh")
     async def browser_ssh_route():
@@ -241,6 +261,273 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)
     app.add_event_handler("startup", start_filemgr_mount_reconcile_task)
+
+    uncovered_policy_routes: set[str] = set()
+    for route in app.routes:
+        path = str(getattr(route, "path", "") or "").strip()
+        methods = set(getattr(route, "methods", set()) or set())
+        dependant = getattr(route, "dependant", None)
+        dependencies = list(getattr(dependant, "dependencies", []) or [])
+        has_api_key_policy_dependency = any(
+            str(getattr(getattr(dep, "call", None), "__name__", "")) == "maybe_enforce_api_key_route_policy"
+            for dep in dependencies
+        )
+        if not path or not methods or not has_api_key_policy_dependency:
+            continue
+        for method in methods:
+            m = str(method or "").upper().strip()
+            if not m or m in {"HEAD", "OPTIONS"}:
+                continue
+            route_id = f"{m}:{path}"
+            if not is_route_registered_or_exempt(route_id):
+                uncovered_policy_routes.add(route_id)
+
+    if uncovered_policy_routes:
+        preview = ", ".join(sorted(uncovered_policy_routes)[:10])
+        raise RuntimeError(
+            f"API key policy is mounted on routes missing registry/exemption entries: {preview}"
+            + (" ..." if len(uncovered_policy_routes) > 10 else "")
+        )
+
+    all_live_route_ids: set[str] = set()
+    for route in app.routes:
+        path = str(getattr(route, "path", "") or "").strip()
+        methods = set(getattr(route, "methods", set()) or set())
+        if not path or not methods:
+            continue
+        for method in methods:
+            m = str(method or "").upper().strip()
+            if not m or m in {"HEAD", "OPTIONS"}:
+                continue
+            all_live_route_ids.add(f"{m}:{path}")
+    app.state.api_key_registry_drift = summarize_registry_drift(all_live_route_ids)
+    drift_count = int((app.state.api_key_registry_drift or {}).get("stale_route_count") or 0)
+    unregistered_live_count = int((app.state.api_key_registry_drift or {}).get("unregistered_live_route_count") or 0)
+    drift_warn_threshold = int(getattr(_S, "api_key_registry_drift_warn_threshold", 0) or 0)
+    drift_warn_exceeded = drift_count > drift_warn_threshold
+    drift_status = classify_registry_drift(
+        stale_route_count=drift_count,
+        unregistered_live_route_count=unregistered_live_count,
+        warn_threshold=drift_warn_threshold,
+    )
+    app.state.api_key_registry_drift["warn_threshold"] = drift_warn_threshold
+    app.state.api_key_registry_drift["warn_threshold_exceeded"] = drift_warn_exceeded
+    app.state.api_key_registry_drift["status"] = drift_status
+    record_api_key_registry_drift(
+        stale_route_count=drift_count,
+        unregistered_live_route_count=unregistered_live_count,
+    )
+    if drift_warn_exceeded:
+        logger.warning(
+            "API-key route-scope registry drift exceeded threshold: stale_route_count=%s threshold=%s",
+            drift_count,
+            drift_warn_threshold,
+        )
+    if unregistered_live_count > 0:
+        logger.warning(
+            "API-key rollout surfaces include live routes missing registry/exemption coverage: count=%s preview=%s",
+            unregistered_live_count,
+            list((app.state.api_key_registry_drift or {}).get("unregistered_live_route_preview") or [])[:10],
+        )
+
+    def _custom_openapi():
+        if app.openapi_schema:
+            return app.openapi_schema
+
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            routes=app.routes,
+        )
+
+        components = schema.setdefault("components", {})
+        security_schemes = components.setdefault("securitySchemes", {})
+        security_schemes.setdefault(
+            "ApiKeyAuth",
+            {
+                "type": "apiKey",
+                "in": "header",
+                "name": "X-API-Key",
+                "description": "Use `X-API-Key: ak_<key_id>.<secret>` or `Authorization: ApiKey ak_<key_id>.<secret>`.",
+            },
+        )
+
+        external_tags = {
+            "filemanager": "File management APIs",
+            "newsfeed": "Newsfeed APIs",
+            "tickets": "Ticketing APIs",
+            "messaging": "Messaging APIs",
+            "shoppingcart": "Shopping cart APIs",
+            "catalog": "Catalog APIs",
+            "purchase-history": "Order and purchase APIs",
+        }
+        tag_rows = schema.setdefault("tags", [])
+        by_name = {str(tag.get("name") or ""): tag for tag in tag_rows if isinstance(tag, dict)}
+        for tag_name, desc in external_tags.items():
+            row = by_name.get(tag_name)
+            if row is None:
+                tag_rows.append({"name": tag_name, "description": desc})
+            else:
+                row.setdefault("description", desc)
+
+        schema["x-tagGroups"] = [
+            {
+                "name": "External Product APIs",
+                "tags": list(external_tags.keys()),
+            }
+        ]
+
+        idempotent_routes = {
+            "POST:/ui/shoppingcart/carts/{cart_id}/purchase",
+            "POST:/ui/purchase-history/transactions",
+        }
+
+        paths = schema.get("paths", {})
+        for path, methods in paths.items():
+            if not isinstance(methods, dict):
+                continue
+            for method, operation in methods.items():
+                if not isinstance(operation, dict):
+                    continue
+                route_id = f"{str(method).upper()}:{path}"
+                policy = API_KEY_ROUTE_SCOPE_REGISTRY.get(route_id)
+                if not policy:
+                    continue
+
+                required_scopes = list(policy.get("required_scopes") or [])
+                entitlement_required = bool(policy.get("entitlement_required"))
+                operation["x-api-key-scopes"] = required_scopes
+                operation["x-api-key-entitlement-required"] = entitlement_required
+
+                security = operation.setdefault("security", [])
+                if {"ApiKeyAuth": []} not in security:
+                    security.append({"ApiKeyAuth": []})
+
+                params = operation.setdefault("parameters", [])
+                names_in = {(str(p.get("name") or ""), str(p.get("in") or "")) for p in params if isinstance(p, dict)}
+                if ("X-API-Key", "header") not in names_in:
+                    params.append(
+                        {
+                            "name": "X-API-Key",
+                            "in": "header",
+                            "required": False,
+                            "schema": {"type": "string"},
+                            "example": "ak_k1234.very-secret-value",
+                            "description": "API key auth header. Alternative: `Authorization: ApiKey <token>`.",
+                        }
+                    )
+                if route_id in idempotent_routes and ("X-Idempotency-Key", "header") not in names_in:
+                    params.append(
+                        {
+                            "name": "X-Idempotency-Key",
+                            "in": "header",
+                            "required": True,
+                            "schema": {"type": "string", "minLength": 1},
+                            "example": "checkout-2026-04-04-001",
+                            "description": "Required idempotency key for safe retries.",
+                        }
+                    )
+
+                responses = operation.setdefault("responses", {})
+                bad_request = responses.setdefault("400", {"description": "Bad request"})
+                if isinstance(bad_request, dict):
+                    bad_content = bad_request.setdefault("content", {})
+                    bad_json = bad_content.setdefault("application/json", {})
+                    bad_json.setdefault(
+                        "examples",
+                        {
+                            "dual_credential_conflict": {
+                                "summary": "Bearer and API key provided together (reject mode)",
+                                "value": {
+                                    "detail": {
+                                        "code": "api_key_dual_credential_conflict",
+                                        "reason": "dual_credential_conflict",
+                                        "message": "Both API key and Bearer credentials were provided",
+                                    }
+                                },
+                            }
+                        },
+                    )
+
+                unauthorized = responses.setdefault("401", {"description": "Unauthorized"})
+                if isinstance(unauthorized, dict):
+                    unauth_content = unauthorized.setdefault("content", {})
+                    unauth_json = unauth_content.setdefault("application/json", {})
+                    unauth_json.setdefault(
+                        "examples",
+                        {
+                            "invalid_api_key": {
+                                "summary": "API key is invalid/revoked/expired",
+                                "value": {
+                                    "detail": {
+                                        "code": "api_key_invalid",
+                                        "reason": "invalid_key",
+                                    }
+                                },
+                            }
+                        },
+                    )
+
+                forbidden = responses.setdefault("403", {"description": "Forbidden"})
+                if isinstance(forbidden, dict):
+                    content = forbidden.setdefault("content", {})
+                    app_json = content.setdefault("application/json", {})
+                    app_json.setdefault(
+                        "examples",
+                        {
+                            "missing_scope": {
+                                "summary": "API key missing required scope",
+                                "value": {
+                                    "detail": {
+                                        "code": "api_key_scope_denied",
+                                        "reason": "missing_scope",
+                                        "required_scopes": required_scopes,
+                                    }
+                                },
+                            },
+                            "entitlement_denied": {
+                                "summary": "API entitlement denied",
+                                "value": {
+                                    "detail": {
+                                        "code": "api_entitlement_denied",
+                                        "reason": "api_entitlement_denied",
+                                    }
+                                },
+                            },
+                        },
+                    )
+
+                too_many = responses.setdefault("429", {"description": "Too many requests"})
+                if isinstance(too_many, dict):
+                    tm_content = too_many.setdefault("content", {})
+                    tm_json = tm_content.setdefault("application/json", {})
+                    tm_json.setdefault(
+                        "examples",
+                        {
+                            "api_rate_limited": {
+                                "summary": "API rate limit exceeded",
+                                "value": {
+                                    "detail": {
+                                        "code": "api_limit_exceeded",
+                                        "reason": "limit_exceeded",
+                                    }
+                                },
+                            }
+                        },
+                    )
+
+                scope_note = f"Required API key scope(s): `{', '.join(required_scopes)}`."
+                entitlement_note = " API entitlement check is required." if entitlement_required else " API entitlement check is not required."
+                dual_cred_note = (
+                    " If both Bearer and API key credentials are sent, behavior follows `API_KEY_DUAL_CREDENTIAL_MODE`"
+                    " (prefer_api_key / prefer_session / reject)."
+                )
+                operation["description"] = f"{(operation.get('description') or '').strip()}\n\n{scope_note}{entitlement_note}{dual_cred_note}".strip()
+
+        app.openapi_schema = schema
+        return app.openapi_schema
+
+    app.openapi = _custom_openapi
 
     return app
 

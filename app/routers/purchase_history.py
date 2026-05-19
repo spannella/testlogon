@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
 from app.models import (
     PurchaseCancelReq,
@@ -26,14 +26,22 @@ from app.services.purchase_history import (
     update_shipping,
 )
 from app.services.receipts import get_or_create_receipt
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from app.services.sessions import require_ui_session
 
-router = APIRouter(prefix="/ui/purchase-history", tags=["purchase-history"])
+router = APIRouter(prefix="/ui/purchase-history", tags=["purchase-history"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 
 
 @router.post("/transactions", response_model=PurchaseTransactionCreated)
-async def ui_create_transaction(body: PurchaseTransactionIn, ctx=Depends(require_ui_session)):
-    return create_transaction(ctx["user_sub"], body.model_dump())
+async def ui_create_transaction(
+    body: PurchaseTransactionIn,
+    x_idempotency_key: str = Header(default="", alias="X-Idempotency-Key"),
+    ctx=Depends(require_ui_session),
+):
+    idem = (x_idempotency_key or "").strip()
+    if not idem:
+        raise HTTPException(status_code=400, detail={"code": "idempotency_key_required", "message": "X-Idempotency-Key header required"})
+    return create_transaction(ctx["user_sub"], body.model_dump(), idempotency_key=idem)
 
 
 @router.get("/transactions", response_model=list[PurchaseTransactionSummary])

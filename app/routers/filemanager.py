@@ -75,6 +75,7 @@ from app.services.filemanager import (
     assert_mount_write_allowed,
 )
 from app.services.alerts import audit_event
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from app.metrics import (
     record_filemgr_provider_operation,
     record_filemgr_provider_auth_failure,
@@ -161,7 +162,7 @@ from app.services.filemanager_mount_flags import enforce_icloud_mount_enabled
 from app.core.normalize import client_ip_from_request
 from app.core.crypto import sha256_str
 
-router = APIRouter(prefix="/v1/fs", tags=["filemanager"])
+router = APIRouter(prefix="/v1/fs", tags=["filemanager"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 _storage_dispatcher = build_default_dispatcher()
 
 
@@ -245,8 +246,12 @@ def _decode_cursor(cursor: Optional[str]) -> Optional[Dict[str, Any]]:
         raise HTTPException(status_code=400, detail="invalid cursor") from exc
 
 
-def _current_user(ctx=Depends(require_ui_session)) -> str:
-    return ctx["user_sub"]
+async def _current_user(request: Request, auth_user: Optional[AuthenticatedUser] = Depends(get_authenticated_user)) -> str:
+    principal = getattr(request.state, "api_key_principal", None)
+    if isinstance(principal, dict) and str(principal.get("user_sub") or "").strip():
+        return str(principal["user_sub"])
+    ctx = await require_ui_session(request=request, auth_user=auth_user)
+    return str(ctx["user_sub"])
 
 
 def _require_google_drive_mounts_enabled() -> None:

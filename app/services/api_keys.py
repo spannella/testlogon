@@ -11,6 +11,8 @@ from app.core.normalize import normalize_cidr, ip_in_any_cidr
 from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
+from app.services.api_key_capabilities import CANONICAL_API_KEY_CAPABILITIES, normalize_api_key_capabilities
+from app.services.api_key_route_scope_registry import get_route_scope_policy
 from app.services.ttl import with_ttl
 
 def new_api_key_secret() -> str:
@@ -31,7 +33,103 @@ def api_key_hash(secret: str) -> str:
         raise RuntimeError("API_KEY_PEPPER not set")
     return sha256_str(secret + "|" + S.api_key_pepper)
 
-def create_api_key(user_sub: str, label: str, expires_in_days: Optional[int] = None) -> Dict[str, Any]:
+def _normalize_capabilities_or_400(capabilities: List[str] | None) -> List[str]:
+    try:
+        return normalize_api_key_capabilities(capabilities)
+    except ValueError as exc:
+        raise HTTPException(
+            400,
+            {
+                "code": "api_key_scopes_invalid",
+                "message": "Invalid API key scope submission",
+                "details": {"error": str(exc)},
+            },
+        )
+
+
+def _is_active_entitlement(item: Dict[str, Any], *, now: int) -> bool:
+    status = str(item.get("status") or "").strip().lower()
+    if status and status != "active":
+        return False
+    starts_at = int(item.get("starts_at") or 0)
+    ends_at = int(item.get("ends_at") or 0)
+    if starts_at and now < starts_at:
+        return False
+    if ends_at and now >= ends_at:
+        return False
+    return True
+
+
+def _allowed_capabilities_for_user_plan(user_sub: str) -> set[str]:
+    try:
+        resp = T.entitlements.query(KeyConditionExpression=Key("user_id").eq(user_sub))
+        entitlements = resp.get("Items", [])
+    except Exception:
+        return set(CANONICAL_API_KEY_CAPABILITIES)
+
+    if not isinstance(entitlements, list) or not entitlements:
+        return set(CANONICAL_API_KEY_CAPABILITIES)
+
+    now = now_ts()
+    allowed: set[str] = set()
+    for ent in entitlements:
+        if not isinstance(ent, dict) or not _is_active_entitlement(ent, now=now):
+            continue
+        scope = ent.get("scope") if isinstance(ent.get("scope"), dict) else {}
+        access_template = ent.get("access_template") if isinstance(ent.get("access_template"), dict) else {}
+        route_allow = access_template.get("route_allowlist")
+        if route_allow is None:
+            route_allow = scope.get("route_allowlist")
+        if route_allow is None:
+            return set(CANONICAL_API_KEY_CAPABILITIES)
+        if not isinstance(route_allow, list):
+            continue
+        for route_id in route_allow:
+            policy = get_route_scope_policy(str(route_id or "").strip())
+            if not policy:
+                continue
+            for required in policy.get("required_scopes", []):
+                allowed.add(str(required))
+
+    return allowed or set(CANONICAL_API_KEY_CAPABILITIES)
+
+
+def _enforce_capability_plan_or_403(user_sub: str, capabilities: List[str]) -> None:
+    allowed = _allowed_capabilities_for_user_plan(user_sub)
+    requested = {str(cap).strip() for cap in capabilities or [] if str(cap).strip()}
+    disallowed = sorted(requested - allowed)
+    if not disallowed:
+        return
+    raise HTTPException(
+        403,
+        {
+            "code": "api_key_scopes_out_of_plan",
+            "message": "One or more requested scopes are not permitted by your current API plan",
+            "details": {
+                "disallowed_scopes": disallowed,
+                "allowed_scopes": sorted(allowed),
+            },
+        },
+    )
+
+
+def effective_api_key_capabilities(item: Dict[str, Any]) -> List[str]:
+    if not isinstance(item, dict):
+        return list(CANONICAL_API_KEY_CAPABILITIES)
+    stored = item.get("capabilities")
+    if stored is None:
+        # Backwards-compatibility policy for legacy keys created before scoped capabilities.
+        return list(CANONICAL_API_KEY_CAPABILITIES)
+    return _normalize_capabilities_or_400(stored)
+
+
+def _with_effective_capabilities(item: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(item or {})
+    out["capabilities"] = effective_api_key_capabilities(out)
+    return out
+
+
+def create_api_key(user_sub: str, label: str, expires_in_days: Optional[int] = None, capabilities: List[str] | None = None) -> Dict[str, Any]:
     ts = now_ts()
     key_id = secrets.token_hex(16)
     secret = new_api_key_secret()
@@ -40,6 +138,9 @@ def create_api_key(user_sub: str, label: str, expires_in_days: Optional[int] = N
         ttl = ts + max(expires_in_days, 1) * 86400
     else:
         ttl = 0  # user explicitly chose no expiry
+
+    normalized_capabilities = _normalize_capabilities_or_400(capabilities)
+    _enforce_capability_plan_or_403(user_sub, normalized_capabilities)
 
     item = {
         "key_id": key_id,
@@ -59,6 +160,7 @@ def create_api_key(user_sub: str, label: str, expires_in_days: Optional[int] = N
         "monthly_calls_cap": 0,
         "monthly_spend_cap_micros": 0,
         "route_caps": {},
+        "capabilities": normalized_capabilities,
     }
     if ttl:
         item = with_ttl(item, ttl_epoch=ttl)
@@ -70,6 +172,7 @@ def create_api_key(user_sub: str, label: str, expires_in_days: Optional[int] = N
         "label": item["label"],
         "created_at": ts,
         "expires_at": item["expires_at"],
+        "capabilities": item["capabilities"],
     }
 
 def revoke_api_key(user_sub: str, key_id: str) -> None:
@@ -214,14 +317,33 @@ def set_api_key_self_limits(
     }
 
 
+def set_api_key_capabilities(user_sub: str, key_id: str, capabilities: List[str] | None) -> Dict[str, Any]:
+    normalized = _normalize_capabilities_or_400(capabilities)
+    _enforce_capability_plan_or_403(user_sub, normalized)
+    try:
+        T.api_keys.update_item(
+            Key={"key_id": key_id},
+            UpdateExpression="SET capabilities = :caps, updated_at = :now",
+            ConditionExpression="user_sub = :u",
+            ExpressionAttributeValues={":caps": normalized, ":u": user_sub, ":now": now_ts()},
+        )
+    except Exception:
+        raise HTTPException(404, "API key not found")
+    return {"key_id": key_id, "capabilities": normalized}
+
+
 def get_api_key_item(key_id: str) -> Dict[str, Any]:
-    return T.api_keys.get_item(Key={"key_id": key_id}).get("Item") or {}
+    item = T.api_keys.get_item(Key={"key_id": key_id}).get("Item") or {}
+    if not item:
+        return {}
+    return _with_effective_capabilities(item)
 def list_api_keys(user_sub: str) -> List[Dict[str, Any]]:
     r = T.api_keys.query(IndexName=S.api_keys_user_index, KeyConditionExpression=Key("user_sub").eq(user_sub), ScanIndexForward=False, Limit=100)
     out = []
     for it in r.get("Items", []):
         if it.get("revoked"):
             continue
+        normalized = _with_effective_capabilities(it)
         out.append({
             "key_id": it.get("key_id") or it.get("api_key_id"),
             "label": it.get("label",""),
@@ -237,6 +359,7 @@ def list_api_keys(user_sub: str) -> List[Dict[str, Any]]:
             "monthly_calls_cap": int(it.get("monthly_calls_cap", 0) or 0),
             "monthly_spend_cap_micros": int(it.get("monthly_spend_cap_micros", 0) or 0),
             "route_caps": it.get("route_caps", {}),
+            "capabilities": normalized["capabilities"],
         })
     out.sort(key=lambda x: int(x.get("created_at") or 0), reverse=True)
     return out

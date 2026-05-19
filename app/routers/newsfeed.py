@@ -39,6 +39,7 @@ from app.metrics import record_newsfeed_schedule_operation
 from app.services.filemanager import download_file, get_node, get_usage_summary, norm_path
 from app.services.newsfeed_feed_query import FeedFilterParams, parse_filter_window, post_matches_filters, sort_posts_deterministically
 from app.services.rate_limit import rate_limit_feed_query
+from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from app.services.sessions import require_ui_session
 from app.services.subscription_access import can_access_creator
 from app.services.usage_metering import (
@@ -61,7 +62,7 @@ _ddb_type_serializer = TypeSerializer()
 s3 = s3_client() if UPLOAD_BUCKET else None
 sqs = sqs_client() if EVENTS_SQS_URL else None
 
-router = APIRouter(tags=["newsfeed"])
+router = APIRouter(tags=["newsfeed"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 logger = logging.getLogger(__name__)
 _SCHEDULED_LOCAL_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$")
 _ddb_serializer = TypeSerializer()

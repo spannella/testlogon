@@ -12,6 +12,8 @@ from app.core.tables import T
 from app.main import create_app
 from app.services.sessions import require_ui_session
 from app.services.tickets import STORE
+from app.services import api_key_auth_dependency
+import app.main as main_app
 
 
 
@@ -162,6 +164,27 @@ def _build_client(user: AuthenticatedUser) -> TestClient:
     return TestClient(app)
 
 
+def _build_api_key_client(monkeypatch, *, key_id: str, owner_sub: str, capabilities: list[str]) -> TestClient:
+    app = create_app()
+
+    monkeypatch.setattr(
+        api_key_auth_dependency.api_keys,
+        "parse_api_key",
+        lambda raw: {"key_id": key_id, "secret": "test-secret"},
+    )
+    monkeypatch.setattr(
+        api_key_auth_dependency.api_keys,
+        "check_api_key_allowed",
+        lambda _key_id, _secret, _client_ip: {"key_id": key_id, "user_sub": owner_sub, "capabilities": capabilities},
+    )
+    monkeypatch.setattr(
+        main_app,
+        "enforce_api_package_entitlement_pre_request",
+        lambda _request: {},
+    )
+    return TestClient(app)
+
+
 def setup_function():
     FAKE_TABLE.reset()
     FAKE_USERS_TABLE.reset()
@@ -205,6 +228,49 @@ def test_admin_can_assign_and_close_ticket():
     done = admin_client.post(f"/tickets/{created['ticket_id']}/status", json={"status": "done"})
     assert done.status_code == 200
     assert done.json()["ticket"]["status"] == "done"
+
+
+def test_api_key_ticket_lifecycle_enforces_write_and_admin_scopes(monkeypatch):
+    writer = _build_api_key_client(monkeypatch, key_id="k_writer", owner_sub="user-1", capabilities=["tickets:write", "tickets:read"])
+    created = writer.post("/tickets", json={"subject": "API key ticket", "description": "created via key"})
+    assert created.status_code == 200
+    ticket_id = created.json()["ticket"]["ticket_id"]
+
+    replied = writer.post(f"/tickets/{ticket_id}/messages", json={"body": "Follow-up from API key"})
+    assert replied.status_code == 200
+
+    denied_assign = writer.post(f"/tickets/{ticket_id}/assign", json={"assignee_admin_sub": "admin-1"})
+    assert denied_assign.status_code == 403
+    assert denied_assign.json()["detail"]["reason"] == "missing_scope"
+
+    admin = _build_api_key_client(monkeypatch, key_id="k_admin", owner_sub="user-1", capabilities=["tickets:admin"])
+    assigned = admin.post(f"/tickets/{ticket_id}/assign", json={"assignee_admin_sub": "admin-1"})
+    assert assigned.status_code == 200
+    assert assigned.json()["ticket"]["assigned_admin_sub"] == "admin-1"
+
+    status = admin.post(f"/tickets/{ticket_id}/status", json={"status": "done"})
+    assert status.status_code == 200
+    assert status.json()["ticket"]["status"] == "done"
+
+    listed = admin.get("/tickets")
+    assert listed.status_code == 200
+    assert any(item["ticket_id"] == ticket_id for item in listed.json()["items"])
+
+
+def test_api_key_ticket_audit_events_include_actor_metadata(monkeypatch):
+    admin = _build_api_key_client(monkeypatch, key_id="k_admin_audit", owner_sub="user-1", capabilities=["tickets:admin"])
+    created = admin.post("/tickets", json={"subject": "Audit metadata", "description": "ensure metadata"})
+    ticket_id = created.json()["ticket"]["ticket_id"]
+
+    with patch("app.routers.tickets.audit_event") as audit:
+        resp = admin.post(f"/tickets/{ticket_id}/status", json={"status": "done"})
+    assert resp.status_code == 200
+    matched = [call for call in audit.call_args_list if call.args and call.args[0] == "ticket_status_changed"]
+    assert matched, "expected a ticket_status_changed audit event"
+    kwargs = matched[0].kwargs
+    assert kwargs["auth_type"] == "api_key"
+    assert kwargs["api_key_id"] == "k_admin_audit"
+    assert kwargs["api_key_owner_sub"] == "user-1"
 
 
 def test_non_owner_user_cannot_read_ticket():

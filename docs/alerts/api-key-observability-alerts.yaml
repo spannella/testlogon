@@ -1,0 +1,46 @@
+groups:
+  - name: api_key_observability
+    rules:
+      - alert: ApiKey401Spike
+        expr: sum(rate(api_usage_status_class_total{status_class="401"}[10m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+          team: api-platform
+        annotations:
+          summary: "API key 401 responses spiking"
+          description: "401 error rate exceeded threshold for 10m. Check recent key revocations, expiry, and parser failures."
+          runbook: "docs/api-key-observability-runbook.md#triage-authentication-spike-401"
+
+      - alert: ApiKey403Spike
+        expr: sum(rate(api_usage_status_class_total{status_class="403"}[10m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+          team: api-platform
+        annotations:
+          summary: "API key 403 responses spiking"
+          description: "403 error rate exceeded threshold for 10m. Check scope mapping, entitlement failures, and rollout toggles."
+          runbook: "docs/api-key-observability-runbook.md#triage-authorizationentitlement-spike-403"
+
+      - alert: ApiKeySuspiciousActivity
+        expr: topk(1, count by (api_key_id) (count by (api_key_id, client_ip) (increase(api_key_requests_total[30m])) > 0)) > 10
+        for: 15m
+        labels:
+          severity: critical
+          team: security
+        annotations:
+          summary: "Potential suspicious API key behavior"
+          description: "A single key is active across many client IPs in 30m. Investigate potential credential sharing or compromise."
+          runbook: "docs/api-key-observability-runbook.md#triage-suspicious-key-activity"
+
+      - alert: ApiKeyRegistryCoverageDrift
+        expr: (api_key_registry_drift_routes + api_key_registry_unregistered_live_routes) > 0
+        for: 15m
+        labels:
+          severity: warning
+          team: api-platform
+        annotations:
+          summary: "API-key registry coverage drift detected"
+          description: "Registry drift or unregistered rollout-surface live routes are present. Review rollout-state registry_drift payload and reconcile route coverage."
+          runbook: "docs/api-key-observability-runbook.md#triage-shadow-vs-enforce-drift-aki-052"

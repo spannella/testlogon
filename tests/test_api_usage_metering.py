@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from threading import Lock, Thread
 from types import SimpleNamespace
 
@@ -88,7 +89,7 @@ class _FakeTable:
                     "cost_subtotal_micros": ":cost_inc",
                 }.items():
                     item[field] = int(item.get(field, 0)) + int(ExpressionAttributeValues[vkey])
-                for attr in ("entity_type", "user_sub", "period_id", "api_key_id", "route_id", "day_utc"):
+                for attr in ("entity_type", "user_sub", "period_id", "api_key_id", "route_id", "product", "day_utc"):
                     token = f":{attr}"
                     if token in ExpressionAttributeValues:
                         item[attr] = item.get(attr, ExpressionAttributeValues[token])
@@ -741,3 +742,33 @@ def test_cutover_signoff_rejects_out_of_threshold_shadow(monkeypatch) -> None:
             rollback_criteria="none",
         )
     assert ex.value.status_code == 409
+
+
+@pytest.mark.parametrize(
+    "path,method,expected_product",
+    [
+        ("/v1/files", "GET", "filemanager"),
+        ("/v1/newsfeed/posts", "POST", "newsfeed"),
+        ("/v1/tickets", "GET", "tickets"),
+        ("/v1/cart/checkout", "POST", "shopping"),
+        ("/v1/messages/send", "POST", "messager"),
+    ],
+)
+def test_build_api_usage_event_includes_product_dimension(path: str, method: str, expected_product: str) -> None:
+    event = api_usage_metering.build_api_usage_event(
+        _request(path, method=method, headers={"x-user-sub": "u-prod", "x-request-id": "p1", "x-api-key": "ak_prod.secret"}),
+        200,
+    )
+    assert event is not None
+    assert event["product"] == expected_product
+
+
+def test_build_api_usage_event_never_includes_api_key_secret_material() -> None:
+    event = api_usage_metering.build_api_usage_event(
+        _request("/v1/files", headers={"x-user-sub": "u-secret", "x-request-id": "sec1", "x-api-key": "ak_abcd1234.super-secret-value"}),
+        200,
+    )
+    assert event is not None
+    blob = json.dumps(event)
+    assert "super-secret-value" not in blob
+    assert event["api_key_id"] == "abcd1234"

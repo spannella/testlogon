@@ -23,6 +23,7 @@ from app.services.api_usage_metering import (
     record_api_billing_cutover_signoff,
 )
 from app.services.alerts import audit_event
+from app.services.api_key_rollout import get_api_key_rollout_state
 
 router = APIRouter(prefix="/v1/admin", tags=["admin-usage"])
 
@@ -412,5 +413,56 @@ def create_api_usage_cutover_signoff(inp: ApiBillingCutoverSignoffIn, req: Reque
         snapshot_version=inp.snapshot_version,
         signoff_sk=out.get("signoff_sk"),
         shadow_report_sk=inp.shadow_report_sk,
+    )
+    return out
+
+
+@router.get("/api-keys/rollout-state")
+def admin_api_keys_rollout_state(
+    req: Request,
+    include_subjects: bool = False,
+    admin_user: str = Depends(_require_admin_user),
+):
+    if include_subjects and not bool(getattr(S, "api_key_rollout_state_allow_subjects", False)):
+        audit_event(
+            "api_key_rollout_state_view",
+            admin_user,
+            req,
+            outcome="denied",
+            reason="include_subjects_disabled",
+            include_subjects=True,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="include_subjects is disabled; set API_KEY_ROLLOUT_STATE_ALLOW_SUBJECTS=1 to enable",
+        )
+
+    out = get_api_key_rollout_state(include_subjects=include_subjects)
+    drift = getattr(getattr(req, "app", None), "state", None)
+    drift_payload = getattr(drift, "api_key_registry_drift", None) if drift is not None else None
+    if isinstance(drift_payload, dict):
+        out["registry_drift"] = {
+            "stale_route_count": int(drift_payload.get("stale_route_count") or 0),
+            "stale_route_preview": list(drift_payload.get("stale_route_preview") or []),
+            "unregistered_live_route_count": int(drift_payload.get("unregistered_live_route_count") or 0),
+            "unregistered_live_route_preview": list(drift_payload.get("unregistered_live_route_preview") or []),
+            "warn_threshold": int(drift_payload.get("warn_threshold") or 0),
+            "warn_threshold_exceeded": bool(drift_payload.get("warn_threshold_exceeded")),
+            "status": str(drift_payload.get("status") or "ok"),
+        }
+    products = out.get("products") if isinstance(out.get("products"), dict) else {}
+    audit_event(
+        "api_key_rollout_state_view",
+        admin_user,
+        req,
+        outcome="success",
+        dual_credential_mode=str(out.get("dual_credential_mode") or ""),
+        products=",".join(sorted(products.keys())),
+        include_subjects=bool(include_subjects),
+        stale_route_count=int(((out.get("registry_drift") or {}).get("stale_route_count") or 0)),
+        unregistered_live_route_count=int(((out.get("registry_drift") or {}).get("unregistered_live_route_count") or 0)),
+        stale_route_warn_threshold=int(((out.get("registry_drift") or {}).get("warn_threshold") or 0)),
+        stale_route_warn_threshold_exceeded=bool(((out.get("registry_drift") or {}).get("warn_threshold_exceeded"))),
+        stale_route_status=str(((out.get("registry_drift") or {}).get("status") or "ok")),
     )
     return out

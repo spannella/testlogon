@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.models import CreateApiKeyReq, RevokeApiKeyReq, ApiKeyIpRulesReq, ApiKeySelfLimitsReq, ApiKeyLimitsPatchReq
-from app.services.api_keys import create_api_key, list_api_keys, revoke_api_key, set_api_key_ip_rules, set_api_key_self_limits, get_api_key_item
+from app.models import CreateApiKeyReq, RevokeApiKeyReq, ApiKeyIpRulesReq, ApiKeySelfLimitsReq, ApiKeyLimitsPatchReq, ApiKeyScopesReq
+from app.services.api_keys import create_api_key, list_api_keys, revoke_api_key, set_api_key_ip_rules, set_api_key_self_limits, get_api_key_item, set_api_key_capabilities
 from app.services.alerts import audit_event
 from app.services.api_usage_metering import _api_usage_table, get_api_key_usage_period_totals
 from app.services.sessions import require_ui_session, require_fresh_mfa
@@ -17,7 +17,7 @@ async def ui_list_api_keys(ctx=Depends(require_ui_session)):
 @router.post("/api_keys")
 async def ui_create_api_key(req: Request, body: CreateApiKeyReq, ctx=Depends(require_ui_session)):
     require_fresh_mfa(ctx)
-    created = create_api_key(ctx["user_sub"], body.label or "", expires_in_days=body.expires_in_days)
+    created = create_api_key(ctx["user_sub"], body.label or "", expires_in_days=body.expires_in_days, capabilities=body.capabilities)
     audit_event("api_key_create", ctx["user_sub"], req, outcome="success", key_id=created["key_id"])
     return created
 
@@ -34,6 +34,45 @@ async def ui_set_api_key_ip_rules(req: Request, body: ApiKeyIpRulesReq, ctx=Depe
     rules = set_api_key_ip_rules(ctx["user_sub"], body.key_id, body.allow_cidrs, body.deny_cidrs)
     audit_event("api_key_ip_rules_set", ctx["user_sub"], req, outcome="success", key_id=body.key_id, allow=len(rules["allow_cidrs"]), deny=len(rules["deny_cidrs"]))
     return {"ok": True, "allow_cidrs": rules["allow_cidrs"], "deny_cidrs": rules["deny_cidrs"]}
+
+
+@router.post("/api_keys/scopes")
+async def ui_set_api_key_scopes(req: Request, body: ApiKeyScopesReq, ctx=Depends(require_ui_session)):
+    require_fresh_mfa(ctx)
+    updated = set_api_key_capabilities(ctx["user_sub"], body.key_id, body.capabilities)
+    audit_event(
+        "api_key_scopes_set",
+        ctx["user_sub"],
+        req,
+        outcome="success",
+        key_id=body.key_id,
+        capabilities_count=len(updated["capabilities"]),
+    )
+    return {"ok": True, **updated}
+
+
+@router.patch("/api_keys/{key_id}/scopes")
+async def ui_patch_api_key_scopes(req: Request, key_id: str, body: ApiKeyScopesReq, ctx=Depends(require_ui_session)):
+    require_fresh_mfa(ctx)
+    if key_id != body.key_id:
+        raise HTTPException(
+            400,
+            {
+                "code": "api_key_scope_target_mismatch",
+                "message": "Path key_id must match payload key_id",
+                "details": {"path_key_id": key_id, "payload_key_id": body.key_id},
+            },
+        )
+    updated = set_api_key_capabilities(ctx["user_sub"], key_id, body.capabilities)
+    audit_event(
+        "api_key_scopes_patch",
+        ctx["user_sub"],
+        req,
+        outcome="success",
+        key_id=key_id,
+        capabilities_count=len(updated["capabilities"]),
+    )
+    return {"ok": True, **updated}
 
 
 @router.post("/api_keys/self_limits")

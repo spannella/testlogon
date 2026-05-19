@@ -609,6 +609,19 @@ API_USAGE_RECONCILIATION_DRIFT = Gauge(
     "API usage reconciliation drift rows by area",
     ["area"],
 )
+API_KEY_POLICY_DECISIONS = Counter(
+    "api_key_policy_decisions_total",
+    "API key policy decisions by mode/product/outcome/reason",
+    ["mode", "product", "outcome", "reason"],
+)
+API_KEY_REGISTRY_DRIFT = Gauge(
+    "api_key_registry_drift_routes",
+    "Count of API-key route-scope registry entries not present in mounted routes",
+)
+API_KEY_REGISTRY_UNREGISTERED_LIVE = Gauge(
+    "api_key_registry_unregistered_live_routes",
+    "Count of live API routes on rollout surfaces without registry/exemption coverage",
+)
 USAGE_METERING_PIPELINE_LATENCY = Histogram(
     "usage_metering_pipeline_duration_seconds",
     "Usage metering pipeline latency in seconds",
@@ -1043,6 +1056,20 @@ def record_api_usage_snapshot_finalize(outcome: str) -> None:
 
 def record_api_usage_reconciliation_drift(*, area: str, rows: int) -> None:
     API_USAGE_RECONCILIATION_DRIFT.labels(area=(area or "unknown").lower()).set(float(max(0, int(rows))))
+
+
+def record_api_key_policy_decision(*, mode: str, product: str, outcome: str, reason: str) -> None:
+    API_KEY_POLICY_DECISIONS.labels(
+        mode=(mode or "unknown").lower(),
+        product=(product or "unknown").lower(),
+        outcome=(outcome or "unknown").lower(),
+        reason=(reason or "unknown").lower(),
+    ).inc()
+
+
+def record_api_key_registry_drift(*, stale_route_count: int, unregistered_live_route_count: int = 0) -> None:
+    API_KEY_REGISTRY_DRIFT.set(float(max(0, int(stale_route_count))))
+    API_KEY_REGISTRY_UNREGISTERED_LIVE.set(float(max(0, int(unregistered_live_route_count))))
 
 
 def record_helpdesk_alert_sent(outcome: str) -> None:
