@@ -3267,6 +3267,21 @@ def index_message_search(
     _opensearch_index_message(conversation_id, message_id, sender_id, created_at, text, kind)
 
 
+def _safe_index_message(item: Dict[str, Any]) -> None:
+    try:
+        text = item.get("text") or ""
+        if text:
+            index_message_search(
+                item.get("conversation_id", ""),
+                item.get("message_id", ""),
+                item.get("sender_id", ""),
+                int(item.get("created_at", 0)),
+                text,
+            )
+    except Exception:
+        pass
+
+
 def remove_message_search(
     conversation_id: str,
     message_id: str,
@@ -11280,7 +11295,6 @@ def create_lottery_message(
         raise HTTPException(status_code=500, detail="Failed to create lottery message") from exc
 
     _safe_index_message(message_item)
-    _emit_message_event(payload.conversation_id, message_id, message_item)
     _meter_message_send(user_id=user_id, conversation_id=payload.conversation_id, message_id=message_id)
     record_messaging_lottery_send(outcome="success", client_version=client_version)
     audit_event(

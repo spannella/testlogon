@@ -919,13 +919,14 @@ test.describe("22. TOTP confirm response includes recovery_codes (fix 2: recover
 
   test("TOTP confirm response includes recovery_codes array when first device enrolled", async () => {
     // Generate two codes from different 30-second windows (required for confirmation).
+    // Use 60s gap to guarantee they're in different windows even near boundaries.
     const codes = JSON.parse(
       execSync(
         `${PYTHON} -c "
 import pyotp, time, json
 t = int(time.time())
 totp = pyotp.TOTP('${secret}')
-print(json.dumps({'curr': totp.at(t), 'prev': totp.at(t - 30)}))
+print(json.dumps({'curr': totp.at(t), 'prev': totp.at(t - 60)}))
 "`,
         { timeout: 5000 },
       ).toString().trim(),
@@ -936,13 +937,6 @@ print(json.dumps({'curr': totp.at(t), 'prev': totp.at(t - 30)}))
       totp_code:  codes.prev,
       totp_code2: codes.curr,
     });
-
-    // Enrollment must succeed.
-    if (!resp.ok()) {
-      // May fail if codes happened to be in the same window — acceptable flake.
-      test.skip(true, `TOTP confirm returned ${resp.status()} — codes may be in same window`);
-      return;
-    }
     expect(resp.status()).toBe(200);
 
     const body = await resp.json() as Record<string, unknown>;

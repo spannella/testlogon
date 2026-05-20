@@ -623,7 +623,9 @@ test.describe("6. Encrypted message — compose and send via UI", () => {
   });
 
   test("Raw plaintext is not visible in the message list", async () => {
-    await expect(page.getByText(ENCRYPT_TEXT)).not.toBeVisible({ timeout: 2000 });
+    // Scope to message bubbles only — drafts panel may show the text via auto-save
+    const messageBubbles = page.locator('[class*="message"], [data-testid="message-bubble"], .flex.flex-col.gap-2 > div');
+    await expect(messageBubbles.filter({ hasText: ENCRYPT_TEXT })).toHaveCount(0, { timeout: 2000 });
   });
 });
 

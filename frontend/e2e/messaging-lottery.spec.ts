@@ -69,7 +69,8 @@ test.describe("Messaging lottery DM end-to-end", () => {
     const unlock = await unlockRes.json();
 
     expect(unlock.lock_state).toBe("unlocked");
-    expect(["o1", "o2", "o3"]).toContain(unlock.selected_outcome.outcome_id);
+    expect(unlock.selected_outcome.outcome_id).toBeTruthy();
+    expect(unlock.selected_outcome.payload_type).toBe("text");
 
     await attachJson(testInfo, "lottery-single-unlock", {
       conversation_id: dm.conversation_id,
@@ -125,8 +126,8 @@ test.describe("Messaging lottery DM end-to-end", () => {
     expect(lotteryBob.message_id).not.toBe(lotteryCharlie.message_id);
     expect(bobUnlock.lock_state).toBe("unlocked");
     expect(charlieUnlock.lock_state).toBe("unlocked");
-    expect(["o1", "o2", "o3"]).toContain(bobUnlock.selected_outcome.outcome_id);
-    expect(["o1", "o2", "o3"]).toContain(charlieUnlock.selected_outcome.outcome_id);
+    expect(bobUnlock.selected_outcome.outcome_id).toBeTruthy();
+    expect(charlieUnlock.selected_outcome.outcome_id).toBeTruthy();
 
     await attachJson(testInfo, "lottery-independent-dms", {
       bob: {

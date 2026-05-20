@@ -561,6 +561,20 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # LotteryMessageConfig: pk=message_id
+        TableDef(os.getenv("DDB_LOTTERY_MESSAGE_CONFIG", "LotteryMessageConfig"), "message_id"),
+        # LotteryMessageUnlocks: pk=message_id, sk=recipient_id
+        TableDef(os.getenv("DDB_LOTTERY_MESSAGE_UNLOCKS", "LotteryMessageUnlocks"), "message_id", "recipient_id"),
+        # MessageDrafts: pk=owner_user_id, sk=draft_id, GSI ByConversationUpdatedAt
+        TableDef(
+            os.getenv("DDB_MESSAGE_DRAFTS", "MessageDrafts"),
+            "owner_user_id",
+            "draft_id",
+            gsi=[
+                {"index_name": "ByConversationUpdatedAt", "partition_key": "conversation_owner_key", "sort_key": "updated_at"},
+            ],
+            attr_types={"updated_at": "N"},
+        ),
         # MessageArchiveChainHeads: pk=conversation_id
         TableDef(_resolve_table_name(S.message_archive_chain_heads_table_name, "MessageArchiveChainHeads"), "conversation_id"),
         # MessageComplianceExports: pk=export_id, GSIs ByCaseCreatedAt + ByStatusCreatedAt

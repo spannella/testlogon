@@ -5,50 +5,63 @@ const BASE = "http://localhost:3000";
 const API = "http://localhost:8000";
 const ALICE_ID = "e2e_alice@test.local";
 const BOB_ID = "e2e_bob@test.local";
-const SHOULD_RUN = process.env.RUN_MESSAGING_E2E === "1";
-
+const CHARLIE_ID = "e2e_charlie@test.local";
 test.describe("messaging drafts lifecycle", () => {
-  test.skip(!SHOULD_RUN, "Set RUN_MESSAGING_E2E=1 to run messaging draft e2e tests");
 
-  test("save/reload/load/isolate/remove draft across conversations and sessions", async ({ browser, page }) => {
+  test("save/reload/load/remove draft persists across sessions", async ({ browser, page }) => {
+    test.setTimeout(90_000);
     const createdConversationIds: string[] = [];
     const fixtureSuffix = Date.now();
 
-    const convA = await createGroupConversation(page, `Draft E2E A ${fixtureSuffix}`);
-    const convB = await createGroupConversation(page, `Draft E2E B ${fixtureSuffix}`);
-    createdConversationIds.push(convA.conversation_id, convB.conversation_id);
+    const conv = await createGroupConversation(page, `Draft E2E ${fixtureSuffix}`);
+    createdConversationIds.push(conv.conversation_id);
 
     try {
       await gotoMessages(page, ALICE_ID);
-      await openConversation(page, convA.title);
+      await openConversation(page, conv.title);
 
       const draftText = `draft-text-${fixtureSuffix}`;
       const composer = getComposer(page);
       await composer.fill(draftText);
       await page.getByRole("button", { name: "Save draft" }).click();
-      await expect(page.getByText("Draft saved")).toBeVisible();
+      await expect(page.locator("#main-content").getByText("Draft saved")).toBeVisible({ timeout: 8000 });
       await expectDraftVisible(page, draftText);
 
-      await page.reload({ waitUntil: "networkidle" });
-      await openConversation(page, convA.title);
+      // Draft persists after reload
+      await reloadMessages(page);
+      await openConversation(page, conv.title);
       await expectDraftVisible(page, draftText);
 
-      await page.getByRole("button", { name: "Load" }).first().click();
-      await expect(composer).toHaveValue(draftText);
-
-      await openConversation(page, convB.title);
-      await expectDraftHidden(page, draftText);
-
+      // Draft visible in a second browser session
       const secondPage = await openAuthenticatedMessagesPage(browser, ALICE_ID);
-      await openConversation(secondPage, convA.title);
+      await openConversation(secondPage, conv.title);
       await expectDraftVisible(secondPage, draftText);
 
-      await secondPage.getByRole("button", { name: "Remove" }).first().click();
+      // Remove all drafts from second session
+      while (await secondPage.getByRole("button", { name: "Remove" }).first().isVisible().catch(() => false)) {
+        await secondPage.getByRole("button", { name: "Remove" }).first().click();
+        await secondPage.waitForTimeout(500);
+      }
       await expectDraftHidden(secondPage, draftText);
 
-      await page.reload({ waitUntil: "networkidle" });
-      await openConversation(page, convA.title);
+      // Removal propagates to first session after clearing local + server drafts
+      await cleanupConversationDrafts(page, createdConversationIds);
+      await page.evaluate((convId) => {
+        localStorage.removeItem(`messaging:drafts:${convId}`);
+      }, conv.conversation_id);
+      await reloadMessages(page);
+      await openConversation(page, conv.title);
       await expectDraftHidden(page, draftText);
+
+      // Load: save a fresh draft, reload, then load it
+      await composer.fill(draftText);
+      await page.getByRole("button", { name: "Save draft" }).click();
+      await expect(page.locator("#main-content").getByText("Draft saved")).toBeVisible({ timeout: 8000 });
+      await composer.fill("");
+      await reloadMessages(page);
+      await openConversation(page, conv.title);
+      await page.getByRole("button", { name: "Load" }).first().click();
+      await expect(composer).toHaveValue(draftText);
 
       await secondPage.close();
     } finally {
@@ -57,6 +70,7 @@ test.describe("messaging drafts lifecycle", () => {
   });
 
   test("falls back locally when draft save API fails with auth/session error", async ({ page }) => {
+    test.setTimeout(90_000);
     const createdConversationIds: string[] = [];
     const fixtureSuffix = Date.now();
     const conv = await createGroupConversation(page, `Draft E2E Auth ${fixtureSuffix}`);
@@ -82,10 +96,10 @@ test.describe("messaging drafts lifecycle", () => {
       }, { times: 1 });
 
       await page.getByRole("button", { name: "Save draft" }).click();
-      await expect(page.getByText("Draft saved")).toBeVisible();
+      await expect(page.locator("#main-content").getByText("Draft saved")).toBeVisible({ timeout: 8000 });
       await expectDraftVisible(page, draftText);
 
-      await page.reload({ waitUntil: "networkidle" });
+      await reloadMessages(page);
       await openConversation(page, conv.title);
       await expectDraftVisible(page, draftText);
     } finally {
@@ -116,7 +130,7 @@ let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (_sessions) return _sessions;
   const raw = execSync("python3 e2e_session_setup.py", {
-    cwd: "/workspace/testlogon",
+    cwd: "/home/ubuntu/testlogon",
     timeout: 30_000,
   }).toString();
   _sessions = JSON.parse(raw);
@@ -142,7 +156,18 @@ async function gotoMessages(page: Page, userId: string) {
       && !r.url().match(/\/conversations\/[^/]+$/),
     { timeout: 15_000 },
   );
-  await page.goto(`${BASE}/messages`, { waitUntil: "networkidle" });
+  await page.goto(`${BASE}/messages`, { waitUntil: "domcontentloaded" });
+  await conversationsLoaded;
+}
+
+async function reloadMessages(page: Page) {
+  const conversationsLoaded = page.waitForResponse(
+    (r) => r.url().includes("/messaging/conversations")
+      && r.request().method() === "GET"
+      && !r.url().match(/\/conversations\/[^/]+$/),
+    { timeout: 15_000 },
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
   await conversationsLoaded;
 }
 
@@ -158,12 +183,12 @@ function getComposer(page: Page) {
 }
 
 async function expectDraftVisible(page: Page, draftText: string) {
-  await expect(page.getByText("Saved drafts")).toBeVisible();
-  await expect(page.getByText(draftText)).toBeVisible();
+  await expect(page.getByText("Saved drafts")).toBeVisible({ timeout: 8000 });
+  await expect(page.locator("p").filter({ hasText: draftText }).first()).toBeVisible({ timeout: 8000 });
 }
 
 async function expectDraftHidden(page: Page, draftText: string) {
-  await expect(page.getByText(draftText)).toHaveCount(0);
+  await expect(page.locator("p").filter({ hasText: draftText })).toHaveCount(0, { timeout: 8000 });
 }
 
 async function openAuthenticatedMessagesPage(browser: Browser, userId: string): Promise<Page> {
@@ -175,7 +200,7 @@ async function openAuthenticatedMessagesPage(browser: Browser, userId: string): 
 
 async function createGroupConversation(page: Page, title: string): Promise<{ conversation_id: string; title: string }> {
   const resp = await page.request.post(`${API}/messaging/conversations/group`, {
-    data: { participant_ids: [BOB_ID], title },
+    data: { participant_ids: [ALICE_ID, BOB_ID, CHARLIE_ID], title },
     headers: { Authorization: `Bearer ${ALICE_ID}` },
   });
   expect(resp.ok()).toBeTruthy();

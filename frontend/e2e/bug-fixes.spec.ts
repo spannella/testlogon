@@ -1208,7 +1208,10 @@ test.describe("12. Payment method cache — unlock enabled after PM added + bill
   });
 
   test("'Unlock for' button is disabled when Alice has no payment method", async () => {
+    // Ensure the locked message is fully rendered before checking button state
+    await expect(alicePage.getByText(LOCK_DESC)).toBeVisible({ timeout: 8000 });
     const unlockBtn = alicePage.getByRole("button", { name: /unlock for/i });
+    await expect(unlockBtn).toBeVisible({ timeout: 8000 });
     await expect(unlockBtn).toBeDisabled({ timeout: 5000 });
   });
 

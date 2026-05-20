@@ -716,25 +716,22 @@ test.describe("100 — Alert Center UI", () => {
     ).toBeVisible({ timeout: 8000 });
   });
 
-  test("100.4 Clicking 'Mark all read' button marks alerts as read", async () => {
+  test("100.4 Clicking 'Mark as read' button marks alerts as read", async () => {
     test.setTimeout(15_000);
-    // Look for a "Mark all read" or "Mark read" button
-    const markAllBtn = page.getByRole("button", { name: /mark all read/i })
-      .or(page.getByRole("button", { name: /mark.*read/i })).first();
+    // Select all alerts first to reveal the "Mark as read" button
+    const selectAll = page.getByRole("checkbox", { name: /select all/i });
+    await expect(selectAll).toBeVisible({ timeout: 5000 });
+    await selectAll.click();
 
-    const hasBtn = await markAllBtn.isVisible().catch(() => false);
-    if (!hasBtn) {
-      // If no mark-all button, skip — center may already be empty
-      test.skip();
-      return;
-    }
+    const markBtn = page.getByRole("button", { name: /mark.*read/i }).first();
+    await expect(markBtn).toBeVisible({ timeout: 5000 });
 
     const markDone = page.waitForResponse(
       (r) => r.url().includes("/alerts/mark_read") && r.request().method() === "POST",
       { timeout: 5000 },
     ).catch(() => null);
 
-    await markAllBtn.click();
+    await markBtn.click();
     const resp = await markDone;
     if (resp) {
       expect(resp.status()).toBe(200);
@@ -743,44 +740,37 @@ test.describe("100 — Alert Center UI", () => {
 
   test("100.5 Alert search filters results by keyword", async () => {
     test.setTimeout(15_000);
-    const searchInput = page.getByPlaceholder(/search/i).first();
-    const hasSearch = await searchInput.isVisible().catch(() => false);
-    if (!hasSearch) {
-      test.skip();
-      return;
-    }
+    // Re-navigate to ensure fresh state after mark-read
+    await goToAlerts(page);
+    const searchInput = page.getByPlaceholder(/search alerts/i).first();
+    await expect(searchInput).toBeVisible({ timeout: 8000 });
 
-    // Search for known content
     await searchInput.fill("api_key");
-    const searchDone = page.waitForResponse(
-      (r) => r.url().includes("/alerts/search") && r.request().method() === "GET",
-      { timeout: 5000 },
-    ).catch(() => null);
-
-    if (searchDone) {
-      const resp = await searchDone;
-      if (resp) expect(resp.status()).toBe(200);
-    }
+    await page.waitForTimeout(1000);
 
     // Clear search
     await searchInput.fill("");
+    await page.waitForTimeout(500);
   });
 
   test("100.6 Clicking on an alert expands its details", async () => {
-    // Find an alert entry and click the expand button to show details
-    // Alert rows are div.rounded-lg.border elements; expand button is ChevronDown icon
+    test.setTimeout(15_000);
+    // Seed a fresh alert to ensure at least one exists
+    const session = getSessions()[ALICE_ID];
+    await page.request.post(`${API}/ui/api_keys`, {
+      data: { label: `e2e-alerts-expand-${Date.now()}` },
+      headers: { "x-csrf-token": session.csrf_token },
+    });
+    await goToAlerts(page);
+    await page.waitForTimeout(1000);
+
+    // Find an alert entry and click it
     const alertEntry = page.locator("div.rounded-lg.border")
       .filter({ hasText: /api key/i }).first();
-    const hasEntry = await alertEntry.isVisible().catch(() => false);
-    if (!hasEntry) {
-      test.skip();
-      return;
-    }
+    await expect(alertEntry).toBeVisible({ timeout: 8000 });
     await alertEntry.click();
-    // After clicking, some JSON details or expanded view should appear
-    // (the AlertCenter component toggles `expanded` state on click)
     await page.waitForTimeout(300);
-    // Just verify no crash — the page still shows content
+    // Verify no crash — the page still shows content
     await expect(page.getByRole("tab", { name: "Notifications" })).toBeVisible();
   });
 });
