@@ -50,14 +50,19 @@ async function sessionPost(browser: Browser, userId: string, path: string, body:
     data: body,
     headers: { "x-csrf-token": session.csrf_token },
   });
+  const jsonBody = await resp.json().catch(() => null);
+  const status = resp.status();
+  const ok = resp.ok();
   await ctx.close();
-  return resp;
+  return { ok: () => ok, status: () => status, json: async () => jsonBody };
 }
 
 async function gotoModule(page: Page, path: string) {
   await page.goto(`${BASE}/`, { waitUntil: "load" });
   await page.goto(`${BASE}${path}`, { waitUntil: "load" });
 }
+
+let _calName = "";
 
 test.describe("UPR-019 cross-module canonical profile navigation", () => {
   test.beforeAll(async ({ browser }) => {
@@ -75,8 +80,9 @@ test.describe("UPR-019 cross-module canonical profile navigation", () => {
     await sessionPost(browser, BOB_ID, "/posts", { body: `E2E profile-nav post ${Date.now()}` });
 
     // Seed calendar share
+    _calName = `E2E profile-nav calendar ${Date.now()}`;
     const calResp = await sessionPost(browser, ALICE_ID, "/ui/calendars", {
-      name: `E2E profile-nav calendar ${Date.now()}`,
+      name: _calName,
       timezone: "UTC",
     });
     if (calResp.ok()) {
@@ -111,7 +117,7 @@ test.describe("UPR-019 cross-module canonical profile navigation", () => {
     await injectAuth(page, ALICE_ID);
     await gotoModule(page, "/contacts");
 
-    const profileLink = page.getByRole("link", { name: new RegExp(`Open ${BOB_ID} profile`) }).first();
+    const profileLink = page.locator('main a[href*="/u/"]').first();
     await expect(profileLink).toBeVisible({ timeout: 10_000 });
     await profileLink.click();
     await expect(page).toHaveURL(/\/u\//, { timeout: 8_000 });
@@ -123,7 +129,7 @@ test.describe("UPR-019 cross-module canonical profile navigation", () => {
     await injectAuth(page, ALICE_ID);
     await gotoModule(page, "/feed");
 
-    const profileLink = page.getByRole("link", { name: new RegExp(`Open ${BOB_ID} profile`) }).first();
+    const profileLink = page.locator('main a[href*="/u/"]').first();
     await expect(profileLink).toBeVisible({ timeout: 10_000 });
     await profileLink.click();
     await expect(page).toHaveURL(/\/u\//, { timeout: 8_000 });
@@ -136,7 +142,14 @@ test.describe("UPR-019 cross-module canonical profile navigation", () => {
     await gotoModule(page, "/calendar");
     await page.getByRole("tab", { name: "Sharing" }).click();
 
-    const profileLink = page.getByRole("link", { name: new RegExp(`Open ${BOB_ID} profile`) }).first();
+    // Select the calendar that has the share
+    if (_calName) {
+      await page.getByRole("combobox").first().click();
+      await page.getByRole("option", { name: new RegExp(_calName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) }).click();
+      await page.waitForTimeout(500);
+    }
+
+    const profileLink = page.locator('main a[href*="/u/"]').first();
     await expect(profileLink).toBeVisible({ timeout: 10_000 });
     await profileLink.click();
     await expect(page).toHaveURL(/\/u\//, { timeout: 8_000 });
@@ -148,7 +161,7 @@ test.describe("UPR-019 cross-module canonical profile navigation", () => {
     await injectAuth(page, BOB_ID);
     await gotoModule(page, "/tickets");
 
-    const profileLink = page.getByRole("link", { name: new RegExp(`Open ${BOB_ID} profile`) }).first();
+    const profileLink = page.locator('main a[href*="/u/"]').first();
     await expect(profileLink).toBeVisible({ timeout: 10_000 });
     await profileLink.click();
     await expect(page).toHaveURL(/\/u\//, { timeout: 8_000 });

@@ -124,7 +124,7 @@ test.describe("Section 73: Post content envelope API", () => {
       body_plain:    `Section73 md ${TS}`,
       body_markdown: `# Section73 Heading ${TS}\n\n- item one\n- item two\n\n> blockquote line`,
       body_format:   "markdown",
-      visibility:    "followers",
+      visibility:    "public",
     });
     expect(mdResp.ok()).toBeTruthy();
     mdPostId = (await mdResp.json()).post_id;
@@ -134,7 +134,7 @@ test.describe("Section 73: Post content envelope API", () => {
       body_plain:  `Section73 rich ${TS}`,
       body_rich:   simpleRichDoc(`Section73 rich ${TS}`),
       body_format: "rich",
-      visibility:  "followers",
+      visibility:  "public",
     });
     expect(richResp.ok()).toBeTruthy();
     richPostId = (await richResp.json()).post_id;
@@ -152,7 +152,7 @@ test.describe("Section 73: Post content envelope API", () => {
   test("73.1 legacy body field → body_format: plain, no markdown/rich fields", async () => {
     const resp = await apiPost(alicePage, ALICE_ID, "/posts", {
       body:       `Legacy plain ${TS}`,
-      visibility: "followers",
+      visibility: "public",
     });
     expect(resp.ok()).toBeTruthy();
     const post = await resp.json();
@@ -170,7 +170,7 @@ test.describe("Section 73: Post content envelope API", () => {
   test("73.2 body_plain only → body_format: plain, no markdown/rich fields", async () => {
     const resp = await apiPost(alicePage, ALICE_ID, "/posts", {
       body_plain:  `Plain only ${TS}`,
-      visibility: "followers",
+      visibility: "public",
     });
     expect(resp.ok()).toBeTruthy();
     const post = await resp.json();
@@ -189,7 +189,7 @@ test.describe("Section 73: Post content envelope API", () => {
   test("73.3 body_format auto-inferred as markdown when only body_markdown provided", async () => {
     const resp = await apiPost(alicePage, ALICE_ID, "/posts", {
       body_markdown: `**Inferred markdown** ${TS}`,
-      visibility:    "followers",
+      visibility:    "public",
     });
     expect(resp.ok()).toBeTruthy();
     const post = await resp.json();
@@ -208,7 +208,7 @@ test.describe("Section 73: Post content envelope API", () => {
       body_plain:    `Html elements ${TS}`,
       body_markdown: `**bold** *italic* \`inline code\`\n\n- list item\n\n> quoted line`,
       body_format:   "markdown",
-      visibility:    "followers",
+      visibility:    "public",
     });
     expect(resp.ok()).toBeTruthy();
     const post = await resp.json();
@@ -230,7 +230,7 @@ test.describe("Section 73: Post content envelope API", () => {
       body_plain:    "See the link",
       body_markdown: "[the link](https://example.com/page)",
       body_format:   "markdown",
-      visibility:    "followers",
+      visibility:    "public",
     });
     expect(resp.ok()).toBeTruthy();
     const post = await resp.json();
@@ -249,7 +249,7 @@ test.describe("Section 73: Post content envelope API", () => {
       body_plain:    "Unsafe link text",
       body_markdown: "[Unsafe link text](http://example.com)",
       body_format:   "markdown",
-      visibility:    "followers",
+      visibility:    "public",
     });
     expect(resp.ok()).toBeTruthy();
     const post = await resp.json();
@@ -301,7 +301,7 @@ test.describe("Section 73: Post content envelope API", () => {
   test("73.10 edit post format switching: plain → markdown → rich", async () => {
     const create = await apiPost(alicePage, ALICE_ID, "/posts", {
       body_plain:  `Edit switch ${TS}`,
-      visibility: "followers",
+      visibility: "public",
     });
     expect(create.ok()).toBeTruthy();
     const { post_id } = await create.json();
@@ -342,7 +342,7 @@ test.describe("Section 73: Post content envelope API", () => {
       body_plain:         `Locked rich ${TS}`,
       body_rich:          simpleRichDoc(`Locked rich ${TS}`),
       body_format:        "rich",
-      visibility:         "followers",
+      visibility:         "public",
       unlock_price_cents: 300,
     });
     expect(create.ok()).toBeTruthy();
@@ -375,7 +375,7 @@ test.describe("Section 73: Post content envelope API", () => {
     const resp = await apiPost(alicePage, ALICE_ID, "/posts", {
       body_rich:   simpleRichDoc("No plain fallback"),
       body_format: "rich",
-      visibility:  "followers",
+      visibility:  "public",
       // body_plain intentionally omitted
     });
     expect(resp.ok()).toBeFalsy();
@@ -390,7 +390,7 @@ test.describe("Section 73: Post content envelope API", () => {
         content: [{ type: "table", content: [] }],
       },
       body_format: "rich",
-      visibility:  "followers",
+      visibility:  "public",
     });
     expect(resp.ok()).toBeFalsy();
     expect(resp.status()).toBe(422);
@@ -411,7 +411,7 @@ test.describe("Section 73: Post content envelope API", () => {
         }],
       },
       body_format: "rich",
-      visibility:  "followers",
+      visibility:  "public",
     });
     expect(resp.ok()).toBeFalsy();
     expect(resp.status()).toBe(422);
@@ -455,7 +455,7 @@ test.describe("Section 74: Comment content API", () => {
     // Create the post that all comment tests attach to
     const resp = await apiPost(alicePage, ALICE_ID, "/posts", {
       body_plain:  `Section74 host ${TS}`,
-      visibility: "followers",
+      visibility: "public",
     });
     expect(resp.ok()).toBeTruthy();
     postId = (await resp.json()).post_id;

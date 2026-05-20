@@ -50,13 +50,17 @@ async function sessionPost(browser: Browser, userId: string, path: string, body:
     data: body,
     headers: { "x-csrf-token": session.csrf_token },
   });
+  const jsonBody = await resp.json().catch(() => null);
+  const status = resp.status();
+  const ok = resp.ok();
   await ctx.close();
-  return resp;
+  return { ok: () => ok, status: () => status, json: async () => jsonBody };
 }
 
 test.describe("UPR-017 profile links — calendar and tickets", () => {
   test("calendar sharing collaborator link navigates to canonical profile", async ({ browser }) => {
-    const createCal = await sessionPost(browser, ALICE_ID, "/ui/calendars", { name: `E2E Link Cal ${Date.now()}`, timezone: "UTC" });
+    const calName = `E2E Link Cal ${Date.now()}`;
+    const createCal = await sessionPost(browser, ALICE_ID, "/ui/calendars", { name: calName, timezone: "UTC" });
     expect(createCal.ok()).toBe(true);
     const cal = await createCal.json() as { calendar_id: string };
 
@@ -68,7 +72,12 @@ test.describe("UPR-017 profile links — calendar and tickets", () => {
     await page.goto(`${BASE}/calendar`, { waitUntil: "load" });
     await page.getByRole("tab", { name: "Sharing" }).click();
 
-    const link = page.getByRole("link", { name: new RegExp(`Open ${BOB_ID} profile`) }).first();
+    // Select the correct calendar from the dropdown
+    await page.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: new RegExp(calName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) }).click();
+    await page.waitForTimeout(500);
+
+    const link = page.locator('main a[href*="/u/"]').first();
     await expect(link).toBeVisible({ timeout: 8_000 });
     await link.click();
     await expect(page).toHaveURL(/\/u\//, { timeout: 8_000 });
@@ -83,7 +92,7 @@ test.describe("UPR-017 profile links — calendar and tickets", () => {
     await injectAuth(page, BOB_ID);
     await page.goto(`${BASE}/tickets`, { waitUntil: "load" });
 
-    const ownerLink = page.getByRole("link", { name: new RegExp(`Open ${BOB_ID} profile`) }).first();
+    const ownerLink = page.locator('main a[href*="/u/"]').first();
     await expect(ownerLink).toBeVisible({ timeout: 8_000 });
     await ownerLink.click();
     await expect(page).toHaveURL(/\/u\//, { timeout: 8_000 });

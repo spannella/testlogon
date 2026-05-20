@@ -221,6 +221,7 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
                 {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
                 {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
+                {"index_name": "GSI_SCHEDULE_DUE", "partition_key": "GSI_SCHEDULE_PK", "sort_key": "GSI_SCHEDULE_SK"},
             ],
         ),
         TableDef(

@@ -154,56 +154,24 @@ def _publish_due_post(item: Dict[str, Any], *, now_ts: int, now_iso: str) -> str
     if current_status and current_status != "scheduled":
         return "invalid_state"
 
-    tx: List[Dict[str, Any]] = [
-        {
-            "Update": {
-                "TableName": APP_TABLE,
-                "Key": {"pk": {"S": pk_post(post_id)}, "sk": {"S": sk_post()}},
-                "UpdateExpression": "SET #status = :published, published_at = :now, updated_at = :now, publish_at = :null, schedule_timezone = :null, scheduled_at_local = :null, GSI_SCHEDULE_PK = :null, GSI_SCHEDULE_SK = :null",
-                "ConditionExpression": "#status = :scheduled AND publish_at <= :now_ts",
-                "ExpressionAttributeNames": {"#status": "status"},
-                "ExpressionAttributeValues": {
-                    ":published": {"S": "published"},
-                    ":scheduled": {"S": "scheduled"},
-                    ":now": {"S": now_iso},
-                    ":now_ts": {"N": str(now_ts)},
-                    ":null": {"NULL": True},
-                },
-            }
-        },
-        {
-            "Delete": {
-                "TableName": APP_TABLE,
-                "Key": {"pk": {"S": pk_user(user_id)}, "sk": {"S": sk_scheduled_post_ref(publish_at, post_id)}},
-            }
-        },
-        {
-            "Put": {
-                "TableName": APP_TABLE,
-                "Item": {
-                    "pk": {"S": pk_post(post_id)},
-                    "sk": {"S": f"FEEDREF#{user_id}"},
-                    "Entity": {"S": "FeedRef"},
-                    "post_id": {"S": post_id},
-                    "user_id": {"S": user_id},
-                    # Feed ordering timestamp should reflect actual publish time for scheduled posts.
-                    "created_at": {"S": now_iso},
-                    "GSI1PK": {"S": f"FEED#{user_id}"},
-                    "GSI1SK": {"S": now_iso},
-                },
-                "ConditionExpression": "attribute_not_exists(pk) AND attribute_not_exists(sk)",
-            }
-        },
-    ]
-
+    tbl = _tbl()
     try:
-        ddb.meta.client.transact_write_items(TransactItems=tx)
-        return "published"
+        tbl.update_item(
+            Key={"pk": pk_post(post_id), "sk": sk_post()},
+            UpdateExpression="SET #status = :published, published_at = :now, updated_at = :now REMOVE publish_at, schedule_timezone, scheduled_at_local, GSI_SCHEDULE_PK, GSI_SCHEDULE_SK",
+            ConditionExpression="#status = :scheduled AND publish_at <= :now_ts",
+            ExpressionAttributeNames={"#status": "status"},
+            ExpressionAttributeValues={
+                ":published": "published",
+                ":scheduled": "scheduled",
+                ":now": now_iso,
+                ":now_ts": now_ts,
+            },
+        )
     except ClientError as exc:
         code = str(exc.response.get("Error", {}).get("Code") or "")
-        if code == "TransactionCanceledException":
-            # Idempotent behavior: if already transitioned, treat as duplicate and continue.
-            latest = _tbl().get_item(Key={"pk": pk_post(post_id), "sk": sk_post()}).get("Item") or {}
+        if code == "ConditionalCheckFailedException":
+            latest = tbl.get_item(Key={"pk": pk_post(post_id), "sk": sk_post()}).get("Item") or {}
             latest_status = str(latest.get("status") or "").strip().lower()
             if latest_status == "published":
                 return "already_published"
@@ -213,6 +181,30 @@ def _publish_due_post(item: Dict[str, Any], *, now_ts: int, now_iso: str) -> str
         if code in RETRYABLE_CODES:
             raise
         return "error"
+
+    try:
+        tbl.delete_item(Key={"pk": pk_user(user_id), "sk": sk_scheduled_post_ref(publish_at, post_id)})
+    except ClientError:
+        pass
+
+    try:
+        tbl.put_item(
+            Item={
+                "pk": pk_post(post_id),
+                "sk": f"FEEDREF#{user_id}",
+                "Entity": "FeedRef",
+                "post_id": post_id,
+                "user_id": user_id,
+                "created_at": now_iso,
+                "GSI1PK": f"FEED#{user_id}",
+                "GSI1SK": now_iso,
+            },
+            ConditionExpression="attribute_not_exists(pk) AND attribute_not_exists(sk)",
+        )
+    except ClientError:
+        pass
+
+    return "published"
 
 
 def _publish_with_retry(item: Dict[str, Any], *, now_ts: int, now_iso: str, max_retries: int, backoff_seconds: float) -> str:

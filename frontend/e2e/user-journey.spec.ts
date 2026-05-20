@@ -421,7 +421,7 @@ test.describe("89. Sidebar navigation", () => {
   test("89.4 Sidebar Contacts link navigates to /contacts", async () => {
     await page.getByRole("link", { name: /contacts/i }).first().click();
     await expect(page).toHaveURL(/\/contacts/, { timeout: 5_000 });
-    await expect(page.getByRole("heading", { name: /contacts/i })).toBeVisible({ timeout: 8_000 });
+    await expect(page.getByRole("heading", { name: "Contacts", exact: true })).toBeVisible({ timeout: 8_000 });
   });
 
   test("89.5 Sidebar Files link navigates to /files", async () => {

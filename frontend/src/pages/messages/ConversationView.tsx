@@ -27,7 +27,6 @@ import {
 } from "@/api/endpoints/messaging";
 import { useAuthStore } from "@/stores/authStore";
 import { useOfflineStore } from "@/stores/offlineStore";
-import { ApiError } from "@/api/client";
 import type { Conversation, Message, SendTextMessageReq, SendFileShareReq, SendCalendarShareReq, SendCalendarEventReq, SendMeetingPollReq, CreateLotteryMessageReq } from "@/api/types";
 import { MessageBubble } from "./MessageBubble";
 import { ComposeBar } from "./ComposeBar";

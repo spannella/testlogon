@@ -92,7 +92,7 @@ test.describe("NFR-503: newsfeed rich content e2e journeys", () => {
         body_plain: "Markdown title",
         body_markdown: "# Markdown title\n\n- one\n- two",
         body_format: "markdown",
-        visibility: "followers",
+        visibility: "public",
       });
       expect(createPost.ok()).toBeTruthy();
       const created = await createPost.json();
@@ -166,7 +166,7 @@ test.describe("NFR-503: newsfeed rich content e2e journeys", () => {
         body_plain: "Rich post text",
         body_rich: richDoc,
         body_format: "rich",
-        visibility: "followers",
+        visibility: "public",
       });
       expect(createPost.ok()).toBeTruthy();
       const created = await createPost.json();
@@ -241,7 +241,7 @@ test.describe("NFR-503: newsfeed rich content e2e journeys", () => {
         body_plain: "safe",
         body_markdown: maliciousMarkdown,
         body_format: "markdown",
-        visibility: "followers",
+        visibility: "public",
       });
       expect(createPost.ok()).toBeTruthy();
       const created = await createPost.json();

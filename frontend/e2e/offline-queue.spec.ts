@@ -255,7 +255,7 @@ test.describe("84 — Offline queue behaviour", () => {
     // Navigate to messages and open the conversation
     await page.goto(`${BASE}/messages`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(800);
-    await page.getByText("Bob", { exact: false }).first().click();
+    await page.locator("button").filter({ hasText: "Bob" }).first().click();
     // Wait for ConversationView + ComposeBar to render
     await page.waitForSelector('[placeholder="Type a message..."]', { timeout: 10_000 });
 
@@ -284,7 +284,7 @@ test.describe("84 — Offline queue behaviour", () => {
 
     await page.goto(`${BASE}/messages`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(800);
-    await page.getByText("Bob", { exact: false }).first().click();
+    await page.locator("button").filter({ hasText: "Bob" }).first().click();
     // Wait for ConversationView + ComposeBar to render
     await page.waitForSelector('[placeholder="Type a message..."]', { timeout: 10_000 });
 
@@ -311,7 +311,7 @@ test.describe("84 — Offline queue behaviour", () => {
 
     await page.goto(`${BASE}/messages`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(800);
-    await page.getByText("Bob", { exact: false }).first().click();
+    await page.locator("button").filter({ hasText: "Bob" }).first().click();
     // Wait for ConversationView + ComposeBar to render
     await page.waitForSelector('[placeholder="Type a message..."]', { timeout: 10_000 });
 
@@ -357,7 +357,7 @@ test.describe("84 — Offline queue behaviour", () => {
 
     await page.goto(`${BASE}/messages`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(800);
-    await page.getByText("Bob", { exact: false }).first().click();
+    await page.locator("button").filter({ hasText: "Bob" }).first().click();
     // Wait for ConversationView + ComposeBar to render
     await page.waitForSelector('[placeholder="Type a message..."]', { timeout: 10_000 });
 
@@ -513,7 +513,7 @@ test.describe("85 — Offline queue UI", () => {
     // Navigate to messages and open conversation
     await page.goto(`${BASE}/messages`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(800);
-    await page.getByText("Bob", { exact: false }).first().click();
+    await page.locator("button").filter({ hasText: "Bob" }).first().click();
     await page.waitForSelector('[placeholder="Type a message..."]', { timeout: 10_000 });
 
     await goOffline(page);
@@ -561,7 +561,7 @@ test.describe("85 — Offline queue UI", () => {
 
     await page.goto(`${BASE}/messages`, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(800);
-    await page.getByText("Bob", { exact: false }).first().click();
+    await page.locator("button").filter({ hasText: "Bob" }).first().click();
     // Wait for ConversationView + ComposeBar to render
     await page.waitForSelector('[placeholder="Type a message..."]', { timeout: 10_000 });
 

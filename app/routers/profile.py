@@ -25,6 +25,7 @@ from app.services.profile import (
 )
 from app.services.profile_discoverability import get_profile_discoverability_state
 from app.services.rate_limit import rate_limit_profile_lookup
+from app.auth.deps import get_authenticated_user
 from app.services.sessions import require_ui_session
 from app.core.normalize import client_ip_from_request
 from app.core.settings import S
@@ -74,7 +75,8 @@ async def ui_get_profile_by_identifier(identifier: str, req: Request):
 
         requester_user_sub = None
         try:
-            ctx = await require_ui_session(req)
+            auth_user = await get_authenticated_user(req)
+            ctx = await require_ui_session(req, auth_user=auth_user)
             requester_user_sub = ctx.get("user_sub")
         except HTTPException as exc:
             if exc.status_code not in {401, 403}:
@@ -274,7 +276,7 @@ else:
 
 
 def _profile_lookup_etag(body: dict) -> str:
-    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return f'W/"{digest}"'
 

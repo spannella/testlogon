@@ -67,18 +67,21 @@ async function feedGet(page: Page, pathName: string) {
 }
 
 function runSchedulerOnce() {
-  execSync("python3 scripts/newsfeed-scheduler-worker.py", {
-    cwd: REPO_ROOT,
-    timeout: 20_000,
-    env: {
-      ...process.env,
-      NEWSFEED_SCHEDULER_ITERATIONS: "1",
-      NEWSFEED_SCHEDULER_PAGE_LIMIT: "100",
-      NEWSFEED_SCHEDULER_MAX_BATCHES: "2",
-      NEWSFEED_SCHEDULER_PUBLISH_RETRY_MAX: "3",
-      NEWSFEED_SCHEDULER_RETRY_BACKOFF_SECONDS: "0.2",
+  execSync(
+    "bash -c 'set -a; source .env.local; set +a; PYTHONPATH=. .venv/bin/python3 scripts/newsfeed-scheduler-worker.py'",
+    {
+      cwd: REPO_ROOT,
+      timeout: 20_000,
+      env: {
+        ...process.env,
+        NEWSFEED_SCHEDULER_ITERATIONS: "1",
+        NEWSFEED_SCHEDULER_PAGE_LIMIT: "100",
+        NEWSFEED_SCHEDULER_MAX_BATCHES: "2",
+        NEWSFEED_SCHEDULER_PUBLISH_RETRY_MAX: "3",
+        NEWSFEED_SCHEDULER_RETRY_BACKOFF_SECONDS: "0.2",
+      },
     },
-  });
+  );
 }
 
 async function isPostInFeed(page: Page, postId: string): Promise<boolean> {

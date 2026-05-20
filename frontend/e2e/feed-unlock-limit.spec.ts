@@ -25,7 +25,7 @@ interface SessionData {
 let _sessions: Record<string, SessionData> | null = null;
 function getSessions(): Record<string, SessionData> {
   if (!_sessions) {
-    const root = path.resolve(__dirname, "../../..");
+    const root = path.resolve(process.cwd(), "..");
     const raw = execSync(`python3 ${path.join(root, "e2e_session_setup.py")}`, {
       cwd: root,
       timeout: 30_000,
@@ -36,7 +36,7 @@ function getSessions(): Record<string, SessionData> {
 }
 
 function upsertPaymentMethod(userSub: string, pmId: string): void {
-  const root = path.resolve(__dirname, "../../..");
+  const root = path.resolve(process.cwd(), "..");
   execSync(
     `python3 -c "
 import boto3, os, time
@@ -74,7 +74,7 @@ print('ok')
 }
 
 function removePaymentMethod(userSub: string, pmId: string): void {
-  const root = path.resolve(__dirname, "../../..");
+  const root = path.resolve(process.cwd(), "..");
   try {
     execSync(
       `python3 -c "

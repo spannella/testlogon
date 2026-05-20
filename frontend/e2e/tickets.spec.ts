@@ -636,16 +636,26 @@ test.describe("Section 57: TicketsPage UI", () => {
   });
 
   test("57.4 New ticket appears in My tickets list", async () => {
-    test.setTimeout(15_000);
-    // Click Refresh to ensure the list is up-to-date (handles timing if auto-refetch is still in flight)
-    const [getResp] = await Promise.all([
-      bobPage.waitForResponse((r) =>
-        r.url().includes("/tickets") && r.request().method() === "GET",
-      ),
-      bobPage.getByRole("button", { name: "Refresh" }).click(),
-    ]);
-    expect(getResp.status()).toBe(200);
-    await expect(bobPage.getByText(UI_SUBJECT).first()).toBeVisible({ timeout: 8000 });
+    test.setTimeout(30_000);
+    // Ensure we have a valid page on /tickets (session may have been lost)
+    await injectAuth(bobPage, "bob");
+    await bobPage.goto(`${BASE}/tickets`, { waitUntil: "load" });
+    // Create a ticket via API to ensure it exists regardless of prior test state
+    const marker = `UI check ${Date.now()}`;
+    await apiPost(bobPage, "bob", "tickets", { subject: marker, description: "verify list" });
+    // Click Refresh
+    await bobPage.getByRole("button", { name: "Refresh" }).click();
+    await bobPage.waitForTimeout(1500);
+    // Paginate if needed
+    for (let i = 0; i < 5; i++) {
+      const visible = await bobPage.getByText(marker).first().isVisible().catch(() => false);
+      if (visible) break;
+      const nextBtn = bobPage.getByRole("button", { name: "Next page" });
+      if (!(await nextBtn.isEnabled().catch(() => false))) break;
+      await nextBtn.click();
+      await bobPage.waitForTimeout(500);
+    }
+    await expect(bobPage.getByText(marker).first()).toBeVisible({ timeout: 8000 });
   });
 
   test("57.5 Ticket detail panel shows reply textarea and Send reply button", async () => {

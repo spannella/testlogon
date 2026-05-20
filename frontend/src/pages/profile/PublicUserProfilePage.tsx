@@ -32,6 +32,15 @@ export default function PublicUserProfilePage() {
     onError: () => toast.error("Unable to add contact right now"),
   });
 
+  const data = q.data;
+  const canonicalIdentifier = data?.canonical_identifier?.trim() || data?.identifier || "";
+
+  useEffect(() => {
+    if (!identifier || !canonicalIdentifier) return;
+    if (canonicalIdentifier === identifier) return;
+    navigate(`/u/${encodeURIComponent(canonicalIdentifier)}`, { replace: true });
+  }, [canonicalIdentifier, identifier, navigate]);
+
   if (!identifier) {
     return <ErrorPage status={404} title="Profile Not Available" description="This profile URL is invalid." />;
   }
@@ -75,17 +84,13 @@ export default function PublicUserProfilePage() {
     return <ErrorPage status={500} title="Profile Unavailable" description="Unable to load this profile right now." />;
   }
 
-  const data = q.data;
+  if (!data) {
+    return <ErrorPage status={500} title="Profile Unavailable" description="Unable to load this profile right now." />;
+  }
+
   const p = data.profile;
   const isMemberAudience = data.audience === "member";
   const isOwnerAudience = data.audience === "owner";
-  const canonicalIdentifier = data.canonical_identifier?.trim() || data.identifier;
-
-  useEffect(() => {
-    if (!identifier || !canonicalIdentifier) return;
-    if (canonicalIdentifier === identifier) return;
-    navigate(`/u/${encodeURIComponent(canonicalIdentifier)}`, { replace: true });
-  }, [canonicalIdentifier, identifier, navigate]);
 
   // Public-safe fields only.
   const displayName = p.display_name?.trim() || data.identifier;
