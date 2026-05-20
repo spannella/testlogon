@@ -150,8 +150,16 @@ def _mount_item_to_out(it: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _marshal_s(item: Dict[str, Any]) -> Dict[str, Dict[str, str]]:
-    return {k: {"S": str(v)} for k, v in item.items() if v is not None}
+def _marshal_s(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Prepare an item for ``transact_write_items`` via the DynamoDB
+    *resource* client (``table.meta.client``).
+
+    The resource client auto-serializes native Python types so we must
+    NOT wrap values in ``{"S": ...}`` ourselves — doing so causes
+    "Invalid attribute value type" errors from DynamoDB Local.
+    We just strip ``None`` values (DynamoDB rejects NULL key attrs).
+    """
+    return {k: v for k, v in item.items() if v is not None}
 
 
 def create_mount(

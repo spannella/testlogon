@@ -29,7 +29,7 @@ async function ensureLotteryEnabled(req: APIRequestContext) {
   const cfgRes = await apiGetBearer(req, "/messaging/config", ALICE_ID);
   expect(cfgRes.ok()).toBeTruthy();
   const cfg = await cfgRes.json();
-  test.skip(!cfg?.messaging_dm_lottery_enabled, "Lottery feature flag is disabled in this environment");
+  expect(cfg?.messaging_dm_lottery_enabled).toBe(true);
 }
 
 async function createDmConversation(req: APIRequestContext, senderId: string, recipientId: string) {

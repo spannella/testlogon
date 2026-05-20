@@ -436,7 +436,13 @@ def _enforce_draft_expected_updated_at(
 
 
 def _draft_payload_bytes(payload: Dict[str, Any]) -> int:
-    return len(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    def _default(o: Any) -> Any:  # noqa: ANN401
+        from decimal import Decimal as _D
+        if isinstance(o, _D):
+            return int(o) if o == int(o) else float(o)
+        raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+    return len(json.dumps(payload, separators=(",", ":"), ensure_ascii=False, default=_default).encode("utf-8"))
 
 
 def _maybe_draft_ttl_epoch(updated_at_iso: str) -> Optional[int]:
@@ -631,6 +637,13 @@ def ddb_query(**kwargs) -> Dict[str, Any]:
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
     try:
         return tbl.query(**kwargs)
+    except ClientError as exc:
+        raise HTTPException(status_code=500, detail=f"DynamoDB error: {exc.response['Error'].get('Message','unknown')}") from exc
+
+
+def ddb_delete_item(key: Dict[str, Any]) -> None:
+    try:
+        tbl.delete_item(Key=key)
     except ClientError as exc:
         raise HTTPException(status_code=500, detail=f"DynamoDB error: {exc.response['Error'].get('Message','unknown')}") from exc
 
@@ -3423,36 +3436,22 @@ def cancel_scheduled_post(post_id: str, user_id: UserIdDep):
 
     now = now_iso()
     ref_sk = sk_scheduled_post_ref(publish_at_int, post_id)
-    transact_items: List[Dict[str, Any]] = [
-        {
-            "Update": {
-                "TableName": APP_TABLE,
-                "Key": _ddb_serialize_map({"pk": pk_post(post_id), "sk": sk_post()}),
-                "UpdateExpression": f"SET #status = :cancelled, updated_at = :u, published_at = :null, publish_at = :null, schedule_timezone = :null, scheduled_at_local = :null, {SCHEDULE_DUE_INDEX_PK_ATTR} = :null, {SCHEDULE_DUE_INDEX_SK_ATTR} = :null",
-                "ConditionExpression": "#user = :uid AND #status = :scheduled",
-                "ExpressionAttributeNames": {"#status": "status", "#user": "user_id"},
-                "ExpressionAttributeValues": _ddb_serialize_map(
-                    {
-                        ":cancelled": "cancelled",
-                        ":u": now,
-                        ":null": None,
-                        ":uid": user_id,
-                        ":scheduled": "scheduled",
-                    }
-                ),
-            }
-        },
-        {
-            "Delete": {
-                "TableName": APP_TABLE,
-                "Key": _ddb_serialize_map({"pk": pk_user(user_id), "sk": ref_sk}),
-            }
-        },
-    ]
     try:
-        ddb.meta.client.transact_write_items(TransactItems=transact_items)
+        tbl.update_item(
+            Key={"pk": pk_post(post_id), "sk": sk_post()},
+            UpdateExpression=f"SET #status = :cancelled, updated_at = :u REMOVE published_at, publish_at, schedule_timezone, scheduled_at_local, {SCHEDULE_DUE_INDEX_PK_ATTR}, {SCHEDULE_DUE_INDEX_SK_ATTR}",
+            ConditionExpression="#user = :uid AND #status = :scheduled",
+            ExpressionAttributeNames={"#status": "status", "#user": "user_id"},
+            ExpressionAttributeValues={
+                ":cancelled": "cancelled",
+                ":u": now,
+                ":uid": user_id,
+                ":scheduled": "scheduled",
+            },
+        )
     except ClientError as exc:
-        if exc.response.get("Error", {}).get("Code") == "TransactionCanceledException":
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code == "ConditionalCheckFailedException":
             latest = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
             latest_status = str((latest or {}).get("status") or "").strip().lower()
             if latest and latest.get("user_id") == user_id and latest_status == "cancelled":
@@ -3468,6 +3467,10 @@ def cancel_scheduled_post(post_id: str, user_id: UserIdDep):
             ) from exc
         record_newsfeed_schedule_operation(operation="cancel", outcome="error")
         raise HTTPException(status_code=500, detail=f"DynamoDB error: {exc.response['Error'].get('Message','unknown')}") from exc
+    try:
+        tbl.delete_item(Key={"pk": pk_user(user_id), "sk": ref_sk})
+    except ClientError:
+        pass
 
     updated = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()}) or {
         **post,

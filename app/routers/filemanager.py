@@ -1685,6 +1685,65 @@ def rotate_sftp_mount_credential_endpoint(
     return {"ok": True, "mount": _mount_to_api(updated_mount), "auth_credential_ref": credential_ref}
 
 
+# ── iCloud revoke ─────────────────────────────────────────────────────────
+# Registered BEFORE the parametric ``{mount_id}/revoke`` route so that
+# ``/mounts/icloud/revoke`` is matched as a static path rather than being
+# captured by the SFTP handler with ``mount_id="icloud"``.
+@router.post("/mounts/icloud/revoke", response_model=ICloudRevokeOut)
+def revoke_icloud_mount_credentials(inp: ICloudRevokeIn, req: Request = None, user: str = Depends(_current_user)):
+    _enforce_filemanager_internal_entitlement(
+        user=user,
+        action="mount_icloud_revoke",
+        request_id=(req.headers.get("X-Request-Id") if req else inp.mount_id),
+    )
+    _enforce_icloud_feature_for_request(user, req)
+    try:
+        rate_limit_filemgr_mount_revoke(user, client_ip_from_request(req))
+    except HTTPException as exc:
+        if exc.status_code == 429:
+            audit_event(
+                "filemgr_mount_icloud_revoke",
+                user,
+                req,
+                outcome="failure",
+                provider="icloud",
+                mount_id=inp.mount_id,
+                reason="rate_limited",
+                status_code=429,
+            )
+        raise
+    try:
+        revoked = revoke_mount_secret(owner_user_sub=user, mount_id=inp.mount_id)
+        sessions_cleared = clear_onboarding_sessions_for_mount(user_sub=user, mount_id=inp.mount_id)
+    except HTTPException as exc:
+        audit_event(
+            "filemgr_mount_icloud_revoke",
+            user,
+            req,
+            outcome="failure",
+            provider="icloud",
+            mount_id=inp.mount_id,
+            reason="revoke_failed",
+            status_code=exc.status_code,
+        )
+        raise
+    audit_event(
+        "filemgr_mount_icloud_revoke",
+        user,
+        req,
+        outcome="success",
+        provider="icloud",
+        mount_id=inp.mount_id,
+        mount_status=revoked.get("mount_status") or "revoked",
+        sessions_cleared=sessions_cleared,
+    )
+    return ICloudRevokeOut(
+        mount_id=inp.mount_id,
+        status=str(revoked.get("mount_status") or "revoked"),
+        sessions_cleared=int(sessions_cleared),
+    )
+
+
 @router.post("/mounts/{mount_id}/revoke")
 def revoke_sftp_mount_endpoint(
     mount_id: str,
@@ -2248,61 +2307,6 @@ def rotate_icloud_mount_credentials(inp: ICloudRotateIn, req: Request = None, us
         secret_ref=rotated.get("secret_ref"),
     )
     return ICloudRotateOut(mount_id=inp.mount_id, secret_ref=str(rotated.get("secret_ref") or ""), status="active")
-
-
-@router.post("/mounts/icloud/revoke", response_model=ICloudRevokeOut)
-def revoke_icloud_mount_credentials(inp: ICloudRevokeIn, req: Request = None, user: str = Depends(_current_user)):
-    _enforce_filemanager_internal_entitlement(
-        user=user,
-        action="mount_icloud_revoke",
-        request_id=(req.headers.get("X-Request-Id") if req else inp.mount_id),
-    )
-    _enforce_icloud_feature_for_request(user, req)
-    try:
-        rate_limit_filemgr_mount_revoke(user, client_ip_from_request(req))
-    except HTTPException as exc:
-        if exc.status_code == 429:
-            audit_event(
-                "filemgr_mount_icloud_revoke",
-                user,
-                req,
-                outcome="failure",
-                provider="icloud",
-                mount_id=inp.mount_id,
-                reason="rate_limited",
-                status_code=429,
-            )
-        raise
-    try:
-        revoked = revoke_mount_secret(owner_user_sub=user, mount_id=inp.mount_id)
-        sessions_cleared = clear_onboarding_sessions_for_mount(user_sub=user, mount_id=inp.mount_id)
-    except HTTPException as exc:
-        audit_event(
-            "filemgr_mount_icloud_revoke",
-            user,
-            req,
-            outcome="failure",
-            provider="icloud",
-            mount_id=inp.mount_id,
-            reason="revoke_failed",
-            status_code=exc.status_code,
-        )
-        raise
-    audit_event(
-        "filemgr_mount_icloud_revoke",
-        user,
-        req,
-        outcome="success",
-        provider="icloud",
-        mount_id=inp.mount_id,
-        mount_status=revoked.get("mount_status") or "revoked",
-        sessions_cleared=sessions_cleared,
-    )
-    return ICloudRevokeOut(
-        mount_id=inp.mount_id,
-        status=str(revoked.get("mount_status") or "revoked"),
-        sessions_cleared=int(sessions_cleared),
-    )
 
 
 @router.get("/download")

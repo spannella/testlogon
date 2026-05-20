@@ -139,6 +139,18 @@ async function apiDelete(page: Page, userId: string, pathSuffix: string) {
   });
 }
 
+async function apiPatch(page: Page, userId: string, pathSuffix: string, payload: object) {
+  const session = getSessions()[userId];
+  return page.request.patch(`${API}${pathSuffix}`, {
+    data: payload,
+    headers: { "x-csrf-token": session.csrf_token },
+  });
+}
+
+async function apiGet(page: Page, pathSuffix: string) {
+  return page.request.get(`${API}${pathSuffix}`);
+}
+
 test.describe("feed unlock-limit capped journey", () => {
   test("first N unlocks succeed, N+1 rejected, sold-out visible in UI", async ({ browser }) => {
     const authorPage = await browser.newPage();
@@ -194,6 +206,91 @@ test.describe("feed unlock-limit capped journey", () => {
       await authorPage.close();
       await bobPage.close();
       await charliePage.close();
+    }
+  });
+
+  test("edit unlock_limit on existing post", async ({ browser }) => {
+    test.setTimeout(60_000);
+
+    const authorPage = await browser.newPage();
+    const postBody = `e2e edit limit ${Date.now()}`;
+    let postId = "";
+
+    try {
+      await injectAuth(authorPage, ALICE_ID);
+
+      // Create a locked post with unlock_limit: 2
+      const createResp = await apiPost(authorPage, ALICE_ID, "/posts", {
+        body: postBody,
+        unlock_price_cents: 100,
+        unlock_limit: 2,
+      });
+      expect(createResp.ok()).toBeTruthy();
+      const created = await createResp.json();
+      postId = created.post_id as string;
+      expect(created.unlock_limit).toBe(2);
+
+      // PATCH to update unlock_limit to 5 (body field required by validation)
+      const patchResp = await apiPatch(authorPage, ALICE_ID, `/posts/${postId}`, {
+        body: postBody,
+        unlock_limit: 5,
+      });
+      expect(patchResp.ok()).toBeTruthy();
+      const patched = await patchResp.json();
+      expect(patched.unlock_limit).toBe(5);
+
+      // GET the post to double-check
+      const getResp = await apiGet(authorPage, `/posts/${postId}`);
+      expect(getResp.ok()).toBeTruthy();
+      const fetched = await getResp.json();
+      expect(fetched.unlock_limit).toBe(5);
+    } finally {
+      if (postId) {
+        await apiDelete(authorPage, ALICE_ID, `/posts/${postId}`);
+      }
+      await authorPage.close();
+    }
+  });
+
+  test("post without unlock_limit allows unlimited unlocks", async ({ browser }) => {
+    test.setTimeout(60_000);
+
+    const authorPage = await browser.newPage();
+    const bobPage = await browser.newPage();
+    const postBody = `e2e no limit ${Date.now()}`;
+    const bobPm = `pm_bob_nolim_${Date.now()}`;
+    let postId = "";
+
+    try {
+      upsertPaymentMethod(BOB_ID, bobPm);
+
+      await injectAuth(authorPage, ALICE_ID);
+
+      // Create a locked post WITHOUT unlock_limit
+      const createResp = await apiPost(authorPage, ALICE_ID, "/posts", {
+        body: postBody,
+        unlock_price_cents: 50,
+      });
+      expect(createResp.ok()).toBeTruthy();
+      const created = await createResp.json();
+      postId = created.post_id as string;
+      // unlock_limit should be absent or null
+      expect(created.unlock_limit ?? null).toBeNull();
+
+      // Bob unlocks — should succeed (no 409)
+      await injectAuth(bobPage, BOB_ID);
+      const bobUnlock = await apiPost(bobPage, BOB_ID, "/posts/unlock", {
+        post_id: postId,
+        payment_method_id: bobPm,
+      });
+      expect(bobUnlock.ok()).toBeTruthy();
+    } finally {
+      if (postId) {
+        await apiDelete(authorPage, ALICE_ID, `/posts/${postId}`);
+      }
+      removePaymentMethod(BOB_ID, bobPm);
+      await authorPage.close();
+      await bobPage.close();
     }
   });
 });

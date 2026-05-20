@@ -222,6 +222,7 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI2", "partition_key": "GSI2PK", "sort_key": "GSI2SK"},
                 {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
                 {"index_name": "GSI_SCHEDULE_DUE", "partition_key": "GSI_SCHEDULE_PK", "sort_key": "GSI_SCHEDULE_SK"},
+                {"index_name": "GSI4", "partition_key": "GSI4PK", "sort_key": "GSI4SK"},
             ],
         ),
         TableDef(
@@ -587,6 +588,13 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # SFTP mounts: pk=PK, sk=SK
+        TableDef(os.getenv("FILEMGR_SFTP_MOUNTS_TABLE_NAME", "filemgr_sftp_mounts"), "PK", "SK"),
+        # Google Calendar integration tables
+        TableDef(os.getenv("CALENDAR_CONNECTIONS_TABLE_NAME", "calendar_connections"), "pk", "sk"),
+        TableDef(os.getenv("CALENDAR_CONNECTION_SECRETS_TABLE_NAME", "calendar_connection_secrets"), "pk", "sk"),
+        TableDef(os.getenv("EXTERNAL_CALENDARS_TABLE_NAME", "external_calendars"), "pk", "sk"),
+        TableDef(os.getenv("CALENDAR_SYNC_RUNS_TABLE_NAME", "calendar_sync_runs"), "pk", "sk"),
     ]
 
 

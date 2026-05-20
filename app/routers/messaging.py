@@ -6864,7 +6864,7 @@ def _encode_thread_messages_cursor(
         "exp": int(time.time()) + MESSAGING_THREAD_CURSOR_TTL_SECONDS,
         "lek": last_evaluated_key,
     }
-    payload_raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    payload_raw = json.dumps(payload, separators=(",", ":"), sort_keys=True, cls=_DecimalEncoder).encode("utf-8")
     payload_b64 = base64.urlsafe_b64encode(payload_raw).decode("utf-8").rstrip("=")
     signature = _sign_thread_cursor_payload(payload_b64)
     return f"{payload_b64}.{signature}"
