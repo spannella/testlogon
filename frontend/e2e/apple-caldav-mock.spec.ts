@@ -3,6 +3,7 @@
  *
  * Sections:
  *   78 — Apple CalDAV Mock Integration (6 tests)
+ *   79 — Apple CalDAV Deep Integration Flows (5 tests)
  *
  * Auth: Alice session cookies (from e2e_session_setup.py).
  *
@@ -296,5 +297,277 @@ test.describe("78 — Apple CalDAV Mock Integration", () => {
     const statusBody = await statusResp.json();
     expect(statusBody.connection_state).toBe("disconnected");
     expect(statusBody.is_connected).toBe(false);
+  });
+});
+
+test.describe("79 — Apple CalDAV Deep Integration Flows", () => {
+  let alicePage: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    const ctx = await browser.newContext();
+    alicePage = await ctx.newPage();
+    await injectAuth(alicePage, ALICE_ID);
+
+    // Start with a clean mock state and fresh seed data
+    await resetMock(alicePage);
+    await seedMock(alicePage);
+
+    // Connect so all tests start with an active connection
+    const connectResp = await apiPost(alicePage, `${APPLE_PREFIX}/connect`, {
+      username: MOCK_USERNAME,
+      app_specific_password: MOCK_PASSWORD,
+    });
+    expect(connectResp.status()).toBe(200);
+    const connectBody = await connectResp.json();
+    expect(connectBody.status).toBe("connected");
+  });
+
+  test.afterAll(async () => {
+    await apiPost(alicePage, `${APPLE_PREFIX}/disconnect`).catch(() => {});
+    await resetMock(alicePage).catch(() => {});
+    await alicePage.context().close();
+  });
+
+  test("79.1 select calendars for sync persists selection", async () => {
+    test.setTimeout(30_000);
+
+    // Select cal1 with two_way sync and cal2 with read_only sync
+    const selectResp = await apiPost(
+      alicePage,
+      `${APPLE_PREFIX}/calendars/select`,
+      {
+        calendars: [
+          {
+            external_calendar_id: "cal1",
+            sync_enabled: true,
+            sync_direction: "two_way",
+          },
+          {
+            external_calendar_id: "cal2",
+            sync_enabled: false,
+            sync_direction: "read_only",
+          },
+        ],
+      },
+    );
+    expect(selectResp.status()).toBe(200);
+
+    const selected = (await selectResp.json()) as Array<{
+      external_calendar_id: string;
+      sync_enabled: boolean;
+      sync_direction: string;
+      display_name: string;
+      calendar_url: string;
+    }>;
+    expect(Array.isArray(selected)).toBe(true);
+
+    const cal1 = selected.find((c) => c.external_calendar_id === "cal1");
+    const cal2 = selected.find((c) => c.external_calendar_id === "cal2");
+    expect(cal1).toBeDefined();
+    expect(cal1!.sync_enabled).toBe(true);
+    expect(cal1!.sync_direction).toBe("two_way");
+    expect(cal2).toBeDefined();
+    expect(cal2!.sync_enabled).toBe(false);
+
+    // Verify via list endpoint that selection persisted
+    const listResp = await apiGet(alicePage, `${APPLE_PREFIX}/calendars`);
+    expect(listResp.status()).toBe(200);
+    const calendars = (await listResp.json()) as Array<{
+      external_calendar_id: string;
+      sync_enabled: boolean;
+      sync_direction: string;
+    }>;
+    const cal1Listed = calendars.find(
+      (c) => c.external_calendar_id === "cal1",
+    );
+    expect(cal1Listed).toBeDefined();
+    expect(cal1Listed!.sync_enabled).toBe(true);
+    expect(cal1Listed!.sync_direction).toBe("two_way");
+  });
+
+  test("79.2 initial import triggers import job", async () => {
+    test.setTimeout(60_000);
+
+    // Ensure cal1 is selected for sync before importing
+    await apiPost(alicePage, `${APPLE_PREFIX}/calendars/select`, {
+      calendars: [
+        {
+          external_calendar_id: "cal1",
+          sync_enabled: true,
+          sync_direction: "two_way",
+        },
+      ],
+    });
+
+    const importResp = await apiPost(
+      alicePage,
+      `${APPLE_PREFIX}/import/initial`,
+      {
+        external_calendar_ids: ["cal1"],
+        lookback_days: 30,
+        lookahead_days: 90,
+      },
+    );
+    expect(importResp.status()).toBe(200);
+
+    const runs = (await importResp.json()) as Array<{
+      run_id: string;
+      connection_id: string;
+      external_calendar_id: string;
+      run_type: string;
+      status: string;
+      started_at: string;
+      historical_window_start: string;
+      historical_window_end: string;
+    }>;
+    expect(Array.isArray(runs)).toBe(true);
+    expect(runs.length).toBeGreaterThanOrEqual(1);
+
+    const cal1Run = runs.find((r) => r.external_calendar_id === "cal1");
+    expect(cal1Run).toBeDefined();
+    expect(cal1Run!.run_id).toBeTruthy();
+    expect(cal1Run!.connection_id).toBeTruthy();
+    expect(typeof cal1Run!.run_type).toBe("string");
+    expect(typeof cal1Run!.status).toBe("string");
+    expect(typeof cal1Run!.started_at).toBe("string");
+    expect(typeof cal1Run!.historical_window_start).toBe("string");
+    expect(typeof cal1Run!.historical_window_end).toBe("string");
+  });
+
+  test("79.3 reconnect after disconnect restores connected status", async () => {
+    test.setTimeout(30_000);
+
+    // Disconnect first
+    const disconnResp = await apiPost(
+      alicePage,
+      `${APPLE_PREFIX}/disconnect`,
+    );
+    expect(disconnResp.status()).toBe(200);
+    const disconnBody = await disconnResp.json();
+    expect(disconnBody.status).toBe("disconnected");
+
+    // Verify status is disconnected
+    const statusBefore = await apiGet(alicePage, `${APPLE_PREFIX}/status`);
+    expect(statusBefore.status()).toBe(200);
+    const beforeBody = await statusBefore.json();
+    expect(beforeBody.is_connected).toBe(false);
+    expect(beforeBody.connection_state).toBe("disconnected");
+
+    // Reconnect with valid credentials
+    const reconnResp = await apiPost(alicePage, `${APPLE_PREFIX}/connect`, {
+      username: MOCK_USERNAME,
+      app_specific_password: MOCK_PASSWORD,
+    });
+    expect(reconnResp.status()).toBe(200);
+    const reconnBody = await reconnResp.json();
+    expect(reconnBody.status).toBe("connected");
+    expect(reconnBody.credential_validation_status).toBe("valid");
+    expect(typeof reconnBody.connection_id).toBe("string");
+    expect(reconnBody.connection_id.length).toBeGreaterThan(0);
+
+    // Verify status is connected again
+    const statusAfter = await apiGet(alicePage, `${APPLE_PREFIX}/status`);
+    expect(statusAfter.status()).toBe(200);
+    const afterBody = await statusAfter.json();
+    expect(afterBody.is_connected).toBe(true);
+    expect(afterBody.connection_state).not.toBe("disconnected");
+    expect(afterBody.credential_validation_status).toBe("valid");
+  });
+
+  test("79.4 sync returns delta changes after seeding new events", async () => {
+    test.setTimeout(60_000);
+
+    // Ensure cal1 is selected for sync
+    await apiPost(alicePage, `${APPLE_PREFIX}/calendars/select`, {
+      calendars: [
+        {
+          external_calendar_id: "cal1",
+          sync_enabled: true,
+          sync_direction: "two_way",
+        },
+      ],
+    });
+
+    // First sync to establish a baseline (pulls the initial seeded event)
+    const firstSyncResp = await apiPost(
+      alicePage,
+      `${APPLE_PREFIX}/sync/now`,
+    );
+    expect(firstSyncResp.status()).toBe(200);
+    const firstSync = await firstSyncResp.json();
+    expect(firstSync.triggered_calendar_count).toBeGreaterThanOrEqual(1);
+    expect(typeof firstSync.success_count).toBe("number");
+    expect(typeof firstSync.failure_count).toBe("number");
+
+    // Seed a NEW event into the mock (simulates a change on the CalDAV server)
+    const newIcalData =
+      "BEGIN:VCALENDAR\r\n" +
+      "VERSION:2.0\r\n" +
+      "PRODID:-//Mock//Mock//EN\r\n" +
+      "BEGIN:VEVENT\r\n" +
+      "UID:evt_delta_79\r\n" +
+      "DTSTART:20260715T140000Z\r\n" +
+      "DTEND:20260715T150000Z\r\n" +
+      "SUMMARY:Delta Sync Event 79\r\n" +
+      "END:VEVENT\r\n" +
+      "END:VCALENDAR\r\n";
+
+    const seedResp = await alicePage.request.post(
+      `${BASE}/mock/apple-caldav/seed`,
+      {
+        data: {
+          events: {
+            "cal1:evt_delta_79": newIcalData,
+          },
+        },
+      },
+    );
+    expect(seedResp.status()).toBe(200);
+
+    // Second sync should pick up the new event
+    const secondSyncResp = await apiPost(
+      alicePage,
+      `${APPLE_PREFIX}/sync/now`,
+    );
+    expect(secondSyncResp.status()).toBe(200);
+    const secondSync = await secondSyncResp.json();
+    expect(secondSync.triggered_calendar_count).toBeGreaterThanOrEqual(1);
+    expect(typeof secondSync.success_count).toBe("number");
+    // The sync mechanism should report at least one successful calendar sync
+    expect(secondSync.success_count).toBeGreaterThanOrEqual(1);
+    expect(Array.isArray(secondSync.results)).toBe(true);
+  });
+
+  test("79.5 invalid credentials on reconnect shows proper error", async () => {
+    test.setTimeout(30_000);
+
+    // Disconnect the current connection
+    const disconnResp = await apiPost(
+      alicePage,
+      `${APPLE_PREFIX}/disconnect`,
+    );
+    expect(disconnResp.status()).toBe(200);
+
+    // Attempt to reconnect with wrong password — should fail with 401
+    const badResp = await apiPost(alicePage, `${APPLE_PREFIX}/connect`, {
+      username: MOCK_USERNAME,
+      app_specific_password: "totally_wrong_password",
+    });
+    expect(badResp.status()).toBe(401);
+
+    // Status should still be disconnected after failed reconnect attempt
+    const statusResp = await apiGet(alicePage, `${APPLE_PREFIX}/status`);
+    expect(statusResp.status()).toBe(200);
+    const statusBody = await statusResp.json();
+    expect(statusBody.is_connected).toBe(false);
+    expect(statusBody.connection_state).toBe("disconnected");
+
+    // Reconnect with correct credentials to leave things clean for afterAll
+    const goodResp = await apiPost(alicePage, `${APPLE_PREFIX}/connect`, {
+      username: MOCK_USERNAME,
+      app_specific_password: MOCK_PASSWORD,
+    });
+    expect(goodResp.status()).toBe(200);
+    expect((await goodResp.json()).status).toBe("connected");
   });
 });

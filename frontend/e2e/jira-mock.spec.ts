@@ -4,6 +4,7 @@
  * Sections:
  *   80 — Jira OAuth connect flow (1 test)
  *   81 — Jira connection lifecycle via DDB-seeded connection (5 tests)
+ *   82 — Jira mock issue operations — direct mock endpoints (5 tests)
  *
  * Auth: Alice session cookies (from e2e_admin_session_setup.py).
  *
@@ -421,5 +422,209 @@ test.describe("81 · Jira connection lifecycle", () => {
     );
     expect(conn).toBeUndefined();
     expect(afterBody.connected).toBe(false);
+  });
+});
+
+// =============================================================================
+// Section 82 — Jira mock issue operations (direct mock endpoints)
+// =============================================================================
+
+test.describe("82 · Jira mock issue operations", () => {
+  let alicePage: Page;
+  const MOCK_TOKEN = "mock-e2e-section82";
+  const MOCK_HEADERS = {
+    Authorization: `Bearer ${MOCK_TOKEN}`,
+    "Content-Type": "application/json",
+  };
+
+  /** Issue tracking across tests within this section */
+  let createdIssueId: string;
+  let createdIssueKey: string;
+
+  test.beforeAll(async ({ browser }) => {
+    alicePage = await browser.newPage();
+    await injectAuth(alicePage, "alice");
+
+    // Reset + seed mock with projects for CLOUD_ID
+    await seedMock(alicePage);
+  });
+
+  test.afterAll(async () => {
+    await alicePage.close();
+  });
+
+  test("82.1 list accessible resources returns seeded sites", async () => {
+    const resp = await alicePage.request.get(
+      `${API}/mock/jira/oauth/accessible-resources`,
+      { headers: MOCK_HEADERS },
+    );
+    expect(resp.status()).toBe(200);
+
+    const sites = await resp.json();
+    expect(Array.isArray(sites)).toBe(true);
+    expect(sites.length).toBeGreaterThanOrEqual(1);
+
+    const site = sites.find((s: { id: string }) => s.id === CLOUD_ID);
+    expect(site).toBeTruthy();
+    expect(site.url).toBe(SITE_URL);
+    expect(site.name).toBe("Mock Site");
+    expect(site.scopes).toEqual(
+      expect.arrayContaining(["read:jira-work", "write:jira-work"]),
+    );
+  });
+
+  test("82.2 create issue via mock Jira REST API", async () => {
+    const resp = await alicePage.request.post(
+      `${API}/mock/jira/ex/jira/${CLOUD_ID}/rest/api/3/issue`,
+      {
+        headers: MOCK_HEADERS,
+        data: {
+          fields: {
+            project: { key: "ALPHA" },
+            summary: `E2E issue ${TS}`,
+            description: "Created by section 82 E2E test",
+            issuetype: { name: "Bug" },
+          },
+        },
+      },
+    );
+    expect(resp.status()).toBe(200);
+
+    const body = await resp.json();
+    expect(body.id).toBeTruthy();
+    expect(body.key).toMatch(/^ALPHA-\d+$/);
+    expect(body.self).toContain(`/ex/jira/${CLOUD_ID}/rest/api/3/issue/`);
+
+    // Store for subsequent tests
+    createdIssueId = body.id;
+    createdIssueKey = body.key;
+  });
+
+  test("82.3 get issue details returns created issue", async () => {
+    expect(createdIssueId).toBeTruthy();
+
+    const resp = await alicePage.request.get(
+      `${API}/mock/jira/ex/jira/${CLOUD_ID}/rest/api/3/issue/${createdIssueId}`,
+      { headers: MOCK_HEADERS },
+    );
+    expect(resp.status()).toBe(200);
+
+    const issue = await resp.json();
+    expect(issue.id).toBe(createdIssueId);
+    expect(issue.key).toBe(createdIssueKey);
+    expect(issue.fields).toBeTruthy();
+    expect(issue.fields.summary).toBe(`E2E issue ${TS}`);
+    expect(issue.fields.description).toBe("Created by section 82 E2E test");
+    expect(issue.fields.issuetype.name).toBe("Bug");
+    expect(issue.fields.project.key).toBe("ALPHA");
+    expect(issue.fields.status.name).toBe("To Do");
+    expect(issue.fields.created).toBeTruthy();
+    expect(issue.fields.updated).toBeTruthy();
+
+    // Also verify lookup by key works
+    const respByKey = await alicePage.request.get(
+      `${API}/mock/jira/ex/jira/${CLOUD_ID}/rest/api/3/issue/${createdIssueKey}`,
+      { headers: MOCK_HEADERS },
+    );
+    expect(respByKey.status()).toBe(200);
+    const issueByKey = await respByKey.json();
+    expect(issueByKey.id).toBe(createdIssueId);
+  });
+
+  test("82.4 update issue fields via PUT", async () => {
+    expect(createdIssueId).toBeTruthy();
+
+    const resp = await alicePage.request.put(
+      `${API}/mock/jira/ex/jira/${CLOUD_ID}/rest/api/3/issue/${createdIssueId}`,
+      {
+        headers: MOCK_HEADERS,
+        data: {
+          fields: {
+            summary: `Updated issue ${TS}`,
+            status: { name: "In Progress" },
+          },
+        },
+      },
+    );
+    // Jira REST API returns 204 No Content on successful update
+    expect(resp.status()).toBe(204);
+
+    // Verify the update persisted
+    const getResp = await alicePage.request.get(
+      `${API}/mock/jira/ex/jira/${CLOUD_ID}/rest/api/3/issue/${createdIssueId}`,
+      { headers: MOCK_HEADERS },
+    );
+    expect(getResp.status()).toBe(200);
+    const updated = await getResp.json();
+    expect(updated.fields.summary).toBe(`Updated issue ${TS}`);
+    expect(updated.fields.status.name).toBe("In Progress");
+    // Original fields should be preserved
+    expect(updated.fields.description).toBe("Created by section 82 E2E test");
+    expect(updated.fields.issuetype.name).toBe("Bug");
+  });
+
+  test("82.5 search issues by JQL project filter", async () => {
+    // Create a second issue in a different project for contrast
+    const resp2 = await alicePage.request.post(
+      `${API}/mock/jira/ex/jira/${CLOUD_ID}/rest/api/3/issue`,
+      {
+        headers: MOCK_HEADERS,
+        data: {
+          fields: {
+            project: { key: "BETA" },
+            summary: `Beta issue ${TS}`,
+            issuetype: { name: "Task" },
+          },
+        },
+      },
+    );
+    expect(resp2.status()).toBe(200);
+
+    // Search for ALPHA project issues only
+    const searchResp = await alicePage.request.get(
+      `${API}/mock/jira/ex/jira/${CLOUD_ID}/rest/api/3/search`,
+      {
+        headers: MOCK_HEADERS,
+        params: { jql: "project = ALPHA" },
+      },
+    );
+    expect(searchResp.status()).toBe(200);
+
+    const searchBody = await searchResp.json();
+    expect(searchBody.issues).toBeDefined();
+    expect(Array.isArray(searchBody.issues)).toBe(true);
+    expect(searchBody.total).toBeGreaterThanOrEqual(1);
+    expect(searchBody.startAt).toBe(0);
+
+    // All returned issues should belong to ALPHA project
+    for (const issue of searchBody.issues) {
+      expect(issue.fields.project.key).toBe("ALPHA");
+    }
+
+    // The ALPHA issue we created should be in results
+    const found = searchBody.issues.find(
+      (i: { id: string }) => i.id === createdIssueId,
+    );
+    expect(found).toBeTruthy();
+    // It should reflect the updated summary from test 82.4
+    expect(found.fields.summary).toBe(`Updated issue ${TS}`);
+
+    // Search without JQL — should return all issues for this cloud_id
+    const allResp = await alicePage.request.get(
+      `${API}/mock/jira/ex/jira/${CLOUD_ID}/rest/api/3/search`,
+      {
+        headers: MOCK_HEADERS,
+        params: { jql: "" },
+      },
+    );
+    expect(allResp.status()).toBe(200);
+    const allBody = await allResp.json();
+    // Should include both ALPHA and BETA issues
+    expect(allBody.total).toBeGreaterThanOrEqual(2);
+    const projectKeys = allBody.issues.map(
+      (i: { fields: { project: { key: string } } }) => i.fields.project.key,
+    );
+    expect(projectKeys).toContain("ALPHA");
+    expect(projectKeys).toContain("BETA");
   });
 });

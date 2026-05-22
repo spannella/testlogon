@@ -183,7 +183,13 @@ class TestGoogleDriveMountE2EIntegration(unittest.TestCase):
 
     def test_read_only_enforcement_under_mount(self):
         mount = SimpleNamespace(mount_id="m1", mount_path="/integrations/drive/", mode="read_only")
-        with patch.object(filemanager, "resolve_path_dispatch", return_value={"kind": "mount", "mount": mount}):
+        mount_match = {
+            "mount": mount,
+            "mount_path": "/integrations/drive/",
+            "relative_parts": ["a.txt"],
+            "requested_path": "/integrations/drive/a.txt",
+        }
+        with patch.object(filemanager, "_mount_match_for_path", return_value=mount_match):
             with self.assertRaises(HTTPException) as ctx:
                 filemanager.assert_mount_write_allowed("u1", "/integrations/drive/a.txt", action="upload")
         self.assertEqual(ctx.exception.status_code, 403)

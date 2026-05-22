@@ -2,6 +2,7 @@
  * E2E tests for Google Drive mount integration through the mock backend.
  *
  * Section 73 — Google Drive Mock Integration (5 tests)
+ * Section 74 — Google Drive Mount File Operations (5 tests)
  *
  * Prerequisites:
  *   - GOOGLE_DRIVE_MOCK_ENABLED=1 in .env.local
@@ -430,5 +431,182 @@ test.describe("73 — Google Drive Mock Integration", () => {
     const body = await listResp.json();
     const items = body.items ?? [];
     expect(items.length).toBe(0);
+  });
+});
+
+// ─── Section 74 — Google Drive Mount File Operations ─────────────────────────
+
+test.describe("74 — Google Drive Mount File Operations", () => {
+  let alicePage: Page;
+  let mountId: string;
+  const TS74 = Date.now();
+  const MOUNT_PATH_74 = `/gdrive_ops_${TS74}`;
+
+  // Seed file IDs for this section
+  const ROOT_ID_74 = "root";
+  const SEED_FILE_ID = `seed_file_${TS74}`;
+
+  test.beforeAll(async ({ browser }) => {
+    getSessions();
+    alicePage = await browser.newPage();
+    await injectAuth(alicePage, "alice");
+
+    // Clean up any leftover state
+    cleanupAll(ALICE_ID);
+
+    // Reset mock drive
+    const resetResp = await alicePage.request.post(`${API}/mock/google-drive/reset`);
+    expect(resetResp.status()).toBe(200);
+
+    // Seed mock with root folder and one file for move/delete/stat tests
+    const seedContent = Buffer.from("Seed file for ops tests").toString("base64");
+    const seedResp = await alicePage.request.post(`${API}/mock/google-drive/seed`, {
+      data: {
+        files: [
+          {
+            id: ROOT_ID_74,
+            name: "My Drive",
+            mimeType: "application/vnd.google-apps.folder",
+            parents: [],
+            size: "0",
+          },
+          {
+            id: SEED_FILE_ID,
+            name: "seed_ops.txt",
+            mimeType: "text/plain",
+            parents: ["root"],
+            size: String("Seed file for ops tests".length),
+          },
+        ],
+        file_content: {
+          [SEED_FILE_ID]: seedContent,
+        },
+      },
+      headers: { "Content-Type": "application/json" },
+    });
+    expect(seedResp.status()).toBe(200);
+
+    // Create mount + provider credential
+    mountId = seedMountAndCredential(ALICE_ID, "e2e-mock-gdrive-ops-token", MOUNT_PATH_74);
+    expect(mountId).toBeTruthy();
+  });
+
+  test.afterAll(async () => {
+    try {
+      await alicePage.request.post(`${API}/mock/google-drive/reset`);
+    } catch {
+      // ignore
+    }
+    cleanupAll(ALICE_ID);
+    await alicePage.close();
+  });
+
+  test("74.1 upload a file through mount", async () => {
+    const uploadPath = `${MOUNT_PATH_74}/uploaded_ops.txt`;
+    const session = getSessions()["alice"];
+    const resp = await alicePage.request.post(`${BASE}/v1/fs/upload`, {
+      params: { path: uploadPath },
+      multipart: {
+        file: {
+          name: "uploaded_ops.txt",
+          mimeType: "text/plain",
+          buffer: Buffer.from("Uploaded via mount E2E"),
+        },
+      },
+      headers: { "x-csrf-token": session.csrf_token },
+    });
+    expect(resp.ok()).toBe(true);
+    const body = await resp.json();
+    expect(body.ok).toBe(true);
+
+    // Verify the file appears in listing
+    const listResp = await apiGet(
+      alicePage,
+      `/v1/fs/list?path=${encodeURIComponent(MOUNT_PATH_74 + "/")}`,
+    );
+    expect(listResp.status()).toBe(200);
+    const listBody = await listResp.json();
+    const names = (listBody.items as Array<{ name: string }>).map((i) => i.name);
+    expect(names).toContain("uploaded_ops.txt");
+  });
+
+  test("74.2 create folder through mount", async () => {
+    const folderPath = `${MOUNT_PATH_74}/new_subfolder`;
+    const resp = await apiPost(alicePage, "/v1/fs/folder", { path: folderPath });
+    expect(resp.ok()).toBe(true);
+    const body = await resp.json();
+    expect(body.ok).toBe(true);
+
+    // Verify folder appears in listing
+    const listResp = await apiGet(
+      alicePage,
+      `/v1/fs/list?path=${encodeURIComponent(MOUNT_PATH_74 + "/")}`,
+    );
+    expect(listResp.status()).toBe(200);
+    const listBody = await listResp.json();
+    const items = listBody.items as Array<{ name: string; type: string }>;
+    const folder = items.find((i) => i.name === "new_subfolder");
+    expect(folder).toBeTruthy();
+    expect(folder!.type).toBe("folder");
+  });
+
+  test("74.3 rename/move file through mount", async () => {
+    const srcPath = `${MOUNT_PATH_74}/seed_ops.txt`;
+    const dstPath = `${MOUNT_PATH_74}/seed_ops_renamed.txt`;
+    const resp = await apiPost(alicePage, "/v1/fs/move", {
+      src: srcPath,
+      dst: dstPath,
+    });
+    expect(resp.ok()).toBe(true);
+    const body = await resp.json();
+    expect(body.ok).toBe(true);
+
+    // Verify renamed file appears and original is gone
+    const listResp = await apiGet(
+      alicePage,
+      `/v1/fs/list?path=${encodeURIComponent(MOUNT_PATH_74 + "/")}`,
+    );
+    expect(listResp.status()).toBe(200);
+    const listBody = await listResp.json();
+    const names = (listBody.items as Array<{ name: string }>).map((i) => i.name);
+    expect(names).toContain("seed_ops_renamed.txt");
+    expect(names).not.toContain("seed_ops.txt");
+  });
+
+  test("74.4 delete file through mount", async () => {
+    // Delete the uploaded file from test 74.1
+    const deletePath = `${MOUNT_PATH_74}/uploaded_ops.txt`;
+    const session = getSessions()["alice"];
+    const resp = await alicePage.request.delete(`${BASE}/v1/fs/file`, {
+      params: { path: deletePath },
+      headers: { "x-csrf-token": session.csrf_token },
+    });
+    expect(resp.ok()).toBe(true);
+
+    // Verify file no longer appears in listing
+    const listResp = await apiGet(
+      alicePage,
+      `/v1/fs/list?path=${encodeURIComponent(MOUNT_PATH_74 + "/")}`,
+    );
+    expect(listResp.status()).toBe(200);
+    const listBody = await listResp.json();
+    const names = (listBody.items as Array<{ name: string }>).map((i) => i.name);
+    expect(names).not.toContain("uploaded_ops.txt");
+  });
+
+  test("74.5 file metadata returns correct size and mime type", async () => {
+    // Query info for the renamed seed file (from 74.3)
+    const infoPath = `${MOUNT_PATH_74}/seed_ops_renamed.txt`;
+    const resp = await apiGet(
+      alicePage,
+      `/v1/fs/info?path=${encodeURIComponent(infoPath)}`,
+    );
+    expect(resp.ok()).toBe(true);
+    const body = await resp.json();
+    expect(body.name).toBe("seed_ops_renamed.txt");
+    expect(body.type).toBe("file");
+    expect(body.content_type).toBe("text/plain");
+    // Size should match original seed content ("Seed file for ops tests" = 23 bytes)
+    expect(Number(body.size)).toBe("Seed file for ops tests".length);
   });
 });

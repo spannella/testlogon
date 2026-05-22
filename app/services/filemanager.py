@@ -608,11 +608,15 @@ def resolve_path_dispatch(owner: str, path: str) -> Dict[str, Any]:
 
 
 def assert_mount_write_allowed(owner: str, path: str, *, action: str = "write") -> None:
-    dispatch = resolve_path_dispatch(owner, path)
-    if dispatch.get("kind") != "mount":
+    # Use _mount_match_for_path instead of resolve_path_dispatch so that
+    # write checks work even when the target file/folder does not yet exist
+    # (e.g. uploading a new file or creating a new folder).
+    normalized = norm_path(path, is_folder=None)
+    mount_match = _mount_match_for_path(owner, normalized)
+    if not mount_match:
         return
 
-    mount = dispatch.get("mount")
+    mount = mount_match["mount"]
     mode = str(getattr(mount, "mode", "read_only") or "read_only").strip().lower()
     if mode == "read_write":
         return
@@ -623,7 +627,7 @@ def assert_mount_write_allowed(owner: str, path: str, *, action: str = "write") 
             "code": "mount_read_only",
             "message": "write operation is not allowed for read-only mount",
             "action": action,
-            "path": norm_path(path, is_folder=None),
+            "path": normalized,
             "mount_id": getattr(mount, "mount_id", None),
             "mount_path": getattr(mount, "mount_path", None),
             "mode": mode,
@@ -1908,7 +1912,19 @@ def _mount_parent_dispatch_for_write(owner: str, path: str, *, is_folder: bool) 
 
 def create_empty_folder_dispatched(owner: str, path: str) -> str:
     started = time.perf_counter()
-    dispatch = resolve_path_dispatch(owner, path)
+    try:
+        dispatch = resolve_path_dispatch(owner, path)
+    except HTTPException as exc:
+        # New folder doesn't exist yet — resolve_path_dispatch throws 404.
+        # Check if the path is within a mount by looking at the mount match.
+        if exc.status_code == 404:
+            mount_match = _mount_match_for_path(owner, norm_path(path, is_folder=None))
+            if mount_match:
+                dispatch = {"kind": "mount"}
+            else:
+                raise
+        else:
+            raise
     if dispatch["kind"] == "local":
         return create_empty_folder(owner, path)
 
@@ -1942,7 +1958,19 @@ def upload_file_dispatched(
     encryption_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     started = time.perf_counter()
-    dispatch = resolve_path_dispatch(owner, path)
+    try:
+        dispatch = resolve_path_dispatch(owner, path)
+    except HTTPException as exc:
+        # New file doesn't exist yet — resolve_path_dispatch throws 404.
+        # Check if the path is within a mount by looking at the parent.
+        if exc.status_code == 404:
+            mount_match = _mount_match_for_path(owner, norm_path(path, is_folder=None))
+            if mount_match:
+                dispatch = {"kind": "mount"}
+            else:
+                raise
+        else:
+            raise
     if dispatch["kind"] == "local":
         if overwrite:
             try:
@@ -3391,7 +3419,18 @@ def move_node_dispatched(owner: str, src: str, dst: str) -> Dict[str, Any]:
     is_folder = str(src_meta.get("type") or "") in {"dir", "folder"}
     dst_norm = norm_path(dst, is_folder=is_folder)
 
-    dst_dispatch = resolve_path_dispatch(owner, dst_norm)
+    try:
+        dst_dispatch = resolve_path_dispatch(owner, dst_norm)
+    except HTTPException as exc:
+        # Destination doesn't exist yet (rename/move to new name) — check mount match.
+        if exc.status_code == 404:
+            dst_mount_match = _mount_match_for_path(owner, dst_norm)
+            if dst_mount_match:
+                dst_dispatch = {"kind": "mount", "mount": dst_mount_match["mount"]}
+            else:
+                raise HTTPException(status_code=409, detail={"code": "mount_move_unsupported", "reason": "cross_mount_or_provider", "message": "moving between mounted and local paths is not supported"}) from exc
+        else:
+            raise
     if dst_dispatch["kind"] != "mount":
         raise HTTPException(status_code=409, detail={"code": "mount_move_unsupported", "reason": "cross_mount_or_provider", "message": "moving between mounted and local paths is not supported"})
 

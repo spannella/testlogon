@@ -2261,11 +2261,13 @@ class TestFileManagerService(unittest.TestCase):
 
 
     def test_assert_mount_write_allowed_rejects_read_only_mount(self):
-        dispatch = {
-            "kind": "mount",
+        mount_match = {
             "mount": SimpleNamespace(mount_id="m1", mount_path="/integrations/drive/", mode="read_only"),
+            "mount_path": "/integrations/drive/",
+            "relative_parts": ["a.txt"],
+            "requested_path": "/integrations/drive/a.txt",
         }
-        with patch.object(filemanager, "resolve_path_dispatch", return_value=dispatch):
+        with patch.object(filemanager, "_mount_match_for_path", return_value=mount_match):
             with self.assertRaises(HTTPException) as ctx:
                 filemanager.assert_mount_write_allowed("owner-1", "/integrations/drive/a.txt", action="upload_file")
 
@@ -2273,11 +2275,13 @@ class TestFileManagerService(unittest.TestCase):
         self.assertEqual(ctx.exception.detail["code"], "mount_read_only")
 
     def test_assert_mount_write_allowed_allows_read_write_mount(self):
-        dispatch = {
-            "kind": "mount",
+        mount_match = {
             "mount": SimpleNamespace(mount_id="m2", mount_path="/integrations/drive/", mode="read_write"),
+            "mount_path": "/integrations/drive/",
+            "relative_parts": ["a.txt"],
+            "requested_path": "/integrations/drive/a.txt",
         }
-        with patch.object(filemanager, "resolve_path_dispatch", return_value=dispatch):
+        with patch.object(filemanager, "_mount_match_for_path", return_value=mount_match):
             filemanager.assert_mount_write_allowed("owner-1", "/integrations/drive/a.txt", action="upload_file")
 
 
