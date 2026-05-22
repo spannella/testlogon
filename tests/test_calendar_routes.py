@@ -12,7 +12,9 @@ from app.routers import calendar as calendar_router
 
 
 def run_async(coro):
-    return asyncio.run(coro)
+    if asyncio.iscoroutine(coro):
+        return asyncio.run(coro)
+    return coro
 
 
 def build_ctx(user_sub: str = "user") -> dict[str, str]:

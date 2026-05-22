@@ -325,6 +325,8 @@ class TestGoogleDriveProvider(unittest.TestCase):
             patch("app.services.file_providers.time.sleep") as sleep,
             patch("app.services.file_providers.random.uniform", return_value=0.0),
             patch("app.services.file_providers.S", SimpleNamespace(
+                google_drive_api_base_url="https://www.googleapis.com/drive/v3",
+                google_drive_upload_api_base_url="https://www.googleapis.com/upload/drive/v3",
                 google_drive_api_retry_max_attempts=3,
                 google_drive_api_timeout_seconds=10,
                 google_drive_api_retry_base_delay_seconds=0.01,
@@ -350,6 +352,8 @@ class TestGoogleDriveProvider(unittest.TestCase):
             patch("app.services.file_providers.requests.get", return_value=forbidden) as requests_get,
             patch("app.services.file_providers.time.sleep") as sleep,
             patch("app.services.file_providers.S", SimpleNamespace(
+                google_drive_api_base_url="https://www.googleapis.com/drive/v3",
+                google_drive_upload_api_base_url="https://www.googleapis.com/upload/drive/v3",
                 google_drive_api_retry_max_attempts=3,
                 google_drive_api_timeout_seconds=10,
                 google_drive_api_retry_base_delay_seconds=0.01,
@@ -374,6 +378,8 @@ class TestGoogleDriveProvider(unittest.TestCase):
             patch("app.services.file_providers.time.sleep") as sleep,
             patch("app.services.file_providers.random.uniform", return_value=0.0),
             patch("app.services.file_providers.S", SimpleNamespace(
+                google_drive_api_base_url="https://www.googleapis.com/drive/v3",
+                google_drive_upload_api_base_url="https://www.googleapis.com/upload/drive/v3",
                 google_drive_api_retry_max_attempts=2,
                 google_drive_api_timeout_seconds=10,
                 google_drive_api_retry_base_delay_seconds=0.01,
@@ -421,7 +427,7 @@ class TestGoogleDriveProvider(unittest.TestCase):
             patch.object(provider, "_find_child_ref_by_name", return_value=None),
             patch.object(provider, "_build_headers", return_value={"Authorization": "Bearer t"}),
             patch.object(provider, "_request_retry_config", return_value={"max_attempts": 3, "timeout_seconds": 10, "base_delay": 0.01, "jitter": 0.0}),
-            patch("app.services.file_providers.S", SimpleNamespace(google_drive_resumable_upload_threshold_bytes=1)),
+            patch("app.services.file_providers.S", SimpleNamespace(google_drive_api_base_url="https://www.googleapis.com/drive/v3", google_drive_upload_api_base_url="https://www.googleapis.com/upload/drive/v3", google_drive_resumable_upload_threshold_bytes=1)),
             patch("app.services.file_providers.requests.post", return_value=init_response) as requests_post,
             patch("app.services.file_providers.requests.put", side_effect=[transient_put, success_put]) as requests_put,
             patch("app.services.file_providers.time.sleep") as sleep,
@@ -443,7 +449,7 @@ class TestGoogleDriveProvider(unittest.TestCase):
         create_resp = SimpleNamespace(status_code=200, headers={}, content=b"1", json=lambda: {"id": "new-id", "driveId": ""})
         with (
             patch.object(provider, "_find_child_ref_by_name", return_value=None),
-            patch("app.services.file_providers.S", SimpleNamespace(google_drive_resumable_upload_threshold_bytes=10_000_000)),
+            patch("app.services.file_providers.S", SimpleNamespace(google_drive_api_base_url="https://www.googleapis.com/drive/v3", google_drive_upload_api_base_url="https://www.googleapis.com/upload/drive/v3", google_drive_resumable_upload_threshold_bytes=10_000_000)),
             patch.object(provider, "_build_headers", return_value={"Authorization": "Bearer t"}),
             patch.object(provider, "_request_retry_config", return_value={"timeout_seconds": 10}),
             patch("app.services.file_providers.requests.post", return_value=create_resp) as requests_post,
@@ -464,6 +470,8 @@ class TestGoogleDriveProvider(unittest.TestCase):
             patch("app.services.file_providers.get_provider_auth_context", return_value={"token": "token", "metadata": {}}),
             patch("app.services.file_providers.requests.get", return_value=response) as requests_get,
             patch("app.services.file_providers.S", SimpleNamespace(
+                google_drive_api_base_url="https://www.googleapis.com/drive/v3",
+                google_drive_upload_api_base_url="https://www.googleapis.com/upload/drive/v3",
                 google_drive_api_retry_max_attempts=2,
                 google_drive_api_timeout_seconds=10,
                 google_drive_api_retry_base_delay_seconds=0.01,

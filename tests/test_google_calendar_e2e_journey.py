@@ -9,7 +9,9 @@ from app.routers import calendar as calendar_router
 
 
 def run_async(coro):
-    return asyncio.run(coro)
+    if asyncio.iscoroutine(coro):
+        return asyncio.run(coro)
+    return coro
 
 
 def test_e2e_connect_map_import_writeback_conflict_visibility_user_journey():
