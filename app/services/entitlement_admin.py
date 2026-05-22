@@ -14,11 +14,17 @@ def _utc_now_iso() -> str:
 
 
 def _scan_entitlement(entitlement_id: str) -> Dict[str, Any]:
-    resp = T.entitlements.scan(FilterExpression=Attr("entitlement_id").eq(entitlement_id), Limit=1)
-    items = list(resp.get("Items", []))
-    if not items:
-        raise HTTPException(status_code=404, detail={"code": "entitlement_not_found", "entitlement_id": entitlement_id})
-    return dict(items[0])
+    kwargs: Dict[str, Any] = {"FilterExpression": Attr("entitlement_id").eq(entitlement_id)}
+    while True:
+        resp = T.entitlements.scan(**kwargs)
+        items = list(resp.get("Items", []))
+        if items:
+            return dict(items[0])
+        last_key = resp.get("LastEvaluatedKey")
+        if not last_key:
+            break
+        kwargs["ExclusiveStartKey"] = last_key
+    raise HTTPException(status_code=404, detail={"code": "entitlement_not_found", "entitlement_id": entitlement_id})
 
 
 def _parse_utc(ts: str | None) -> datetime | None:

@@ -10,6 +10,7 @@ from app.main import create_app
 from app.core.settings import S
 from app.routers import profile as profile_router
 from app.services import profile as profile_service
+from app.auth.deps import AuthenticatedUser
 
 
 @pytest.fixture
@@ -60,20 +61,33 @@ def _install_common_mocks(monkeypatch: pytest.MonkeyPatch, discoverability_statu
     )
 
 
-async def _require_session_owner(_req):
+async def _require_session_owner(*args, **kwargs):
     return {"user_sub": "u_target", "session_id": "s_owner"}
 
 
-async def _require_session_member(_req):
+async def _require_session_member(*args, **kwargs):
     return {"user_sub": "u_member", "session_id": "s_member"}
 
 
-async def _require_session_anon(_req):
+async def _require_session_anon(*args, **kwargs):
+    raise HTTPException(status_code=401, detail="unauthorized")
+
+
+async def _get_authenticated_user_owner(_req):
+    return AuthenticatedUser(sub="u_target")
+
+
+async def _get_authenticated_user_member(_req):
+    return AuthenticatedUser(sub="u_member")
+
+
+async def _get_authenticated_user_anon(_req):
     raise HTTPException(status_code=401, detail="unauthorized")
 
 
 def test_profile_endpoint_returns_owner_field_set(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     _install_common_mocks(monkeypatch, discoverability_status="active")
+    monkeypatch.setattr(profile_router, "get_authenticated_user", _get_authenticated_user_owner)
     monkeypatch.setattr(profile_router, "require_ui_session", _require_session_owner)
     monkeypatch.setattr(profile_router, "_resolve_canonical_identifier_for_user_sub", lambda _user_sub: "ada.username")
 
@@ -91,6 +105,7 @@ def test_profile_endpoint_returns_owner_field_set(client: TestClient, monkeypatc
 
 def test_profile_endpoint_returns_member_field_set(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     _install_common_mocks(monkeypatch, discoverability_status="active")
+    monkeypatch.setattr(profile_router, "get_authenticated_user", _get_authenticated_user_member)
     monkeypatch.setattr(profile_router, "require_ui_session", _require_session_member)
 
     resp = client.get("/ui/profiles/u_target")
@@ -151,6 +166,7 @@ def test_profile_endpoint_suppression_states(
 
 def test_profile_endpoint_hidden_owner_remains_visible(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     _install_common_mocks(monkeypatch, discoverability_status="hidden")
+    monkeypatch.setattr(profile_router, "get_authenticated_user", _get_authenticated_user_owner)
     monkeypatch.setattr(profile_router, "require_ui_session", _require_session_owner)
 
     resp = client.get("/ui/profiles/u_target")

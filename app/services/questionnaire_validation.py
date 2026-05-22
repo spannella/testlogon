@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 from datetime import datetime
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -334,7 +335,7 @@ def _validate_multiselect(value: Any, config: dict[str, Any]) -> list[dict[str, 
 
 
 def _validate_slider(value: Any, config: dict[str, Any]) -> list[dict[str, str]]:
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
+    if not isinstance(value, (int, float, Decimal)) or isinstance(value, bool):
         return [_error("invalid_type")]
 
     out: list[dict[str, str]] = []
@@ -343,13 +344,13 @@ def _validate_slider(value: Any, config: dict[str, Any]) -> list[dict[str, str]]
     step = config.get("step")
 
     in_range = True
-    if isinstance(min_v, (int, float)) and value < min_v:
+    if isinstance(min_v, (int, float, Decimal)) and value < min_v:
         out.append(_error("below_min"))
         in_range = False
-    if isinstance(max_v, (int, float)) and value > max_v:
+    if isinstance(max_v, (int, float, Decimal)) and value > max_v:
         out.append(_error("above_max"))
         in_range = False
-    if in_range and isinstance(step, (int, float)) and step > 0 and isinstance(min_v, (int, float)):
+    if in_range and isinstance(step, (int, float, Decimal)) and step > 0 and isinstance(min_v, (int, float, Decimal)):
         delta = (float(value) - float(min_v)) / float(step)
         if abs(delta - round(delta)) > 1e-9:
             out.append(_error("invalid_step"))

@@ -1581,18 +1581,17 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
         with (
             patch.object(newsfeed, "now_iso", return_value="2026-01-02T00:00:00+00:00"),
             patch.object(newsfeed, "ddb_get_item", side_effect=[existing, cancelled]),
-            patch.object(newsfeed.ddb.meta.client, "transact_write_items") as txn,
+            patch.object(newsfeed.tbl, "update_item") as update_mock,
+            patch.object(newsfeed.tbl, "delete_item") as delete_mock,
         ):
             out = newsfeed.cancel_scheduled_post("p1", user_id="u1")
         self.assertEqual(out["status"], "cancelled")
         self.assertIsNone(out["publish_at"])
-        self.assertEqual(txn.call_count, 1)
-        tx_items = txn.call_args.kwargs["TransactItems"]
-        self.assertEqual(len(tx_items), 2)
-        self.assertIn("Update", tx_items[0])
-        self.assertIn("Delete", tx_items[1])
-        self.assertIn("GSI_SCHEDULE_PK", tx_items[0]["Update"]["UpdateExpression"])
-        self.assertIn("GSI_SCHEDULE_SK", tx_items[0]["Update"]["UpdateExpression"])
+        update_mock.assert_called_once()
+        update_expr = update_mock.call_args.kwargs["UpdateExpression"]
+        self.assertIn("GSI_SCHEDULE_PK", update_expr)
+        self.assertIn("GSI_SCHEDULE_SK", update_expr)
+        delete_mock.assert_called_once()
 
     def test_cancel_scheduled_post_emits_metric(self):
         existing = {
@@ -1610,7 +1609,8 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
         with (
             patch.object(newsfeed, "now_iso", return_value="2026-01-02T00:00:00+00:00"),
             patch.object(newsfeed, "ddb_get_item", side_effect=[existing, cancelled]),
-            patch.object(newsfeed.ddb.meta.client, "transact_write_items"),
+            patch.object(newsfeed.tbl, "update_item"),
+            patch.object(newsfeed.tbl, "delete_item"),
             patch.object(newsfeed, "record_newsfeed_schedule_operation") as schedule_metric,
         ):
             newsfeed.cancel_scheduled_post("p1", user_id="u1")
@@ -1688,10 +1688,10 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
             "schedule_timezone": None,
             "scheduled_at_local": None,
         }
-        err = newsfeed.ClientError({"Error": {"Code": "TransactionCanceledException", "Message": "conflict"}}, "TransactWriteItems")
+        err = newsfeed.ClientError({"Error": {"Code": "ConditionalCheckFailedException", "Message": "conflict"}}, "UpdateItem")
         with (
             patch.object(newsfeed, "ddb_get_item", side_effect=[existing, cancelled]),
-            patch.object(newsfeed.ddb.meta.client, "transact_write_items", side_effect=err),
+            patch.object(newsfeed.tbl, "update_item", side_effect=err),
         ):
             out = newsfeed.cancel_scheduled_post("p1", user_id="u1")
         self.assertEqual(out["status"], "cancelled")
@@ -1708,10 +1708,10 @@ class TestNewsfeedContentEnvelope(unittest.TestCase):
             "scheduled_at_local": "2026-12-31T19:00",
             "created_at": "2026-01-01T00:00:00+00:00",
         }
-        err = newsfeed.ClientError({"Error": {"Code": "TransactionCanceledException", "Message": "conflict"}}, "TransactWriteItems")
+        err = newsfeed.ClientError({"Error": {"Code": "ConditionalCheckFailedException", "Message": "conflict"}}, "UpdateItem")
         with (
             patch.object(newsfeed, "ddb_get_item", side_effect=[existing, existing]),
-            patch.object(newsfeed.ddb.meta.client, "transact_write_items", side_effect=err),
+            patch.object(newsfeed.tbl, "update_item", side_effect=err),
         ):
             with self.assertRaises(newsfeed.HTTPException) as ctx:
                 newsfeed.cancel_scheduled_post("p1", user_id="u1")

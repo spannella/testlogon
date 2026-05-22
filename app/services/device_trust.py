@@ -166,12 +166,13 @@ def trust_current_device(req: Request, user_sub: str) -> str:
 
 
 def list_devices(user_sub: str) -> List[Dict[str, Any]]:
-    r = T.sessions.query(KeyConditionExpression=Key("user_sub").eq(user_sub), Limit=200)
+    r = T.sessions.query(
+        KeyConditionExpression=Key("user_sub").eq(user_sub) & Key("session_id").begins_with("dev#"),
+        Limit=200,
+    )
     out = []
     for it in r.get("Items", []):
         sid = it.get("session_id", "")
-        if not sid.startswith("dev#"):
-            continue
         out.append({
             "device_id": it.get("device_id", sid.replace("dev#", "")),
             "user_agent": it.get("user_agent", ""),

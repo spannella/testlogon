@@ -5,10 +5,22 @@ class _FakeTable:
     def __init__(self, item):
         self._item = item
         self.get_calls = 0
+        self.update_calls = []
+        self.delete_calls = []
+        self.put_calls = []
 
     def get_item(self, **kwargs):
         self.get_calls += 1
         return {"Item": self._item}
+
+    def update_item(self, **kwargs):
+        self.update_calls.append(kwargs)
+
+    def delete_item(self, **kwargs):
+        self.delete_calls.append(kwargs)
+
+    def put_item(self, **kwargs):
+        self.put_calls.append(kwargs)
 
 
 class _QueryTable:
@@ -145,44 +157,32 @@ def test_process_due_scheduled_posts_clamps_page_limit_and_batches(monkeypatch) 
 def test_publish_due_post_is_idempotent_when_already_published(monkeypatch) -> None:
     fake_tbl = _FakeTable({"status": "published"})
     monkeypatch.setattr(svc, "_tbl", lambda: fake_tbl)
-
-    called = {"n": 0}
-
-    def _tx(**kwargs):
-        called["n"] += 1
-
-    monkeypatch.setattr(svc.ddb.meta.client, "transact_write_items", _tx)
     out = svc._publish_due_post({"post_id": "p1", "user_id": "u1", "publish_at": 100}, now_ts=100, now_iso="2026-01-01T00:00:00+00:00")
     assert out == "already_published"
-    assert called["n"] == 0
+    assert len(fake_tbl.update_calls) == 0
 
 
 def test_publish_due_post_fails_safely_when_cancelled(monkeypatch) -> None:
     fake_tbl = _FakeTable({"status": "cancelled"})
     monkeypatch.setattr(svc, "_tbl", lambda: fake_tbl)
-    monkeypatch.setattr(svc.ddb.meta.client, "transact_write_items", lambda **kwargs: (_ for _ in ()).throw(AssertionError("should not transact")))
     out = svc._publish_due_post({"post_id": "p1", "user_id": "u1", "publish_at": 100}, now_ts=100, now_iso="2026-01-01T00:00:00+00:00")
     assert out == "already_cancelled"
+    assert len(fake_tbl.update_calls) == 0
 
 
 def test_publish_due_post_uses_publish_time_for_feedref_ordering(monkeypatch) -> None:
     fake_tbl = _FakeTable({"status": "scheduled"})
     monkeypatch.setattr(svc, "_tbl", lambda: fake_tbl)
-    captured = {}
-
-    def _tx(**kwargs):
-        captured["tx"] = kwargs["TransactItems"]
-
-    monkeypatch.setattr(svc.ddb.meta.client, "transact_write_items", _tx)
     out = svc._publish_due_post(
         {"post_id": "p1", "user_id": "u1", "publish_at": 100, "created_at": "2025-01-01T00:00:00+00:00"},
         now_ts=100,
         now_iso="2026-01-01T00:00:00+00:00",
     )
     assert out == "published"
-    put_item = captured["tx"][2]["Put"]["Item"]
-    assert put_item["created_at"]["S"] == "2026-01-01T00:00:00+00:00"
-    assert put_item["GSI1SK"]["S"] == "2026-01-01T00:00:00+00:00"
+    assert len(fake_tbl.put_calls) == 1
+    put_item = fake_tbl.put_calls[0]["Item"]
+    assert put_item["created_at"] == "2026-01-01T00:00:00+00:00"
+    assert put_item["GSI1SK"] == "2026-01-01T00:00:00+00:00"
 
 
 def test_process_due_scheduled_posts_cancelled_rows_do_not_meter(monkeypatch) -> None:

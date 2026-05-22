@@ -195,7 +195,8 @@ class DynamoQuestionnaireRepository:
         for pos, section_id in enumerate(ordered_section_ids):
             self._table.update_item(
                 Key={"pk": _q_pk(questionnaire_id), "sk": _section_sk(section_id)},
-                UpdateExpression="SET position=:position, updated_at=:updated_at, updated_by=:updated_by",
+                UpdateExpression="SET #pos=:position, updated_at=:updated_at, updated_by=:updated_by",
+                ExpressionAttributeNames={"#pos": "position"},
                 ExpressionAttributeValues={":position": pos, ":updated_at": ts, ":updated_by": actor_sub},
             )
         return self.list_sections(questionnaire_id)
@@ -302,7 +303,8 @@ class DynamoQuestionnaireRepository:
         for pos, question_id in enumerate(ordered_question_ids):
             self._table.update_item(
                 Key={"pk": _q_pk(questionnaire_id), "sk": _question_sk(section_id, question_id)},
-                UpdateExpression="SET position=:position, updated_at=:updated_at, updated_by=:updated_by",
+                UpdateExpression="SET #pos=:position, updated_at=:updated_at, updated_by=:updated_by",
+                ExpressionAttributeNames={"#pos": "position"},
                 ExpressionAttributeValues={":position": pos, ":updated_at": ts, ":updated_by": actor_sub},
             )
         return self.list_questions(questionnaire_id, section_id)

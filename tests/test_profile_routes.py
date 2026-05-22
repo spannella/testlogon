@@ -2,10 +2,11 @@ import asyncio
 import json
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
+from app.auth.deps import AuthenticatedUser
 from app.models import ProfilePatchReq, ProfilePutReq
 from app.routers import profile
 
@@ -63,12 +64,13 @@ class TestProfileRoutes(unittest.TestCase):
         req = build_request()
         with patch.object(profile, "S", SimpleNamespace(profile_lookup_audience_filtering_enabled=True)):
             with patch.object(profile, "_resolve_profile_identifier_to_user_sub", return_value="target_1"):
-                with patch.object(profile, "require_ui_session", return_value={"user_sub": "viewer_1", "session_id": "sid"}):
-                    with patch.object(profile, "rate_limit_profile_lookup") as rl_mock:
-                        with patch.object(profile, "client_ip_from_request", return_value="198.51.100.9"):
-                            with patch.object(profile, "get_profile_discoverability_state", return_value={"discoverability_status": "active"}):
-                                with patch.object(profile, "get_profile_for_requester", return_value={"display_name": "Ada"}) as get_for_requester:
-                                    resp = run_async(profile.ui_get_profile_by_identifier("target_1", req))
+                with patch.object(profile, "get_authenticated_user", AsyncMock(return_value=AuthenticatedUser(sub="viewer_1"))):
+                    with patch.object(profile, "require_ui_session", return_value={"user_sub": "viewer_1", "session_id": "sid"}):
+                        with patch.object(profile, "rate_limit_profile_lookup") as rl_mock:
+                            with patch.object(profile, "client_ip_from_request", return_value="198.51.100.9"):
+                                with patch.object(profile, "get_profile_discoverability_state", return_value={"discoverability_status": "active"}):
+                                    with patch.object(profile, "get_profile_for_requester", return_value={"display_name": "Ada"}) as get_for_requester:
+                                        resp = run_async(profile.ui_get_profile_by_identifier("target_1", req))
         rl_mock.assert_called_once_with("viewer_1", "198.51.100.9")
         get_for_requester.assert_called_once_with(target_user_sub="target_1", requester_user_sub="viewer_1")
         payload = json.loads(resp.body)
