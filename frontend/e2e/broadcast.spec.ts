@@ -585,3 +585,128 @@ test.describe("Broadcast — access control", () => {
     expect(resp.status()).toBe(201);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/*  Section 7 — State machine edge cases                              */
+/* ------------------------------------------------------------------ */
+
+test.describe("Broadcast — state machine edge cases", () => {
+  let rootPage: Page;
+  let alicePage: Page;
+  let profileId: string;
+
+  test.beforeAll(async ({ browser }) => {
+    const rootCtx = await browser.newContext();
+    rootPage = await rootCtx.newPage();
+    await injectAuth(rootPage, "root");
+
+    const aliceCtx = await browser.newContext();
+    alicePage = await aliceCtx.newPage();
+    await injectAuth(alicePage, "alice");
+
+    const pResp = await apiPost(rootPage, "root", "/broadcast/profiles", {
+      name: `Edge Profile ${TS}`,
+      region: "us-east-1",
+      rendition_preset: "720p30",
+    });
+    profileId = (await pResp.json()).id;
+  });
+
+  test.afterAll(async () => {
+    await rootPage.context().close();
+    await alicePage.context().close();
+  });
+
+  test("7.1 start already-live session is idempotent (returns 202)", async () => {
+    const sResp = await apiPost(rootPage, "root", "/broadcast/sessions", { profile_id: profileId });
+    const sessionId = (await sResp.json()).id;
+
+    const start1 = await apiPost(rootPage, "root", `/broadcast/sessions/${sessionId}/start`, { reason: "first start" });
+    expect(start1.status()).toBe(202);
+
+    const start2 = await apiPost(rootPage, "root", `/broadcast/sessions/${sessionId}/start`, { reason: "double start" });
+    expect(start2.status()).toBe(202);
+    const body = await start2.json();
+    expect(body.status).toBe("live");
+  });
+
+  test("7.2 stop then delete lifecycle", async () => {
+    const sResp = await apiPost(rootPage, "root", "/broadcast/sessions", { profile_id: profileId });
+    const sessionId = (await sResp.json()).id;
+    await apiPost(rootPage, "root", `/broadcast/sessions/${sessionId}/start`, { reason: "start" });
+
+    const stopResp = await apiPost(rootPage, "root", `/broadcast/sessions/${sessionId}/stop`, { reason: "stop" });
+    expect(stopResp.status()).toBe(202);
+    const stopped = await stopResp.json();
+    expect(stopped.status).toBe("stopped");
+
+    const delResp = await apiDelete(rootPage, "root", `/broadcast/sessions/${sessionId}`);
+    expect(delResp.status()).toBe(200);
+    const delBody = await delResp.json();
+    expect(delBody.ok).toBe(true);
+  });
+
+  test("7.3 get non-existent session returns 404", async () => {
+    const resp = await apiGet(rootPage, `/broadcast/sessions/nonexistent_${TS}`);
+    expect(resp.status()).toBe(404);
+  });
+
+  test("7.4 create session with valid profile_id returns 201", async () => {
+    const resp = await apiPost(alicePage, "alice", "/broadcast/sessions", { profile_id: profileId });
+    expect(resp.status()).toBe(201);
+    const body = await resp.json();
+    expect(body.profile_id).toBe(profileId);
+    expect(body.status).toBe("draft");
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  Section 8 — Validation errors                                     */
+/* ------------------------------------------------------------------ */
+
+test.describe("Broadcast — validation errors", () => {
+  let alicePage: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    const ctx = await browser.newContext();
+    alicePage = await ctx.newPage();
+    await injectAuth(alicePage, "alice");
+  });
+
+  test.afterAll(async () => {
+    await alicePage.context().close();
+  });
+
+  test("8.1 missing required name field returns 422", async () => {
+    const resp = await apiPost(alicePage, "alice", "/broadcast/profiles", {
+      region: "us-east-1",
+      rendition_preset: "720p30",
+    });
+    expect(resp.status()).toBe(422);
+  });
+
+  test("8.2 missing region returns 422", async () => {
+    const resp = await apiPost(alicePage, "alice", "/broadcast/profiles", {
+      name: `Valid Name ${TS}`,
+      rendition_preset: "720p30",
+    });
+    expect(resp.status()).toBe(422);
+  });
+
+  test("8.3 unauthenticated create profile returns 401", async ({ request }) => {
+    const resp = await request.post(`${API}/broadcast/profiles`, {
+      data: { name: "NoAuth", region: "us-east-1", rendition_preset: "720p30" },
+    });
+    expect(resp.status()).toBe(401);
+  });
+
+  test("8.4 get non-existent session returns 404", async () => {
+    const resp = await apiGet(alicePage, `/broadcast/sessions/nonexistent_${TS}`);
+    expect(resp.status()).toBe(404);
+  });
+
+  test("8.5 playback URL for non-existent session returns 404", async () => {
+    const resp = await apiPost(alicePage, "alice", `/broadcast/sessions/nonexistent_${TS}/playback-url`, {});
+    expect(resp.status()).toBe(404);
+  });
+});

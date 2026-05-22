@@ -12099,3 +12099,173 @@ async def issue_turn_credentials_endpoint(
             status_code=TURN_CREDENTIAL_ERROR_STATUS_MAP.get(exc.code, 400),
             detail={"code": exc.code, "message": str(exc)},
         )
+
+
+# ---------------------------------------------------------------------------
+# WebRTC Call Lifecycle Routes
+# ---------------------------------------------------------------------------
+
+class CallInviteIn(BaseModel):
+    call_id: str
+    conversation_id: str
+    callee_user_id: str
+    initial_mode: str = "audio"
+    idempotency_key: Optional[str] = None
+
+
+class CallInviteOut(BaseModel):
+    call_id: str
+    conversation_id: str
+    caller_user_id: str
+    callee_user_id: str
+    state: str
+    initial_mode: str
+    start_ts: int
+
+
+class CallAcceptIn(BaseModel):
+    idempotency_key: Optional[str] = None
+
+
+class CallDeclineIn(BaseModel):
+    reason: str = "declined"
+
+
+class CallEndIn(BaseModel):
+    reason: str = "ended"
+    idempotency_key: Optional[str] = None
+
+
+class CallActionOut(BaseModel):
+    call_id: str
+    conversation_id: str
+    state: str
+    from_state: Optional[str] = None
+    reason: Optional[str] = None
+    event_ts: int
+
+
+_CALL_ERROR_STATUS_MAP = {
+    "call_not_found": 404,
+    "forbidden": 403,
+    "invalid_state_transition": 409,
+    "callee_busy": 409,
+    "caller_busy": 409,
+    "duplicate_call_id": 409,
+    "idempotency_conflict": 409,
+}
+
+
+def _call_error_to_http(exc) -> HTTPException:
+    return HTTPException(
+        status_code=_CALL_ERROR_STATUS_MAP.get(exc.code, 400),
+        detail={"code": exc.code, "message": str(exc)},
+    )
+
+
+@router.post("/messages/calls/invite", response_model=CallInviteOut)
+async def create_call_invite(
+    body: CallInviteIn,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    from app.services.messaging_call_lifecycle import CallLifecycleError, create_invite
+
+    try:
+        record, _event = create_invite(
+            call_id=body.call_id,
+            conversation_id=body.conversation_id,
+            actor_user_id=user_id,
+            caller_user_id=user_id,
+            callee_user_id=body.callee_user_id,
+            initial_mode=body.initial_mode,
+            idempotency_key=body.idempotency_key,
+        )
+        return CallInviteOut(
+            call_id=record.call_id,
+            conversation_id=record.conversation_id,
+            caller_user_id=record.caller_user_id,
+            callee_user_id=record.callee_user_id,
+            state=record.state,
+            initial_mode=record.initial_mode,
+            start_ts=record.start_ts,
+        )
+    except CallLifecycleError as exc:
+        raise _call_error_to_http(exc)
+
+
+@router.post("/messages/calls/{call_id}/accept", response_model=CallActionOut)
+async def accept_call_invite(
+    call_id: str,
+    body: CallAcceptIn = CallAcceptIn(),
+    user_id: str = Depends(get_messaging_user_id),
+):
+    from app.services.messaging_call_lifecycle import CallLifecycleError, accept_invite
+
+    try:
+        record, event = accept_invite(
+            call_id=call_id,
+            actor_user_id=user_id,
+            idempotency_key=body.idempotency_key,
+        )
+        return CallActionOut(
+            call_id=record.call_id,
+            conversation_id=record.conversation_id,
+            state=record.state,
+            from_state=event.from_state,
+            event_ts=event.event_ts,
+        )
+    except CallLifecycleError as exc:
+        raise _call_error_to_http(exc)
+
+
+@router.post("/messages/calls/{call_id}/decline", response_model=CallActionOut)
+async def decline_call_invite(
+    call_id: str,
+    body: CallDeclineIn = CallDeclineIn(),
+    user_id: str = Depends(get_messaging_user_id),
+):
+    from app.services.messaging_call_lifecycle import CallLifecycleError, decline_invite
+
+    try:
+        record, event = decline_invite(
+            call_id=call_id,
+            actor_user_id=user_id,
+            reason=body.reason,
+        )
+        return CallActionOut(
+            call_id=record.call_id,
+            conversation_id=record.conversation_id,
+            state=record.state,
+            from_state=event.from_state,
+            reason=event.reason,
+            event_ts=event.event_ts,
+        )
+    except CallLifecycleError as exc:
+        raise _call_error_to_http(exc)
+
+
+@router.post("/messages/calls/{call_id}/end", response_model=CallActionOut)
+async def end_call_endpoint(
+    call_id: str,
+    body: CallEndIn = CallEndIn(),
+    user_id: str = Depends(get_messaging_user_id),
+):
+    from app.services.messaging_call_lifecycle import CallLifecycleError, end_call
+
+    try:
+        record, event = end_call(
+            call_id=call_id,
+            actor_user_id=user_id,
+            reason=body.reason,
+            idempotency_key=body.idempotency_key,
+        )
+        return CallActionOut(
+            call_id=record.call_id,
+            conversation_id=record.conversation_id,
+            state=record.state,
+            from_state=event.from_state,
+            reason=event.reason,
+            event_ts=event.event_ts,
+        )
+    except CallLifecycleError as exc:
+        raise _call_error_to_http(exc)

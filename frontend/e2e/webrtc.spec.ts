@@ -443,3 +443,429 @@ test.describe("73 — WebRTC TURN credentials", () => {
     expect(body.detail.message.length).toBeGreaterThan(0);
   });
 });
+
+// ===========================================================================
+// 74 — Call Lifecycle: Invite
+// ===========================================================================
+
+function seedConversation(conversationId: string, participantIds: string[]): void {
+  const py = `
+import boto3, time
+ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001",
+                     region_name="us-east-1",
+                     aws_access_key_id="test",
+                     aws_secret_access_key="test")
+table = ddb.Table("Conversations")
+ts = int(time.time())
+table.put_item(Item={
+    "conversation_id": ${JSON.stringify("__CONVO_ID__")},
+    "participant_ids": ${JSON.stringify("__PARTICIPANTS__")},
+    "type": "dm",
+    "created_at": ts,
+    "last_message_at": ts,
+    "updated_at": ts,
+})
+print("ok")
+`.replace("__CONVO_ID__", conversationId).replace('"__PARTICIPANTS__"', JSON.stringify(participantIds));
+  execSync(`python3 -c '${py.replace(/'/g, "'\\''")}'`, {
+    cwd: "/home/ubuntu/testlogon",
+    timeout: 10_000,
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+}
+
+function deleteConversation(conversationId: string): void {
+  const py = `
+import boto3
+ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001",
+                     region_name="us-east-1",
+                     aws_access_key_id="test",
+                     aws_secret_access_key="test")
+table = ddb.Table("Conversations")
+table.delete_item(Key={"conversation_id": ${JSON.stringify(conversationId)}})
+print("ok")
+`;
+  try {
+    execSync(`python3 -c '${py.replace(/'/g, "'\\''")}'`, {
+      cwd: "/home/ubuntu/testlogon",
+      timeout: 10_000,
+      env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+    });
+  } catch { /* ignore */ }
+}
+
+test.describe("74 — Call Lifecycle: Invite Flow", () => {
+  const CONVO_ID = `e2e_call_convo_${TS}`;
+  let alicePage: Page;
+  let bobPage: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    seedConversation(CONVO_ID, [ALICE_ID, BOB_ID]);
+
+    const aliceCtx = await browser.newContext();
+    alicePage = await aliceCtx.newPage();
+    await injectAuth(alicePage, "alice");
+    await alicePage.goto(BASE);
+
+    const bobCtx = await browser.newContext();
+    bobPage = await bobCtx.newPage();
+    await injectAuth(bobPage, "bob");
+    await bobPage.goto(BASE);
+  });
+
+  test.afterAll(async () => {
+    deleteConversation(CONVO_ID);
+    await alicePage?.context().close();
+    await bobPage?.context().close();
+  });
+
+  test("74.1 — Alice creates a call invite", async () => {
+    const callId = `e2e_invite_${TS}_1`;
+    const resp = await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
+      call_id: callId,
+      conversation_id: CONVO_ID,
+      callee_user_id: BOB_ID,
+      initial_mode: "audio",
+    });
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.call_id).toBe(callId);
+    expect(body.conversation_id).toBe(CONVO_ID);
+    expect(body.caller_user_id).toBe(ALICE_ID);
+    expect(body.callee_user_id).toBe(BOB_ID);
+    expect(body.state).toBe("invited");
+    expect(body.initial_mode).toBe("audio");
+    expect(typeof body.start_ts).toBe("number");
+    deleteCallSession(callId);
+  });
+
+  test("74.2 — duplicate call_id returns 409", async () => {
+    const callId = `e2e_invite_${TS}_2`;
+    const resp1 = await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
+      call_id: callId,
+      conversation_id: CONVO_ID,
+      callee_user_id: BOB_ID,
+      initial_mode: "audio",
+    });
+    expect(resp1.status()).toBe(200);
+
+    const resp2 = await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
+      call_id: callId,
+      conversation_id: CONVO_ID,
+      callee_user_id: BOB_ID,
+      initial_mode: "audio",
+    });
+    expect(resp2.status()).toBe(409);
+    const body = await resp2.json();
+    expect(body.detail.code).toBe("duplicate_call_id");
+    deleteCallSession(callId);
+  });
+
+  test("74.3 — non-participant cannot create invite", async ({ browser }) => {
+    const charlieCtx = await browser.newContext();
+    const charliePage = await charlieCtx.newPage();
+    await injectAuth(charliePage, "charlie_admin");
+    await charliePage.goto(BASE);
+
+    const resp = await apiPost(charliePage, "charlie_admin", "/messaging/messages/calls/invite", {
+      call_id: `e2e_invite_${TS}_3`,
+      conversation_id: CONVO_ID,
+      callee_user_id: BOB_ID,
+      initial_mode: "audio",
+    });
+    expect(resp.status()).toBe(403);
+    const body = await resp.json();
+    expect(body.detail.code).toBe("forbidden");
+    await charlieCtx.close();
+  });
+
+  test("74.4 — idempotent retry with same key returns same result", async () => {
+    const callId = `e2e_invite_${TS}_4`;
+    const idemKey = `idem_${TS}_4`;
+    const body1 = { call_id: callId, conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "video", idempotency_key: idemKey };
+
+    const resp1 = await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", body1);
+    expect(resp1.status()).toBe(200);
+    const data1 = await resp1.json();
+
+    const resp2 = await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", body1);
+    expect(resp2.status()).toBe(200);
+    const data2 = await resp2.json();
+    expect(data2.call_id).toBe(data1.call_id);
+    expect(data2.state).toBe("invited");
+    deleteCallSession(callId);
+  });
+
+  test("74.5 — request without auth returns 401", async ({ request }) => {
+    const resp = await request.post(`${API}/messaging/messages/calls/invite`, {
+      data: { call_id: "noauth", conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "audio" },
+    });
+    expect(resp.status()).toBe(401);
+  });
+});
+
+// ===========================================================================
+// 75 — Call Lifecycle: Accept / Decline
+// ===========================================================================
+
+test.describe("75 — Call Lifecycle: Accept & Decline", () => {
+  const CONVO_ID = `e2e_ad_convo_${TS}`;
+  let alicePage: Page;
+  let bobPage: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    seedConversation(CONVO_ID, [ALICE_ID, BOB_ID]);
+    const aliceCtx = await browser.newContext();
+    alicePage = await aliceCtx.newPage();
+    await injectAuth(alicePage, "alice");
+    await alicePage.goto(BASE);
+
+    const bobCtx = await browser.newContext();
+    bobPage = await bobCtx.newPage();
+    await injectAuth(bobPage, "bob");
+    await bobPage.goto(BASE);
+  });
+
+  test.afterAll(async () => {
+    deleteConversation(CONVO_ID);
+    await alicePage?.context().close();
+    await bobPage?.context().close();
+  });
+
+  test("75.1 — Bob accepts Alice's invite", async () => {
+    const callId = `e2e_accept_${TS}_1`;
+    const invResp = await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
+      call_id: callId, conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "audio",
+    });
+    expect(invResp.status()).toBe(200);
+
+    const resp = await apiPost(bobPage, "bob", `/messaging/messages/calls/${callId}/accept`);
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.call_id).toBe(callId);
+    expect(body.state).toBe("accepted");
+    expect(body.from_state).toBe("invited");
+    deleteCallSession(callId);
+  });
+
+  test("75.2 — only callee can accept (Alice gets 403)", async () => {
+    const callId = `e2e_accept_${TS}_2`;
+    await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
+      call_id: callId, conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "audio",
+    });
+
+    const resp = await apiPost(alicePage, "alice", `/messaging/messages/calls/${callId}/accept`);
+    expect(resp.status()).toBe(403);
+    const body = await resp.json();
+    expect(body.detail.code).toBe("forbidden");
+    deleteCallSession(callId);
+  });
+
+  test("75.3 — Bob declines Alice's invite", async () => {
+    const callId = `e2e_decline_${TS}_3`;
+    await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
+      call_id: callId, conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "audio",
+    });
+
+    const resp = await apiPost(bobPage, "bob", `/messaging/messages/calls/${callId}/decline`, {
+      reason: "declined",
+    });
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.call_id).toBe(callId);
+    expect(body.state).toBe("declined");
+    expect(body.reason).toBe("declined");
+    deleteCallSession(callId);
+  });
+
+  test("75.4 — decline with reason=busy sets state to busy", async () => {
+    const callId = `e2e_decline_${TS}_4`;
+    await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
+      call_id: callId, conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "audio",
+    });
+
+    const resp = await apiPost(bobPage, "bob", `/messaging/messages/calls/${callId}/decline`, {
+      reason: "busy",
+    });
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.state).toBe("busy");
+    deleteCallSession(callId);
+  });
+
+  test("75.5 — accept already-declined call returns 409", async () => {
+    const callId = `e2e_decline_${TS}_5`;
+    await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
+      call_id: callId, conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "audio",
+    });
+    await apiPost(bobPage, "bob", `/messaging/messages/calls/${callId}/decline`);
+
+    const resp = await apiPost(bobPage, "bob", `/messaging/messages/calls/${callId}/accept`);
+    expect(resp.status()).toBe(409);
+    const body = await resp.json();
+    expect(body.detail.code).toBe("invalid_state_transition");
+    deleteCallSession(callId);
+  });
+});
+
+// ===========================================================================
+// 76 — Call Lifecycle: End Call
+// ===========================================================================
+
+test.describe("76 — Call Lifecycle: End Call", () => {
+  const CONVO_ID = `e2e_end_convo_${TS}`;
+  let alicePage: Page;
+  let bobPage: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    seedConversation(CONVO_ID, [ALICE_ID, BOB_ID]);
+    const aliceCtx = await browser.newContext();
+    alicePage = await aliceCtx.newPage();
+    await injectAuth(alicePage, "alice");
+    await alicePage.goto(BASE);
+
+    const bobCtx = await browser.newContext();
+    bobPage = await bobCtx.newPage();
+    await injectAuth(bobPage, "bob");
+    await bobPage.goto(BASE);
+  });
+
+  test.afterAll(async () => {
+    deleteConversation(CONVO_ID);
+    await alicePage?.context().close();
+    await bobPage?.context().close();
+  });
+
+  test("76.1 — either participant ends accepted call → state=ended", async () => {
+    const callId = `e2e_end_${TS}_1`;
+    await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
+      call_id: callId, conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "audio",
+    });
+    await apiPost(bobPage, "bob", `/messaging/messages/calls/${callId}/accept`);
+
+    const resp = await apiPost(alicePage, "alice", `/messaging/messages/calls/${callId}/end`);
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.state).toBe("ended");
+    expect(body.from_state).toBe("accepted");
+    deleteCallSession(callId);
+  });
+
+  test("76.2 — end invited call → state=canceled", async () => {
+    const callId = `e2e_end_${TS}_2`;
+    await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
+      call_id: callId, conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "audio",
+    });
+
+    const resp = await apiPost(alicePage, "alice", `/messaging/messages/calls/${callId}/end`);
+    expect(resp.status()).toBe(200);
+    const body = await resp.json();
+    expect(body.state).toBe("canceled");
+    expect(body.from_state).toBe("invited");
+    deleteCallSession(callId);
+  });
+
+  test("76.3 — end already-ended call returns 409", async () => {
+    const callId = `e2e_end_${TS}_3`;
+    await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
+      call_id: callId, conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "audio",
+    });
+    await apiPost(bobPage, "bob", `/messaging/messages/calls/${callId}/accept`);
+    await apiPost(alicePage, "alice", `/messaging/messages/calls/${callId}/end`);
+
+    const resp = await apiPost(bobPage, "bob", `/messaging/messages/calls/${callId}/end`);
+    expect(resp.status()).toBe(409);
+    const body = await resp.json();
+    expect(body.detail.code).toBe("invalid_state_transition");
+    deleteCallSession(callId);
+  });
+
+  test("76.4 — non-participant cannot end call", async ({ browser }) => {
+    const callId = `e2e_end_${TS}_4`;
+    await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
+      call_id: callId, conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "audio",
+    });
+
+    const charlieCtx = await browser.newContext();
+    const charliePage = await charlieCtx.newPage();
+    await injectAuth(charliePage, "charlie_admin");
+    await charliePage.goto(BASE);
+
+    const resp = await apiPost(charliePage, "charlie_admin", `/messaging/messages/calls/${callId}/end`);
+    expect(resp.status()).toBe(403);
+    const body = await resp.json();
+    expect(body.detail.code).toBe("forbidden");
+    await charlieCtx.close();
+    deleteCallSession(callId);
+  });
+});
+
+// ===========================================================================
+// 77 — Call Lifecycle: Full Happy Path
+// ===========================================================================
+
+test.describe("77 — Call Lifecycle: Full Happy Path", () => {
+  const CONVO_ID = `e2e_happy_convo_${TS}`;
+  let alicePage: Page;
+  let bobPage: Page;
+
+  test.beforeAll(async ({ browser }) => {
+    seedConversation(CONVO_ID, [ALICE_ID, BOB_ID]);
+    const aliceCtx = await browser.newContext();
+    alicePage = await aliceCtx.newPage();
+    await injectAuth(alicePage, "alice");
+    await alicePage.goto(BASE);
+
+    const bobCtx = await browser.newContext();
+    bobPage = await bobCtx.newPage();
+    await injectAuth(bobPage, "bob");
+    await bobPage.goto(BASE);
+  });
+
+  test.afterAll(async () => {
+    deleteConversation(CONVO_ID);
+    await alicePage?.context().close();
+    await bobPage?.context().close();
+  });
+
+  test("77.1 — invite → accept → end (happy path)", async () => {
+    const callId = `e2e_happy_${TS}_1`;
+
+    const invResp = await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
+      call_id: callId, conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "video",
+    });
+    expect(invResp.status()).toBe(200);
+    const invBody = await invResp.json();
+    expect(invBody.state).toBe("invited");
+    expect(invBody.initial_mode).toBe("video");
+
+    const accResp = await apiPost(bobPage, "bob", `/messaging/messages/calls/${callId}/accept`);
+    expect(accResp.status()).toBe(200);
+    const accBody = await accResp.json();
+    expect(accBody.state).toBe("accepted");
+
+    const endResp = await apiPost(bobPage, "bob", `/messaging/messages/calls/${callId}/end`);
+    expect(endResp.status()).toBe(200);
+    const endBody = await endResp.json();
+    expect(endBody.state).toBe("ended");
+    deleteCallSession(callId);
+  });
+
+  test("77.2 — invite → decline (terminal state)", async () => {
+    const callId = `e2e_happy_${TS}_2`;
+
+    const invResp = await apiPost(alicePage, "alice", "/messaging/messages/calls/invite", {
+      call_id: callId, conversation_id: CONVO_ID, callee_user_id: BOB_ID, initial_mode: "audio",
+    });
+    expect(invResp.status()).toBe(200);
+
+    const decResp = await apiPost(bobPage, "bob", `/messaging/messages/calls/${callId}/decline`);
+    expect(decResp.status()).toBe(200);
+    const decBody = await decResp.json();
+    expect(decBody.state).toBe("declined");
+
+    const endResp = await apiPost(alicePage, "alice", `/messaging/messages/calls/${callId}/end`);
+    expect(endResp.status()).toBe(409);
+    deleteCallSession(callId);
+  });
+});

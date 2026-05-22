@@ -33,6 +33,10 @@ from app.routers.admin_impersonation import router as admin_impersonation_router
 from app.routers.misc import router as misc_router
 from app.routers.billing_ccbill import router as billing_ccbill_router
 from app.routers.ccbill_mock import router as ccbill_mock_router
+from app.routers.google_calendar_mock import router as google_calendar_mock_router
+from app.routers.google_drive_mock import router as google_drive_mock_router
+from app.routers.apple_caldav_mock import router as apple_caldav_mock_router
+from app.routers.jira_mock import router as jira_mock_router
 from app.routers.paypal_mock import router as paypal_mock_router
 from app.routers.s3_mock import router as s3_mock_router, list_buckets as _s3_list_buckets
 from app.core.dev_s3 import start_s3_mock as _start_s3_mock
@@ -235,6 +239,10 @@ def create_app() -> FastAPI:
     app.include_router(misc_router)
     app.include_router(billing_ccbill_router)
     app.include_router(ccbill_mock_router)
+    app.include_router(google_calendar_mock_router)
+    app.include_router(google_drive_mock_router)
+    app.include_router(apple_caldav_mock_router)
+    app.include_router(jira_mock_router)
     app.include_router(paypal_mock_router)
     app.include_router(s3_mock_router, prefix="/mock/s3")
     # Also register GET /mock/s3 (no trailing slash) for boto3 list_buckets

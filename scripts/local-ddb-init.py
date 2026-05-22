@@ -590,11 +590,12 @@ def _table_defs() -> List[TableDef]:
         ),
         # SFTP mounts: pk=PK, sk=SK
         TableDef(os.getenv("FILEMGR_SFTP_MOUNTS_TABLE_NAME", "filemgr_sftp_mounts"), "PK", "SK"),
-        # Google Calendar integration tables
-        TableDef(os.getenv("CALENDAR_CONNECTIONS_TABLE_NAME", "calendar_connections"), "pk", "sk"),
-        TableDef(os.getenv("CALENDAR_CONNECTION_SECRETS_TABLE_NAME", "calendar_connection_secrets"), "pk", "sk"),
-        TableDef(os.getenv("EXTERNAL_CALENDARS_TABLE_NAME", "external_calendars"), "pk", "sk"),
-        TableDef(os.getenv("CALENDAR_SYNC_RUNS_TABLE_NAME", "calendar_sync_runs"), "pk", "sk"),
+        # Calendar integration tables (Apple CalDAV / Google)
+        TableDef(os.getenv("CALENDAR_CONNECTIONS_TABLE_NAME", "calendar_connections"), "connection_id"),
+        TableDef(os.getenv("CALENDAR_CONNECTION_SECRETS_TABLE_NAME", "calendar_connection_secrets"), "credential_ref"),
+        TableDef(os.getenv("EXTERNAL_CALENDARS_TABLE_NAME", "external_calendars"), "external_calendar_id"),
+        TableDef(os.getenv("CALENDAR_SYNC_RUNS_TABLE_NAME", "calendar_sync_runs"), "run_id"),
+        TableDef(os.getenv("EXTERNAL_EVENT_LINKS_TABLE_NAME", "external_event_links"), "connection_uid_key"),
     ]
 
 
@@ -689,10 +690,15 @@ def _ensure_table(ddb, table: TableDef) -> None:
     gsi = _global_secondary_indexes(table)
     if gsi:
         kwargs["GlobalSecondaryIndexes"] = gsi
-    _retry_transient_ddb_call(client.create_table, **kwargs)
+    try:
+        _retry_transient_ddb_call(client.create_table, **kwargs)
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") == "ResourceInUseException":
+            return
+        raise
 
 
-def _retry_transient_ddb_call(func, *args, retries: int = 12, delay_seconds: float = 1.0, **kwargs):
+def _retry_transient_ddb_call(func, *args, retries: int = 20, delay_seconds: float = 1.0, **kwargs):
     """Retry DynamoDB Local operations when the embedded server is still warming up."""
     for attempt in range(1, retries + 1):
         try:

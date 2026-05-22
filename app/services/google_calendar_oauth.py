@@ -174,8 +174,9 @@ def consume_connect_state(*, user_sub: str, state: str) -> Dict[str, Any]:
         try:
             out = table.update_item(
                 Key={"calendar_id": _state_pk(state_norm), "sk": _state_sk()},
-                UpdateExpression="SET consumed = :consumed, consumed_at_utc = :consumed_at",
-                ConditionExpression="attribute_not_exists(consumed) OR consumed = :not_consumed",
+                UpdateExpression="SET #consumed = :consumed, consumed_at_utc = :consumed_at",
+                ConditionExpression="attribute_not_exists(#consumed) OR #consumed = :not_consumed",
+                ExpressionAttributeNames={"#consumed": "consumed"},
                 ExpressionAttributeValues={
                     ":consumed": True,
                     ":consumed_at": consumed_at_utc,
@@ -284,8 +285,8 @@ def handle_connect_callback(*, user_sub: str, state: str, code: str) -> Dict[str
         record_google_calendar_oauth_callback_outcome(outcome="error", reason="unverified_google_email")
         raise HTTPException(status_code=400, detail="google account email is not verified")
 
-    connection_id = str(getattr(S, "google_calendar_connection_default_id", "google-primary") or "google-primary")
-    connection_id = f"google-{google_sub}"
+    default_cid = str(getattr(S, "google_calendar_connection_default_id", "") or "").strip()
+    connection_id = default_cid if default_cid else f"google-{google_sub}"
 
     out = upsert_calendar_provider_connection(
         user_sub=user_sub,

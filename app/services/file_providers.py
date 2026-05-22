@@ -461,12 +461,12 @@ class GoogleDriveProvider:
 
     def _get_file(self, parsed: Dict[str, str]) -> requests.Response:
         fields = "id,name,mimeType,size,modifiedTime,parents,trashed,driveId"
-        url = f"https://www.googleapis.com/drive/v3/files/{quote(parsed['item_id'], safe='')}"
+        url = f"{S.google_drive_api_base_url}/files/{quote(parsed['item_id'], safe='')}"
         params: Dict[str, Any] = {"fields": fields, "supportsAllDrives": "true"}
         return self._request_with_retry(url=url, params=params, operation="get_file")
 
     def _list_files(self, parsed: Dict[str, str]) -> requests.Response:
-        url = "https://www.googleapis.com/drive/v3/files"
+        url = f"{S.google_drive_api_base_url}/files"
         params: Dict[str, Any] = {
             "q": f"'{parsed['item_id']}' in parents and trashed=false",
             "fields": "files(id,name,mimeType,size,modifiedTime,parents,driveId)",
@@ -602,7 +602,7 @@ class GoogleDriveProvider:
                 return existing
             raise HTTPException(status_code=409, detail="mount path conflict: file already exists")
 
-        url = "https://www.googleapis.com/drive/v3/files"
+        url = f"{S.google_drive_api_base_url}/files"
         body = {
             "name": name,
             "mimeType": "application/vnd.google-apps.folder",
@@ -716,7 +716,7 @@ class GoogleDriveProvider:
             if str(existing_meta.get("type") or "") in {"dir", "folder"}:
                 raise HTTPException(status_code=409, detail="mount path conflict: folder already exists")
             existing_parsed = self._parse_ref(existing)
-            url = f"https://www.googleapis.com/upload/drive/v3/files/{quote(existing_parsed['item_id'], safe='')}"
+            url = f"{S.google_drive_upload_api_base_url}/files/{quote(existing_parsed['item_id'], safe='')}"
             if use_resumable:
                 resp = self._upload_via_resumable(
                     endpoint_url=url,
@@ -743,7 +743,7 @@ class GoogleDriveProvider:
                 "name": meta.get("name") or name,
             }
 
-        url = "https://www.googleapis.com/upload/drive/v3/files"
+        url = f"{S.google_drive_upload_api_base_url}/files"
         if use_resumable:
             resp = self._upload_via_resumable(
                 endpoint_url=url,
@@ -783,7 +783,7 @@ class GoogleDriveProvider:
 
     def delete_item(self, canonical_ref: str) -> None:
         parsed = self._parse_ref(canonical_ref)
-        url = f"https://www.googleapis.com/drive/v3/files/{quote(parsed['item_id'], safe='')}"
+        url = f"{S.google_drive_api_base_url}/files/{quote(parsed['item_id'], safe='')}"
         response = requests.delete(
             url,
             params={"supportsAllDrives": "true"},
@@ -802,7 +802,7 @@ class GoogleDriveProvider:
         src_parents = src_meta.get("parents") if isinstance(src_meta.get("parents"), list) else []
         remove_parents = ",".join([str(p).strip() for p in src_parents if str(p).strip()])
 
-        url = f"https://www.googleapis.com/drive/v3/files/{quote(src['item_id'], safe='')}"
+        url = f"{S.google_drive_api_base_url}/files/{quote(src['item_id'], safe='')}"
         params = {
             "supportsAllDrives": "true",
             "fields": "id,driveId",
@@ -828,7 +828,7 @@ class GoogleDriveProvider:
 
     def stream_file(self, canonical_ref: str) -> requests.Response:
         parsed = self._parse_ref(canonical_ref)
-        url = f"https://www.googleapis.com/drive/v3/files/{quote(parsed['item_id'], safe='')}"
+        url = f"{S.google_drive_api_base_url}/files/{quote(parsed['item_id'], safe='')}"
         response = self._request_with_retry(
             url=url,
             params={"alt": "media", "supportsAllDrives": "true"},

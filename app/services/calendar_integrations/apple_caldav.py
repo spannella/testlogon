@@ -141,6 +141,9 @@ def _is_forbidden_egress_host(hostname: str) -> bool:
 
 
 def _assert_safe_caldav_base_url(base_url: str) -> None:
+    from app.core.settings import S
+    if getattr(S, "apple_caldav_mock_enabled", False):
+        return
     parsed = urlparse.urlparse(str(base_url or "").strip())
     if parsed.scheme.lower() != "https":
         raise CalendarIntegrationError(

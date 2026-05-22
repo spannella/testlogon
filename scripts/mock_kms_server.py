@@ -225,6 +225,30 @@ def op_decrypt(state: Dict, body: Dict) -> Tuple[Resp, Err]:
     }, None
 
 
+def op_generate_data_key(state: Dict, body: Dict) -> Tuple[Resp, Err]:
+    key_id_in = body.get("KeyId", "")
+    resolved = _resolve_key_id(state, key_id_in)
+    if not resolved or resolved not in state["keys"]:
+        return None, {"__type": "NotFoundException", "message": f"Key '{key_id_in}' does not exist"}
+
+    key_spec = body.get("KeySpec", "AES_256")
+    if key_spec == "AES_128":
+        data_key_bytes = os.urandom(16)
+    else:
+        data_key_bytes = os.urandom(32)
+
+    key = state["keys"][resolved]
+    nonce, ct = _encrypt_bytes(key["key_material"], data_key_bytes)
+    blob = _pack_blob(resolved, nonce, ct)
+
+    log.info("GenerateDataKey with key %s (%s)", resolved[:8], key_spec)
+    return {
+        "KeyId": key["arn"],
+        "Plaintext": base64.b64encode(data_key_bytes).decode(),
+        "CiphertextBlob": blob,
+    }, None
+
+
 OPERATIONS = {
     "CreateKey": op_create_key,
     "CreateAlias": op_create_alias,
@@ -232,6 +256,7 @@ OPERATIONS = {
     "ListAliases": op_list_aliases,
     "Encrypt": op_encrypt,
     "Decrypt": op_decrypt,
+    "GenerateDataKey": op_generate_data_key,
 }
 
 # ---------------------------------------------------------------------------

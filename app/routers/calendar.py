@@ -101,7 +101,7 @@ def _map_calendar_integration_error(exc: CalendarIntegrationError) -> HTTPExcept
 
 
 @integration_router.post("/connect", response_model=AppleCalendarConnectionOut)
-async def connect_apple_calendar(
+def connect_apple_calendar(
     body: AppleCalendarConnectIn,
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
@@ -124,7 +124,7 @@ async def connect_apple_calendar(
 
 
 @integration_router.get("/status", response_model=AppleCalendarStatusOut)
-async def apple_calendar_status(
+def apple_calendar_status(
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
     status = get_apple_caldav_status(user_sub=ctx["user_sub"])
@@ -132,7 +132,7 @@ async def apple_calendar_status(
 
 
 @integration_router.post("/disconnect", response_model=AppleCalendarConnectionOut)
-async def apple_calendar_disconnect(
+def apple_calendar_disconnect(
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
     disconnected = disconnect_apple_caldav_credential(user_sub=ctx["user_sub"])
@@ -140,7 +140,7 @@ async def apple_calendar_disconnect(
 
 
 @integration_router.get("/calendars", response_model=List[AppleCalendarExternalCalendarOut])
-async def list_apple_calendars(
+def list_apple_calendars(
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
     calendars = list_apple_caldav_calendars(user_sub=ctx["user_sub"])
@@ -148,7 +148,7 @@ async def list_apple_calendars(
 
 
 @integration_router.post("/calendars/select", response_model=List[AppleCalendarExternalCalendarOut])
-async def select_apple_calendars(
+def select_apple_calendars(
     body: AppleCalendarSelectionUpdateIn,
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
@@ -160,7 +160,7 @@ async def select_apple_calendars(
 
 
 @integration_router.post("/import/initial", response_model=List[AppleCalendarImportRunOut])
-async def start_apple_initial_import(
+def start_apple_initial_import(
     body: AppleCalendarInitialImportIn,
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
@@ -174,7 +174,7 @@ async def start_apple_initial_import(
 
 
 @integration_router.post("/sync/now", response_model=AppleCalendarSyncNowOut)
-async def sync_apple_now(
+def sync_apple_now(
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
     out = trigger_apple_caldav_sync_now(user_sub=ctx["user_sub"])
@@ -1130,7 +1130,7 @@ async def list_calendars(ctx: Dict[str, str] = Depends(require_ui_session)):
 
 
 @router.post("/calendar/integrations/google/connect/start", response_model=GoogleCalendarConnectStartOut)
-async def google_calendar_connect_start(ctx: Dict[str, str] = Depends(require_ui_session)):
+def google_calendar_connect_start(ctx: Dict[str, str] = Depends(require_ui_session)):
     user_sub = str(ctx.get("user_sub") or "")
     require_google_calendar_sync_enabled_for_user(user_sub)
     out = create_connect_start_state(user_sub=user_sub)
@@ -1146,7 +1146,7 @@ async def google_calendar_connect_start(ctx: Dict[str, str] = Depends(require_ui
 
 
 @router.get("/calendar/integrations/google/connect/callback", response_model=GoogleCalendarConnectCallbackOut)
-async def google_calendar_connect_callback(
+def google_calendar_connect_callback(
     code: str | None = Query(default=None),
     state: str | None = Query(default=None),
     error: str | None = Query(default=None),
@@ -1199,7 +1199,7 @@ async def google_calendar_connect_callback(
 
 
 @router.post("/calendar/integrations/google/disconnect", response_model=GoogleCalendarDisconnectOut)
-async def google_calendar_disconnect(
+def google_calendar_disconnect(
     connection_id: str | None = Query(default=None),
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
@@ -1230,7 +1230,7 @@ async def google_calendar_disconnect(
 
 
 @router.get("/calendar/integrations/google/status", response_model=GoogleCalendarIntegrationStatusOut)
-async def google_calendar_integration_status(ctx: Dict[str, str] = Depends(require_ui_session)):
+def google_calendar_integration_status(ctx: Dict[str, str] = Depends(require_ui_session)):
     user_sub = str(ctx.get("user_sub") or "")
     require_google_calendar_sync_enabled_for_user(user_sub)
     connection_id = str(getattr(S, "google_calendar_connection_default_id", "google-primary") or "google-primary")
@@ -1259,7 +1259,7 @@ async def google_calendar_integration_status(ctx: Dict[str, str] = Depends(requi
 
 
 @router.get("/calendar/integrations/google/calendars", response_model=GoogleCalendarProviderCalendarsOut)
-async def google_calendar_provider_calendars(ctx: Dict[str, str] = Depends(require_ui_session)):
+def google_calendar_provider_calendars(ctx: Dict[str, str] = Depends(require_ui_session)):
     user_sub = str(ctx.get("user_sub") or "")
     require_google_calendar_sync_enabled_for_user(user_sub)
     connection_id = str(getattr(S, "google_calendar_connection_default_id", "google-primary") or "google-primary")
@@ -1286,7 +1286,7 @@ async def google_calendar_provider_calendars(ctx: Dict[str, str] = Depends(requi
 
 
 @router.post("/calendar/integrations/google/mappings", response_model=GoogleCalendarMappingOut)
-async def google_calendar_create_mapping(
+def google_calendar_create_mapping(
     body: GoogleCalendarMappingCreateIn,
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
@@ -1301,7 +1301,7 @@ async def google_calendar_create_mapping(
 
 
 @router.post("/calendar/integrations/google/sync/run", response_model=GoogleCalendarSyncRunOut)
-async def google_calendar_manual_sync_run(
+def google_calendar_manual_sync_run(
     mode: str = Query(default="incremental"),
     ctx: Dict[str, str] = Depends(require_ui_session),
 ):
