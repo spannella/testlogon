@@ -47,12 +47,21 @@ def _normalize_capabilities_or_400(capabilities: List[str] | None) -> List[str]:
         )
 
 
+def _safe_int_ts(value: Any) -> int:
+    if not value:
+        return 0
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return 0
+
+
 def _is_active_entitlement(item: Dict[str, Any], *, now: int) -> bool:
     status = str(item.get("status") or "").strip().lower()
     if status and status != "active":
         return False
-    starts_at = int(item.get("starts_at") or 0)
-    ends_at = int(item.get("ends_at") or 0)
+    starts_at = _safe_int_ts(item.get("starts_at"))
+    ends_at = _safe_int_ts(item.get("ends_at"))
     if starts_at and now < starts_at:
         return False
     if ends_at and now >= ends_at:

@@ -57,16 +57,16 @@ const ENT_ID_2 = `ent_e2e_usage_${TS}`;
 
 /** Seed an entitlement row directly into DynamoDB. */
 function seedEntitlement(userId: string, entitlementId: string, extras: Record<string, unknown> = {}): void {
-  const now = new Date().toISOString();
-  const endsAt = new Date(Date.now() + 365 * 86400_000).toISOString();
+  const nowIso = new Date().toISOString();
+  const endsAtIso = new Date(Date.now() + 365 * 86400_000).toISOString();
   const base: Record<string, unknown> = {
     user_id: userId,
     entitlement_id: entitlementId,
     sku: `sku_${TS}`,
     product_type: "api_package",
     status: "active",
-    starts_at: now,
-    ends_at: endsAt,
+    starts_at: nowIso,
+    ends_at: endsAtIso,
     usage_limit: 1000,
     usage_consumed: 50,
     source_system: "subscription_cycle",
@@ -87,6 +87,13 @@ ddb.Table(S.entitlements_table_name).put_item(Item={${pairs}})
   );
 }
 
+function deleteEntitlement(userId: string, entitlementId: string): void {
+  execSync(
+    `.venv/bin/python3 -c 'import boto3; ddb = boto3.resource("dynamodb", endpoint_url="http://localhost:8001", region_name="us-east-1", aws_access_key_id="test", aws_secret_access_key="test"); from app.core.settings import S; ddb.Table(S.entitlements_table_name).delete_item(Key={"user_id": "${userId}", "entitlement_id": "${entitlementId}"})'`,
+    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
+  );
+}
+
 // ─── 94. User Entitlements ─────────────────────────────────────────────────
 
 test.describe.serial("94. User Entitlements — list + filter + usage", () => {
@@ -100,6 +107,8 @@ test.describe.serial("94. User Entitlements — list + filter + usage", () => {
   });
 
   test.afterAll(async () => {
+    try { deleteEntitlement(aliceSub(), ENT_ID); } catch { /* ignore */ }
+    try { deleteEntitlement(aliceSub(), ENT_ID_2); } catch { /* ignore */ }
     await alicePage?.close();
   });
 
@@ -188,6 +197,7 @@ test.describe.serial("95. Admin Entitlement Management — extend, credit, revok
   });
 
   test.afterAll(async () => {
+    try { deleteEntitlement(aliceSub(), adminEntId); } catch { /* ignore */ }
     await rootPage?.close();
     await alicePage?.close();
   });
