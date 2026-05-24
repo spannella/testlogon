@@ -483,6 +483,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     peerId: dmPartner?.user_id ?? "",
     userId: userId ?? "",
     enabled: rtcEnabled && !!callMachine.callId,
+    retryCount: callMachine.retryCount,
     onConnect: () => dispatchCall({ type: "CONNECT" }),
     onConnectionLost: (msg) => dispatchCall({ type: "CONNECTION_LOST", message: msg }),
     onFail: (msg) => dispatchCall({ type: "FAIL", message: msg }),
@@ -576,8 +577,14 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
           dispatchCall({ type: "OUTGOING_RINGING", callId: res.call_id });
           // WebRTC negotiation is now handled by useRtcPeerConnection hook.
           // REMOTE_ACCEPT will be dispatched when the callee accepts via SSE.
-          callTimeoutRef.current = window.setTimeout(() => {
+          callTimeoutRef.current = window.setTimeout(async () => {
             dispatchCall({ type: "REMOTE_DECLINE", reason: "timeout" });
+            if (res.call_id) {
+              try {
+                const { timeoutCall } = await import("@/api/endpoints/messaging");
+                await timeoutCall(res.call_id, { reason: "no_answer" });
+              } catch { /* best-effort */ }
+            }
           }, 30_000);
         },
         onError: (err) => {
@@ -629,6 +636,11 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         dispatchCall({ type: "REMOTE_ACCEPT" });
       } else if (eventType === "call.decline" && isCurrentUserCaller) {
         dispatchCall({ type: "REMOTE_DECLINE", reason: reason === "busy" ? "busy" : "declined" });
+      } else if (eventType === "call.missed") {
+        // If I'm the callee, dismiss any ringing UI
+        if (isCurrentUserCallee) {
+          dispatchCall({ type: "REMOTE_DECLINE", reason: "timeout" });
+        }
       } else if (eventType === "call.end") {
         dispatchCall({ type: "END_REMOTE" });
       }

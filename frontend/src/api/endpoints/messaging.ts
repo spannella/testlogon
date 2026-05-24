@@ -283,6 +283,12 @@ export const endCall = (callId: string, body?: { reason?: string; idempotency_ke
     ...(body?.idempotency_key ? { idempotency_key: body.idempotency_key } : {}),
   });
 
+export const timeoutCall = (callId: string, body?: { reason?: string; idempotency_key?: string }) =>
+  api.post<CallInviteResp>(`/messages/calls/${callId}/timeout`, {
+    ...(body?.reason ? { reason: body.reason } : {}),
+    ...(body?.idempotency_key ? { idempotency_key: body.idempotency_key } : {}),
+  });
+
 const uploadToPresignedUrl = async (uploadUrl: string, file: File, contentType: string) => {
   const resp = await fetch(uploadUrl, {
     method: "PUT",

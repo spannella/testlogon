@@ -114,6 +114,7 @@ export function useMessagingStream(enabled = true) {
       "call.accept",
       "call.decline",
       "call.end",
+      "call.missed",
       "webrtc.offer",
       "webrtc.answer",
       "webrtc.ice_candidate",

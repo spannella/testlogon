@@ -19,6 +19,7 @@ import {
   UsersRound,
   MonitorSmartphone,
   Radio,
+  Video,
   Scale,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -49,6 +50,7 @@ const MORE_LINKS = [
   { label: "Billing", path: "/billing", icon: CreditCard },
   { label: "Calendar", path: "/calendar", icon: CalendarDays },
   { label: "Signing", path: "/signing", icon: FilePen },
+  { label: "Videos", path: "/videos", icon: Video },
   { label: "Broadcast", path: "/broadcast", icon: Radio },
   { label: "Profile", path: "/profile", icon: User },
   { label: "Security", path: "/security", icon: Shield },

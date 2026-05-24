@@ -993,6 +993,7 @@ class Settings:
     messaging_webrtc_turn_urls: str = os.environ.get("MESSAGING_WEBRTC_TURN_URLS", "")
     messaging_webrtc_turn_secret: str = os.environ.get("MESSAGING_WEBRTC_TURN_SECRET", "")
     messaging_webrtc_turn_ttl_seconds: int = int(os.environ.get("MESSAGING_WEBRTC_TURN_TTL_SECONDS", "600"))
+    messaging_webrtc_call_ringing_timeout_seconds: int = int(os.environ.get("MESSAGING_WEBRTC_CALL_RINGING_TIMEOUT_SECONDS", "30"))
     # Subscriptions
     subscriptions_table_name: str = os.environ.get("SUBSCRIPTIONS_TABLE_NAME", "subscriptions")
     questionnaire_table_name: str = os.environ.get("QUESTIONNAIRE_TABLE_NAME", "questionnaires")

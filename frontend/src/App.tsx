@@ -45,6 +45,8 @@ const SigningPage = lazy(() => import("@/pages/signing/SigningPage"));
 const QuestionnaireBuilderPage = lazy(() => import("@/pages/questionnaires/QuestionnaireBuilderPage"));
 const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/QuestionnaireRespondentPage"));
 const PublicUserProfilePage = lazy(() => import("@/pages/profile/PublicUserProfilePage"));
+const VideosPage = lazy(() => import("@/pages/videos/VideosPage"));
+const VideoPlayerPage = lazy(() => import("@/pages/videos/VideoPlayerPage"));
 const BroadcastPage = lazy(() => import("@/pages/broadcast/BroadcastPage"));
 const LivePlayer = lazy(() => import("@/pages/broadcast/LivePlayer"));
 
@@ -97,6 +99,8 @@ export default function App() {
           <Route path="tickets" element={<TicketsPage />} />
           <Route path="tickets/spaces" element={<TicketSpacesPage />} />
           <Route path="tickets/spaces/:spaceId" element={<TicketSpaceDetailPage />} />
+          <Route path="videos" element={<VideosPage />} />
+          <Route path="videos/:videoId" element={<VideoPlayerPage />} />
           {showBroadcastNavigation && <Route path="broadcast" element={<BroadcastPage />} />}
           {showVncRemoteDesktop && <Route path="remote-desktop" element={<RemoteDesktopPage />} />}
           <Route path="security" element={<SecurityPage />} />

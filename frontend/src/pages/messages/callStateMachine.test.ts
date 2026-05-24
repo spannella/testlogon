@@ -51,6 +51,125 @@ describe("callStateReducer", () => {
 
     expect(state.phase).toBe("failure");
   });
+
+  // ── ICE Restart transitions (CALL-008) ──────────────────────────────
+
+  it("CONNECTION_LOST from connected → reconnecting", () => {
+    let state = createInitialCallMachineState();
+    state = callStateReducer(state, { type: "START_OUTGOING", mode: "audio", peerName: "Peer" });
+    state = callStateReducer(state, { type: "OUTGOING_RINGING", callId: "c1" });
+    state = callStateReducer(state, { type: "REMOTE_ACCEPT" });
+    expect(state.phase).toBe("connected");
+
+    state = callStateReducer(state, { type: "CONNECTION_LOST", message: "ICE connection interrupted." });
+    expect(state.phase).toBe("reconnecting");
+    expect(state.reasonMessage).toBe("ICE connection interrupted.");
+  });
+
+  it("RECONNECT_ATTEMPT from reconnecting → outgoing_connecting with retryCount incremented", () => {
+    let state = createInitialCallMachineState();
+    state = callStateReducer(state, { type: "START_OUTGOING", mode: "audio", peerName: "Peer" });
+    state = callStateReducer(state, { type: "OUTGOING_RINGING", callId: "c1" });
+    state = callStateReducer(state, { type: "REMOTE_ACCEPT" });
+    state = callStateReducer(state, { type: "CONNECTION_LOST" });
+    expect(state.phase).toBe("reconnecting");
+    expect(state.retryCount).toBe(0);
+
+    state = callStateReducer(state, { type: "RECONNECT_ATTEMPT" });
+    expect(state.phase).toBe("outgoing_connecting");
+    expect(state.retryCount).toBe(1);
+  });
+
+  it("RECONNECT_ATTEMPT when retryCount >= maxRetries → failure", () => {
+    let state = createInitialCallMachineState();
+    state = callStateReducer(state, { type: "START_OUTGOING", mode: "audio", peerName: "Peer" });
+    state = callStateReducer(state, { type: "OUTGOING_RINGING", callId: "c1" });
+    state = callStateReducer(state, { type: "REMOTE_ACCEPT" });
+
+    // First reconnect cycle
+    state = callStateReducer(state, { type: "CONNECTION_LOST" });
+    state = callStateReducer(state, { type: "RECONNECT_ATTEMPT" }); // retryCount = 1
+    // Second reconnect cycle
+    state = callStateReducer(state, { type: "CONNECTION_LOST" });
+    state = callStateReducer(state, { type: "RECONNECT_ATTEMPT" }); // retryCount = 2
+    // Third attempt should fail (maxRetries defaults to 2)
+    state = callStateReducer(state, { type: "CONNECTION_LOST" });
+    state = callStateReducer(state, { type: "RECONNECT_ATTEMPT" });
+    expect(state.phase).toBe("failure");
+    expect(state.reasonMessage).toBe("Call failed to reconnect.");
+  });
+
+  it("CONNECT from outgoing_connecting → connected resets retryCount to 0", () => {
+    let state = createInitialCallMachineState();
+    state = callStateReducer(state, { type: "START_OUTGOING", mode: "audio", peerName: "Peer" });
+    state = callStateReducer(state, { type: "OUTGOING_RINGING", callId: "c1" });
+    state = callStateReducer(state, { type: "REMOTE_ACCEPT" });
+    state = callStateReducer(state, { type: "CONNECTION_LOST" });
+    state = callStateReducer(state, { type: "RECONNECT_ATTEMPT" }); // retryCount = 1
+    expect(state.retryCount).toBe(1);
+
+    state = callStateReducer(state, { type: "CONNECT" });
+    expect(state.phase).toBe("connected");
+    expect(state.retryCount).toBe(0);
+  });
+
+  it("NETWORK_OFFLINE from connected → reconnecting", () => {
+    let state = createInitialCallMachineState();
+    state = callStateReducer(state, { type: "START_OUTGOING", mode: "audio", peerName: "Peer" });
+    state = callStateReducer(state, { type: "OUTGOING_RINGING", callId: "c1" });
+    state = callStateReducer(state, { type: "REMOTE_ACCEPT" });
+    expect(state.phase).toBe("connected");
+
+    state = callStateReducer(state, { type: "NETWORK_OFFLINE" });
+    expect(state.phase).toBe("reconnecting");
+    expect(state.isOnline).toBe(false);
+  });
+
+  it("NETWORK_ONLINE from reconnecting → outgoing_connecting without incrementing retryCount", () => {
+    let state = createInitialCallMachineState();
+    state = callStateReducer(state, { type: "START_OUTGOING", mode: "audio", peerName: "Peer" });
+    state = callStateReducer(state, { type: "OUTGOING_RINGING", callId: "c1" });
+    state = callStateReducer(state, { type: "REMOTE_ACCEPT" });
+    state = callStateReducer(state, { type: "NETWORK_OFFLINE" });
+    expect(state.phase).toBe("reconnecting");
+    const retryBefore = state.retryCount;
+
+    state = callStateReducer(state, { type: "NETWORK_ONLINE" });
+    expect(state.phase).toBe("outgoing_connecting");
+    expect(state.retryCount).toBe(retryBefore); // no increment
+    expect(state.isOnline).toBe(true);
+  });
+
+  it("TAB_HIDDEN while reconnecting blocks RECONNECT_ATTEMPT", () => {
+    let state = createInitialCallMachineState();
+    state = callStateReducer(state, { type: "START_OUTGOING", mode: "audio", peerName: "Peer" });
+    state = callStateReducer(state, { type: "OUTGOING_RINGING", callId: "c1" });
+    state = callStateReducer(state, { type: "REMOTE_ACCEPT" });
+    state = callStateReducer(state, { type: "CONNECTION_LOST" });
+    state = callStateReducer(state, { type: "TAB_HIDDEN" });
+    expect(state.isTabVisible).toBe(false);
+
+    state = callStateReducer(state, { type: "RECONNECT_ATTEMPT" });
+    // Should transition to failure because tab is not visible
+    expect(state.phase).toBe("failure");
+  });
+
+  it("TAB_VISIBLE while reconnecting auto-transitions to outgoing_connecting", () => {
+    let state = createInitialCallMachineState();
+    state = callStateReducer(state, { type: "START_OUTGOING", mode: "audio", peerName: "Peer" });
+    state = callStateReducer(state, { type: "OUTGOING_RINGING", callId: "c1" });
+    state = callStateReducer(state, { type: "REMOTE_ACCEPT" });
+    state = callStateReducer(state, { type: "TAB_HIDDEN" });
+    state = callStateReducer(state, { type: "NETWORK_OFFLINE" });
+    expect(state.phase).toBe("reconnecting");
+
+    state = callStateReducer(state, { type: "NETWORK_ONLINE" });
+    // Still reconnecting because tab is hidden
+    expect(state.phase).toBe("reconnecting");
+
+    state = callStateReducer(state, { type: "TAB_VISIBLE" });
+    expect(state.phase).toBe("outgoing_connecting");
+  });
 });
 
 describe("teardownCallResources", () => {

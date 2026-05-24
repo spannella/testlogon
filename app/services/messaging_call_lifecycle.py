@@ -22,7 +22,7 @@ from app.services.messaging_call_sessions import (
 
 TERMINAL_STATES = {"declined", "busy", "missed", "ended", "failed", "canceled"}
 ALLOWED_TRANSITIONS = {
-    "invited": {"accepted", "declined", "busy", "canceled", "failed"},
+    "invited": {"accepted", "declined", "busy", "canceled", "failed", "missed"},
     "accepted": {"connected", "ended", "failed", "canceled"},
     "connected": {"ended", "failed"},
 }
@@ -383,6 +383,58 @@ def end_call(
     return updated, event
 
 
+def timeout_call(
+    *,
+    call_id: str,
+    actor_user_id: str,
+    reason: str = "no_answer",
+    idempotency_key: Optional[str] = None,
+    timeline_emitter: Callable[..., dict[str, object]] = emit_call_timeline_event,
+) -> tuple[CallSessionRecord, LifecycleEvent]:
+    """Transition an invited call to missed (ringing timeout)."""
+    record = get_call_session(call_id)
+    if not record:
+        raise CallLifecycleError("call_not_found", "call session not found")
+    deduped = _dedupe_if_retried(record=record, idempotency_key=idempotency_key, action="timeout_call")
+    if deduped:
+        return deduped
+    # Only the caller or "system" (server background job) can timeout a call
+    if actor_user_id not in {record.caller_user_id, "system"}:
+        raise CallLifecycleError("forbidden", "only caller or system can timeout a call")
+
+    _check_transition(record.state, "missed")
+    event = _build_event(
+        record=record,
+        actor_user_id=actor_user_id,
+        event_type="call.missed",
+        from_state=record.state,
+        to_state="missed",
+        reason=reason,
+    )
+    updated = update_call_session_state(
+        call_id=call_id,
+        state="missed",  # type: ignore[arg-type]
+        end_reason=reason,
+        end_ts=int(now_ts()),
+        lifecycle_event=event.__dict__,
+        idempotency_entry=(idempotency_key, _idempotent_entry(action="timeout_call", event=event))
+        if idempotency_key
+        else None,
+    )
+    if not updated:
+        raise CallLifecycleError("call_not_found", "call session not found during update")
+    timeline_emitter(
+        call_id=updated.call_id,
+        conversation_id=updated.conversation_id,
+        actor_user_id=actor_user_id,
+        event_type=event.event_type,
+        call_state=event.to_state,
+        reason=event.reason,
+        event_ts=event.event_ts,
+    )
+    return updated, event
+
+
 __all__ = [
     "CallLifecycleError",
     "LifecycleEvent",
@@ -390,4 +442,5 @@ __all__ = [
     "accept_invite",
     "decline_invite",
     "end_call",
+    "timeout_call",
 ]

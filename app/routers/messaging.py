@@ -11727,6 +11727,38 @@ def _deliver_scheduled_message(item: dict) -> None:
     logger.info("Delivered scheduled message %s in conversation %s", message_id, conversation_id)
 
 
+async def _expire_stale_invites() -> None:
+    """Server-side backstop: transition invited calls to missed after timeout."""
+    from app.services.messaging_call_lifecycle import CallLifecycleError, timeout_call
+    from app.services.messaging_call_sessions import _table as _call_sessions_table
+
+    timeout_seconds = S.messaging_webrtc_call_ringing_timeout_seconds
+    cutoff_ts = int(now_ts()) - timeout_seconds
+    try:
+        tbl = _call_sessions_table()
+        resp = tbl.scan(
+            FilterExpression=Attr("state").eq("invited") & Attr("start_ts").lte(cutoff_ts),
+        )
+        for item in resp.get("Items", []):
+            call_id = str(item.get("call_id") or "")
+            if not call_id:
+                continue
+            try:
+                timeout_call(
+                    call_id=call_id,
+                    actor_user_id="system",
+                    reason="server_timeout",
+                )
+                logger.info("Server timeout expired stale invite call_id=%s", call_id)
+            except CallLifecycleError:
+                # Already transitioned or other expected error — skip
+                pass
+            except Exception as exc:
+                logger.error("Failed to timeout stale invite %s: %s", call_id, exc)
+    except Exception as exc:
+        logger.error("Expire stale invites loop error: %s", exc)
+
+
 async def _messaging_background_loop() -> None:
     """Background task: deliver due scheduled messages and expire timed-out messages."""
     while True:
@@ -11787,6 +11819,9 @@ async def _messaging_background_loop() -> None:
                     )
         except Exception as exc:
             logger.error("Expiry loop error: %s", exc)
+
+        # C) Expire stale call invites (server-side ringing timeout backstop)
+        await _expire_stale_invites()
 
         await asyncio.sleep(30)
 
@@ -12254,6 +12289,38 @@ async def end_call_endpoint(
 
     try:
         record, event = end_call(
+            call_id=call_id,
+            actor_user_id=user_id,
+            reason=body.reason,
+            idempotency_key=body.idempotency_key,
+        )
+        return CallActionOut(
+            call_id=record.call_id,
+            conversation_id=record.conversation_id,
+            state=record.state,
+            from_state=event.from_state,
+            reason=event.reason,
+            event_ts=event.event_ts,
+        )
+    except CallLifecycleError as exc:
+        raise _call_error_to_http(exc)
+
+
+class CallTimeoutIn(BaseModel):
+    reason: str = "no_answer"
+    idempotency_key: Optional[str] = None
+
+
+@router.post("/messages/calls/{call_id}/timeout", response_model=CallActionOut)
+async def timeout_call_endpoint(
+    call_id: str,
+    body: CallTimeoutIn = CallTimeoutIn(),
+    user_id: str = Depends(get_messaging_user_id),
+):
+    from app.services.messaging_call_lifecycle import CallLifecycleError, timeout_call
+
+    try:
+        record, event = timeout_call(
             call_id=call_id,
             actor_user_id=user_id,
             reason=body.reason,

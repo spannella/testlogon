@@ -2,6 +2,11 @@
  * useRtcPeerConnection — manages the full RTCPeerConnection lifecycle for
  * direct (1-on-1) calls. Bridges the call state machine to real WebRTC
  * offer/answer exchange, ICE candidate trickle, and media stream management.
+ *
+ * ICE Restart (CALL-008): When the state machine enters "outgoing_connecting"
+ * with retryCount > 0, performIceRestart() is invoked to generate a fresh
+ * offer with { iceRestart: true }, optionally refreshing TURN credentials.
+ * A 3-second grace period prevents reacting to transient ICE blips.
  */
 import * as React from "react";
 import type { CallRole } from "@/pages/messages/callStateMachine";
@@ -12,6 +17,9 @@ import type { DirectCallMode, SignalingPayload } from "@/api/endpoints/messaging
 import { fetchTurnCredentials, sendSignalingEvent } from "@/api/endpoints/messaging";
 import { acquireLocalMedia, createIceCandidateBuffer, generateNonce, generateEventId } from "@/lib/webrtc";
 
+/** Grace period (ms) before escalating ICE "disconnected" to CONNECTION_LOST. */
+const ICE_DISCONNECT_GRACE_MS = 3000;
+
 export interface UseRtcPeerConnectionParams {
   callId: string | undefined;
   conversationId: string;
@@ -21,6 +29,7 @@ export interface UseRtcPeerConnectionParams {
   peerId: string;
   userId: string;
   enabled: boolean;
+  retryCount?: number;
   onConnect: () => void;
   onConnectionLost: (msg?: string) => void;
   onFail: (msg?: string) => void;
@@ -31,6 +40,7 @@ export interface UseRtcPeerConnectionReturn {
   remoteStream: MediaStream | null;
   resources: CallRuntimeResources | null;
   connectionState: RTCPeerConnectionState | null;
+  performIceRestart: () => Promise<void>;
 }
 
 /**
@@ -66,6 +76,7 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
     peerId,
     userId,
     enabled,
+    retryCount = 0,
     onConnect,
     onConnectionLost,
     onFail,
@@ -87,6 +98,7 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
   // Track whether we've already set up the PC for this call to avoid double-setup
   const setupCallIdRef = React.useRef<string | null>(null);
   const pcRef = React.useRef<RTCPeerConnection | null>(null);
+  const iceDisconnectTimerRef = React.useRef<number | null>(null);
 
   const activate = enabled && !!callId && shouldActivate(phase, role);
 
@@ -189,37 +201,51 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
       // 6. ICE candidate buffer (for candidates received before remote desc is set)
       const iceBuffer = createIceCandidateBuffer();
 
-      // 7. Connection state monitoring
+      // 7. Connection state monitoring (RTCPeerConnection.connectionState)
       pc.onconnectionstatechange = () => {
         setConnectionState(pc.connectionState);
-        switch (pc.connectionState) {
-          case "connected":
-            onConnectRef.current?.();
-            break;
-          case "disconnected":
-            onConnectionLostRef.current?.("Peer connection interrupted.");
-            break;
-          case "failed":
-            onConnectionLostRef.current?.("Peer connection failed.");
-            break;
-          case "closed":
-            // No-op; teardown handles this
-            break;
-        }
+        // connectionState mirrors iceConnectionState in most browsers but is
+        // considered the canonical aggregate. Keep this lightweight — detailed
+        // ICE handling is in oniceconnectionstatechange below.
       };
 
+      // 8. ICE connection state monitoring with grace period (CALL-008)
+      //    "disconnected" gets a 3-second grace period before escalating —
+      //    transient blips (e.g. DTLS re-key, brief route change) resolve on
+      //    their own within this window.
       pc.oniceconnectionstatechange = () => {
-        if (pc.iceConnectionState === "failed") {
-          // Attempt ICE restart
-          try {
-            pc.restartIce();
-          } catch {
-            // Ignore if connection is already closed
+        const state = pc.iceConnectionState;
+
+        if (state === "disconnected") {
+          // Start grace period
+          if (iceDisconnectTimerRef.current != null) {
+            window.clearTimeout(iceDisconnectTimerRef.current);
           }
+          iceDisconnectTimerRef.current = window.setTimeout(() => {
+            iceDisconnectTimerRef.current = null;
+            // Re-check — might have recovered during grace period
+            if (pc.iceConnectionState === "disconnected") {
+              onConnectionLostRef.current?.("ICE connection interrupted.");
+            }
+          }, ICE_DISCONNECT_GRACE_MS);
+        } else if (state === "failed") {
+          // Immediate escalation — no grace period
+          if (iceDisconnectTimerRef.current != null) {
+            window.clearTimeout(iceDisconnectTimerRef.current);
+            iceDisconnectTimerRef.current = null;
+          }
+          onConnectionLostRef.current?.("ICE connection failed.");
+        } else if (state === "connected" || state === "completed") {
+          // Connection recovered — cancel any pending grace timer and notify success
+          if (iceDisconnectTimerRef.current != null) {
+            window.clearTimeout(iceDisconnectTimerRef.current);
+            iceDisconnectTimerRef.current = null;
+          }
+          onConnectRef.current?.();
         }
       };
 
-      // 8. ICE candidate trickle (outbound)
+      // 9. ICE candidate trickle (outbound)
       pc.onicecandidate = (event) => {
         if (event.candidate && callId) {
           const signalingData: SignalingPayload = {
@@ -242,7 +268,7 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
         }
       };
 
-      // 9. Listen for incoming signaling events via SSE
+      // 10. Listen for incoming signaling events via SSE
       const signalingHandler = async (event: Event) => {
         const custom = event as CustomEvent<Record<string, unknown>>;
         const detail = custom.detail ?? {};
@@ -335,7 +361,7 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
       detachListeners.push(() => { pc.onconnectionstatechange = null; });
       detachListeners.push(() => { pc.oniceconnectionstatechange = null; });
 
-      // 10. If caller, create and send offer immediately
+      // 11. If caller, create and send offer immediately
       if (role === "caller") {
         try {
           const offer = await pc.createOffer();
@@ -361,7 +387,7 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
         }
       }
 
-      // 11. Store resources
+      // 12. Store resources
       const callResources: CallRuntimeResources = {
         peerConnection: pc,
         localStream: localMediaStream,
@@ -383,6 +409,67 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activate, callId, role]);
 
+  // ── ICE Restart (CALL-008) ──────────────────────────────────────────
+  //
+  // performIceRestart: creates a fresh offer with { iceRestart: true } and
+  // sends it via signaling. Optionally refreshes TURN credentials first.
+  const performIceRestart = React.useCallback(async () => {
+    const pc = pcRef.current;
+    if (!pc || pc.connectionState === "closed" || !callId) return;
+
+    // Optionally refresh TURN credentials (allocation may have expired)
+    try {
+      const turnResp = await fetchTurnCredentials(callId);
+      const iceServers: RTCIceServer[] = turnResp.ice_servers.map((s) => ({
+        urls: s.urls,
+        username: s.username,
+        credential: s.credential,
+      }));
+      if (iceServers.length > 0) {
+        pc.setConfiguration({ iceServers });
+      }
+    } catch {
+      // TURN refresh failed — continue with existing credentials
+    }
+
+    // Create offer with iceRestart flag
+    try {
+      const offer = await pc.createOffer({ iceRestart: true });
+      await pc.setLocalDescription(offer);
+
+      const offerPayload: SignalingPayload = {
+        type: "webrtc.offer",
+        event_id: generateEventId("offer"),
+        conversation_id: conversationId,
+        recipient_user_id: peerId,
+        nonce: generateNonce(),
+        sent_at: Math.floor(Date.now() / 1000),
+        payload: {
+          sdp: offer.sdp,
+          type: offer.type,
+        },
+      };
+      await sendSignalingEvent(callId, offerPayload);
+    } catch (err) {
+      console.warn("[useRtcPeerConnection] ICE restart offer failed:", err);
+    }
+  }, [callId, conversationId, peerId]);
+
+  // Trigger ICE restart when state machine moves to outgoing_connecting after
+  // a reconnect attempt (retryCount > 0).
+  React.useEffect(() => {
+    if (phase !== "outgoing_connecting" || retryCount === 0) return;
+    performIceRestart();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, retryCount]);
+
+  // Expose performIceRestart on window for E2E test inspection
+  React.useEffect(() => {
+    if (import.meta.env.DEV && pcRef.current) {
+      (window as unknown as Record<string, unknown>).__performIceRestart = performIceRestart;
+    }
+  }, [performIceRestart]);
+
   // Teardown when call ends or hook is disabled
   React.useEffect(() => {
     if (!enabled || !callId) {
@@ -396,6 +483,11 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
         setupCallIdRef.current = null;
         pcRef.current = null;
       }
+      // Clear any pending ICE disconnect timer
+      if (iceDisconnectTimerRef.current != null) {
+        window.clearTimeout(iceDisconnectTimerRef.current);
+        iceDisconnectTimerRef.current = null;
+      }
     }
   }, [enabled, callId, resources]);
 
@@ -406,10 +498,21 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
     }
   }, [callId]);
 
+  // Cleanup ICE disconnect timer on unmount
+  React.useEffect(() => {
+    return () => {
+      if (iceDisconnectTimerRef.current != null) {
+        window.clearTimeout(iceDisconnectTimerRef.current);
+        iceDisconnectTimerRef.current = null;
+      }
+    };
+  }, []);
+
   return {
     localStream,
     remoteStream,
     resources,
     connectionState,
+    performIceRestart,
   };
 }

@@ -75,6 +75,7 @@ import {
   LayoutDashboard,
   MessageSquare,
   Radio,
+  Video,
   Rss,
   Store,
   ShoppingCart,
@@ -128,6 +129,7 @@ const MOBILE_NAV_GROUPS = [
   {
     title: "Media",
     items: [
+      { label: "Videos", path: "/videos", icon: Video },
       { label: "Broadcast", path: "/broadcast", icon: Radio },
     ],
   },

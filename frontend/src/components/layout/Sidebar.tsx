@@ -24,6 +24,7 @@ import {
   PanelLeft,
   MonitorSmartphone,
   Radio,
+  Video,
   Scale,
   Wrench,
 } from "lucide-react";
@@ -85,6 +86,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     title: "Media",
     items: [
+      { label: "Videos", path: "/videos", icon: <Video className="h-5 w-5" /> },
       { label: "Broadcast", path: "/broadcast", icon: <Radio className="h-5 w-5" /> },
     ],
   },

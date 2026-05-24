@@ -31,6 +31,8 @@ def _preview_for_event(*, event_type: str, call_state: str, reason: Optional[str
         if reason:
             return f"Call ended ({reason})"
         return "Call ended"
+    if event_type == "call.missed":
+        return "Missed call"
     return f"Call event: {call_state}"
 
 
