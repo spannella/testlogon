@@ -474,7 +474,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const rtcEnabled = callMachine.phase !== "idle" &&
     !["declined", "busy", "timeout", "ended", "failure"].includes(callMachine.phase);
 
-  const { resources: rtcResources } = useRtcPeerConnection({
+  const { resources: rtcResources, localStream: rtcLocalStream, remoteStream: rtcRemoteStream } = useRtcPeerConnection({
     callId: callMachine.callId,
     conversationId: convoId,
     role: callMachine.role,
@@ -1015,6 +1015,8 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
       <CallSessionOverlay
         session={overlaySession}
         isBusy={callActionMutation.isPending}
+        localStream={rtcLocalStream ?? mediaCapture.stream ?? null}
+        remoteStream={rtcRemoteStream ?? null}
         onAccept={async () => {
           if (!callMachine.callId) return;
 

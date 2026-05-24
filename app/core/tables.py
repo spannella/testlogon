@@ -74,6 +74,8 @@ class Tables:
     kyc_cases: Any
     video_metadata: Any
     transcode_jobs: Any
+    broadcast_viewers: Any
+    broadcast_health_snapshots: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -142,4 +144,6 @@ T = Tables(
     kyc_cases=ddb.Table(S.kyc_cases_table_name),
     video_metadata=ddb.Table(S.video_metadata_table_name),
     transcode_jobs=ddb.Table(S.transcode_jobs_table_name),
+    broadcast_viewers=ddb.Table(S.broadcast_viewers_table_name),
+    broadcast_health_snapshots=ddb.Table(S.broadcast_health_snapshots_table_name),
 )

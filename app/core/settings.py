@@ -472,6 +472,10 @@ class Settings:
     broadcast_cloudfront_response_headers_policy_id: str = os.environ.get("BROADCAST_CLOUDFRONT_RESPONSE_HEADERS_POLICY_ID", "managed-security-headers")
     broadcast_cloudfront_waf_acl_arn: str = os.environ.get("BROADCAST_CLOUDFRONT_WAF_ACL_ARN", "")
     broadcast_cloudfront_geo_allowlist: str = os.environ.get("BROADCAST_CLOUDFRONT_GEO_ALLOWLIST", "")
+    broadcast_viewers_table_name: str = os.environ.get("DDB_BROADCAST_VIEWERS", "BroadcastViewers")
+    broadcast_health_snapshots_table_name: str = os.environ.get("DDB_BROADCAST_HEALTH_SNAPSHOTS", "BroadcastHealthSnapshots")
+    broadcast_viewer_ttl_seconds: int = int(os.environ.get("BROADCAST_VIEWER_TTL_SECONDS", "60"))
+    broadcast_health_poll_interval_seconds: int = int(os.environ.get("BROADCAST_HEALTH_POLL_INTERVAL_SECONDS", "10"))
     broadcast_reconciler_enabled: bool = os.environ.get("BROADCAST_RECONCILER_ENABLED", "1") not in ("0", "false", "False")
     broadcast_reconciler_interval_seconds: int = int(os.environ.get("BROADCAST_RECONCILER_INTERVAL_SECONDS", "30"))
     broadcast_drift_sla_seconds: int = int(os.environ.get("BROADCAST_DRIFT_SLA_SECONDS", "120"))
@@ -1021,6 +1025,14 @@ class Settings:
     transcode_output_prefix: str = os.environ.get("TRANSCODE_OUTPUT_PREFIX", "tenants")
     transcode_scratch_dir: str = os.environ.get("TRANSCODE_SCRATCH_DIR", "tmp/transcode-scratch")
     transcode_progress_update_interval_seconds: int = int(os.environ.get("TRANSCODE_PROGRESS_UPDATE_INTERVAL", "5"))
+    transcode_rendition_timeout_seconds: int = int(os.environ.get("TRANSCODE_RENDITION_TIMEOUT_SECONDS", "1800"))
+
+    # FFmpeg executor (VOD-004)
+    ffmpeg_max_threads_per_job: int = int(os.environ.get("FFMPEG_MAX_THREADS_PER_JOB", "0"))  # 0 = auto
+    ffmpeg_max_memory_gb: int = int(os.environ.get("FFMPEG_MAX_MEMORY_GB", "8"))
+    ffmpeg_grace_kill_seconds: int = int(os.environ.get("FFMPEG_GRACE_KILL_SECONDS", "5"))
+    ffmpeg_min_free_disk_gb: float = float(os.environ.get("FFMPEG_MIN_FREE_DISK_GB", "5.0"))
+    ffmpeg_binary_path: str = os.environ.get("FFMPEG_BINARY_PATH", "ffmpeg")
 
     # Google Calendar integration hardening/tuning
     google_calendar_oauth_require_refresh_token: bool = os.environ.get("GOOGLE_CALENDAR_OAUTH_REQUIRE_REFRESH_TOKEN", "true").lower() in ("1", "true", "yes", "on")

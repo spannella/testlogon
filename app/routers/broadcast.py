@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Annotated, List, Optional
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services.broadcast_store import (
@@ -23,6 +26,18 @@ from app.services.broadcast_orchestrator import (
 )
 from app.services.broadcast_cloudfront import validate_cloudfront_token
 from app.services.broadcast_playback import mint_local_playback_url
+from app.services.broadcast_sse import broadcast_sse_subscribe, broadcast_sse_unsubscribe
+from app.services.broadcast_viewers import (
+    register_viewer,
+    touch_viewer,
+    unregister_viewer,
+    get_viewer_count as _get_viewer_count,
+)
+from app.services.broadcast_health import (
+    store_health_snapshot,
+    get_latest_health,
+    get_health_history,
+)
 from app.services.sessions import require_ui_session
 from app.metrics import record_broadcast_output_error
 
@@ -388,3 +403,174 @@ def query_audit_route(
         limit=limit,
     )
     return BroadcastAuditListOut(items=[BroadcastAuditOut(**i.model_dump()) for i in items])
+
+
+# ─── Viewer Count Endpoints ─────────────────────────────────────────
+
+
+class ViewerJoinOut(BaseModel):
+    viewer_id: str
+    session_id: str
+    viewer_count: int
+
+
+class ViewerHeartbeatOut(BaseModel):
+    ok: bool
+    viewer_count: int
+
+
+class ViewerCountOut(BaseModel):
+    session_id: str
+    viewer_count: int
+
+
+@router.post("/sessions/{session_id}/viewers/join", response_model=ViewerJoinOut)
+def viewer_join_route(session_id: str, ctx: dict = Depends(_ctx)):
+    """Register as a viewer. Called when playback begins."""
+    _ = get_session(session_id)  # 404 if session doesn't exist
+    result = register_viewer(session_id, ctx["user_sub"])
+    return ViewerJoinOut(**result)
+
+
+@router.post("/sessions/{session_id}/viewers/heartbeat", response_model=ViewerHeartbeatOut)
+def viewer_heartbeat_route(
+    session_id: str,
+    viewer_id: str = Query(...),
+    ctx: dict = Depends(_ctx),
+):
+    """Heartbeat to keep viewer session alive. Call every 30s."""
+    _ = ctx
+    count = touch_viewer(session_id, viewer_id)
+    return ViewerHeartbeatOut(ok=True, viewer_count=count)
+
+
+@router.post("/sessions/{session_id}/viewers/leave")
+def viewer_leave_route(
+    session_id: str,
+    viewer_id: str = Query(...),
+    ctx: dict = Depends(_ctx),
+):
+    """Explicit leave signal. Called on page unload via sendBeacon."""
+    _ = ctx
+    count = unregister_viewer(session_id, viewer_id)
+    return {"ok": True, "viewer_count": count}
+
+
+@router.get("/sessions/{session_id}/viewers/count", response_model=ViewerCountOut)
+def viewer_count_route(session_id: str, ctx: dict = Depends(_ctx)):
+    """Get current viewer count for a session."""
+    _ = ctx
+    count = _get_viewer_count(session_id)
+    return ViewerCountOut(session_id=session_id, viewer_count=count)
+
+
+# ─── Health Metrics Endpoints ────────────────────────────────────────
+
+
+class BroadcastHealthReportIn(BaseModel):
+    ingest_bitrate_kbps: int = Field(ge=0, le=100_000)
+    ingest_framerate: float = Field(ge=0, le=240)
+    dropped_frames: int = Field(ge=0)
+    dropped_frames_pct: float = Field(ge=0, le=100)
+    output_errors: int = Field(ge=0, default=0)
+    input_loss_seconds: float = Field(ge=0, default=0)
+
+
+class BroadcastHealthOut(BaseModel):
+    session_id: str
+    viewer_count: int
+    ingest_bitrate_kbps: int
+    ingest_framerate: float
+    dropped_frames: int
+    dropped_frames_pct: float
+    connection_quality: str
+    output_errors: int
+    input_loss_seconds: float
+    updated_at: int
+
+
+class BroadcastHealthHistoryOut(BaseModel):
+    session_id: str
+    snapshots: List[BroadcastHealthOut] = Field(default_factory=list)
+
+
+@router.post("/sessions/{session_id}/health/report", response_model=BroadcastHealthOut)
+def report_session_health_route(
+    session_id: str,
+    body: BroadcastHealthReportIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Accept health metrics from the broadcaster client or ingest probe."""
+    _ = ctx
+    session = get_session(session_id)
+    if session.status != "live":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "BROADCAST_NOT_LIVE", "detail": "session is not live"},
+        )
+    result = store_health_snapshot(
+        session_id,
+        ingest_bitrate_kbps=body.ingest_bitrate_kbps,
+        ingest_framerate=body.ingest_framerate,
+        dropped_frames=body.dropped_frames,
+        dropped_frames_pct=body.dropped_frames_pct,
+        output_errors=body.output_errors,
+        input_loss_seconds=body.input_loss_seconds,
+    )
+    return BroadcastHealthOut(**result)
+
+
+@router.get("/sessions/{session_id}/health", response_model=BroadcastHealthOut)
+def get_session_health_route(session_id: str, ctx: dict = Depends(_ctx)):
+    """Get current health metrics for a live session."""
+    _ = ctx
+    latest = get_latest_health(session_id)
+    if latest is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "BROADCAST_NO_HEALTH_DATA", "detail": "no health data for session"},
+        )
+    return BroadcastHealthOut(**latest)
+
+
+@router.get("/sessions/{session_id}/health/history", response_model=BroadcastHealthHistoryOut)
+def get_session_health_history_route(
+    session_id: str,
+    from_ts: Optional[int] = Query(default=None),
+    to_ts: Optional[int] = Query(default=None),
+    limit: int = Query(default=60, ge=1, le=360),
+    ctx: dict = Depends(_ctx),
+):
+    """Get health metric history (for charts)."""
+    _ = ctx
+    snapshots = get_health_history(session_id, from_ts=from_ts, to_ts=to_ts, limit=limit)
+    return BroadcastHealthHistoryOut(
+        session_id=session_id,
+        snapshots=[BroadcastHealthOut(**s) for s in snapshots],
+    )
+
+
+# ─── SSE Stream Endpoint ────────────────────────────────────────────
+
+
+@router.get("/sessions/{session_id}/stream")
+async def broadcast_event_stream_route(session_id: str, ctx: dict = Depends(_ctx)):
+    """SSE stream for real-time broadcast events (viewer count, health updates)."""
+    _ = ctx
+    _ = get_session(session_id)  # 404 if session doesn't exist
+    q = broadcast_sse_subscribe(session_id)
+
+    async def gen():
+        try:
+            yield "event: hello\ndata: {}\n\n"
+            while True:
+                try:
+                    item = await asyncio.wait_for(q.get(), timeout=15.0)
+                    event_type = item.pop("_type", "update")
+                    yield f"event: {event_type}\ndata: {json.dumps(item, separators=(',', ':'), default=str)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        finally:
+            broadcast_sse_unsubscribe(session_id, q)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")

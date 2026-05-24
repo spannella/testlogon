@@ -129,3 +129,79 @@ export const mintPlaybackUrl = (id: string) =>
 
 export const getAuditLog = (params?: { actor?: string; limit?: number }) =>
   api.get<AuditListResponse>("/broadcast/admin/audit", params as Record<string, string>);
+
+// ─── Viewer Count API ──────────────────────────────────────────────
+
+export interface ViewerJoinResponse {
+  viewer_id: string;
+  session_id: string;
+  viewer_count: number;
+}
+
+export interface ViewerHeartbeatResponse {
+  ok: boolean;
+  viewer_count: number;
+}
+
+export interface ViewerCountResponse {
+  session_id: string;
+  viewer_count: number;
+}
+
+export const viewerJoin = (sessionId: string) =>
+  api.post<ViewerJoinResponse>(`/broadcast/sessions/${sessionId}/viewers/join`);
+
+export const viewerHeartbeat = (sessionId: string, viewerId: string) =>
+  api.post<ViewerHeartbeatResponse>(
+    `/broadcast/sessions/${sessionId}/viewers/heartbeat`,
+    null,
+    { params: { viewer_id: viewerId } } as never,
+  );
+
+export const viewerLeave = (sessionId: string, viewerId: string) =>
+  api.post<{ ok: boolean; viewer_count: number }>(
+    `/broadcast/sessions/${sessionId}/viewers/leave`,
+    null,
+    { params: { viewer_id: viewerId } } as never,
+  );
+
+export const getViewerCount = (sessionId: string) =>
+  api.get<ViewerCountResponse>(`/broadcast/sessions/${sessionId}/viewers/count`);
+
+// ─── Health Metrics API ────────────────────────────────────────────
+
+export interface BroadcastHealthReport {
+  ingest_bitrate_kbps: number;
+  ingest_framerate: number;
+  dropped_frames: number;
+  dropped_frames_pct: number;
+  output_errors?: number;
+  input_loss_seconds?: number;
+}
+
+export interface BroadcastHealthResponse {
+  session_id: string;
+  viewer_count: number;
+  ingest_bitrate_kbps: number;
+  ingest_framerate: number;
+  dropped_frames: number;
+  dropped_frames_pct: number;
+  connection_quality: string;
+  output_errors: number;
+  input_loss_seconds: number;
+  updated_at: number;
+}
+
+export interface BroadcastHealthHistoryResponse {
+  session_id: string;
+  snapshots: BroadcastHealthResponse[];
+}
+
+export const reportHealth = (sessionId: string, data: BroadcastHealthReport) =>
+  api.post<BroadcastHealthResponse>(`/broadcast/sessions/${sessionId}/health/report`, data);
+
+export const getHealth = (sessionId: string) =>
+  api.get<BroadcastHealthResponse>(`/broadcast/sessions/${sessionId}/health`);
+
+export const getHealthHistory = (sessionId: string, params?: { from_ts?: number; to_ts?: number; limit?: number }) =>
+  api.get<BroadcastHealthHistoryResponse>(`/broadcast/sessions/${sessionId}/health/history`, params as Record<string, string>);

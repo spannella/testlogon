@@ -154,10 +154,23 @@ async def _run_ffmpeg_for_rendition(
     scratch_dir: Path,
     rendition_idx: int,
     total_renditions: int,
+    cancel_event: Optional[asyncio.Event] = None,
 ) -> None:
-    """Run FFmpeg for a single rendition using asyncio subprocess."""
+    """Run FFmpeg for a single rendition using the VOD-004 executor."""
+    import time as _time
+
     from app.contracts.watermark_policy import WatermarkPolicy
     from app.services.ffmpeg_abr_pipeline import build_rendition_ffmpeg_args
+    from app.services.ffmpeg_executor import classify_error, execute_rendition
+    from app.services.ffmpeg_executor_types import (
+        NonRetryableError,
+        RenditionTimeoutError,
+        RetryableError,
+    )
+    from app.services.ffmpeg_watermark_lifecycle import (
+        patch_watermark_input,
+        prepare_watermark_asset,
+    )
 
     watermark_policy = WatermarkPolicy(**(watermark or {}))
     output_dir = scratch_dir / "output"
@@ -169,44 +182,52 @@ async def _run_ffmpeg_for_rendition(
         watermark_policy=watermark_policy,
     )
 
-    # Add progress output for tracking
-    # Insert -progress pipe:1 after -hide_banner
-    prog_args = list(args)
+    # Prepare watermark asset if needed
+    local_wm = await prepare_watermark_asset(watermark or {}, scratch_dir)
+    if local_wm:
+        args = patch_watermark_input(args, local_wm)
+
+    rendition_name = rendition.get("name", f"rendition_{rendition_idx}")
+
+    # Estimate expected duration (default 10 minutes if unknown)
+    expected_duration_us = int(rendition.get("expected_duration_us", 600_000_000))
+
+    # Throttled progress callback
+    last_db_write = 0.0
+
+    async def _on_progress(sample, overall_pct: int) -> None:
+        nonlocal last_db_write
+        now = _time.time()
+        if now - last_db_write >= S.transcode_progress_update_interval_seconds:
+            update_job_progress(
+                job_id,
+                progress_pct=overall_pct,
+                current_rendition=rendition_name,
+            )
+            last_db_write = now
+
     try:
-        idx = prog_args.index("-hide_banner")
-        prog_args.insert(idx + 1, "-progress")
-        prog_args.insert(idx + 2, "pipe:1")
-    except ValueError:
-        pass
+        result = await execute_rendition(
+            args=args,
+            rendition_name=rendition_name,
+            expected_duration_us=expected_duration_us,
+            timeout_seconds=S.transcode_rendition_timeout_seconds,
+            on_progress=_on_progress,
+            cancel_event=cancel_event,
+        )
+    except RenditionTimeoutError:
+        raise
+    except RetryableError:
+        raise
+    except NonRetryableError:
+        raise
 
-    proc = await asyncio.create_subprocess_exec(
-        *prog_args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    last_update = 0
-    if proc.stdout:
-        async for line in proc.stdout:
-            decoded = line.decode().strip()
-            if decoded.startswith("out_time_us="):
-                try:
-                    current_us = int(decoded.split("=")[1])
-                    # Rough progress estimate
-                    if current_us > 0 and now_ts() - last_update >= S.transcode_progress_update_interval_seconds:
-                        overall_pct = int(
-                            ((rendition_idx + 0.5) / max(total_renditions, 1)) * 100
-                        )
-                        update_job_progress(job_id, progress_pct=overall_pct)
-                        last_update = now_ts()
-                except (ValueError, IndexError):
-                    pass
-
-    await proc.wait()
-    if proc.returncode != 0:
-        stderr_bytes = await proc.stderr.read() if proc.stderr else b""
-        stderr_text = stderr_bytes.decode(errors="replace")[:4096]
-        raise RuntimeError(f"FFmpeg exit code {proc.returncode}: {stderr_text}")
+    if not result.success:
+        error_code, is_retryable = classify_error(result.returncode, result.stderr_tail)
+        if is_retryable:
+            raise RetryableError(error_code, result.stderr_tail[:4096])
+        else:
+            raise NonRetryableError(error_code, result.stderr_tail[:4096])
 
 
 def start_transcode_worker_task() -> None:

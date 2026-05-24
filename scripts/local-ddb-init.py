@@ -504,6 +504,18 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByCreatedAt", "partition_key": "scope", "sort_key": "created_at"},
             ],
         ),
+        TableDef(
+            _resolve_table_name(S.broadcast_viewers_table_name, "BroadcastViewers"),
+            "session_id",
+            "viewer_id",
+            attr_types={"joined_at": "N", "last_heartbeat": "N", "expires_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.broadcast_health_snapshots_table_name, "BroadcastHealthSnapshots"),
+            "session_id",
+            "snapshot_ts",
+            attr_types={"snapshot_ts": "N"},
+        ),
         # Messaging extended tables (from PR 127 compliance/visibility features)
         # ConversationPins: pk=(conversation_id, message_id), GSI ByConversationActivePinnedAt
         TableDef(
