@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from app.models_broadcast import BroadcastSessionModel
 from app.services.broadcast_provider import AwsBroadcastProvider, LocalBroadcastProvider, get_broadcast_provider
@@ -32,9 +32,21 @@ def test_local_provider_contract() -> None:
 
 
 def test_aws_provider_contract() -> None:
+    mock_ml_client = MagicMock()
+    mock_ml_client.describe_channel.return_value = {"State": "IDLE"}
+    mock_ml_client.delete_channel.return_value = {}
+    mock_ml_client.list_inputs.return_value = {"Inputs": []}
+    mock_mp_client = MagicMock()
+    mock_mp_client.delete_origin_endpoint.return_value = {}
+    mock_mp_client.delete_channel.return_value = {}
+
     with (
         patch("app.services.broadcast_provider.provision_mediolive_input_and_channel") as provision_live,
         patch("app.services.broadcast_provider.provision_mediapackage_channel_and_endpoint") as provision_pkg,
+        patch("app.services.broadcast_provider._medialive_client", return_value=mock_ml_client),
+        patch("app.services.broadcast_provider._mediapackage_client", return_value=mock_mp_client),
+        patch("app.services.broadcast_provider._resolve_channel_id", return_value="ch-1"),
+        patch("app.services.broadcast_provider._find_input_by_name", return_value=None),
     ):
         provision_live.return_value = type(
             "_RL",

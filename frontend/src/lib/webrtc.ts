@@ -4,8 +4,19 @@
 
 /**
  * Acquire local media (audio always, video only in video mode).
+ * Returns the MediaStream on success. Throws categorized errors on failure:
+ *   - NotAllowedError: permission denied
+ *   - NotFoundError: no device available
+ *   - NotReadableError: device in use by another app
+ *   - OverconstrainedError: device cannot meet constraints
+ *
+ * Callers that want null-on-failure behavior should use the useMediaCapture hook instead.
  */
 export async function acquireLocalMedia(mode: "audio" | "video"): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new DOMException("Media devices API not available", "NotFoundError");
+  }
+
   const constraints: MediaStreamConstraints = {
     audio: true,
     video:
@@ -13,7 +24,20 @@ export async function acquireLocalMedia(mode: "audio" | "video"): Promise<MediaS
         ? { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }
         : false,
   };
-  return navigator.mediaDevices.getUserMedia(constraints);
+
+  try {
+    return await navigator.mediaDevices.getUserMedia(constraints);
+  } catch (err) {
+    // For OverconstrainedError on video, retry with minimal constraints
+    if (
+      mode === "video" &&
+      err instanceof DOMException &&
+      err.name === "OverconstrainedError"
+    ) {
+      return navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    }
+    throw err;
+  }
 }
 
 /**

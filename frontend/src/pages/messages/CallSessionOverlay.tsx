@@ -1,5 +1,4 @@
-import * as React from "react";
-import { Phone, PhoneCall, PhoneIncoming, PhoneOff, Video } from "lucide-react";
+import { Phone, PhoneCall, PhoneIncoming, PhoneOff, Video, Mic, MicOff, VideoOff, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -37,10 +36,14 @@ export interface CallSessionUi {
 interface Props {
   session: CallSessionUi;
   isBusy?: boolean;
+  isMuted?: boolean;
+  isCameraOff?: boolean;
   onAccept: () => void;
   onDecline: () => void;
   onEnd: () => void;
   onDismiss: () => void;
+  onToggleMute?: () => void;
+  onToggleCamera?: () => void;
 }
 
 const outcomeCopy: Record<Extract<CallUiState, "declined" | "busy" | "timeout" | "ended" | "failure">, string> = {
@@ -51,11 +54,30 @@ const outcomeCopy: Record<Extract<CallUiState, "declined" | "busy" | "timeout" |
   failure: "Call failed to connect.",
 };
 
-export function CallSessionOverlay({ session, isBusy = false, onAccept, onDecline, onEnd, onDismiss }: Props) {
+/** Detect if a failure is permission-related based on the reason message. */
+function isPermissionDeniedFailure(session: CallSessionUi): boolean {
+  if (session.state !== "failure") return false;
+  const msg = (session.reasonMessage ?? "").toLowerCase();
+  return msg.includes("denied") || msg.includes("access") || msg.includes("permission") || msg.includes("not found");
+}
+
+export function CallSessionOverlay({
+  session,
+  isBusy = false,
+  isMuted,
+  isCameraOff,
+  onAccept,
+  onDecline,
+  onEnd,
+  onDismiss,
+  onToggleMute,
+  onToggleCamera,
+}: Props) {
   const isIncoming = session.state === "incoming_ringing";
   const isOutgoing = ["outgoing_inviting", "outgoing_ringing", "outgoing_connecting", "reconnecting"].includes(session.state);
   const isConnected = session.state === "connected";
   const isOutcome = ["declined", "busy", "timeout", "ended", "failure"].includes(session.state);
+  const isPermissionDenied = isPermissionDeniedFailure(session);
 
   if (session.state === "idle") {
     return null;
@@ -68,21 +90,38 @@ export function CallSessionOverlay({ session, isBusy = false, onAccept, onDeclin
       <DialogContent className="sm:max-w-md" aria-label="Direct call">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            {isIncoming ? <PhoneIncoming className="h-4 w-4" /> : isConnected ? <PhoneCall className="h-4 w-4" /> : <Phone className="h-4 w-4" />}
-            {isIncoming
-              ? `Incoming ${modeLabel} call`
-              : isOutgoing
-                ? `${session.mode === "video" ? "Video" : "Audio"} call`
-                : "Call status"}
+            {isPermissionDenied ? (
+              <ShieldAlert className="h-4 w-4 text-destructive" />
+            ) : isIncoming ? (
+              <PhoneIncoming className="h-4 w-4" />
+            ) : isConnected ? (
+              <PhoneCall className="h-4 w-4" />
+            ) : (
+              <Phone className="h-4 w-4" />
+            )}
+            {isPermissionDenied
+              ? "Permission Required"
+              : isIncoming
+                ? `Incoming ${modeLabel} call`
+                : isOutgoing
+                  ? `${session.mode === "video" ? "Video" : "Audio"} call`
+                  : "Call status"}
           </DialogTitle>
           <DialogDescription>
-            {isIncoming && `${session.peerName} is calling you.`}
-            {session.state === "outgoing_ringing" && `Ringing ${session.peerName}…`}
-            {session.state === "outgoing_inviting" && `Starting call with ${session.peerName}…`}
-            {session.state === "outgoing_connecting" && `Connecting to ${session.peerName}…`}
-            {session.state === "reconnecting" && `Reconnecting to ${session.peerName}…`}
-            {isConnected && `Connected with ${session.peerName}.`}
-            {isOutcome && (session.reasonMessage ?? outcomeCopy[session.state as keyof typeof outcomeCopy])}
+            {isPermissionDenied && (
+              <span data-testid="permission-denied-message">
+                {session.mode === "video"
+                  ? "Camera and microphone access denied. Please allow camera and microphone access in your browser settings."
+                  : "Microphone access denied. Please allow microphone access in your browser settings."}
+              </span>
+            )}
+            {!isPermissionDenied && isIncoming && `${session.peerName} is calling you.`}
+            {!isPermissionDenied && session.state === "outgoing_ringing" && `Ringing ${session.peerName}…`}
+            {!isPermissionDenied && session.state === "outgoing_inviting" && `Starting call with ${session.peerName}…`}
+            {!isPermissionDenied && session.state === "outgoing_connecting" && `Connecting to ${session.peerName}…`}
+            {!isPermissionDenied && session.state === "reconnecting" && `Reconnecting to ${session.peerName}…`}
+            {!isPermissionDenied && isConnected && `Connected with ${session.peerName}.`}
+            {!isPermissionDenied && isOutcome && (session.reasonMessage ?? outcomeCopy[session.state as keyof typeof outcomeCopy])}
           </DialogDescription>
         </DialogHeader>
 
@@ -106,10 +145,32 @@ export function CallSessionOverlay({ session, isBusy = false, onAccept, onDeclin
             </Button>
           )}
           {isConnected && (
-            <Button variant="destructive" onClick={onEnd} disabled={isBusy} aria-label="End call">
-              <PhoneOff className="mr-2 h-4 w-4" />
-              End call
-            </Button>
+            <>
+              {onToggleMute && (
+                <Button
+                  variant={isMuted ? "secondary" : "ghost"}
+                  size="icon"
+                  onClick={onToggleMute}
+                  aria-label={isMuted ? "Unmute" : "Mute"}
+                >
+                  {isMuted ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                </Button>
+              )}
+              {session.mode === "video" && onToggleCamera && (
+                <Button
+                  variant={isCameraOff ? "secondary" : "ghost"}
+                  size="icon"
+                  onClick={onToggleCamera}
+                  aria-label={isCameraOff ? "Turn camera on" : "Turn camera off"}
+                >
+                  {isCameraOff ? <VideoOff className="h-4 w-4" /> : <Video className="h-4 w-4" />}
+                </Button>
+              )}
+              <Button variant="destructive" onClick={onEnd} disabled={isBusy} aria-label="End call">
+                <PhoneOff className="mr-2 h-4 w-4" />
+                End call
+              </Button>
+            </>
           )}
           {isOutcome && (
             <Button onClick={onDismiss} aria-label="Dismiss call status">

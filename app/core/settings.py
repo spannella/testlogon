@@ -476,6 +476,9 @@ class Settings:
     broadcast_reconciler_interval_seconds: int = int(os.environ.get("BROADCAST_RECONCILER_INTERVAL_SECONDS", "30"))
     broadcast_drift_sla_seconds: int = int(os.environ.get("BROADCAST_DRIFT_SLA_SECONDS", "120"))
     broadcast_stale_session_seconds: int = int(os.environ.get("BROADCAST_STALE_SESSION_SECONDS", "300"))
+    broadcast_aws_start_timeout_seconds: int = int(os.environ.get("BROADCAST_AWS_START_TIMEOUT_SECONDS", "120"))
+    broadcast_aws_stop_timeout_seconds: int = int(os.environ.get("BROADCAST_AWS_STOP_TIMEOUT_SECONDS", "120"))
+    broadcast_aws_poll_interval_seconds: int = int(os.environ.get("BROADCAST_AWS_POLL_INTERVAL_SECONDS", "5"))
 
     message_visibility_overrides_table_name: str = os.environ.get(
         "DDB_MESSAGE_VISIBILITY_OVERRIDES",
@@ -1007,6 +1010,17 @@ class Settings:
 
     # Video upload (VOD-002)
     video_upload_bucket: str = os.environ.get("VIDEO_UPLOAD_BUCKET", "local-uploads")
+
+    # Transcode job queue (VOD-003)
+    transcode_jobs_table_name: str = os.environ.get("DDB_TRANSCODE_JOBS", "TranscodeJobs")
+    transcode_worker_enabled: bool = os.environ.get("TRANSCODE_WORKER_ENABLED", os.environ.get("DEV_MODE", "0")) not in ("0", "false", "False")
+    transcode_max_concurrent_jobs: int = int(os.environ.get("TRANSCODE_MAX_CONCURRENT", "2"))
+    transcode_poll_interval_seconds: int = int(os.environ.get("TRANSCODE_POLL_INTERVAL", "10"))
+    transcode_max_attempts: int = int(os.environ.get("TRANSCODE_MAX_ATTEMPTS", "3"))
+    transcode_output_bucket: str = os.environ.get("TRANSCODE_OUTPUT_BUCKET", "vod-output")
+    transcode_output_prefix: str = os.environ.get("TRANSCODE_OUTPUT_PREFIX", "tenants")
+    transcode_scratch_dir: str = os.environ.get("TRANSCODE_SCRATCH_DIR", "tmp/transcode-scratch")
+    transcode_progress_update_interval_seconds: int = int(os.environ.get("TRANSCODE_PROGRESS_UPDATE_INTERVAL", "5"))
 
     # Google Calendar integration hardening/tuning
     google_calendar_oauth_require_refresh_token: bool = os.environ.get("GOOGLE_CALENDAR_OAUTH_REQUIRE_REFRESH_TOKEN", "true").lower() in ("1", "true", "yes", "on")

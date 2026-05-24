@@ -45,6 +45,7 @@ import { useMessageJump } from "./useMessageJump";
 import { CallSessionOverlay, type CallSessionUi, type CallUiState } from "./CallSessionOverlay";
 import { callStateReducer, createInitialCallMachineState, teardownCallResources, type CallRuntimeResources } from "./callStateMachine";
 import { useRtcPeerConnection } from "@/hooks/useRtcPeerConnection";
+import { useMediaCapture } from "@/hooks/useMediaCapture";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -85,6 +86,9 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const callTimeoutRef = React.useRef<number | null>(null);
   const callResourcesRef = React.useRef<CallRuntimeResources | null>(null);
   const lastCallEventTsRef = React.useRef<number>(0);
+  const mediaCapture = useMediaCapture();
+  const [isMuted, setIsMuted] = React.useState(false);
+  const [isCameraOff, setIsCameraOff] = React.useState(false);
   const handleViewOnce = React.useCallback((id: string) => {
     setViewedOnceIds((prev) => new Set([...prev, id]));
   }, []);
@@ -539,10 +543,28 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     return "";
   };
 
-  const startOutgoingCall = (mode: DirectCallMode) => {
+  const startOutgoingCall = async (mode: DirectCallMode) => {
     if (!dmPartner || !callsEnabled) return;
     clearCallTimeout();
     dispatchCall({ type: "START_OUTGOING", mode, peerName: dmPartner.display_name ?? dmPartner.user_id });
+
+    // CALL-003: Acquire media BEFORE sending invite
+    const localStream = await mediaCapture.acquire(mode);
+    if (!localStream) {
+      // Permission denied or device not found — abort without sending invite
+      const errorMsg = mediaCapture.error?.message ?? "Could not access microphone/camera.";
+      dispatchCall({ type: "FAIL", message: errorMsg });
+      toast.error(errorMsg);
+      return;
+    }
+
+    // Attach to runtime resources for the peer connection hook
+    callResourcesRef.current = {
+      ...callResourcesRef.current,
+      localStream,
+      cleanedUp: false,
+    };
+
     callMutation.mutate(
       {
         mode,
@@ -993,8 +1015,28 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
       <CallSessionOverlay
         session={overlaySession}
         isBusy={callActionMutation.isPending}
-        onAccept={() => {
+        onAccept={async () => {
           if (!callMachine.callId) return;
+
+          // CALL-003: Acquire media before accepting
+          const localStream = await mediaCapture.acquire(callMachine.mode);
+          if (!localStream) {
+            // Cannot acquire media — decline the call
+            const errorMsg = mediaCapture.error?.message ?? "Could not access microphone/camera.";
+            callActionMutation.mutate(
+              { action: "decline", callId: callMachine.callId },
+              { onSettled: () => dispatchCall({ type: "FAIL", message: errorMsg }) },
+            );
+            toast.error(`Call failed: ${errorMsg}`);
+            return;
+          }
+
+          callResourcesRef.current = {
+            ...callResourcesRef.current,
+            localStream,
+            cleanedUp: false,
+          };
+
           dispatchCall({ type: "LOCAL_ACCEPT" });
           callActionMutation.mutate(
             { action: "accept", callId: callMachine.callId },
@@ -1030,9 +1072,30 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
             },
           );
         }}
+        isMuted={isMuted}
+        isCameraOff={isCameraOff}
+        onToggleMute={() => {
+          const stream = callResourcesRef.current?.localStream ?? mediaCapture.stream;
+          const audioTrack = stream?.getAudioTracks()[0];
+          if (audioTrack) {
+            audioTrack.enabled = !audioTrack.enabled;
+            setIsMuted(!audioTrack.enabled);
+          }
+        }}
+        onToggleCamera={() => {
+          const stream = callResourcesRef.current?.localStream ?? mediaCapture.stream;
+          const videoTrack = stream?.getVideoTracks()[0];
+          if (videoTrack) {
+            videoTrack.enabled = !videoTrack.enabled;
+            setIsCameraOff(!videoTrack.enabled);
+          }
+        }}
         onDismiss={() => {
           clearCallTimeout();
           teardownCallResources(callResourcesRef.current);
+          mediaCapture.release();
+          setIsMuted(false);
+          setIsCameraOff(false);
           dispatchCall({ type: "RESET" });
         }}
       />

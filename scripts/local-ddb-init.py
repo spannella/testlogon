@@ -618,6 +618,29 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # Transcode jobs (VOD-003)
+        TableDef(
+            _resolve_table_name(S.transcode_jobs_table_name, "TranscodeJobs"),
+            "job_id",
+            gsi=[
+                {
+                    "index_name": "ByStatusCreatedAt",
+                    "partition_key": "status",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByVideoId",
+                    "partition_key": "video_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByTenantStatus",
+                    "partition_key": "tenant_id",
+                    "sort_key": "status_created_at",
+                },
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 

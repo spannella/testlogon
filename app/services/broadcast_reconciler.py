@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Iterable
 
@@ -17,6 +18,8 @@ from app.services.broadcast_store import (
     put_output,
     transition_session_status,
 )
+
+logger = logging.getLogger("broadcast.reconciler")
 
 ACTIVE_STATES = ("provisioning", "ready", "live", "stopping")
 
@@ -62,6 +65,15 @@ def reconcile_once(*, now_ts: int | None = None) -> dict:
             first = int(snapshot.get("drift_first_detected_at") or now)
             snapshot["drift_first_detected_at"] = first
             snapshot["drift_detected"] = True
+            logger.warning(
+                "drift detected",
+                extra={
+                    "session_id": session.id,
+                    "desired": desired,
+                    "actual": actual,
+                    "drift_age_seconds": now - first,
+                },
+            )
             if now - first >= int(S.broadcast_drift_sla_seconds or 120):
                 transition_session_status(
                     session_id=session.id,
