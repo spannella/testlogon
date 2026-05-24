@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import Annotated, List, Optional
 from uuid import uuid4
 
@@ -26,7 +27,16 @@ from app.services.broadcast_orchestrator import (
 )
 from app.services.broadcast_cloudfront import validate_cloudfront_token
 from app.services.broadcast_playback import mint_local_playback_url
-from app.services.broadcast_sse import broadcast_sse_subscribe, broadcast_sse_unsubscribe
+from app.services.broadcast_sse import broadcast_sse_subscribe, broadcast_sse_unsubscribe, broadcast_sse_publish
+from app.services.broadcast_chat_store import (
+    send_chat_message as _store_send_chat,
+    get_chat_history as _store_get_history,
+    fetch_chat_messages_after as _store_fetch_after,
+    delete_chat_message as _store_delete_msg,
+    get_mute_status as _store_get_mute,
+    set_mute as _store_set_mute,
+    _chat_msg_out,
+)
 from app.services.broadcast_viewers import (
     register_viewer,
     touch_viewer,
@@ -572,5 +582,179 @@ async def broadcast_event_stream_route(session_id: str, ctx: dict = Depends(_ctx
                     yield ": ping\n\n"
         finally:
             broadcast_sse_unsubscribe(session_id, q)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ─── Live Chat Endpoints (BCAST-005) ─────────────────────────────
+
+
+class BroadcastChatSendIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=280)
+
+
+class BroadcastChatMessageOut(BaseModel):
+    message_id: str
+    session_id: str
+    sender_id: str
+    sender_display_name: str
+    text: str
+    created_at: int
+    deleted: bool = False
+
+
+class BroadcastChatHistoryOut(BaseModel):
+    messages: List[BroadcastChatMessageOut] = Field(default_factory=list)
+    has_more: bool = False
+    oldest_sort_key: Optional[str] = None
+
+
+class BroadcastChatMuteIn(BaseModel):
+    target_user_id: str = Field(..., min_length=1)
+    duration_seconds: int = Field(default=300, ge=30, le=86400)
+
+
+class BroadcastChatMuteOut(BaseModel):
+    target_user_id: str
+    muted_until: int
+    session_id: str
+
+
+@router.post(
+    "/sessions/{session_id}/chat",
+    response_model=BroadcastChatMessageOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def send_chat_message_route(session_id: str, body: BroadcastChatSendIn, ctx: dict = Depends(_ctx)):
+    """Send a chat message to a live broadcast session."""
+    session = get_session(session_id)
+    if session.status != "live":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "BROADCAST_NOT_LIVE", "message": "Chat is only available while the broadcast is live"},
+        )
+
+    user_id = ctx["user_sub"]
+    # Resolve display name: use profile display_name if available, otherwise user_sub
+    display_name = user_id
+    try:
+        from app.core.tables import T as _T
+        profile_resp = _T.profile.get_item(Key={"user_sub": user_id})
+        profile_item = profile_resp.get("Item")
+        if profile_item and profile_item.get("display_name"):
+            display_name = profile_item["display_name"]
+    except Exception:
+        pass
+
+    result = _store_send_chat(
+        session_id=session_id,
+        user_id=user_id,
+        display_name=display_name,
+        text=body.text,
+    )
+    return BroadcastChatMessageOut(
+        message_id=result["message_id"],
+        session_id=result["session_id"],
+        sender_id=result["sender_id"],
+        sender_display_name=result["sender_display_name"],
+        text=result["text"],
+        created_at=result["created_at"],
+        deleted=result["deleted"],
+    )
+
+
+@router.get("/sessions/{session_id}/chat", response_model=BroadcastChatHistoryOut)
+def get_chat_history_route(
+    session_id: str,
+    limit: int = Query(default=100, ge=1, le=200),
+    before: Optional[str] = Query(default=None),
+    ctx: dict = Depends(_ctx),
+):
+    """Load recent chat history for a broadcast session."""
+    _ = ctx
+    _ = get_session(session_id)  # 404 if session doesn't exist
+    result = _store_get_history(session_id, limit=limit, before_sort_key=before)
+    return BroadcastChatHistoryOut(
+        messages=[BroadcastChatMessageOut(**m) for m in result["messages"]],
+        has_more=result["has_more"],
+        oldest_sort_key=result["oldest_sort_key"],
+    )
+
+
+@router.delete("/sessions/{session_id}/chat/{message_id}")
+def delete_chat_message_route(session_id: str, message_id: str, ctx: dict = Depends(_ctx)):
+    """Delete a chat message (broadcaster or admin only)."""
+    session = get_session(session_id)
+    # Only session creator (broadcaster) or admin/root can delete
+    if ctx["user_sub"] != session.created_by:
+        _require_operator_role(ctx)
+
+    deleted = _store_delete_msg(session_id, message_id, ctx["user_sub"])
+    if not deleted:
+        raise HTTPException(status_code=404, detail={"code": "CHAT_MESSAGE_NOT_FOUND", "message": "Message not found"})
+    return {"ok": True, "message_id": message_id}
+
+
+@router.post("/sessions/{session_id}/chat/mute", response_model=BroadcastChatMuteOut)
+def mute_chat_user_route(session_id: str, body: BroadcastChatMuteIn, ctx: dict = Depends(_ctx)):
+    """Mute a user in broadcast chat (broadcaster or admin only)."""
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        _require_operator_role(ctx)
+
+    result = _store_set_mute(
+        session_id=session_id,
+        user_id=body.target_user_id,
+        duration_seconds=body.duration_seconds,
+        actor=ctx["user_sub"],
+    )
+    return BroadcastChatMuteOut(**result)
+
+
+@router.get("/sessions/{session_id}/chat/stream")
+async def broadcast_chat_stream_route(
+    session_id: str,
+    after: Optional[str] = Query(default=None),
+    poll_ms: int = Query(default=500, ge=200, le=3000),
+    ctx: dict = Depends(_ctx),
+):
+    """SSE stream for real-time broadcast chat messages."""
+    _ = ctx
+    session = get_session(session_id)
+    if session.status not in ("live", "ready"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "BROADCAST_NOT_LIVE", "message": "Chat stream is only available for live broadcasts"},
+        )
+
+    import anyio
+
+    async def gen():
+        cursor = after
+        last_ping = time.time()
+        yield ": stream-open\n\n"
+
+        while True:
+            now = time.time()
+            if now - last_ping > 15:
+                yield ": ping\n\n"
+                last_ping = now
+
+            messages = await anyio.to_thread.run_sync(
+                lambda: _store_fetch_after(session_id, cursor, 50)
+            )
+            if messages:
+                for msg in messages:
+                    cursor = msg["sort_key"]
+                    if msg.get("deleted"):
+                        payload = json.dumps({"message_id": msg["message_id"]}, separators=(",", ":"))
+                        yield f"event: chat:delete\ndata: {payload}\n\n"
+                    else:
+                        payload = json.dumps(_chat_msg_out(msg), separators=(",", ":"), default=str)
+                        yield f"event: chat:message\ndata: {payload}\n\n"
+                last_ping = time.time()
+                continue
+
+            await asyncio.sleep(poll_ms / 1000.0)
 
     return StreamingResponse(gen(), media_type="text/event-stream")

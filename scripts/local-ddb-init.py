@@ -516,6 +516,17 @@ def _table_defs() -> List[TableDef]:
             "snapshot_ts",
             attr_types={"snapshot_ts": "N"},
         ),
+        # Broadcast chat (BCAST-005)
+        TableDef(
+            _resolve_table_name(S.broadcast_chat_messages_table_name, "BroadcastChatMessages"),
+            "session_id",
+            "sort_key",
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.broadcast_chat_mutes_table_name, "BroadcastChatMutes"),
+            "session_user",
+        ),
         # Messaging extended tables (from PR 127 compliance/visibility features)
         # ConversationPins: pk=(conversation_id, message_id), GSI ByConversationActivePinnedAt
         TableDef(

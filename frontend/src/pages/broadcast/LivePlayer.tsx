@@ -24,6 +24,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { mintPlaybackUrl, getSession, type BroadcastSession } from "@/api/endpoints/broadcast";
 import { useAuthStore } from "@/stores/authStore";
+import { BroadcastChat } from "./BroadcastChat";
+import { ChatOverlay } from "./ChatOverlay";
+import { type ChatMessage } from "@/api/endpoints/broadcast-chat";
 
 // ─── Types ──────────────────────────────────────────────────────
 
@@ -64,6 +67,9 @@ export default function LivePlayer() {
   const [session, setSession] = useState<BroadcastSession | null>(null);
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<number>(0);
+  const [showChat, setShowChat] = useState(true);
+  const [overlayEnabled, setOverlayEnabled] = useState(false);
+  const [chatMessages] = useState<ChatMessage[]>([]);
 
   const controlsTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
@@ -392,14 +398,20 @@ export default function LivePlayer() {
         </div>
       </header>
 
-      {/* Player area */}
-      <div className="flex-1 flex items-center justify-center p-2 sm:p-4">
+      {/* Player + Chat area */}
+      <div className="flex-1 flex flex-col lg:flex-row p-2 sm:p-4 gap-2">
+        {/* Player container */}
+        <div className="flex-1 flex items-center justify-center">
         <div
           ref={containerRef}
           className="relative w-full max-w-5xl aspect-video bg-black rounded-lg overflow-hidden"
           onMouseMove={resetControlsTimer}
           onTouchStart={resetControlsTimer}
         >
+          {/* Chat overlay on video */}
+          {isLive && (
+            <ChatOverlay messages={chatMessages} enabled={overlayEnabled} />
+          )}
           {/* Video element */}
           <video
             ref={videoRef}
@@ -554,7 +566,42 @@ export default function LivePlayer() {
             </div>
           )}
         </div>
+        </div>
+
+        {/* Chat panel (right side on desktop, below on mobile) */}
+        {isLive && showChat && sessionId && (
+          <div className="w-full lg:w-80 h-64 lg:h-auto lg:max-h-[calc(100vh-8rem)] shrink-0" data-testid="chat-panel">
+            <BroadcastChat
+              sessionId={sessionId}
+              isBroadcaster={session?.created_by === useAuthStore.getState().userId}
+            />
+          </div>
+        )}
       </div>
+
+      {/* Chat toggle + overlay toggle */}
+      {isLive && (
+        <div className="flex items-center gap-2 px-4 py-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-gray-400 hover:text-white text-xs"
+            onClick={() => setShowChat((v) => !v)}
+            data-testid="chat-toggle"
+          >
+            {showChat ? "Hide Chat" : "Show Chat"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-gray-400 hover:text-white text-xs"
+            onClick={() => setOverlayEnabled((v) => !v)}
+            data-testid="overlay-toggle"
+          >
+            {overlayEnabled ? "Overlay On" : "Overlay Off"}
+          </Button>
+        </div>
+      )}
 
       {/* Session info below video */}
       {session && (

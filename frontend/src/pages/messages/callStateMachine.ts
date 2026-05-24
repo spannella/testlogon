@@ -152,7 +152,7 @@ export function callStateReducer(state: CallMachineState, event: CallMachineEven
 }
 
 export interface CallRuntimeResources {
-  peerConnection?: { close: () => void } | null;
+  peerConnection?: RTCPeerConnection | null;
   localStream?: MediaStream | null;
   remoteStream?: MediaStream | null;
   detachListeners?: Array<() => void>;

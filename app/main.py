@@ -278,6 +278,7 @@ def create_app() -> FastAPI:
             os.environ.get("UPLOAD_BUCKET", ""),
             os.environ.get("S3_BUCKET_IMAGES", ""),
             _S.video_upload_bucket,
+            _S.vod_output_bucket or "vod-output",
         ] if b]
         app.add_event_handler("startup", lambda: _start_s3_mock(_dev_buckets))
 

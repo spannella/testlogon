@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Phone, PhoneCall, PhoneIncoming, PhoneOff, Video, Mic, MicOff, VideoOff, ShieldAlert } from "lucide-react";
+import { Phone, PhoneCall, PhoneIncoming, PhoneOff, Video, Mic, MicOff, VideoOff, ShieldAlert, Signal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -9,9 +9,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import type { DirectCallMode } from "@/api/endpoints/messaging";
+import { useConnectionQuality, type ConnectionQuality } from "@/hooks/useConnectionQuality";
 
 export type CallUiState =
   | "idle"
@@ -41,6 +43,7 @@ interface Props {
   isBusy?: boolean;
   localStream?: MediaStream | null;
   remoteStream?: MediaStream | null;
+  peerConnection?: RTCPeerConnection | null;
   isMuted?: boolean;
   isCameraOff?: boolean;
   onAccept: () => void;
@@ -178,6 +181,46 @@ function CallControls({ mode, isMuted, isCameraOff, onToggleMute, onToggleCamera
   );
 }
 
+// ─── Connection quality indicator ─────────────────────────────────────────────
+
+const qualityConfig: Record<ConnectionQuality, { color: string; label: string }> = {
+  good: { color: "text-green-500", label: "Good connection" },
+  fair: { color: "text-yellow-500", label: "Fair connection" },
+  poor: { color: "text-red-500", label: "Poor connection" },
+  unknown: { color: "text-muted-foreground", label: "Connection quality unknown" },
+};
+
+function ConnectionQualityIndicator({
+  quality,
+  rtt,
+  packetLoss,
+}: {
+  quality: ConnectionQuality;
+  rtt: number | null;
+  packetLoss: number | null;
+}) {
+  const cfg = qualityConfig[quality];
+  const details =
+    rtt !== null || packetLoss !== null
+      ? `${cfg.label}${rtt !== null ? ` · RTT: ${rtt}ms` : ""}${packetLoss !== null ? ` · Loss: ${packetLoss}%` : ""}`
+      : cfg.label;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn("inline-flex items-center", cfg.color)}
+          aria-label={cfg.label}
+          data-testid="connection-quality"
+        >
+          <Signal className="h-4 w-4" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{details}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 // ─── Main component ────────────────────────────────────────────────────────
 
 /** Detect if a failure is permission-related based on the reason message. */
@@ -192,6 +235,7 @@ export function CallSessionOverlay({
   isBusy = false,
   localStream,
   remoteStream,
+  peerConnection,
   isMuted,
   isCameraOff,
   onAccept,
@@ -206,6 +250,9 @@ export function CallSessionOverlay({
   const isConnected = session.state === "connected";
   const isOutcome = ["declined", "busy", "timeout", "ended", "failure"].includes(session.state);
   const isPermissionDenied = isPermissionDeniedFailure(session);
+
+  // Connection quality monitoring
+  const connectionQuality = useConnectionQuality(peerConnection, isConnected);
 
   // Track whether remote stream has active video tracks
   const [hasRemoteVideo, setHasRemoteVideo] = React.useState(false);
@@ -283,8 +330,13 @@ export function CallSessionOverlay({
               )}
             </div>
 
-            {/* Peer name + timer overlay */}
+            {/* Peer name + timer + quality overlay */}
             <div className="absolute top-4 left-4 flex items-center gap-2 rounded-lg bg-black/50 px-3 py-1.5 text-white backdrop-blur-sm">
+              <ConnectionQualityIndicator
+                quality={connectionQuality.quality}
+                rtt={connectionQuality.rtt}
+                packetLoss={connectionQuality.packetLoss}
+              />
               <span className="text-sm font-medium">{session.peerName}</span>
               <CallTimer running />
             </div>
@@ -341,6 +393,11 @@ export function CallSessionOverlay({
             <div className="flex flex-col gap-1">
               <span className="text-sm font-semibold">{session.peerName}</span>
               <div className="flex items-center gap-2">
+                <ConnectionQualityIndicator
+                  quality={connectionQuality.quality}
+                  rtt={connectionQuality.rtt}
+                  packetLoss={connectionQuality.packetLoss}
+                />
                 <span className="text-xs text-muted-foreground">Connected</span>
                 <CallTimer running />
               </div>

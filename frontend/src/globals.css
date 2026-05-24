@@ -85,6 +85,15 @@
   75% { transform: rotate(3deg); }
 }
 
+@keyframes chat-scroll-left {
+  from { transform: translateX(100%); }
+  to { transform: translateX(-100%); }
+}
+
+.animate-chat-scroll {
+  animation: chat-scroll-left 8s linear forwards;
+}
+
 /*
  * Dark mode overrides — applied when <html class="dark">
  */

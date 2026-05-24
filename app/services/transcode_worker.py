@@ -119,13 +119,69 @@ async def execute_transcode_job(job: Dict[str, Any]) -> None:
         output_dir.mkdir(parents=True, exist_ok=True)
         write_master_playlist(output_dir)
 
-        # Build output URI
-        output_prefix = (
-            f"{S.transcode_output_prefix}/{job['tenant_id']}/assets/{job['video_id']}/hls"
-        )
-        manifest_uri = f"s3://{S.transcode_output_bucket}/{output_prefix}/master.m3u8"
+        # ─── VOD-005: Extract thumbnails ────────────────────────────────
+        thumbnail_dir = scratch_dir / "thumbnails"
+        thumbnail_dir.mkdir(parents=True, exist_ok=True)
+        if S.vod_thumbnail_enabled:
+            from app.services.vod_thumbnail_extractor import extract_thumbnails
 
-        complete_job(job_id, manifest_uri, completed_renditions)
+            timestamps = [
+                float(t.strip())
+                for t in (S.vod_thumbnail_timestamps or "0,10,30").split(",")
+                if t.strip()
+            ]
+            source_path = scratch_dir / "source"
+            # Find source file in scratch dir (download step places it here)
+            source_candidates = list(scratch_dir.glob("source*"))
+            if source_candidates:
+                source_path = source_candidates[0]
+
+            try:
+                await extract_thumbnails(
+                    source_path=source_path,
+                    output_dir=thumbnail_dir,
+                    timestamps=timestamps,
+                    width=S.vod_thumbnail_width,
+                    quality=S.vod_thumbnail_quality,
+                )
+            except Exception:
+                logger.warning("Thumbnail extraction failed for job %s", job_id, exc_info=True)
+
+        # ─── VOD-005: Upload all outputs to S3 ─────────────────────────
+        from app.services.vod_s3_uploader import upload_transcode_outputs
+
+        def _upload_progress(files_done: int, total_files: int) -> None:
+            # Map upload progress to 90-100% range (0-90% was transcode)
+            pct = 90 + int((files_done / max(1, total_files)) * 10)
+            update_job_progress(job_id, progress_pct=pct, current_rendition="uploading")
+
+        upload_result = upload_transcode_outputs(
+            job_id=job_id,
+            video_id=job["video_id"],
+            tenant_id=job["tenant_id"],
+            output_dir=output_dir,
+            thumbnail_dir=thumbnail_dir,
+            on_progress=_upload_progress,
+        )
+
+        # ─── VOD-005: Generate signed playback URL ─────────────────────
+        from app.services.vod_playback_url import mint_vod_playback_url
+
+        playback_url = mint_vod_playback_url(
+            video_id=job["video_id"],
+            tenant_id=job["tenant_id"],
+        )
+
+        # ─── VOD-005: Complete with full output metadata ───────────────
+        from app.services.transcode_job_store import complete_job_with_outputs
+
+        complete_job_with_outputs(
+            job_id=job_id,
+            worker_id=wid,
+            upload_result=upload_result,
+            playback_url=playback_url,
+            renditions_completed=completed_renditions,
+        )
         logger.info("Transcode job %s completed successfully", job_id)
 
         # Transition video to published if video_metadata store is available
@@ -140,6 +196,17 @@ async def execute_transcode_job(job: Dict[str, Any]) -> None:
         error_msg = str(e)[:4096]
         attempt = int(job.get("attempt", 0))
         logger.warning("Transcode job %s failed (attempt %d): %s", job_id, attempt, error_msg)
+
+        # VOD-005: Abort any incomplete multipart uploads on failure
+        try:
+            from app.services.vod_s3_uploader import abort_incomplete_uploads
+
+            bucket = S.vod_output_bucket or S.transcode_output_bucket or "vod-output"
+            prefix = f"{S.vod_output_prefix or S.transcode_output_prefix or 'tenants'}/{job['tenant_id']}/assets/{job['video_id']}"
+            abort_incomplete_uploads(bucket, prefix)
+        except Exception:
+            logger.warning("Failed to abort incomplete multipart uploads for job %s", job_id, exc_info=True)
+
         fail_job(job_id, error_msg, attempt)
     finally:
         shutil.rmtree(scratch_dir, ignore_errors=True)

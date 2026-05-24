@@ -171,6 +171,69 @@ def complete_job(
     )
 
 
+def complete_job_with_outputs(
+    *,
+    job_id: str,
+    worker_id: str,
+    upload_result: Any,
+    playback_url: Any,
+    renditions_completed: Optional[List[str]] = None,
+) -> None:
+    """Atomically mark job as completed and store VOD-005 output metadata.
+
+    Args:
+        job_id: The transcode job ID
+        worker_id: Worker that completed the job (for condition check)
+        upload_result: UploadResult from vod_s3_uploader
+        playback_url: VodPlaybackUrl from vod_playback_url
+        renditions_completed: List of completed rendition names
+    """
+    ts = now_ts()
+    update_expr = (
+        "SET #s = :completed, "
+        "completed_at = :now, "
+        "updated_at = :now, "
+        "status_created_at = :sc, "
+        "output_hls_manifest_uri = :hls_uri, "
+        "output_s3_prefix = :prefix, "
+        "output_total_bytes = :bytes, "
+        "output_object_count = :count, "
+        "output_upload_duration_seconds = :dur, "
+        "output_thumbnail_keys = :thumbs, "
+        "output_playback_url = :purl, "
+        "output_playback_expires_at = :pexp, "
+        "progress_pct = :hundred"
+    )
+    values: Dict[str, Any] = {
+        ":completed": "completed",
+        ":now": ts,
+        ":sc": f"completed#{ts}",
+        ":hls_uri": upload_result.manifest_s3_uri,
+        ":prefix": upload_result.manifest_s3_key.rsplit("/hls/", 1)[0] if "/hls/" in upload_result.manifest_s3_key else upload_result.manifest_s3_key,
+        ":bytes": upload_result.total_bytes,
+        ":count": upload_result.files_uploaded,
+        ":dur": int(upload_result.upload_duration_seconds),
+        ":thumbs": upload_result.thumbnail_s3_keys,
+        ":purl": playback_url.url,
+        ":pexp": playback_url.expires_at,
+        ":hundred": 100,
+        ":running": "running",
+        ":wid": worker_id,
+    }
+
+    if renditions_completed is not None:
+        update_expr += ", renditions_completed = :rc"
+        values[":rc"] = renditions_completed
+
+    T.transcode_jobs.update_item(
+        Key={"job_id": job_id},
+        UpdateExpression=update_expr,
+        ConditionExpression="#s = :running AND worker_id = :wid",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues=values,
+    )
+
+
 def fail_job(job_id: str, error_message: str, attempt: int) -> Dict[str, Any]:
     """Handle a job failure. If retries remain, transition back to queued; otherwise mark failed.
 

@@ -1017,6 +1017,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         isBusy={callActionMutation.isPending}
         localStream={rtcLocalStream ?? mediaCapture.stream ?? null}
         remoteStream={rtcRemoteStream ?? null}
+        peerConnection={rtcResources?.peerConnection ?? null}
         onAccept={async () => {
           if (!callMachine.callId) return;
 

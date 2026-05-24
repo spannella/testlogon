@@ -474,6 +474,11 @@ class Settings:
     broadcast_cloudfront_geo_allowlist: str = os.environ.get("BROADCAST_CLOUDFRONT_GEO_ALLOWLIST", "")
     broadcast_viewers_table_name: str = os.environ.get("DDB_BROADCAST_VIEWERS", "BroadcastViewers")
     broadcast_health_snapshots_table_name: str = os.environ.get("DDB_BROADCAST_HEALTH_SNAPSHOTS", "BroadcastHealthSnapshots")
+    broadcast_chat_messages_table_name: str = os.environ.get("DDB_BROADCAST_CHAT_MESSAGES", "BroadcastChatMessages")
+    broadcast_chat_mutes_table_name: str = os.environ.get("DDB_BROADCAST_CHAT_MUTES", "BroadcastChatMutes")
+    broadcast_chat_rate_limit_ms: int = int(os.environ.get("BROADCAST_CHAT_RATE_LIMIT_MS", "2000"))
+    broadcast_chat_max_message_length: int = int(os.environ.get("BROADCAST_CHAT_MAX_MESSAGE_LENGTH", "280"))
+    broadcast_chat_history_default_limit: int = int(os.environ.get("BROADCAST_CHAT_HISTORY_DEFAULT_LIMIT", "100"))
     broadcast_viewer_ttl_seconds: int = int(os.environ.get("BROADCAST_VIEWER_TTL_SECONDS", "60"))
     broadcast_health_poll_interval_seconds: int = int(os.environ.get("BROADCAST_HEALTH_POLL_INTERVAL_SECONDS", "10"))
     broadcast_reconciler_enabled: bool = os.environ.get("BROADCAST_RECONCILER_ENABLED", "1") not in ("0", "false", "False")
@@ -1026,6 +1031,25 @@ class Settings:
     transcode_scratch_dir: str = os.environ.get("TRANSCODE_SCRATCH_DIR", "tmp/transcode-scratch")
     transcode_progress_update_interval_seconds: int = int(os.environ.get("TRANSCODE_PROGRESS_UPDATE_INTERVAL", "5"))
     transcode_rendition_timeout_seconds: int = int(os.environ.get("TRANSCODE_RENDITION_TIMEOUT_SECONDS", "1800"))
+
+    # VOD S3 upload (VOD-005)
+    vod_output_bucket: str = os.environ.get("VOD_OUTPUT_BUCKET", "vod-output")
+    vod_output_prefix: str = os.environ.get("VOD_OUTPUT_PREFIX", "tenants")
+    vod_output_retention_days: int = int(os.environ.get("VOD_OUTPUT_RETENTION_DAYS", "30"))
+    vod_upload_concurrency: int = int(os.environ.get("VOD_UPLOAD_CONCURRENCY", "4"))
+    vod_upload_multipart_threshold_mb: int = int(os.environ.get("VOD_UPLOAD_MULTIPART_THRESHOLD_MB", "8"))
+    vod_upload_multipart_chunksize_mb: int = int(os.environ.get("VOD_UPLOAD_MULTIPART_CHUNKSIZE_MB", "8"))
+
+    # VOD playback URLs (VOD-005)
+    vod_playback_url_ttl_seconds: int = int(os.environ.get("VOD_PLAYBACK_URL_TTL_SECONDS", "3600"))
+    vod_cloudfront_domain: str = os.environ.get("VOD_CLOUDFRONT_DOMAIN", "")
+    vod_cloudfront_signing_secret: str = os.environ.get("VOD_CLOUDFRONT_SIGNING_SECRET", "dev-vod-cf-secret")
+
+    # VOD thumbnails (VOD-005)
+    vod_thumbnail_enabled: bool = os.environ.get("VOD_THUMBNAIL_ENABLED", "1") not in ("0", "false", "False")
+    vod_thumbnail_timestamps: str = os.environ.get("VOD_THUMBNAIL_TIMESTAMPS", "0,10,30")
+    vod_thumbnail_width: int = int(os.environ.get("VOD_THUMBNAIL_WIDTH", "640"))
+    vod_thumbnail_quality: int = int(os.environ.get("VOD_THUMBNAIL_QUALITY", "5"))
 
     # FFmpeg executor (VOD-004)
     ffmpeg_max_threads_per_job: int = int(os.environ.get("FFMPEG_MAX_THREADS_PER_JOB", "0"))  # 0 = auto

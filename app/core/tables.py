@@ -76,6 +76,8 @@ class Tables:
     transcode_jobs: Any
     broadcast_viewers: Any
     broadcast_health_snapshots: Any
+    broadcast_chat_messages: Any
+    broadcast_chat_mutes: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -146,4 +148,6 @@ T = Tables(
     transcode_jobs=ddb.Table(S.transcode_jobs_table_name),
     broadcast_viewers=ddb.Table(S.broadcast_viewers_table_name),
     broadcast_health_snapshots=ddb.Table(S.broadcast_health_snapshots_table_name),
+    broadcast_chat_messages=ddb.Table(S.broadcast_chat_messages_table_name),
+    broadcast_chat_mutes=ddb.Table(S.broadcast_chat_mutes_table_name),
 )

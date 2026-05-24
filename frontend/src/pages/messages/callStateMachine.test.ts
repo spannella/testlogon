@@ -64,7 +64,7 @@ describe("teardownCallResources", () => {
     const resources = {
       localStream: { getTracks: () => [{ stop: stopLocal1 }, { stop: stopLocal2 }] } as unknown as MediaStream,
       remoteStream: { getTracks: () => [{ stop: stopRemote }] } as unknown as MediaStream,
-      peerConnection: { close },
+      peerConnection: { close } as unknown as RTCPeerConnection,
       detachListeners: [detach],
       teardownTimers: [window.setTimeout(() => undefined, 1000)],
       cleanedUp: false,
