@@ -43,7 +43,8 @@ import { PinnedMessagesPanel } from "./PinnedMessagesPanel";
 import { ThreadPanel } from "./ThreadPanel";
 import { useMessageJump } from "./useMessageJump";
 import { CallSessionOverlay, type CallSessionUi, type CallUiState } from "./CallSessionOverlay";
-import { callStateReducer, createInitialCallMachineState, teardownCallResources } from "./callStateMachine";
+import { callStateReducer, createInitialCallMachineState, teardownCallResources, type CallRuntimeResources } from "./callStateMachine";
+import { useRtcPeerConnection } from "@/hooks/useRtcPeerConnection";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -82,7 +83,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
   const [threadAnchorMessage, setThreadAnchorMessage] = React.useState<Message | null>(null);
   const [callMachine, dispatchCall] = React.useReducer(callStateReducer, undefined, createInitialCallMachineState);
   const callTimeoutRef = React.useRef<number | null>(null);
-  const callResourcesRef = React.useRef<{ cleanedUp?: boolean } | null>(null);
+  const callResourcesRef = React.useRef<CallRuntimeResources | null>(null);
   const lastCallEventTsRef = React.useRef<number>(0);
   const handleViewOnce = React.useCallback((id: string) => {
     setViewedOnceIds((prev) => new Set([...prev, id]));
@@ -465,6 +466,30 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     : null;
   const callsEnabled = !isGroup && !!dmPartner && isMessagingWebrtcDirectCallEnabled();
 
+  // ── WebRTC peer connection hook ────────────────────────────────
+  const rtcEnabled = callMachine.phase !== "idle" &&
+    !["declined", "busy", "timeout", "ended", "failure"].includes(callMachine.phase);
+
+  const { resources: rtcResources } = useRtcPeerConnection({
+    callId: callMachine.callId,
+    conversationId: convoId,
+    role: callMachine.role,
+    mode: callMachine.mode,
+    phase: callMachine.phase,
+    peerId: dmPartner?.user_id ?? "",
+    userId: userId ?? "",
+    enabled: rtcEnabled && !!callMachine.callId,
+    onConnect: () => dispatchCall({ type: "CONNECT" }),
+    onConnectionLost: (msg) => dispatchCall({ type: "CONNECTION_LOST", message: msg }),
+    onFail: (msg) => dispatchCall({ type: "FAIL", message: msg }),
+  });
+
+  React.useEffect(() => {
+    if (rtcResources) {
+      callResourcesRef.current = rtcResources;
+    }
+  }, [rtcResources]);
+
   const clearCallTimeout = React.useCallback(() => {
     if (callTimeoutRef.current) {
       window.clearTimeout(callTimeoutRef.current);
@@ -527,9 +552,8 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
       {
         onSuccess: (res) => {
           dispatchCall({ type: "OUTGOING_RINGING", callId: res.call_id });
-          window.setTimeout(() => {
-            dispatchCall({ type: "REMOTE_ACCEPT" });
-          }, 700);
+          // WebRTC negotiation is now handled by useRtcPeerConnection hook.
+          // REMOTE_ACCEPT will be dispatched when the callee accepts via SSE.
           callTimeoutRef.current = window.setTimeout(() => {
             dispatchCall({ type: "REMOTE_DECLINE", reason: "timeout" });
           }, 30_000);
@@ -975,7 +999,10 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
           callActionMutation.mutate(
             { action: "accept", callId: callMachine.callId },
             {
-              onSuccess: () => dispatchCall({ type: "CONNECT" }),
+              onSuccess: () => {
+                // CONNECT will be dispatched by useRtcPeerConnection when
+                // RTCPeerConnection.connectionState === "connected"
+              },
               onError: () => dispatchCall({ type: "FAIL" }),
             },
           );

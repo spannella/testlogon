@@ -1005,6 +1005,9 @@ class Settings:
     # Video metadata (VOD-001)
     video_metadata_table_name: str = os.environ.get("DDB_VIDEO_METADATA", "VideoMetadata")
 
+    # Video upload (VOD-002)
+    video_upload_bucket: str = os.environ.get("VIDEO_UPLOAD_BUCKET", "local-uploads")
+
     # Google Calendar integration hardening/tuning
     google_calendar_oauth_require_refresh_token: bool = os.environ.get("GOOGLE_CALENDAR_OAUTH_REQUIRE_REFRESH_TOKEN", "true").lower() in ("1", "true", "yes", "on")
     google_calendar_api_retry_after_max_seconds: int = int(os.environ.get("GOOGLE_CALENDAR_API_RETRY_AFTER_MAX_SECONDS", "60"))

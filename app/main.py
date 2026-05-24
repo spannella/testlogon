@@ -83,6 +83,7 @@ from app.routers.kyc_cases import router as kyc_cases_router
 from app.routers.playback_entitlements import router as playback_entitlements_router
 from app.routers.moderation import router as moderation_router, compat_router as moderation_compat_router
 from app.routers.admin_moderation import router as admin_moderation_router
+from app.routers.vod import router as vod_router
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
@@ -274,6 +275,7 @@ def create_app() -> FastAPI:
             _S.filemgr_bucket,
             os.environ.get("UPLOAD_BUCKET", ""),
             os.environ.get("S3_BUCKET_IMAGES", ""),
+            _S.video_upload_bucket,
         ] if b]
         app.add_event_handler("startup", lambda: _start_s3_mock(_dev_buckets))
 
@@ -306,6 +308,7 @@ def create_app() -> FastAPI:
     app.include_router(kyc_cases_router)
     app.include_router(vnc_sessions_router)
     app.include_router(playback_entitlements_router)
+    app.include_router(vod_router)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)
     app.add_event_handler("startup", start_filemgr_mount_reconcile_task)

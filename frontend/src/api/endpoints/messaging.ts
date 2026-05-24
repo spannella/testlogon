@@ -900,3 +900,21 @@ export async function sendSignalingEvent(
   const resp = await api.post<SignalingAck>(`/messaging/messages/calls/${callId}/signal`, data);
   return resp;
 }
+
+// ─── TURN Credentials ────────────────────────────────────────────────
+
+export interface TurnIceServer {
+  urls: string[];
+  username: string;
+  credential: string;
+}
+
+export interface TurnCredentialsResp {
+  ttl_seconds: number;
+  expires_at: number;
+  ice_servers: TurnIceServer[];
+}
+
+export async function fetchTurnCredentials(callId: string): Promise<TurnCredentialsResp> {
+  return api.post<TurnCredentialsResp>(`/messaging/messages/calls/${callId}/turn-credentials`, {});
+}

@@ -46,6 +46,7 @@ const QuestionnaireBuilderPage = lazy(() => import("@/pages/questionnaires/Quest
 const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/QuestionnaireRespondentPage"));
 const PublicUserProfilePage = lazy(() => import("@/pages/profile/PublicUserProfilePage"));
 const BroadcastPage = lazy(() => import("@/pages/broadcast/BroadcastPage"));
+const LivePlayer = lazy(() => import("@/pages/broadcast/LivePlayer"));
 
 function PageSpinner() {
   return (
@@ -71,6 +72,7 @@ export default function App() {
         {showCanonicalProfileRoute && <Route path="/u/:identifier" element={<PublicUserProfilePage />} />}
         <Route path="/event/:calendarId/:eventId" element={<PublicEventPage />} />
         <Route path="/questionnaires/published/:publishedSlug/respond" element={<QuestionnaireRespondentPage />} />
+        <Route path="live/:sessionId" element={<LivePlayer />} />
 
         {/* Protected routes inside AppShell layout */}
         <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
