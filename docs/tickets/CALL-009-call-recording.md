@@ -146,7 +146,11 @@ The recording hook will extend this (or maintain its own parallel cleanup) to en
 | `start_ts` | int | When the call was initiated |
 | `connect_ts` | int \| None | When media connected |
 | `end_ts` | int \| None | When the call ended |
+| `end_reason` | str \| None | Why the call ended (e.g., "user_hangup", "timeout") |
+| `updated_at` | int \| None | Last modification timestamp |
 | `network_path` | "p2p" \| "turn" \| None | Connection type |
+| `lifecycle_events` | list[dict] | Ordered log of state transitions with timestamps |
+| `idempotency_records` | dict \| None | Tracks processed idempotency keys to prevent duplicate actions |
 
 Recording metadata will reference `call_id` as a foreign key, linking recordings to their parent call session.
 
@@ -181,7 +185,7 @@ interface Props {
 }
 ```
 
-The controls section contains: Mute, Camera toggle, and End Call buttons. The recording button will be added to this row, between Camera and End Call.
+The controls section (lines 145-182 of `CallControls`) renders in this order: Mute toggle, Camera toggle (video mode only), End Call button. The recording button will be added as a 4th button after End Call in this row.
 
 ### 2.8 Signaling Infrastructure
 
@@ -456,6 +460,7 @@ The recording state is orthogonal to the call phase (it only applies during `con
 | Max file size | `CALL_RECORDING_MAX_FILE_SIZE_BYTES` | `2147483648` (2 GB) | Reject uploads exceeding this |
 | Retention | `CALL_RECORDING_RETENTION_DAYS` | `90` | Auto-delete recordings after this |
 | S3 prefix | `CALL_RECORDING_S3_PREFIX` | `call-recordings/` | S3 key prefix |
+| DDB table name | `DDB_CALL_RECORDINGS_TABLE` | `CallRecordings` | DynamoDB table for recording metadata |
 
 ### 3.10 Recording Timeline Message
 
@@ -557,11 +562,16 @@ Endpoints:
 
 #### Modify: `scripts/local-ddb-init.py`
 
-Add `CallRecordings` table definition:
+First, add a new field to `app/core/settings.py`:
+```python
+call_recordings_table_name: str = os.environ.get("DDB_CALL_RECORDINGS_TABLE", "CallRecordings")
+```
+
+Then add the `CallRecordings` table definition using `_resolve_table_name(S.<field>, "Fallback")` (the standard pattern for all tables in this file):
 
 ```python
 TableDef(
-    os.getenv("DDB_CALL_RECORDINGS", "CallRecordings"),
+    _resolve_table_name(S.call_recordings_table_name, "CallRecordings"),
     "recording_id",
     gsi=[
         {"index_name": "ByCallIdCreatedAt", "partition_key": "call_id", "sort_key": "created_at"},
@@ -576,16 +586,22 @@ TableDef(
 
 Add recording event types to `ALLOWED_SIGNALING_TYPES` and update `STATE_ALLOWED_SIGNALING_TYPES["connected"]` to include them.
 
+> **IMPORTANT**: Recording signaling types (`call.recording_request`, `call.recording_accept`, etc.) MUST be added to BOTH:
+> 1. `ALLOWED_SIGNALING_TYPES` set (top-level validation gate)
+> 2. `STATE_ALLOWED_SIGNALING_TYPES["connected"]` set (per-state validation)
+>
+> Both checks are validated in sequence in `messaging_call_signaling.py`. Missing either one will cause 400 errors.
+
 #### Modify: `app/core/settings.py`
 
-Add settings:
+Add settings (note: `Settings` is a `@dataclass(frozen=True)` using `os.environ.get()`, not Pydantic `Field()`):
 ```python
-call_recording_enabled: bool = Field(default=False)
-call_recording_max_duration_seconds: int = Field(default=3600)
-call_recording_upload_ttl_seconds: int = Field(default=600)
-call_recording_max_file_size_bytes: int = Field(default=2_147_483_648)
-call_recording_retention_days: int = Field(default=90)
-call_recording_s3_prefix: str = Field(default="call-recordings/")
+call_recording_enabled: bool = os.environ.get("CALL_RECORDING_ENABLED", "false").lower() in ("1", "true", "yes", "on")
+call_recording_max_duration_seconds: int = int(os.environ.get("CALL_RECORDING_MAX_DURATION_SECONDS", "3600"))
+call_recording_upload_ttl_seconds: int = int(os.environ.get("CALL_RECORDING_UPLOAD_TTL_SECONDS", "600"))
+call_recording_max_file_size_bytes: int = int(os.environ.get("CALL_RECORDING_MAX_FILE_SIZE_BYTES", "2147483648"))
+call_recording_retention_days: int = int(os.environ.get("CALL_RECORDING_RETENTION_DAYS", "90"))
+call_recording_s3_prefix: str = os.environ.get("CALL_RECORDING_S3_PREFIX", "call-recordings/")
 ```
 
 #### Modify: `app/main.py`
@@ -704,7 +720,7 @@ onStopRecording?: () => void;
 recordingEnabled?: boolean;
 ```
 
-Add recording button to controls row (between Camera and End Call):
+Add recording button to controls row (after End Call button):
 ```tsx
 {recordingEnabled && session.state === "connected" && (
   <Tooltip>
@@ -746,6 +762,8 @@ Add recording event types to `EVENT_TYPES`:
 "call.recording_started",
 "call.recording_stopped",
 ```
+
+> **IMPORTANT**: These types MUST be added to the `EVENT_TYPES` array in `frontend/src/hooks/useMessagingStream.ts`. The EventSource registers `addEventListener` for each entry in this array. Without this registration, the EventSource won't fire `handleEvent` for these typed SSE events, and they will never be received by the client — even though the backend routing logic dispatches any `call.*` event to `messaging:call-event`.
 
 ### Phase 3: Integration & Polish (Days 7-8)
 
@@ -989,17 +1007,23 @@ test("Recording system message appears in conversation after call", async () => 
 
 ### 5.5 MediaRecorder Mocking in Playwright
 
-Chromium supports fake media devices via launch flags (already configured in `playwright.config.ts` for call tests):
+Chromium supports fake media devices via launch flags. **NOTE**: These flags are NOT currently configured in `playwright.config.ts` — the config only uses `{ ...devices["Desktop Chrome"] }` with no `launchOptions` or `args`. The following change MUST be added to `playwright.config.ts` as a prerequisite for the E2E recording tests:
 
 ```typescript
-use: {
-  launchOptions: {
-    args: [
-      "--use-fake-device-for-media-stream",
-      "--use-fake-ui-for-media-stream",
-    ],
+projects: [
+  {
+    name: "chromium",
+    use: {
+      ...devices["Desktop Chrome"],
+      launchOptions: {
+        args: [
+          "--use-fake-device-for-media-stream",
+          "--use-fake-ui-for-media-stream",
+        ],
+      },
+    },
   },
-},
+],
 ```
 
 For recording-specific tests, the `MediaRecorder` constructor can be mocked via `page.addInitScript`:

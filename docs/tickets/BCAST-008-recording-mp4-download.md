@@ -100,13 +100,22 @@ recordings through these stages:
 inventory_segments() → concatenate_segments() → transcode_recording() → generate_thumbnail() → finalize_recording()
 ```
 
-The critical artifact for this ticket is the **concatenated transport stream** produced in
-step 2. After `concatenate_segments()` runs, a single `full.ts` file exists at the path
-stored in `RecordingRecord.s3_archive_prefix` + `/recording/full.ts`. This file contains
-the complete broadcast as a continuous H.264+AAC stream in MPEG-TS container format.
+The critical artifact for this ticket is the **concatenated transport stream** that would be
+produced in step 2. However, `concatenate_segments()` currently returns `None` in all code
+paths (both mock and non-mock). No `.ts` file is actually produced by the current
+implementation. The `s3_archive_prefix` field is used only by `inventory_segments` as a
+directory prefix to list segment files from.
 
-In dev mode (`_should_mock()` returns `True`), the concatenation step is skipped and no real
-`.ts` file exists. The worker produces mock metadata with `duration_seconds=0`.
+**Important**: BCAST-008 implementation must first complete the `concatenate_segments()`
+function so that it actually produces a `full.ts` file at
+`{session_id}/recording/full.ts`. Without this, the MP4 remux step has no input file.
+
+In mock mode (`_should_mock()` returns `True`), the concatenation step remains a no-op and
+`generate_mp4` returns placeholder metadata (same pattern as current mock behavior).
+
+In production mode, `concatenate_segments()` must be implemented to download all HLS
+segments listed by `inventory_segments()` and concatenate them into a single MPEG-TS file
+before the MP4 remux step can proceed.
 
 ### 2.2 Current RecordingRecord Data Model
 
@@ -176,6 +185,11 @@ broadcast_recording_worker_inline: bool = ...
 broadcast_recording_mock_on_no_ffmpeg: bool = ...
 ```
 
+**NOTE**: `broadcast_recording_vod_prefix` exists in settings but is **never actually used**
+in S3 path construction in the current codebase. All S3 keys are constructed directly as
+`{session_id}/recording/...` without incorporating the `vod_prefix` setting. This spec
+follows the actual codebase convention (no prefix), not the unused setting value.
+
 The `broadcast_recording_playback_ttl_seconds` (default 14400 = 4 hours) is reusable for
 download URL TTL, or a separate setting can be introduced for download-specific TTL.
 
@@ -212,8 +226,8 @@ This pattern will be replicated for broadcast recording downloads.
 | `app/routers/broadcast.py` | Add download endpoint + toggle endpoint |
 | `app/core/settings.py` | Add download-specific settings |
 | `BroadcastRecordings` DDB table | Store `mp4_s3_key`, `mp4_size_bytes`, `allow_download`, `allow_viewer_download` |
-| Frontend: SessionDetailDialog | Add "Download Recording" button |
-| Frontend: viewer recording page | Conditional "Download" button |
+| Frontend: `SessionDetailDialog` (inline in `BroadcastPage.tsx`) | Add "Download Recording" button |
+| Frontend: viewer recording page | Conditional "Download" button (route must be created; see section 3.12) |
 
 ---
 
@@ -230,7 +244,7 @@ This pattern will be replicated for broadcast recording downloads.
        |
        |  ffmpeg -i full.ts -c copy -movflags +faststart full.mp4
        v
-[Upload MP4 to S3] ──> s3://{bucket}/sessions/{session_id}/recording/full.mp4
+[Upload MP4 to S3] ──> s3://{bucket}/{session_id}/recording/full.mp4
        |
        v
 [Update DDB Record] ──> mp4_s3_key, mp4_size_bytes, mp4_generated_at
@@ -267,10 +281,10 @@ The remux converts the MPEG-TS container to MP4 without re-encoding:
 
 ```bash
 ffmpeg -hide_banner -loglevel warning -y \
-  -i sessions/{session_id}/recording/full.ts \
+  -i {session_id}/recording/full.ts \
   -c copy \
   -movflags +faststart \
-  sessions/{session_id}/recording/full.mp4
+  {session_id}/recording/full.mp4
 ```
 
 Key flags:
@@ -298,7 +312,7 @@ class RecordingRecord:
     # Download fields (BCAST-008)
     allow_download: bool = True            # broadcaster can download (always True by default)
     allow_viewer_download: bool = False     # viewers can download (opt-in by broadcaster)
-    mp4_s3_key: str = ""                   # S3 key: sessions/{session_id}/recording/full.mp4
+    mp4_s3_key: str = ""                   # S3 key: {session_id}/recording/full.mp4
     mp4_size_bytes: int = 0                # File size for display/progress
     mp4_generated_at: int = 0              # Unix timestamp when MP4 was generated
     s3_concatenated_key: str = ""          # S3 key for full.ts (persisted for MP4 remux)
@@ -493,7 +507,7 @@ def generate_mp4(recording: RecordingRecord, concat_path: Optional[str]) -> Dict
     """
     if _should_mock() or concat_path is None:
         # Mock: no real media exists, produce placeholder metadata
-        mp4_key = f"sessions/{recording.session_id}/recording/full.mp4"
+        mp4_key = f"{recording.session_id}/recording/full.mp4"
         logger.info("Recording %s: mock MP4 at %s", recording.recording_id, mp4_key)
         return {
             "mp4_s3_key": mp4_key,
@@ -520,8 +534,8 @@ def generate_mp4(recording: RecordingRecord, concat_path: Optional[str]) -> Dict
     import os
     mp4_size = os.path.getsize(mp4_path)
     
-    # Upload to S3
-    mp4_key = f"sessions/{recording.session_id}/recording/full.mp4"
+    # Upload to S3 (NOTE: _upload_to_s3 does not exist yet — must be created as part of BCAST-008)
+    mp4_key = f"{recording.session_id}/recording/full.mp4"
     _upload_to_s3(mp4_path, bucket=S.broadcast_recording_vod_bucket, key=mp4_key)
     
     return {
@@ -567,8 +581,8 @@ def process_recording(recording_id: str) -> Optional[RecordingRecord]:
 After BCAST-008, the complete recording storage for a session looks like:
 
 ```
-s3://broadcast-vod/sessions/{session_id}/recording/
-    full.ts             # Concatenated transport stream (from BCAST-006)
+s3://broadcast-vod/{session_id}/recording/
+    full.ts             # Concatenated transport stream (from BCAST-006, must be implemented)
     full.mp4            # Progressive MP4 remux (NEW - BCAST-008)
     master.m3u8         # HLS master playlist (from BCAST-006)
     720p/
@@ -601,7 +615,7 @@ In dev mode (`S.dev_mode=True`), no real FFmpeg processing occurs:
 
 1. **MP4 generation**: `generate_mp4` returns mock metadata (`mp4_s3_key` set but no real
    file exists, `mp4_size_bytes=0`).
-2. **Download URL**: `mint_recording_download_url` returns `/mock/s3/broadcast-vod/sessions/{id}/recording/full.mp4?expires=...`
+2. **Download URL**: `mint_recording_download_url` returns `/mock/s3/broadcast-vod/{id}/recording/full.mp4?expires=...`
 3. **Mock S3 serve**: The existing `/mock/s3/{bucket}/{key}` route in dev mode will return
    404 for the non-existent mock MP4, which is acceptable for E2E tests that only validate
    the URL format and auth behavior (not actual file download).
@@ -611,7 +625,7 @@ seeded into moto S3 during test setup.
 
 ### 3.12 Frontend Integration
 
-**Broadcaster Dashboard** (`SessionDetailDialog.tsx`):
+**Broadcaster Dashboard** (`SessionDetailDialog` component, inline in `frontend/src/pages/broadcast/BroadcastPage.tsx`):
 
 Add a "Download Recording" button alongside the existing "Watch Recording" button:
 
@@ -659,7 +673,11 @@ const handleDownload = async (sessionId: string) => {
 </div>
 ```
 
-**Viewer Recording Page**:
+**Viewer Recording Page** (NOTE: the route `/broadcast/watch/{sessionId}` does NOT currently
+exist in the codebase. The existing `SessionDetailDialog` links directly to the recording
+playback URL rather than a dedicated viewer page. BCAST-008 must either create this route
+or add the viewer download button within the existing `SessionDetailDialog` when viewed by
+a non-owner):
 
 ```tsx
 {recording?.allow_viewer_download && recording.download_available && (
@@ -708,7 +726,7 @@ export const updateRecordingDownloadSettings = (sessionId: string, allowViewerDo
 | `app/routers/broadcast.py` | Add `GET .../recording/download` endpoint; add `PATCH .../recording/download-settings` endpoint; add `BroadcastRecordingDownloadOut` + `BroadcastRecordingDownloadSettingsIn` models; update `BroadcastRecordingOut` with download fields |
 | `app/core/settings.py` | Add `broadcast_recording_download_enabled`, `broadcast_recording_download_ttl_seconds`, `broadcast_recording_mp4_auto_generate` |
 | `frontend/src/api/endpoints/broadcast.ts` | Add `BroadcastRecordingDownload` type, `getRecordingDownload()`, `updateRecordingDownloadSettings()` |
-| `frontend/src/pages/broadcaster/SessionDetailDialog.tsx` | Add "Download Recording" button + viewer download toggle |
+| `frontend/src/pages/broadcast/BroadcastPage.tsx` | Add "Download Recording" button + viewer download toggle (in inline `SessionDetailDialog` component) |
 
 ### 4.2 New Files to Create
 
@@ -730,7 +748,7 @@ export const updateRecordingDownloadSettings = (sessionId: string, allowViewerDo
 **Phase 2: Worker Pipeline Extension (1.5 hours)**
 
 1. Add `generate_mp4()` function to `broadcast_recording_worker.py`
-2. Add `_upload_to_s3()` helper for uploading the MP4 file to S3
+2. Create `_upload_to_s3()` helper for uploading the MP4 file to S3 (does not exist yet in the codebase)
 3. Modify `process_recording()` to call `generate_mp4()` between transcode and thumbnail steps
 4. Modify `finalize_recording()` to accept and persist `mp4_result` dict
 5. Ensure mock mode sets `mp4_s3_key` and `mp4_size_bytes` (even with value 0)
@@ -756,7 +774,7 @@ export const updateRecordingDownloadSettings = (sessionId: string, allowViewerDo
 **Phase 4: Frontend Integration (2 hours)**
 
 1. Add TypeScript types and API wrappers to `frontend/src/api/endpoints/broadcast.ts`
-2. Add "Download Recording" button to `SessionDetailDialog.tsx`:
+2. Add "Download Recording" button to `SessionDetailDialog` (inline in `BroadcastPage.tsx`):
    - Visible when `recording.download_available === true`
    - Shows file size in human-readable format (e.g., "Download MP4 (1.2 GB)")
    - Loading state while fetching presigned URL
@@ -765,7 +783,7 @@ export const updateRecordingDownloadSettings = (sessionId: string, allowViewerDo
    - Uses `useMutation` with `updateRecordingDownloadSettings`
    - Invalidates recording query on success
    - Shows toast confirmation
-4. Add "Download Recording" button to viewer recording page:
+4. Add "Download Recording" button to viewer recording page (NOTE: route `/broadcast/watch/{sessionId}` does not exist yet and must be created, or the download button can be added to the existing `SessionDetailDialog` when viewed by a non-owner):
    - Only visible when `recording.allow_viewer_download === true`
    - Calls `getRecordingDownload(sessionId, true)` with viewer flag
    - Same download trigger pattern as broadcaster
@@ -823,7 +841,7 @@ def test_generate_mp4_ffmpeg_failure_raises_runtime_error():
     # Mock subprocess.run with returncode=1
 
 def test_generate_mp4_output_key_format():
-    """MP4 S3 key follows format: sessions/{session_id}/recording/full.mp4."""
+    """MP4 S3 key follows format: {session_id}/recording/full.mp4."""
     # Verify key derivation from session_id
 
 def test_generate_mp4_no_concat_path_returns_mock():
@@ -939,10 +957,10 @@ def ready_recording(recording_table):
     from app.services.broadcast_recording import create_recording, update_recording_status
     rec = create_recording(session_id="sess_test123", profile_id="prof_1", created_by="user_broadcaster")
     update_recording_status(rec.recording_id, "ready",
-        mp4_s3_key="sessions/sess_test123/recording/full.mp4",
+        mp4_s3_key="sess_test123/recording/full.mp4",
         mp4_size_bytes=1048576,
         mp4_generated_at=int(time.time()),
-        s3_manifest_key="sessions/sess_test123/recording/master.m3u8",
+        s3_manifest_key="sess_test123/recording/master.m3u8",
     )
     return get_recording(rec.recording_id)
 ```
@@ -1145,13 +1163,16 @@ test.describe("Section 96: Download Recording UI", () => {
   });
 
   test("96.4 viewer sees download button only when enabled", async () => {
+    // NOTE: /broadcast/watch/{sessionId} does NOT exist yet — must be created as part of
+    // BCAST-008, OR this test should be adapted to use the existing SessionDetailDialog
+    // (which currently links directly to the playback URL, not a dedicated viewer page).
     // Enable viewer download, then check from Alice's page
     await apiPatch(rootPage, "root",
       `/broadcast/sessions/${sessionId}/recording/download-settings`,
       { allow_viewer_download: true }
     );
     await injectAuth(alicePage, "alice");
-    await alicePage.goto(`/broadcast/watch/${sessionId}`);
+    await alicePage.goto(`/broadcast/watch/${sessionId}`);  // Route must be created
     await expect(alicePage.getByRole("button", { name: /download recording/i })).toBeVisible();
   });
 });
@@ -1162,7 +1183,7 @@ test.describe("Section 96: Download Recording UI", () => {
 Since E2E tests run against the local dev stack (no real media exists), the MP4 generation
 step produces mock metadata:
 
-1. `generate_mp4()` detects mock mode → returns `{ mp4_s3_key: "sessions/.../full.mp4", mp4_size_bytes: 0, mp4_generated_at: <now> }`
+1. `generate_mp4()` detects mock mode → returns `{ mp4_s3_key: "{session_id}/recording/full.mp4", mp4_size_bytes: 0, mp4_generated_at: <now> }`
 2. `finalize_recording()` persists these values in DDB
 3. `GET .../recording/download` sees `mp4_s3_key` is non-empty → mints a mock presigned URL
 4. Tests verify URL format, auth behavior, and permission logic (not actual file download)
@@ -1279,7 +1300,7 @@ class BroadcastRecordingDownloadSettingsIn(BaseModel):
 | `app/routers/broadcast.py` | Download + settings endpoints |
 | `app/core/settings.py` | Feature configuration |
 | `frontend/src/api/endpoints/broadcast.ts` | API client wrappers |
-| `frontend/src/pages/broadcaster/SessionDetailDialog.tsx` | Download button + toggle UI |
+| `frontend/src/pages/broadcast/BroadcastPage.tsx` | Download button + toggle UI (in inline `SessionDetailDialog` component) |
 | `tests/test_broadcast_recording_download.py` | Unit tests (NEW) |
 | `frontend/e2e/broadcast-recording-download.spec.ts` | E2E tests (NEW) |
 
