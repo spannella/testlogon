@@ -1,0 +1,876 @@
+# VOD-012: Optional MP4 Download for Videos
+
+**Ticket**: VOD-012
+**Author**: Engineering
+**Status**: Design
+**Date**: 2026-05-24
+
+---
+
+## 1. Overview & Motivation
+
+### 1.1 Problem Statement
+
+The platform currently delivers all video content exclusively via HLS adaptive bitrate streaming. While this provides optimal quality adaptation for online viewing, it does not serve users who want to watch content offline (airplane, poor connectivity areas, archival). Viewers currently have no legitimate mechanism to save a video for later playback outside the browser.
+
+Third-party HLS downloaders exist but are unsanctioned, bypass analytics, and produce inconsistent quality. Providing a first-party download option gives creators control over distribution while improving viewer satisfaction and reducing churn.
+
+### 1.2 Creator Control
+
+Downloads are opt-in on a per-video basis via a new `allow_download` boolean field on the video metadata record. Creators retain full control:
+
+- **Default**: Downloads are disabled (HLS-only streaming).
+- **Enable**: Creator toggles "Allow Download" in the video edit form. This triggers generation of a progressive MP4 file from the highest-quality HLS rendition.
+- **Disable**: Creator toggles off "Allow Download". The download button disappears from the player page immediately. The MP4 file in S3 is marked for deferred cleanup (not deleted immediately, to avoid re-generation costs if re-enabled within a grace period).
+
+### 1.3 Viewer Experience
+
+When `allow_download` is `true` and the viewer has a valid playback entitlement:
+
+1. A "Download" button appears below the video player on `VideoPlayerPage.tsx`.
+2. Clicking "Download" requests a time-limited presigned S3 URL from the backend.
+3. The browser initiates a standard file download of the progressive MP4.
+4. The download URL expires after a configurable TTL (default: 1 hour). Subsequent clicks generate a fresh URL.
+
+### 1.4 Security Model
+
+- **Signed time-limited URLs**: Download URLs are S3 presigned GET URLs (or CloudFront signed URLs in production) with a configurable TTL. They are not permanent links and cannot be bookmarked for indefinite reuse.
+- **Entitlement enforcement**: The download endpoint validates the viewer's playback entitlement before issuing a URL. Unauthorized viewers receive 403.
+- **DRM policy interaction**: If a video has `drm_enabled=true`, the creator can independently choose whether to allow downloads. If both DRM and download are enabled, the MP4 file is generated from the encrypted HLS rendition remuxed to cleartext (the content key is applied server-side during generation). This is a conscious creator choice -- the download is intentionally DRM-free for offline convenience.
+- **Rate limiting**: Download URL generation is rate-limited per user per video (default: 5 requests per 10 minutes) to prevent URL farming.
+- **Audit trail**: Every download URL issuance is logged with `user_sub`, `video_id`, `ip`, and `timestamp` for creator analytics and abuse detection.
+
+### 1.5 User Stories
+
+| Actor | Story | Acceptance Criteria |
+|-------|-------|---------------------|
+| Creator | As a creator, I want to enable downloads on a specific video so my audience can watch offline. | Toggle `allow_download` via PATCH; MP4 generation begins; download button appears for viewers. |
+| Creator | As a creator, I want to disable downloads on a video to prevent further distribution. | Toggle off via PATCH; download button disappears immediately; existing URLs expire naturally. |
+| Creator | As a creator, I want to see the download file size before enabling, so I can anticipate storage costs. | After MP4 generation completes, `download_mp4_size_bytes` is shown in video detail. |
+| Viewer | As a viewer, I want to download a video for offline viewing on my device. | Click "Download" button; browser downloads `.mp4` file; file plays in any standard player. |
+| Viewer | As a viewer, I expect the download button to be absent for videos where the creator hasn't enabled it. | Button not rendered when `allow_download=false` or `download_mp4_status != "ready"`. |
+| Admin | As an admin, I want to see download analytics (counts, bandwidth) for videos on the platform. | Admin video detail endpoint includes `download_count` and `download_bytes_total`. |
+| Admin | As an admin, I want to disable downloads platform-wide in case of a security incident. | `VIDEO_DOWNLOAD_ENABLED=false` setting immediately blocks all download URL generation (returns 503). |
+
+---
+
+## 2. Current State Analysis
+
+### 2.1 Video Storage Architecture (HLS-Only)
+
+After transcode (VOD-003 through VOD-005), video assets are stored in S3 as HLS segments:
+
+```
+s3://{vod-output}/{prefix}/{tenant_id}/assets/{video_id}/
+  hls/
+    master.m3u8              # ABR master playlist (references rendition playlists)
+    1080p/index.m3u8         # Variant playlist
+    1080p/seg_00001.ts       # 2-second MPEG-TS segments
+    1080p/seg_00002.ts
+    ...
+    720p/index.m3u8
+    720p/seg_00001.ts
+    ...
+    480p/...
+    360p/...
+  thumbnails/
+    poster_0s.jpg
+    poster_10s.jpg
+  metadata.json
+```
+
+Key observations:
+- **No progressive MP4 exists post-transcode**: The pipeline (`ffmpeg_abr_pipeline.py`) outputs only HLS segments. The original upload is stored at `videos/{user_sub}/{video_id}/{filename}` in the upload bucket but is a raw source file (potentially non-MP4, e.g., MKV, MOV, WebM).
+- **S3 paths are consistent**: `tenants/{tenant_id}/assets/{video_id}/hls/{rendition}/` for HLS. A natural extension is `tenants/{tenant_id}/assets/{video_id}/download/{video_id}.mp4` for the download file.
+- **Segment count varies**: A 1-hour video at 2s segments = 1800 segments per rendition. Remuxing these to MP4 is fast (no re-encode).
+
+### 2.2 Original Upload File Retention
+
+The upload flow (`app/routers/vod.py`) stores the original uploaded file at:
+
+```
+s3://{local-uploads}/videos/{user_sub}/{video_id}/{filename}
+```
+
+After transcode completion, the original file is **retained indefinitely** (no lifecycle deletion configured on the upload bucket). This means Option A (serve the original as the download source) is technically feasible. However, the original may be:
+- A non-MP4 format (MKV, MOV, WebM, AVI) -- not universally playable
+- Very large (uncompressed or high-bitrate source)
+- Missing watermarks applied during HLS transcode
+- Lacking any DRM-related processing
+
+**Conclusion**: The original upload is unsuitable as a general download source due to format/size/watermark concerns.
+
+### 2.3 Existing Download Patterns in the Codebase
+
+**File Manager presigned downloads** (`app/services/filemanager.py`, line 1256):
+```python
+return _s3.generate_presigned_url(
+    ClientMethod="get_object",
+    Params={"Bucket": bucket, "Key": key},
+    ExpiresIn=ttl,
+)
+```
+
+This is the established pattern for generating time-limited download URLs. The VOD download endpoint will follow the same approach.
+
+**File Manager download usage tracking** (`record_download_usage`, line 200):
+```python
+def record_download_usage(user: str, path: str, bytes_count: int, *, source: str, request_id: Optional[str] = None) -> None:
+```
+
+We will implement an analogous `record_vod_download_usage` function for analytics.
+
+**VOD playback URL generation** (`app/services/vod_playback_url.py`):
+- Already supports three modes: dev (mock S3), CloudFront signed, S3 presigned
+- The download URL generator will follow the same tri-modal pattern
+- Reuses `_vod_sign` for CloudFront-signed downloads in production
+
+### 2.4 Playback Entitlement Capabilities
+
+`app/services/playback_entitlements.py` provides:
+- `issue_playback_entitlement(...)` -- Generates signed JWT with `tenant_id`, `asset_id`, `exp`
+- `validate_playback_entitlement(*, token, expected_audience)` -- Validates token + audience
+
+The download endpoint can validate viewer authorization via:
+1. **Session auth** (cookie-based): The viewer is authenticated via `require_ui_session`. The endpoint then checks if the viewer is the owner or has a valid entitlement.
+2. **Entitlement token** (optional, for API consumers): Accept a `playback_token` query param and validate it with `expected_audience="download"`.
+
+For simplicity and consistency with other UI endpoints, we will use session auth (cookie-based) as primary, with owner-always-allowed semantics and entitlement check for non-owners.
+
+### 2.5 FFmpeg Capabilities
+
+**`app/services/ffmpeg_abr_pipeline.py`** already handles:
+- Binary path resolution via `ffmpeg_manager.get_ffmpeg_path()`
+- Input from URLs or local files
+- HLS segment generation with encryption support
+
+FFmpeg can trivially remux HLS segments to progressive MP4:
+```bash
+ffmpeg -allowed_extensions ALL -i master.m3u8 -c copy -movflags +faststart output.mp4
+```
+
+This performs no re-encoding (stream copy) and is extremely fast (limited only by I/O). The `-movflags +faststart` moves the `moov` atom to the beginning of the file, enabling progressive download (playback starts before the entire file is downloaded).
+
+### 2.6 Watermark Pipeline
+
+**`app/services/ffmpeg_abr_pipeline.py`** applies watermarks during HLS transcoding (static image or dynamic text overlay). If the HLS rendition is watermarked, remuxing to MP4 preserves the watermark in the output. This is a key advantage of Option B (remux from HLS) over Option A (serve original).
+
+### 2.7 Configuration Patterns
+
+Settings follow the established pattern in `app/core/settings.py`:
+```python
+video_download_enabled: bool = os.environ.get("VIDEO_DOWNLOAD_ENABLED", "1") not in ("0", "false", "False")
+```
+
+Feature flags default to enabled in dev mode but can be toggled in production without code changes.
+
+---
+
+## 3. Technical Design
+
+### 3.1 Approach Evaluation
+
+| Option | Description | Pros | Cons |
+|--------|-------------|------|------|
+| **A: Serve original upload** | Return presigned URL to the raw source file in the upload bucket. | Zero processing cost; instant availability. | Non-MP4 formats not universally playable; no watermark; potentially huge file; format inconsistency across videos. |
+| **B: Remux from HLS** | FFmpeg stream-copy highest-quality HLS rendition segments into a single progressive MP4 (`-c copy -movflags +faststart`). | Fast (no re-encode, <30s for 1hr video); preserves watermark baked into HLS; consistent MP4 output; file size predictable. | Requires MP4 generation step; ~5-10s delay for short videos; storage cost for the MP4 file. |
+| **C: Full re-encode with watermark** | Re-encode from source with dedicated watermark/DRM treatment. | Maximum flexibility; can apply download-specific watermark (e.g., visible user ID). | Very expensive (CPU hours); long delay before download is available; duplicates transcode pipeline logic. |
+
+### 3.2 Recommended Approach: Option B (Remux from HLS)
+
+**Option B** is recommended as the primary approach:
+
+1. **Speed**: HLS-to-MP4 remux is stream copy (`-c copy`). A 1-hour video remuxes in <30 seconds (I/O bound, no CPU-intensive encoding).
+2. **Watermark preservation**: If the HLS rendition was watermarked during transcode (via `ffmpeg_abr_pipeline.py`'s drawtext/overlay), the watermark is embedded in the `.ts` segment video frames and carries through to the MP4.
+3. **Consistency**: Every download is a standard H.264/AAC MP4 regardless of the original upload format.
+4. **Storage efficiency**: The MP4 is roughly the same size as the sum of the highest-quality HLS segments (no inflation from re-encoding).
+
+**Fallback**: If the HLS rendition does not exist (e.g., transcode failed for the highest quality but lower ones succeeded), fall back to the next-best available rendition. If no HLS output exists at all, return 409 ("download not available -- video not yet transcoded").
+
+### 3.3 Data Model Changes
+
+**File: `app/models_video.py`** -- Add fields to `VideoMetadataModel`:
+
+```python
+# Download (VOD-012)
+allow_download: bool = False
+download_mp4_key: Optional[str] = None          # S3 key of the generated MP4
+download_mp4_size_bytes: Optional[int] = None    # File size for UI display
+download_mp4_status: Optional[str] = None        # "pending" | "generating" | "ready" | "failed" | "disabled"
+download_mp4_generated_at: Optional[int] = None  # Timestamp of last successful generation
+download_mp4_error: Optional[str] = None         # Error message if generation failed
+download_count: int = 0                          # Total download count (analytics)
+download_drm_cleartext: bool = True              # If DRM video: generate cleartext MP4 (default True)
+```
+
+**File: `app/models_video.py`** -- Add fields to `UpdateVideoIn`:
+
+```python
+allow_download: Optional[bool] = None
+download_drm_cleartext: Optional[bool] = None
+```
+
+**File: `app/models_video.py`** -- Add fields to `VideoOut`:
+
+```python
+allow_download: bool = False
+download_mp4_size_bytes: Optional[int] = None
+download_mp4_status: Optional[str] = None
+download_available: bool = False  # Computed: allow_download AND download_mp4_status == "ready"
+```
+
+### 3.4 S3 Path Convention
+
+```
+s3://{vod-output}/{prefix}/{tenant_id}/assets/{video_id}/download/{video_id}.mp4
+```
+
+Example:
+```
+s3://vod-output/tenants/user_abc123/assets/v_f7a3b2c1/download/v_f7a3b2c1.mp4
+```
+
+The download directory is a peer to `hls/` and `thumbnails/` under the asset prefix. This keeps all asset outputs colocated for lifecycle management.
+
+### 3.5 MP4 Generation Pipeline
+
+#### 3.5.1 Trigger
+
+MP4 generation is triggered when a creator enables download via `PATCH /ui/videos/{video_id}` with `allow_download=true`:
+
+1. Endpoint validates that `status` is `"published"` or `"approved"` (video must be transcoded).
+2. Sets `download_mp4_status = "pending"` on the video record.
+3. Enqueues an MP4 generation job (in-process background task in dev mode; SQS/task queue in production).
+
+If the video is re-transcoded after download was enabled (e.g., quality upgrade), the MP4 must be regenerated. The transcode completion handler checks `allow_download` and triggers regeneration if `true`.
+
+#### 3.5.2 Generation Process
+
+```python
+def generate_download_mp4(
+    *,
+    video_id: str,
+    tenant_id: str,
+    source_rendition: str = "1080p",  # Highest available
+) -> GenerationResult:
+    """
+    Remux the highest-quality HLS rendition to a progressive MP4.
+
+    Steps:
+    1. Resolve the HLS variant playlist URL/key for the source rendition.
+    2. If DRM-encrypted: fetch decryption key, pass to FFmpeg via -hls_key_info_file.
+    3. Run FFmpeg: ffmpeg -allowed_extensions ALL -i <playlist_url> -c copy -movflags +faststart <output.mp4>
+    4. Upload the resulting MP4 to S3 at the download path.
+    5. Update video metadata with download_mp4_key, download_mp4_size_bytes, download_mp4_status="ready".
+    """
+```
+
+#### 3.5.3 FFmpeg Command
+
+For unencrypted HLS:
+```bash
+ffmpeg -hide_banner -loglevel warning -y \
+  -allowed_extensions ALL \
+  -i /path/to/1080p/index.m3u8 \
+  -c copy \
+  -movflags +faststart \
+  /tmp/scratch/{video_id}.mp4
+```
+
+For DRM-encrypted HLS (cleartext download):
+```bash
+ffmpeg -hide_banner -loglevel warning -y \
+  -allowed_extensions ALL \
+  -hls_key_info_file /tmp/scratch/{video_id}_keyinfo.txt \
+  -i /path/to/1080p/index.m3u8 \
+  -c copy \
+  -movflags +faststart \
+  /tmp/scratch/{video_id}.mp4
+```
+
+Where the key info file contains the decryption key (derived via `content_key_derivation.derive_content_key()`).
+
+For S3-hosted segments (production), FFmpeg reads directly from presigned URLs or via a local download of the playlist + segments to scratch disk:
+
+```python
+# Download variant playlist + segments to scratch dir
+scratch_dir = Path(S.transcode_scratch_dir) / f"download-{video_id}"
+scratch_dir.mkdir(parents=True, exist_ok=True)
+
+# Option 1 (preferred for S3): Generate presigned manifest URL and let FFmpeg HTTP-fetch segments
+manifest_url = _s3.generate_presigned_url(
+    ClientMethod="get_object",
+    Params={"Bucket": bucket, "Key": f"{base_key}/hls/{rendition}/index.m3u8"},
+    ExpiresIn=3600,
+)
+
+# Option 2 (dev mode): Use mock S3 URL
+manifest_url = f"http://localhost:8000/mock/s3/{bucket}/{base_key}/hls/{rendition}/index.m3u8"
+```
+
+#### 3.5.4 Rendition Selection
+
+The generator selects the highest-quality available rendition from `CANONICAL_ABR_LADDER`:
+
+```python
+from app.contracts.video_rendition_profiles import CANONICAL_ABR_LADDER
+
+def _select_best_rendition(video: VideoMetadataModel) -> str:
+    """Select the highest-quality rendition that was successfully transcoded."""
+    # CANONICAL_ABR_LADDER is ordered highest to lowest: 1080p, 720p, 480p, 360p
+    available = {r.label for r in video.renditions}
+    for profile in CANONICAL_ABR_LADDER:
+        if profile["name"] in available:
+            return profile["name"]
+    raise ValueError(f"No renditions available for video {video.id}")
+```
+
+### 3.6 Download Endpoint
+
+**Path**: `GET /ui/videos/{video_id}/download`
+
+**Auth**: `require_ui_session` (cookie-based)
+
+**Authorization logic**:
+1. Owner can always download their own videos (if `allow_download=true` and MP4 is ready).
+2. Non-owner viewers must have a valid playback entitlement (checked via existing entitlement system) OR the video must be `published` + `public`/`unlisted`.
+3. If `VIDEO_DOWNLOAD_ENABLED=false` globally, return 503 ("downloads temporarily disabled").
+4. If `allow_download=false` on the video, return 403 ("downloads not enabled for this video").
+5. If `download_mp4_status != "ready"`, return 409 ("download is being prepared").
+
+**Response**: `302 Redirect` to a presigned S3 URL with `Content-Disposition: attachment; filename="{title}.mp4"`.
+
+```python
+@router.get("/{video_id}/download")
+def download_video(
+    video_id: str,
+    ctx=Depends(require_ui_session),
+):
+    if not S.video_download_enabled:
+        raise HTTPException(status_code=503, detail="downloads temporarily disabled")
+
+    video = get_video(video_id)
+    user_sub = ctx["user_sub"]
+
+    # Authorization
+    is_owner = video.owner_user_id == user_sub
+    is_public = video.status == "published" and video.visibility in ("public", "unlisted")
+    if not is_owner and not is_public:
+        # Check entitlement (future: query entitlements table)
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    if not video.allow_download:
+        raise HTTPException(status_code=403, detail="downloads not enabled for this video")
+
+    if video.download_mp4_status != "ready" or not video.download_mp4_key:
+        raise HTTPException(status_code=409, detail="download is being prepared")
+
+    # Generate presigned URL
+    ttl = S.video_download_url_ttl_seconds
+    download_url = _generate_download_url(video, ttl_seconds=ttl)
+
+    # Record download event
+    _record_download(video_id=video_id, user_sub=user_sub, size_bytes=video.download_mp4_size_bytes or 0)
+
+    # Increment download counter (async, best-effort)
+    _increment_download_count(video_id)
+
+    return RedirectResponse(url=download_url, status_code=302)
+```
+
+### 3.7 Download URL Generation
+
+Follows the same tri-modal pattern as `vod_playback_url.py`:
+
+```python
+def _generate_download_url(video: VideoMetadataModel, *, ttl_seconds: int) -> str:
+    bucket = S.vod_output_bucket or S.transcode_output_bucket or "vod-output"
+    key = video.download_mp4_key
+
+    if S.dev_mode:
+        return f"http://localhost:8000/mock/s3/{bucket}/{key}"
+
+    if S.vod_cloudfront_domain:
+        # CloudFront signed URL with Content-Disposition override
+        return _mint_cloudfront_download_url(key, ttl_seconds=ttl_seconds, filename=f"{video.title}.mp4")
+
+    # S3 presigned URL with response-content-disposition
+    safe_title = video.title.replace('"', "'")[:200]
+    return _s3.generate_presigned_url(
+        ClientMethod="get_object",
+        Params={
+            "Bucket": bucket,
+            "Key": key,
+            "ResponseContentDisposition": f'attachment; filename="{safe_title}.mp4"',
+            "ResponseContentType": "video/mp4",
+        },
+        ExpiresIn=ttl_seconds,
+    )
+```
+
+### 3.8 Signed URL TTL
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `VIDEO_DOWNLOAD_URL_TTL_SECONDS` | `3600` (1 hour) | How long a download URL is valid. |
+
+The TTL is intentionally longer than the playback token TTL (300s) because:
+- Downloads can be large (multi-GB) and may take significant time on slow connections.
+- Users may copy the URL to a download manager.
+- The URL is single-use in practice (browsers don't retry partial downloads with new URLs).
+
+### 3.9 DRM Interaction
+
+| Scenario | Behavior |
+|----------|----------|
+| `drm_enabled=false`, `allow_download=true` | MP4 generated from cleartext HLS. Straightforward remux. |
+| `drm_enabled=true`, `allow_download=true`, `download_drm_cleartext=true` | MP4 generated by decrypting HLS segments during remux (FFmpeg handles this with the key info file). The resulting MP4 is cleartext. Creator explicitly opted into this. |
+| `drm_enabled=true`, `allow_download=true`, `download_drm_cleartext=false` | **Reserved for future**: MP4 would need client-side DRM (Widevine offline license). For Phase 1, this combination returns a warning to the creator that downloads will be cleartext. |
+| `drm_enabled=true`, `allow_download=false` | No MP4 generated. Download button not shown. Default behavior. |
+
+### 3.10 Settings
+
+**File: `app/core/settings.py`** -- New settings:
+
+```python
+# VOD Download (VOD-012)
+video_download_enabled: bool = os.environ.get("VIDEO_DOWNLOAD_ENABLED", "1") not in ("0", "false", "False")
+video_download_url_ttl_seconds: int = int(os.environ.get("VIDEO_DOWNLOAD_URL_TTL_SECONDS", "3600"))
+video_download_max_size_bytes: int = int(os.environ.get("VIDEO_DOWNLOAD_MAX_SIZE_BYTES", str(10 * 1024 * 1024 * 1024)))  # 10 GB
+video_download_rate_limit_per_10min: int = int(os.environ.get("VIDEO_DOWNLOAD_RATE_LIMIT_PER_10MIN", "5"))
+video_download_generation_timeout_seconds: int = int(os.environ.get("VIDEO_DOWNLOAD_GENERATION_TIMEOUT_SECONDS", "600"))
+video_download_mp4_cleanup_grace_days: int = int(os.environ.get("VIDEO_DOWNLOAD_MP4_CLEANUP_GRACE_DAYS", "7"))
+```
+
+### 3.11 Disabling Downloads (MP4 Cleanup)
+
+When a creator sets `allow_download=false`:
+
+1. `download_mp4_status` is set to `"disabled"`.
+2. The download button disappears immediately for viewers.
+3. The MP4 file in S3 is **not** deleted immediately -- it enters a grace period (`VIDEO_DOWNLOAD_MP4_CLEANUP_GRACE_DAYS`, default 7 days).
+4. A background cleanup job deletes MP4 files whose videos have had `allow_download=false` for longer than the grace period.
+5. If the creator re-enables download within the grace period, the existing MP4 is reused (status transitions back to `"ready"` without regeneration).
+
+### 3.12 Size Limit Enforcement
+
+Before generating the MP4, the generator estimates the output size by summing segment sizes from the S3 listing:
+
+```python
+def _estimate_mp4_size(bucket: str, prefix: str) -> int:
+    """Sum the content lengths of all .ts segments under the rendition prefix."""
+    total = 0
+    paginator = _s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            if obj["Key"].endswith(".ts"):
+                total += obj["Size"]
+    return total
+```
+
+If the estimated size exceeds `VIDEO_DOWNLOAD_MAX_SIZE_BYTES`, generation is refused and the status is set to `"failed"` with an appropriate error message ("Video too large for download -- exceeds 10 GB limit").
+
+---
+
+## 4. Implementation Plan
+
+### 4.1 Files to Create
+
+| File | Purpose |
+|------|---------|
+| `app/services/vod_mp4_generator.py` | MP4 generation logic: rendition selection, FFmpeg remux, S3 upload, metadata update |
+| `app/services/vod_download_url.py` | Download URL generation (dev/CloudFront/presigned modes) |
+| `tests/test_vod_mp4_generator.py` | Unit tests for MP4 generation service |
+| `tests/test_vod_download.py` | Unit tests for download endpoint (auth, entitlement, URL generation) |
+| `frontend/e2e/vod-download.spec.ts` | E2E tests for download enable/disable/use flow |
+
+### 4.2 Files to Modify
+
+| File | Change |
+|------|--------|
+| `app/models_video.py` | Add `allow_download`, `download_mp4_key`, `download_mp4_size_bytes`, `download_mp4_status`, `download_mp4_generated_at`, `download_mp4_error`, `download_count`, `download_drm_cleartext` fields to `VideoMetadataModel`; add `allow_download`, `download_drm_cleartext` to `UpdateVideoIn`; add download fields to `VideoOut` |
+| `app/services/video_metadata_store.py` | Add download fields to `video_to_item` and `video_from_item` serialization; add `increment_download_count` atomic counter update |
+| `app/routers/video_listing.py` | Add `GET /ui/videos/{video_id}/download` endpoint; update `PATCH` handler to trigger MP4 generation when `allow_download` transitions to `true`; include download fields in `VideoDetailOut` |
+| `app/core/settings.py` | Add `video_download_enabled`, `video_download_url_ttl_seconds`, `video_download_max_size_bytes`, `video_download_rate_limit_per_10min`, `video_download_generation_timeout_seconds`, `video_download_mp4_cleanup_grace_days` |
+| `.env.local.example` | Add VOD-012 environment variables with defaults |
+| `frontend/src/api/endpoints/videos.ts` | Add `downloadVideo(videoId)` function; add `allow_download`, `download_mp4_size_bytes`, `download_mp4_status`, `download_available` to `VideoDetail` interface |
+| `frontend/src/pages/videos/VideoPlayerPage.tsx` | Add "Download" button (conditional on `download_available`); add download size display |
+
+### 4.3 Step-by-Step Implementation Order
+
+**Step 1: Data model + settings** (no behavior change)
+1. Add new fields to `VideoMetadataModel`, `UpdateVideoIn`, `VideoOut` in `app/models_video.py`.
+2. Update `video_to_item` / `video_from_item` in `app/services/video_metadata_store.py` to serialize/deserialize the new fields.
+3. Add settings to `app/core/settings.py`.
+4. Add env vars to `.env.local.example`.
+
+**Step 2: MP4 generation service**
+1. Create `app/services/vod_mp4_generator.py` with:
+   - `generate_download_mp4(video_id, tenant_id)` -- Main generation function.
+   - `_select_best_rendition(video)` -- Picks highest-quality available rendition.
+   - `_estimate_mp4_size(bucket, prefix)` -- Size estimation from S3 segment listing.
+   - `_run_ffmpeg_remux(input_url, output_path, *, encryption_key_info)` -- FFmpeg subprocess.
+   - `_upload_mp4_to_s3(local_path, bucket, key)` -- Upload with progress tracking.
+2. Wire into the transcode completion handler (if `allow_download=true`, auto-generate).
+
+**Step 3: Download endpoint**
+1. Add `GET /ui/videos/{video_id}/download` to `app/routers/video_listing.py`.
+2. Create `app/services/vod_download_url.py` for URL generation logic.
+3. Add rate limiting (reuse existing `_rate_limit_check` pattern from filemanager).
+4. Add download event recording (DynamoDB + optional metrics).
+
+**Step 4: PATCH trigger for MP4 generation**
+1. Update the PATCH handler in `video_listing.py`:
+   - When `allow_download` transitions from `false` to `true`:
+     - Validate video status is `published` or `approved`.
+     - Set `download_mp4_status = "pending"`.
+     - Spawn background generation task (in dev: `asyncio.create_task`; production: enqueue to SQS).
+   - When `allow_download` transitions from `true` to `false`:
+     - Set `download_mp4_status = "disabled"`.
+     - Schedule deferred cleanup (mark `download_disabled_at` for grace period logic).
+
+**Step 5: Frontend changes**
+1. Update `frontend/src/api/endpoints/videos.ts`:
+   - Add `download_available`, `allow_download`, `download_mp4_size_bytes`, `download_mp4_status` to `VideoDetail`.
+   - Add `downloadVideo(videoId)` function that GETs `/ui/videos/{videoId}/download` and handles the 302 redirect.
+2. Update `frontend/src/pages/videos/VideoPlayerPage.tsx`:
+   - Add a "Download" button below the player (shown when `download_available === true`).
+   - Show file size badge (e.g., "1.2 GB").
+   - Handle loading/error states during download initiation.
+3. Update video edit form (if exists) to show "Allow Downloads" toggle.
+
+**Step 6: Background MP4 generation worker**
+1. In dev mode: Use `asyncio.create_task` to run generation in-process after PATCH response.
+2. In production: The generation job is enqueued via the same transcode job mechanism (DynamoDB `TranscodeJobs` table with `job_type="mp4_download"`).
+3. The worker polls for pending jobs, runs FFmpeg remux, uploads result, updates metadata.
+
+### 4.4 Frontend: Download Button Component
+
+```tsx
+// In VideoPlayerPage.tsx, below the player:
+
+{video.download_available && (
+  <div className="flex items-center gap-3 mt-4">
+    <Button
+      onClick={handleDownload}
+      disabled={isDownloading}
+      className="gap-2"
+    >
+      {isDownloading ? (
+        <Loader2 className="h-4 w-4 animate-spin" />
+      ) : (
+        <Download className="h-4 w-4" />
+      )}
+      Download MP4
+    </Button>
+    {video.download_mp4_size_bytes && (
+      <span className="text-sm text-muted-foreground">
+        {formatFileSize(video.download_mp4_size_bytes)}
+      </span>
+    )}
+  </div>
+)}
+```
+
+The download handler:
+```tsx
+const handleDownload = useCallback(async () => {
+  setIsDownloading(true);
+  try {
+    // GET /ui/videos/{id}/download returns 302 → browser follows redirect → download starts
+    window.location.href = `/ui/videos/${videoId}/download`;
+  } finally {
+    // Reset after a short delay (browser may navigate)
+    setTimeout(() => setIsDownloading(false), 2000);
+  }
+}, [videoId]);
+```
+
+### 4.5 Frontend: Video Edit Form Toggle
+
+In the video edit/settings panel (if it exists on VideoPlayerPage or a separate management page):
+
+```tsx
+<div className="flex items-center justify-between">
+  <div>
+    <Label htmlFor="allow-download">Allow Downloads</Label>
+    <p className="text-sm text-muted-foreground">
+      Viewers can download this video as an MP4 file
+    </p>
+  </div>
+  <Switch
+    id="allow-download"
+    checked={allowDownload}
+    onCheckedChange={(checked) => {
+      updateVideoMut.mutate({ allow_download: checked });
+    }}
+  />
+</div>
+{video.download_mp4_status === "generating" && (
+  <Badge variant="secondary" className="mt-2">
+    <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+    Preparing download file...
+  </Badge>
+)}
+{video.download_mp4_status === "failed" && (
+  <Badge variant="destructive" className="mt-2">
+    MP4 generation failed: {video.download_mp4_error}
+  </Badge>
+)}
+```
+
+### 4.6 Dependency Graph
+
+```
+VOD-001 (metadata model) ─────────┐
+VOD-004 (FFmpeg execution) ────────┤
+VOD-005 (S3 upload) ──────────────┤
+VOD-006 (listing API) ────────────┤
+VOD-010 (DRM encryption) ─────────┤
+                                   v
+                        VOD-012 (this ticket)
+                                   │
+                                   v
+                        VOD-008 (player page update)
+```
+
+VOD-012 depends on a working transcode pipeline (VOD-001 through VOD-005) for HLS segments to exist. It also depends on VOD-010 if the video is DRM-encrypted (needs key derivation to decrypt during remux). The video listing API (VOD-006) provides the PATCH/GET endpoints that are extended.
+
+---
+
+## 5. Testing Strategy
+
+### 5.1 Unit Tests: MP4 Generator (`tests/test_vod_mp4_generator.py`)
+
+| Test | What It Validates |
+|------|-------------------|
+| `test_select_best_rendition_picks_highest` | Given renditions [1080p, 720p, 480p], selects "1080p". |
+| `test_select_best_rendition_fallback` | Given only [480p, 360p], selects "480p" (highest available). |
+| `test_select_best_rendition_no_renditions_raises` | Empty renditions list raises ValueError. |
+| `test_estimate_mp4_size_sums_segments` | Mock S3 listing with 3 `.ts` objects of known sizes; verify sum matches. |
+| `test_estimate_mp4_size_ignores_non_ts` | `.m3u8` and `.json` files in listing are excluded from sum. |
+| `test_estimate_mp4_size_exceeds_limit` | Returns estimated size > max; caller should refuse generation. |
+| `test_generate_mp4_builds_correct_ffmpeg_args` | Mock subprocess; verify args include `-c copy`, `-movflags +faststart`, correct input/output paths. |
+| `test_generate_mp4_with_encryption_includes_keyinfo` | When DRM-encrypted source, verify `-hls_key_info_file` is in FFmpeg args. |
+| `test_generate_mp4_uploads_to_correct_s3_path` | Mock S3 upload; verify key matches `tenants/{tenant}/assets/{video_id}/download/{video_id}.mp4`. |
+| `test_generate_mp4_updates_metadata_on_success` | After successful generation, video record has `download_mp4_status="ready"`, `download_mp4_key` set, `download_mp4_size_bytes` set. |
+| `test_generate_mp4_sets_failed_on_ffmpeg_error` | FFmpeg returns non-zero exit code; video record has `download_mp4_status="failed"`, `download_mp4_error` set. |
+| `test_generate_mp4_timeout_kills_process` | FFmpeg exceeds `video_download_generation_timeout_seconds`; process is killed; status set to "failed". |
+| `test_generate_mp4_concurrent_guard` | Second generation request for same video while one is in progress returns early (idempotent). |
+
+### 5.2 Unit Tests: Download Endpoint (`tests/test_vod_download.py`)
+
+| Test | What It Validates |
+|------|-------------------|
+| `test_download_owner_success` | Owner requests download of own video with `allow_download=true` and `status=ready`; gets 302. |
+| `test_download_non_owner_public_video` | Non-owner requests download of published+public video; gets 302. |
+| `test_download_non_owner_private_video_403` | Non-owner requests private video download; gets 403. |
+| `test_download_disabled_globally_503` | `VIDEO_DOWNLOAD_ENABLED=false`; any request returns 503. |
+| `test_download_not_enabled_on_video_403` | Video has `allow_download=false`; returns 403 with specific message. |
+| `test_download_not_ready_409` | Video has `download_mp4_status="generating"`; returns 409. |
+| `test_download_url_has_content_disposition` | Presigned URL params include `ResponseContentDisposition` with video title. |
+| `test_download_url_ttl_matches_setting` | URL expiry matches `VIDEO_DOWNLOAD_URL_TTL_SECONDS`. |
+| `test_download_increments_counter` | After successful download request, `download_count` incremented by 1. |
+| `test_download_rate_limit_exceeded_429` | After 5 requests in 10 minutes, 6th returns 429. |
+| `test_download_video_not_found_404` | Non-existent `video_id` returns 404. |
+| `test_download_deleted_video_404` | Deleted video returns 404. |
+| `test_download_csrf_not_required` | GET endpoint does not require CSRF header (GET requests skip CSRF). |
+
+### 5.3 Unit Tests: PATCH Trigger (`tests/test_vod_download_trigger.py`)
+
+| Test | What It Validates |
+|------|-------------------|
+| `test_patch_allow_download_true_sets_pending` | PATCH with `allow_download=true` sets `download_mp4_status="pending"`. |
+| `test_patch_allow_download_true_requires_published` | PATCH on video with `status="encoding"` returns 409 ("video must be published or approved"). |
+| `test_patch_allow_download_false_sets_disabled` | PATCH with `allow_download=false` sets `download_mp4_status="disabled"`. |
+| `test_patch_allow_download_false_preserves_mp4_key` | After disabling, `download_mp4_key` is not nulled (grace period). |
+| `test_patch_allow_download_true_reuses_existing_mp4` | Re-enabling within grace period: if `download_mp4_key` exists and S3 object is still present, set status to "ready" without regeneration. |
+
+### 5.4 E2E Tests: `frontend/e2e/vod-download.spec.ts`
+
+Following existing patterns (`injectAuth`, `page.request`, section numbering):
+
+**Section 120: Download Enable/Disable API**
+
+```typescript
+test("120.1 Creator enables download on published video", async ({ page }) => {
+  // PATCH allow_download=true; verify response has download_mp4_status="pending"
+});
+
+test("120.2 Creator cannot enable download on unpublished video", async ({ page }) => {
+  // Create video in "created" status; PATCH allow_download=true; expect 409
+});
+
+test("120.3 Creator disables download", async ({ page }) => {
+  // PATCH allow_download=false; verify download_mp4_status="disabled"
+});
+
+test("120.4 Re-enabling download within grace period reuses MP4", async ({ page }) => {
+  // Disable then re-enable; verify status goes to "ready" without "pending" (if MP4 exists)
+});
+```
+
+**Section 121: Download URL Generation**
+
+```typescript
+test("121.1 Owner gets download URL for ready video", async ({ page }) => {
+  // GET /ui/videos/{id}/download; expect 302 redirect to presigned URL
+});
+
+test("121.2 Non-owner can download public video", async ({ page }) => {
+  // Bob downloads Alice's published+public video; expect 302
+});
+
+test("121.3 Non-owner cannot download private video", async ({ page }) => {
+  // Bob tries Alice's private video; expect 403
+});
+
+test("121.4 Download disabled on video returns 403", async ({ page }) => {
+  // Video with allow_download=false; expect 403
+});
+
+test("121.5 Download not ready returns 409", async ({ page }) => {
+  // Video with download_mp4_status="pending"; expect 409
+});
+
+test("121.6 Global download disable returns 503", async ({ page }) => {
+  // (Requires server-side flag toggle -- may be tested via unit test instead)
+});
+```
+
+**Section 122: MP4 Generation Integration**
+
+```typescript
+test("122.1 Enabling download triggers MP4 generation", async ({ page }) => {
+  // Enable download on a video that has HLS segments; poll until status="ready"
+  // Verify download_mp4_size_bytes > 0
+});
+
+test("122.2 Generated MP4 is downloadable", async ({ page }) => {
+  // After generation completes, GET download endpoint; verify 302; fetch URL; verify Content-Type: video/mp4
+});
+
+test("122.3 Download count increments", async ({ page }) => {
+  // Download twice; GET video detail; verify download_count >= 2
+});
+```
+
+**Section 123: Player Page UI**
+
+```typescript
+test("123.1 Download button shown for downloadable video", async ({ page }) => {
+  // Navigate to player page for video with download_available=true
+  // Verify button with text "Download MP4" is visible
+});
+
+test("123.2 Download button hidden when not available", async ({ page }) => {
+  // Navigate to player page for video with allow_download=false
+  // Verify no "Download MP4" button
+});
+
+test("123.3 File size displayed next to download button", async ({ page }) => {
+  // Verify size badge is present (e.g., "1.2 MB" or similar)
+});
+```
+
+### 5.5 Edge Cases
+
+| Edge Case | Expected Behavior |
+|-----------|-------------------|
+| Video with no HLS renditions (transcode failed completely) | `generate_download_mp4` returns error; `download_mp4_status="failed"`, error="no renditions available". |
+| Very large video (>10 GB estimated) | Generation refused; status="failed"; error="exceeds maximum download size". |
+| Concurrent generation requests for same video | Second request sees `download_mp4_status="pending"` or "generating" and returns early (no duplicate work). |
+| FFmpeg binary not found | `get_ffmpeg_path()` raises; caught by generator; status="failed"; error="FFmpeg not available". |
+| S3 upload fails mid-transfer | Generator catches exception; cleans up partial upload (`abort_incomplete_uploads`); status="failed". |
+| Creator deletes video while MP4 is generating | Generation completes but metadata update fails (video not found); MP4 orphaned in S3; cleaned up by lifecycle policy. |
+| Download URL clicked after expiry | S3 returns 403 (AccessDenied); browser shows generic error. User clicks "Download" again for fresh URL. |
+| Unicode characters in video title | `ResponseContentDisposition` header uses RFC 5987 encoding for non-ASCII filenames: `filename*=UTF-8''<encoded-title>.mp4`. |
+| Disk space exhausted during remux | FFmpeg fails with I/O error; status="failed"; scratch dir cleaned up. Respects `ffmpeg_min_free_disk_gb` check. |
+| DRM-encrypted video, creator denies cleartext | Phase 1: `download_drm_cleartext=false` prevents generation entirely; status remains "disabled" with explanatory message. |
+
+### 5.6 Performance Considerations
+
+| Concern | Mitigation |
+|---------|-----------|
+| MP4 generation blocks request thread | Generation runs as background task (not in request handler). PATCH returns immediately with `status="pending"`. |
+| Large MP4 upload to S3 | Uses multipart upload via `TransferConfig` (same as `vod_s3_uploader.py`). |
+| Scratch disk space for temp MP4 | Check `ffmpeg_min_free_disk_gb` before starting. Clean up scratch dir on completion or failure. |
+| Download URL generation latency | Presigned URL generation is a local computation (no AWS API call); sub-millisecond. |
+| Hot video with many concurrent downloads | All downloads hit S3 directly (via presigned URL); no backend bandwidth used. S3 scales automatically. |
+| Rate limiting storage | Use existing DDB-based rate limiting pattern (`rate_limits` table with TTL). |
+
+---
+
+## Appendix A: Configuration Reference
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `VIDEO_DOWNLOAD_ENABLED` | `true` | Master kill switch for all download functionality |
+| `VIDEO_DOWNLOAD_URL_TTL_SECONDS` | `3600` | Presigned URL expiry (1 hour) |
+| `VIDEO_DOWNLOAD_MAX_SIZE_BYTES` | `10737418240` (10 GB) | Maximum allowed MP4 file size |
+| `VIDEO_DOWNLOAD_RATE_LIMIT_PER_10MIN` | `5` | Max download URL requests per user per video per 10 minutes |
+| `VIDEO_DOWNLOAD_GENERATION_TIMEOUT_SECONDS` | `600` | FFmpeg process timeout for MP4 remux |
+| `VIDEO_DOWNLOAD_MP4_CLEANUP_GRACE_DAYS` | `7` | Days to retain MP4 after download is disabled before S3 deletion |
+
+---
+
+## Appendix B: File Change Summary
+
+| File | Change Type | Description |
+|------|-------------|-------------|
+| `app/models_video.py` | Modify | Add 8 download-related fields to `VideoMetadataModel`; extend `UpdateVideoIn` and `VideoOut` |
+| `app/services/video_metadata_store.py` | Modify | Serialize/deserialize new fields; add `increment_download_count` function |
+| `app/services/vod_mp4_generator.py` | **New** | MP4 generation: rendition selection, FFmpeg remux, S3 upload, metadata update |
+| `app/services/vod_download_url.py` | **New** | Download URL generation (dev/CloudFront/presigned modes) |
+| `app/routers/video_listing.py` | Modify | Add `GET /{video_id}/download` endpoint; update PATCH to trigger generation |
+| `app/core/settings.py` | Modify | Add 6 download-related settings |
+| `.env.local.example` | Modify | Add `VIDEO_DOWNLOAD_*` env vars |
+| `frontend/src/api/endpoints/videos.ts` | Modify | Add download fields to `VideoDetail`; add `downloadVideo` function |
+| `frontend/src/pages/videos/VideoPlayerPage.tsx` | Modify | Add download button + size badge |
+| `tests/test_vod_mp4_generator.py` | **New** | 13 unit tests for MP4 generation |
+| `tests/test_vod_download.py` | **New** | 13 unit tests for download endpoint |
+| `tests/test_vod_download_trigger.py` | **New** | 5 unit tests for PATCH trigger logic |
+| `frontend/e2e/vod-download.spec.ts` | **New** | ~13 E2E tests across 4 sections |
+
+---
+
+## Appendix C: API Endpoint Summary
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/ui/videos/{video_id}/download` | `require_ui_session` | Generate and redirect to presigned download URL |
+| PATCH | `/ui/videos/{video_id}` | `require_ui_session` | (Existing) Extended: `allow_download` field triggers MP4 generation |
+| GET | `/ui/videos/{video_id}` | `require_ui_session` | (Existing) Extended: response includes `download_available`, `download_mp4_status`, `download_mp4_size_bytes` |
+
+---
+
+## Appendix D: State Machine for `download_mp4_status`
+
+```
+                              Creator enables download
+                                      │
+                                      v
+    ┌──────────┐     PATCH      ┌───────────┐    background    ┌─────────────┐
+    │  (null)  │ ──────────────>│  pending   │ ───────────────>│ generating  │
+    └──────────┘  allow_download └───────────┘                  └─────────────┘
+                     = true                                            │
+                                                              success │   failure
+                                                                      │
+                                                         ┌────────────┼────────────┐
+                                                         v                         v
+                                                   ┌───────────┐             ┌──────────┐
+                                                   │   ready    │             │  failed   │
+                                                   └���──────────┘             └──────────┘
+                                                         │                         │
+                                              disable    │               re-enable │
+                                                         v                         v
+                                                   ┌───────────┐           (retry → pending)
+                                                   │  disabled  │
+                                                   └───────────┘
+                                                         │
+                                              re-enable  │ (within grace)
+                                                         v
+                                                   ┌───────────┐
+                                                   │   ready    │ (reuse existing MP4)
+                                                   └───────────┘
+```
