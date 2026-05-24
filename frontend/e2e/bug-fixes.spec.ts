@@ -791,9 +791,9 @@ test.describe("7. Locked message — unlock button opens dialog (not direct muta
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec7BobConvsLoaded;
     await bobPage.waitForTimeout(300);
-    const bobRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
+    const bobRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
     await expect(bobRow).toBeVisible({ timeout: 8000 });
-    await bobRow.click();
+    await bobRow.evaluate((el) => (el as HTMLElement).click());
     await expect(
       bobPage.getByPlaceholder("Type a message...").or(
         bobPage.getByPlaceholder("Type an encrypted message..."),

@@ -1395,10 +1395,10 @@ test.describe("11. Tips and locked messages", () => {
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec11BobConvsLoaded;
     await bobPage.waitForTimeout(300);
-    // Bob's DM shows as "E2E Alice" (conversationName filters Bob out of DM name)
-    const bobRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
+    // Bob's DM shows Alice's name (may be "E2E Alice" or changed by profile tests)
+    const bobRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
     await expect(bobRow).toBeVisible({ timeout: 10000 });
-    await bobRow.click();
+    await bobRow.evaluate((el) => (el as HTMLElement).click());
     await expect(
       bobPage
         .getByPlaceholder("Type a message...")
@@ -1691,9 +1691,9 @@ test.describe("11. Tips and locked messages", () => {
     await bobPage.reload({ waitUntil: "load" });
     await sec11BobReloadConvsLoaded;
     await bobPage.waitForTimeout(300);
-    const bobRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
+    const bobRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
     await expect(bobRow).toBeVisible({ timeout: 10000 });
-    await bobRow.click();
+    await bobRow.evaluate((el) => (el as HTMLElement).click());
     await expect(
       bobPage
         .getByPlaceholder("Type a message...")

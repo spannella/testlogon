@@ -153,6 +153,8 @@ test.describe.serial("92 — Profile Management API", () => {
   });
 
   test.afterAll(async () => {
+    // Restore Alice's display name so other spec files that match on "E2E Alice" keep working.
+    await apiPatch(page, "/ui/profile", { display_name: "E2E Alice" }).catch(() => {});
     await page.close();
   });
 

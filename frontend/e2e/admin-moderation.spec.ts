@@ -195,7 +195,7 @@ test.describe("88. Purchase History — transactions CRUD", () => {
   });
 
   test("88.3 Transaction appears in list with correct fields", async () => {
-    const resp = await apiGet(alicePage, "/ui/purchase-history/transactions");
+    const resp = await apiGet(alicePage, "/ui/purchase-history/transactions", { limit: "100" });
     expect(resp.status()).toBe(200);
     const data = await resp.json() as any[];
     const found = data.find((t) => t.txn_id === txnId);

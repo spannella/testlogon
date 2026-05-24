@@ -4,8 +4,27 @@ import time
 import uuid
 from typing import Any, Iterable
 
-from app.core.aws import ddb
+import boto3
+
 from app.core.settings import S
+
+
+def _make_ddb_client():
+    return boto3.client(
+        "dynamodb",
+        endpoint_url=S.ddb_endpoint_url or None,
+        region_name=S.aws_region or "us-east-1",
+    )
+
+
+_ddb_client = None
+
+
+def _get_ddb_client():
+    global _ddb_client
+    if _ddb_client is None:
+        _ddb_client = _make_ddb_client()
+    return _ddb_client
 
 
 def create_content_report(
@@ -59,5 +78,5 @@ def create_content_report(
             }
         )
 
-    ddb.meta.client.transact_write_items(TransactItems=transact_items)
+    _get_ddb_client().transact_write_items(TransactItems=transact_items)
     return report_id

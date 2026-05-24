@@ -132,7 +132,6 @@ def _fetch_txn(user_sub: str, txn_id: str) -> Optional[Dict[str, Any]]:
         KeyConditionExpression="user_sub = :u AND begins_with(sk, :p)",
         ExpressionAttributeValues={":u": user_sub, ":p": "TXN#", ":t": txn_id},
         FilterExpression="txn_id = :t",
-        Limit=1,
     )
     items = resp.get("Items", [])
     return items[0] if items else None
@@ -143,7 +142,6 @@ def _fetch_txn_by_idempotency_key(user_sub: str, idempotency_key: str) -> Option
         KeyConditionExpression="user_sub = :u AND begins_with(sk, :p)",
         ExpressionAttributeValues={":u": user_sub, ":p": "TXN#", ":idem": idempotency_key},
         FilterExpression="request_idempotency_key = :idem",
-        Limit=1,
     )
     items = resp.get("Items", [])
     return items[0] if items else None

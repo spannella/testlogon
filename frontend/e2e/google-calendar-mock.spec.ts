@@ -65,6 +65,11 @@ function getSessions(): Record<string, SessionData> {
   return _sessions!;
 }
 
+function refreshSessions(): Record<string, SessionData> {
+  _sessions = null;
+  return getSessions();
+}
+
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
 
 async function injectAuth(page: Page, userId = ALICE_ID) {
@@ -236,11 +241,12 @@ test.describe("2. Google Calendar connect/callback", () => {
 
 // ─── 3. Status, calendars, mapping, sync, disconnect ─────────────────────────
 
-test.describe("3. Google Calendar integration operations", () => {
+test.describe.serial("3. Google Calendar integration operations", () => {
   let page: Page;
   let internalCalendarId: string;
 
   test.beforeAll(async ({ browser }) => {
+    refreshSessions();
     page = await browser.newPage();
     await injectAuth(page, ALICE_ID);
     await seedMock(page);

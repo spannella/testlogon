@@ -84,6 +84,16 @@ test.describe("messaging drafts lifecycle", () => {
       );
       expect(saveResp.ok(), `draft save failed: ${saveResp.status()}`).toBeTruthy();
 
+      // Send a touch message so the conversation appears at the top of the sidebar
+      const touchResp = await page.request.post(
+        `${API}/messaging/conversations/${conv.conversation_id}/messages`,
+        {
+          data: { text: `__touch__${ts}` },
+          headers: { "x-csrf-token": session.csrf_token },
+        },
+      );
+      expect(touchResp.ok()).toBeTruthy();
+
       await gotoMessages(page);
       await openConversation(page, conv.title);
 

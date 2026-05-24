@@ -767,9 +767,9 @@ test.describe("20. Encrypted image message — send and decrypt", () => {
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec20BobConvsLoaded;
     await bobPage.waitForTimeout(300);
-    const aliceRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
+    const aliceRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
     await expect(aliceRow).toBeVisible({ timeout: 15000 });
-    await aliceRow.click();
+    await aliceRow.evaluate((el) => (el as HTMLElement).click());
     await expect(
       bobPage.getByText("Encrypted image").last()
     ).toBeVisible({ timeout: 12000 });
@@ -806,9 +806,10 @@ test.describe("20. Encrypted image message — send and decrypt", () => {
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec20WrongPwConvsLoaded;
     await bobPage.waitForTimeout(300);
-    const aliceRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
+    const aliceRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
     await expect(aliceRow).toBeVisible({ timeout: 15000 });
-    await aliceRow.click();
+    // Click the preview area (avoid avatar/name links which navigate to profile)
+    await aliceRow.evaluate((el) => (el as HTMLElement).click());
 
     await expect(
       bobPage.getByRole("button", { name: "Decrypt to view" }).last()
@@ -2459,9 +2460,9 @@ test.describe("29. Encrypted video message — send and decrypt", () => {
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec29BobConvsLoaded;
     await bobPage.waitForTimeout(300);
-    const aliceRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
+    const aliceRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
     await expect(aliceRow).toBeVisible({ timeout: 15000 });
-    await aliceRow.click();
+    await aliceRow.evaluate((el) => (el as HTMLElement).click());
     await expect(
       bobPage.getByText("Encrypted video").last()
     ).toBeVisible({ timeout: 12000 });
@@ -2506,9 +2507,10 @@ test.describe("29. Encrypted video message — send and decrypt", () => {
     await bobPage.goto(`${BASE}/messages`, { waitUntil: "load" });
     await sec29WrongPwConvsLoaded;
     await bobPage.waitForTimeout(300);
-    const aliceRow = bobPage.getByRole("button").filter({ hasText: "E2E Alice" }).first();
+    const aliceRow = bobPage.getByRole("button").filter({ hasText: /Alice/ }).first();
     await expect(aliceRow).toBeVisible({ timeout: 15000 });
-    await aliceRow.click();
+    // Click the preview area (avoid avatar/name links which navigate to profile)
+    await aliceRow.evaluate((el) => (el as HTMLElement).click());
 
     await expect(
       bobPage.getByRole("button", { name: "Decrypt to view" }).last()
