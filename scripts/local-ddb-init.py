@@ -527,6 +527,17 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.broadcast_chat_mutes_table_name, "BroadcastChatMutes"),
             "session_user",
         ),
+        # Broadcast recordings (BCAST-006)
+        TableDef(
+            _resolve_table_name(S.broadcast_recordings_table_name, "BroadcastRecordings"),
+            "recording_id",
+            gsi=[
+                {"index_name": "BySessionId", "partition_key": "session_id", "sort_key": "created_at"},
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "ByExpiresAt", "partition_key": "scope", "sort_key": "expires_at"},
+            ],
+            attr_types={"created_at": "N", "expires_at": "N"},
+        ),
         # Messaging extended tables (from PR 127 compliance/visibility features)
         # ConversationPins: pk=(conversation_id, message_id), GSI ByConversationActivePinnedAt
         TableDef(

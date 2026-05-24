@@ -12,6 +12,7 @@ import {
   Copy,
   ExternalLink,
   Eye,
+  Video,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -63,10 +64,12 @@ import {
   getSession,
   mintPlaybackUrl,
   getAuditLog,
+  getRecording,
   type BroadcastSession,
   type BroadcastProfile,
   type BroadcastSessionStatus,
   type BroadcastAuditEntry,
+  type BroadcastRecordingResponse,
 } from "@/api/endpoints/broadcast";
 
 // ─── Status Badge Colors ────────────────────────────────���───────
@@ -572,6 +575,8 @@ function SessionDetailDialog({
   onDelete: (id: string) => void;
 }) {
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
+  const [recordingData, setRecordingData] = useState<BroadcastRecordingResponse | null>(null);
+  const [showRecordingPlayer, setShowRecordingPlayer] = useState(false);
 
   const mintMut = useMutation({
     mutationFn: (id: string) => mintPlaybackUrl(id),
@@ -580,6 +585,13 @@ function SessionDetailDialog({
       toast.success("Playback URL generated");
     },
     onError: (err) => toast.error(err instanceof Error ? err.message : "Failed to mint URL"),
+  });
+
+  const recordingQuery = useQuery({
+    queryKey: ["broadcast", "recording", session?.id],
+    queryFn: () => getRecording(session!.id),
+    enabled: !!session && session.status === "stopped",
+    retry: false,
   });
 
   if (!session) return null;
@@ -688,6 +700,34 @@ function SessionDetailDialog({
                 {mintMut.isPending ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <ExternalLink className="h-3 w-3 mr-1" />}
                 Mint Playback URL
               </Button>
+              {session.status === "stopped" && recordingQuery.data?.playback_url && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => setShowRecordingPlayer(true)}
+                >
+                  <Video className="h-3 w-3 mr-1" /> Watch Recording
+                </Button>
+              )}
+              {session.status === "stopped" && recordingQuery.data?.status === "expired" && (
+                <p className="text-xs text-muted-foreground mt-1">Recording has expired</p>
+              )}
+              {showRecordingPlayer && recordingQuery.data?.playback_url && (
+                <div className="rounded-md border p-3 bg-black/5 mt-2">
+                  <video
+                    controls
+                    className="w-full max-h-[300px] rounded"
+                    src={recordingQuery.data.playback_url}
+                    data-testid="recording-player"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Duration: {recordingQuery.data.duration_seconds ?? 0}s
+                    {recordingQuery.data.playback_expires_at && (
+                      <> | Expires: {new Date(recordingQuery.data.playback_expires_at * 1000).toLocaleString()}</>
+                    )}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 

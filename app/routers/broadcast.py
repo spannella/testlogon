@@ -19,6 +19,11 @@ from app.services.broadcast_store import (
     list_sessions_by_creator,
     list_sessions_by_status,
 )
+from app.services.broadcast_recording import (
+    get_recording_by_session,
+    mint_recording_playback_url,
+    mint_recording_thumbnail_url,
+)
 from app.services.broadcast_audit import query_broadcast_actions, record_broadcast_action
 from app.services.broadcast_orchestrator import (
     delete_session_with_provider,
@@ -584,6 +589,73 @@ async def broadcast_event_stream_route(session_id: str, ctx: dict = Depends(_ctx
             broadcast_sse_unsubscribe(session_id, q)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ─── Recording Endpoint (BCAST-006) ─────────────────────────────
+
+
+class BroadcastRecordingOut(BaseModel):
+    recording_id: str
+    session_id: str
+    status: str
+    duration_seconds: Optional[float] = None
+    playback_url: Optional[str] = None
+    playback_expires_at: Optional[int] = None
+    thumbnail_url: Optional[str] = None
+    segment_count: Optional[int] = None
+    total_bytes: Optional[int] = None
+    renditions: list = Field(default_factory=list)
+    created_at: int
+    completed_at: Optional[int] = None
+    expires_at: Optional[int] = None
+
+
+@router.get("/sessions/{session_id}/recording", response_model=BroadcastRecordingOut)
+def get_recording_route(session_id: str, ctx: dict = Depends(_ctx)):
+    """Get the recording for a broadcast session."""
+    _ = ctx
+    recording = get_recording_by_session(session_id)
+    if not recording:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "BROADCAST_RECORDING_NOT_FOUND", "detail": "No recording found for this session"},
+        )
+    if recording.status == "expired":
+        raise HTTPException(
+            status_code=410,
+            detail={"code": "BROADCAST_RECORDING_EXPIRED", "detail": "Recording has expired"},
+        )
+    if recording.status not in ("ready",):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={
+                "code": "BROADCAST_RECORDING_PROCESSING",
+                "detail": "Recording is still being processed",
+                "recording_id": recording.recording_id,
+                "session_id": recording.session_id,
+                "status": recording.status,
+                "created_at": recording.created_at,
+            },
+        )
+    # Mint signed playback URL
+    playback = mint_recording_playback_url(recording)
+    thumbnail_url = mint_recording_thumbnail_url(recording)
+    return BroadcastRecordingOut(
+        recording_id=recording.recording_id,
+        session_id=recording.session_id,
+        status=recording.status,
+        duration_seconds=recording.duration_seconds,
+        playback_url=playback["playback_url"],
+        playback_expires_at=playback["playback_expires_at"],
+        thumbnail_url=thumbnail_url,
+        segment_count=recording.segment_count,
+        total_bytes=recording.total_bytes,
+        renditions=recording.renditions,
+        created_at=recording.created_at,
+        completed_at=recording.completed_at if recording.completed_at else None,
+        expires_at=recording.expires_at if recording.expires_at else None,
+    )
 
 
 # ─── Live Chat Endpoints (BCAST-005) ─────────────────────────────

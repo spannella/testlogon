@@ -78,6 +78,7 @@ class Tables:
     broadcast_health_snapshots: Any
     broadcast_chat_messages: Any
     broadcast_chat_mutes: Any
+    broadcast_recordings: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -150,4 +151,5 @@ T = Tables(
     broadcast_health_snapshots=ddb.Table(S.broadcast_health_snapshots_table_name),
     broadcast_chat_messages=ddb.Table(S.broadcast_chat_messages_table_name),
     broadcast_chat_mutes=ddb.Table(S.broadcast_chat_mutes_table_name),
+    broadcast_recordings=ddb.Table(S.broadcast_recordings_table_name),
 )

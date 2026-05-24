@@ -205,3 +205,24 @@ export const getHealth = (sessionId: string) =>
 
 export const getHealthHistory = (sessionId: string, params?: { from_ts?: number; to_ts?: number; limit?: number }) =>
   api.get<BroadcastHealthHistoryResponse>(`/broadcast/sessions/${sessionId}/health/history`, params as Record<string, string>);
+
+// ─── Recording API (BCAST-006) ─────────────────────────���──────────
+
+export interface BroadcastRecordingResponse {
+  recording_id: string;
+  session_id: string;
+  status: string;
+  duration_seconds: number | null;
+  playback_url: string | null;
+  playback_expires_at: number | null;
+  thumbnail_url: string | null;
+  segment_count: number | null;
+  total_bytes: number | null;
+  renditions: Array<Record<string, unknown>>;
+  created_at: number;
+  completed_at: number | null;
+  expires_at: number | null;
+}
+
+export const getRecording = (sessionId: string) =>
+  api.get<BroadcastRecordingResponse>(`/broadcast/sessions/${sessionId}/recording`);

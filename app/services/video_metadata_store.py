@@ -276,25 +276,58 @@ def list_videos_by_owner(
     *,
     limit: int = 50,
     cursor: Optional[Dict[str, Any]] = None,
+    status_filter: Optional[str] = None,
+    visibility_filter: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """List videos by owner, newest first."""
+    """List videos by owner, newest first. Excludes deleted. Supports filters."""
     if not owner_user_id:
         raise HTTPException(status_code=400, detail="owner_user_id is required")
     if not isinstance(limit, int) or limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="invalid limit")
 
-    kwargs: Dict[str, Any] = {
-        "IndexName": "ByOwnerCreatedAt",
-        "KeyConditionExpression": Key("owner_user_id").eq(owner_user_id),
-        "Limit": limit,
-        "ScanIndexForward": False,
-    }
-    if cursor:
-        kwargs["ExclusiveStartKey"] = cursor
+    from boto3.dynamodb.conditions import Attr
 
-    resp = T.video_metadata.query(**kwargs)
-    items = [video_from_item(i) for i in resp.get("Items", [])]
-    return {"items": items, "cursor": resp.get("LastEvaluatedKey")}
+    collected: List[VideoMetadataModel] = []
+    current_cursor = cursor
+    max_pages = 10
+
+    for _ in range(max_pages):
+        kwargs: Dict[str, Any] = {
+            "IndexName": "ByOwnerCreatedAt",
+            "KeyConditionExpression": Key("owner_user_id").eq(owner_user_id),
+            "Limit": limit * 3,
+            "ScanIndexForward": False,
+        }
+        if current_cursor:
+            kwargs["ExclusiveStartKey"] = current_cursor
+
+        # Build filter expression: always exclude deleted
+        filters = [Attr("status").ne("deleted")]
+        if status_filter:
+            filters.append(Attr("status").eq(status_filter))
+        if visibility_filter:
+            filters.append(Attr("visibility").eq(visibility_filter))
+
+        combined_filter = filters[0]
+        for f in filters[1:]:
+            combined_filter = combined_filter & f
+        kwargs["FilterExpression"] = combined_filter
+
+        resp = T.video_metadata.query(**kwargs)
+        for item in resp.get("Items", []):
+            # Skip ticket items
+            vid = item.get("video_id", "")
+            if isinstance(vid, str) and vid.startswith("TICKET#"):
+                continue
+            collected.append(video_from_item(item))
+            if len(collected) >= limit:
+                break
+
+        current_cursor = resp.get("LastEvaluatedKey")
+        if len(collected) >= limit or not current_cursor:
+            break
+
+    return {"items": collected[:limit], "cursor": current_cursor}
 
 
 def list_videos_by_status(
@@ -303,24 +336,143 @@ def list_videos_by_status(
     limit: int = 50,
     cursor: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """List videos by status."""
+    """List videos by status (admin use)."""
     if not status:
         raise HTTPException(status_code=400, detail="status is required")
     if not isinstance(limit, int) or limit < 1 or limit > 200:
         raise HTTPException(status_code=400, detail="invalid limit")
 
-    kwargs: Dict[str, Any] = {
-        "IndexName": "ByStatusCreatedAt",
-        "KeyConditionExpression": Key("status").eq(status),
-        "Limit": limit,
-        "ScanIndexForward": False,
-    }
-    if cursor:
-        kwargs["ExclusiveStartKey"] = cursor
+    from boto3.dynamodb.conditions import Attr
 
-    resp = T.video_metadata.query(**kwargs)
-    items = [video_from_item(i) for i in resp.get("Items", [])]
-    return {"items": items, "cursor": resp.get("LastEvaluatedKey")}
+    collected: List[VideoMetadataModel] = []
+    current_cursor = cursor
+    max_pages = 10
+
+    for _ in range(max_pages):
+        kwargs: Dict[str, Any] = {
+            "IndexName": "ByStatusCreatedAt",
+            "KeyConditionExpression": Key("status").eq(status),
+            "Limit": limit * 3,
+            "ScanIndexForward": False,
+        }
+        if current_cursor:
+            kwargs["ExclusiveStartKey"] = current_cursor
+
+        # Filter out ticket items
+        kwargs["FilterExpression"] = Attr("video_id").begins_with("v_")
+
+        resp = T.video_metadata.query(**kwargs)
+        for item in resp.get("Items", []):
+            collected.append(video_from_item(item))
+            if len(collected) >= limit:
+                break
+
+        current_cursor = resp.get("LastEvaluatedKey")
+        if len(collected) >= limit or not current_cursor:
+            break
+
+    return {"items": collected[:limit], "cursor": current_cursor}
+
+
+def list_videos_public(
+    *,
+    limit: int = 50,
+    cursor: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """List published + public videos (discovery feed)."""
+    if not isinstance(limit, int) or limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="invalid limit")
+
+    from boto3.dynamodb.conditions import Attr
+
+    collected: List[VideoMetadataModel] = []
+    current_cursor = cursor
+    max_pages = 10
+
+    for _ in range(max_pages):
+        kwargs: Dict[str, Any] = {
+            "IndexName": "ByStatusCreatedAt",
+            "KeyConditionExpression": Key("status").eq("published"),
+            "Limit": limit * 3,
+            "ScanIndexForward": False,
+            "FilterExpression": Attr("visibility").eq("public") & Attr("video_id").begins_with("v_"),
+        }
+        if current_cursor:
+            kwargs["ExclusiveStartKey"] = current_cursor
+
+        resp = T.video_metadata.query(**kwargs)
+        for item in resp.get("Items", []):
+            collected.append(video_from_item(item))
+            if len(collected) >= limit:
+                break
+
+        current_cursor = resp.get("LastEvaluatedKey")
+        if len(collected) >= limit or not current_cursor:
+            break
+
+    return {"items": collected[:limit], "cursor": current_cursor}
+
+
+def list_videos_by_creator_public(
+    creator_id: str,
+    *,
+    limit: int = 50,
+    cursor: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """List a creator's published + public videos."""
+    if not creator_id:
+        raise HTTPException(status_code=400, detail="creator_id is required")
+    if not isinstance(limit, int) or limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="invalid limit")
+
+    from boto3.dynamodb.conditions import Attr
+
+    collected: List[VideoMetadataModel] = []
+    current_cursor = cursor
+    max_pages = 10
+
+    for _ in range(max_pages):
+        kwargs: Dict[str, Any] = {
+            "IndexName": "ByOwnerCreatedAt",
+            "KeyConditionExpression": Key("owner_user_id").eq(creator_id),
+            "Limit": limit * 3,
+            "ScanIndexForward": False,
+            "FilterExpression": (
+                Attr("status").eq("published")
+                & Attr("visibility").eq("public")
+                & Attr("video_id").begins_with("v_")
+            ),
+        }
+        if current_cursor:
+            kwargs["ExclusiveStartKey"] = current_cursor
+
+        resp = T.video_metadata.query(**kwargs)
+        for item in resp.get("Items", []):
+            collected.append(video_from_item(item))
+            if len(collected) >= limit:
+                break
+
+        current_cursor = resp.get("LastEvaluatedKey")
+        if len(collected) >= limit or not current_cursor:
+            break
+
+    return {"items": collected[:limit], "cursor": current_cursor}
+
+
+def delete_video(video_id: str, owner_user_id: str) -> None:
+    """Soft-delete a video (owner-only). Sets status=deleted, deleted_at=now."""
+    current = get_video(video_id)
+    if current.owner_user_id != owner_user_id:
+        raise HTTPException(status_code=403, detail="not your video")
+    ts = now_ts()
+    updated = current.model_copy(
+        update={
+            "status": "deleted",
+            "deleted_at": ts,
+            "updated_at": ts,
+        }
+    )
+    T.video_metadata.put_item(Item=video_to_item(updated))
 
 
 def get_video_by_broadcast_session(session_id: str) -> Optional[VideoMetadataModel]:

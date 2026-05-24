@@ -1040,6 +1040,9 @@ class Settings:
     vod_upload_multipart_threshold_mb: int = int(os.environ.get("VOD_UPLOAD_MULTIPART_THRESHOLD_MB", "8"))
     vod_upload_multipart_chunksize_mb: int = int(os.environ.get("VOD_UPLOAD_MULTIPART_CHUNKSIZE_MB", "8"))
 
+    # VOD playback token TTL (VOD-006)
+    video_playback_token_ttl_seconds: int = int(os.environ.get("VIDEO_PLAYBACK_TOKEN_TTL", "300"))
+
     # VOD playback URLs (VOD-005)
     vod_playback_url_ttl_seconds: int = int(os.environ.get("VOD_PLAYBACK_URL_TTL_SECONDS", "3600"))
     vod_cloudfront_domain: str = os.environ.get("VOD_CLOUDFRONT_DOMAIN", "")
@@ -1061,6 +1064,16 @@ class Settings:
     # Google Calendar integration hardening/tuning
     google_calendar_oauth_require_refresh_token: bool = os.environ.get("GOOGLE_CALENDAR_OAUTH_REQUIRE_REFRESH_TOKEN", "true").lower() in ("1", "true", "yes", "on")
     google_calendar_api_retry_after_max_seconds: int = int(os.environ.get("GOOGLE_CALENDAR_API_RETRY_AFTER_MAX_SECONDS", "60"))
+
+    # Broadcast Recording (BCAST-006)
+    broadcast_recordings_table_name: str = os.environ.get("BROADCAST_RECORDINGS_TABLE", "BroadcastRecordings")
+    broadcast_recording_enabled: bool = os.environ.get("BROADCAST_RECORDING_ENABLED", "1") not in ("0", "false", "False")
+    broadcast_recording_playback_ttl_seconds: int = int(os.environ.get("BROADCAST_RECORDING_PLAYBACK_TTL_SECONDS", "14400"))
+    broadcast_recording_vod_bucket: str = os.environ.get("BROADCAST_RECORDING_VOD_BUCKET", "broadcast-vod")
+    broadcast_recording_vod_prefix: str = os.environ.get("BROADCAST_RECORDING_VOD_PREFIX", "recordings")
+    broadcast_recording_max_segments: int = int(os.environ.get("BROADCAST_RECORDING_MAX_SEGMENTS", "10000"))
+    broadcast_recording_worker_inline: bool = os.environ.get("BROADCAST_RECORDING_WORKER_INLINE", os.environ.get("DEV_MODE", "1")) not in ("0", "false", "False")
+    broadcast_recording_mock_on_no_ffmpeg: bool = os.environ.get("BROADCAST_RECORDING_MOCK_ON_NO_FFMPEG", "1") not in ("0", "false", "False")
 
 
 S = Settings()

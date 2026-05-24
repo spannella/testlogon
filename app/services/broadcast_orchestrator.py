@@ -132,6 +132,27 @@ def stop_session_with_provider(
     elif current.status == "stopping":
         current = transition_session_status(session_id=session_id, to_status="stopped", reason=reason, actor=actor)
 
+    # Trigger recording pipeline (BCAST-006)
+    if current.status == "stopped" and S.broadcast_recording_enabled:
+        try:
+            from app.services.broadcast_recording import create_recording
+            from app.services.broadcast_recording_worker import process_recording
+            existing_output = get_output(current.id)
+            archive_prefix = (existing_output.s3_archive_prefix if existing_output and existing_output.s3_archive_prefix else "")
+            recording = create_recording(
+                session_id=session_id,
+                profile_id=current.profile_id,
+                created_by=actor,
+                s3_archive_prefix=archive_prefix,
+                retention_days=S.broadcast_archive_retention_days,
+            )
+            if S.broadcast_recording_worker_inline:
+                process_recording(recording.recording_id)
+        except Exception:
+            # Recording failure should not prevent session stop from succeeding
+            import logging
+            logging.getLogger(__name__).exception("Recording pipeline failed for session %s", session_id)
+
     return current if current.status == "stopped" else get_session(session_id)
 
 

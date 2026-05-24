@@ -136,6 +136,13 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
       }
       pcRef.current = pc;
 
+      // Dev-mode testability: expose the RTCPeerConnection on window for E2E tests
+      if (import.meta.env.DEV) {
+        (window as unknown as Record<string, unknown>).__rtcPeerConnection = pc;
+        (window as unknown as Record<string, unknown>).__rtcLocalStream = null; // will be set below
+        (window as unknown as Record<string, unknown>).__rtcRemoteStream = null; // will be set below
+      }
+
       // 3. Acquire local media
       let localMediaStream: MediaStream;
       try {
@@ -155,6 +162,9 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
         return;
       }
       setLocalStream(localMediaStream);
+      if (import.meta.env.DEV) {
+        (window as unknown as Record<string, unknown>).__rtcLocalStream = localMediaStream;
+      }
 
       // 4. Add local tracks to peer connection
       for (const track of localMediaStream.getTracks()) {
@@ -164,6 +174,9 @@ export function useRtcPeerConnection(params: UseRtcPeerConnectionParams): UseRtc
       // 5. Set up remote stream
       const remote = new MediaStream();
       setRemoteStream(remote);
+      if (import.meta.env.DEV) {
+        (window as unknown as Record<string, unknown>).__rtcRemoteStream = remote;
+      }
 
       pc.ontrack = (event) => {
         const tracks = event.streams[0]?.getTracks() ?? [event.track];

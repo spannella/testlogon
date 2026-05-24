@@ -84,6 +84,7 @@ from app.routers.playback_entitlements import router as playback_entitlements_ro
 from app.routers.moderation import router as moderation_router, compat_router as moderation_compat_router
 from app.routers.admin_moderation import router as admin_moderation_router
 from app.routers.vod import router as vod_router
+from app.routers.video_listing import router as video_listing_router
 from app.routers.transcode_jobs import router as transcode_jobs_router, video_router as transcode_video_router
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
@@ -311,6 +312,7 @@ def create_app() -> FastAPI:
     app.include_router(kyc_cases_router)
     app.include_router(vnc_sessions_router)
     app.include_router(playback_entitlements_router)
+    app.include_router(video_listing_router)
     app.include_router(vod_router)
     app.include_router(transcode_jobs_router)
     app.include_router(transcode_video_router)

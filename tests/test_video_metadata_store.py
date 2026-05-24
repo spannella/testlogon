@@ -137,7 +137,7 @@ def test_list_by_owner_pagination() -> None:
     """Pagination returns cursor when more items exist."""
     ns = _make_ns()
     with patch.object(video_metadata_store, "T", ns):
-        for i in range(5):
+        for i in range(10):
             create_video(owner_user_id="user-p", title=f"Video {i}")
 
         result = list_videos_by_owner("user-p", limit=2)
