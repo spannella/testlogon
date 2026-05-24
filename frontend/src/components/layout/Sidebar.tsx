@@ -23,6 +23,7 @@ import {
   PanelLeftClose,
   PanelLeft,
   MonitorSmartphone,
+  Radio,
   Scale,
   Wrench,
 } from "lucide-react";
@@ -35,7 +36,7 @@ import { useAuthStore } from "@/stores/authStore";
 import { canAccessModerationBoard, canAccessPaymentIncidentQueue, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
 import { useQuery } from "@tanstack/react-query";
 import { getConversations } from "@/api/endpoints/messaging";
-import { isVncRemoteDesktopEnabled, isDevtoolsLogUiEnabled } from "@/lib/featureFlags";
+import { isBroadcastNavigationEnabled, isVncRemoteDesktopEnabled, isDevtoolsLogUiEnabled } from "@/lib/featureFlags";
 
 // ─── Navigation Config ──────────────────────────────────────────
 
@@ -79,6 +80,12 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Projects", path: "/projects", icon: <FolderKanban className="h-5 w-5" /> },
       { label: "Calendar", path: "/calendar", icon: <CalendarDays className="h-5 w-5" /> },
       { label: "Signing", path: "/signing", icon: <FilePen className="h-5 w-5" /> },
+    ],
+  },
+  {
+    title: "Media",
+    items: [
+      { label: "Broadcast", path: "/broadcast", icon: <Radio className="h-5 w-5" /> },
     ],
   },
   {
@@ -152,6 +159,7 @@ export default function Sidebar() {
       <nav className="flex-1 overflow-y-auto px-2 py-3">
         {NAV_GROUPS.map((group, gi) => {
           const items = group.items.filter((item) => {
+            if (item.path === "/broadcast") return isBroadcastNavigationEnabled();
             if (item.path === "/root/roles") return showRootRoleManagement;
             if (item.path === "/remote-desktop") return isVncRemoteDesktopEnabled();
             if (item.path === "/admin/moderation") return showModerationBoard;

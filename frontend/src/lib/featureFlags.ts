@@ -112,6 +112,11 @@ export const vncRemoteDesktopEnabled = toBool(env.VITE_VNC_REMOTE_DESKTOP_ENABLE
 export const vncRemoteDesktopKillSwitch = toBool(env.VITE_VNC_REMOTE_DESKTOP_KILL_SWITCH, false);
 export const isVncRemoteDesktopEnabled = () => vncRemoteDesktopEnabled && !vncRemoteDesktopKillSwitch;
 
+export const broadcastNavigationEnabled = toBool(env.VITE_BROADCAST_NAVIGATION_ENABLED, true);
+export const broadcastNavigationKillSwitch = toBool(env.VITE_BROADCAST_NAVIGATION_KILL_SWITCH, false);
+export const isBroadcastNavigationEnabled = () =>
+  broadcastNavigationEnabled && !broadcastNavigationKillSwitch;
+
 export const googleCalendarSyncEnabled = toBool(env.VITE_GOOGLE_CALENDAR_SYNC_ENABLED, false);
 export const googleCalendarWritebackEnabled = toBool(env.VITE_GOOGLE_CALENDAR_WRITEBACK_ENABLED, false);
 export const isGoogleCalendarSyncEnabled = () => googleCalendarSyncEnabled;

@@ -11,6 +11,9 @@ from app.services.broadcast_store import (
     create_session,
     get_session,
     get_output,
+    list_profiles_by_creator,
+    list_sessions_by_creator,
+    list_sessions_by_status,
 )
 from app.services.broadcast_audit import query_broadcast_actions, record_broadcast_action
 from app.services.broadcast_orchestrator import (
@@ -114,6 +117,15 @@ class BroadcastPlaybackTokenVerifyOut(BaseModel):
     valid: bool
 
 
+class BroadcastSessionListOut(BaseModel):
+    items: List[BroadcastSessionOut] = Field(default_factory=list)
+    has_more: bool = False
+
+
+class BroadcastProfileListOut(BaseModel):
+    items: List[BroadcastProfileOut] = Field(default_factory=list)
+
+
 def _ctx(ctx=Depends(require_ui_session)):
     return ctx
 
@@ -191,6 +203,29 @@ def create_session_route(body: BroadcastSessionCreateIn, request: Request, ctx: 
         metadata={"stream_key_ref": session.stream_key_ref},
     )
     return _to_session_out(session)
+
+
+@router.get("/sessions", response_model=BroadcastSessionListOut)
+def list_sessions_route(
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=200),
+    ctx: dict = Depends(_ctx),
+):
+    if status_filter:
+        result = list_sessions_by_status(status_filter, limit=limit)
+    else:
+        result = list_sessions_by_creator(ctx["user_sub"], limit=limit)
+    items = [_to_session_out(s) for s in result["items"]]
+    return BroadcastSessionListOut(items=items, has_more=bool(result.get("cursor")))
+
+
+@router.get("/profiles", response_model=BroadcastProfileListOut)
+def list_profiles_route(
+    limit: int = Query(default=200, ge=1, le=200),
+    ctx: dict = Depends(_ctx),
+):
+    profiles = list_profiles_by_creator(ctx["user_sub"], limit=limit)
+    return BroadcastProfileListOut(items=[BroadcastProfileOut(**p.model_dump()) for p in profiles])
 
 
 @router.post("/sessions/{session_id}/start", response_model=BroadcastSessionOut, status_code=status.HTTP_202_ACCEPTED)

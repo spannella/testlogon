@@ -303,6 +303,23 @@ def transition_session_status(*, session_id: str, to_status: str, reason: str, a
     return updated
 
 
+def list_profiles_by_creator(created_by: str, *, limit: int = 200) -> List[BroadcastProfileModel]:
+    """Scan broadcast_profiles table filtered by created_by. No GSI — table is small."""
+    kwargs: Dict[str, Any] = {"Limit": limit}
+    if created_by:
+        from boto3.dynamodb.conditions import Attr
+        kwargs["FilterExpression"] = Attr("created_by").eq(created_by)
+
+    items: List[BroadcastProfileModel] = []
+    while True:
+        resp = T.broadcast_profiles.scan(**kwargs)
+        items.extend(profile_from_item(i) for i in resp.get("Items", []))
+        if not resp.get("LastEvaluatedKey") or len(items) >= limit:
+            break
+        kwargs["ExclusiveStartKey"] = resp["LastEvaluatedKey"]
+    return items[:limit]
+
+
 def list_sessions_by_status(status: str, *, limit: int = 50, cursor: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if not status:
         raise HTTPException(status_code=400, detail="status is required")

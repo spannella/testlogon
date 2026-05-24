@@ -72,6 +72,7 @@ class Tables:
     tickets: Any
     questionnaires: Any
     kyc_cases: Any
+    video_metadata: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -138,4 +139,5 @@ T = Tables(
     tickets=ddb.Table(S.tickets_table_name),
     questionnaires=ddb.Table(S.questionnaire_table_name),
     kyc_cases=ddb.Table(S.kyc_cases_table_name),
+    video_metadata=ddb.Table(S.video_metadata_table_name),
 )

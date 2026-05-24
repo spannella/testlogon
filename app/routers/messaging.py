@@ -12269,3 +12269,147 @@ async def end_call_endpoint(
         )
     except CallLifecycleError as exc:
         raise _call_error_to_http(exc)
+
+
+# ---------------------------------------------------------------------------
+# WebRTC Signaling Relay
+# ---------------------------------------------------------------------------
+
+
+class CallSignalingIn(BaseModel):
+    type: str = Field(..., pattern=r"^(webrtc\.offer|webrtc\.answer|webrtc\.ice_candidate)$")
+    event_id: str = Field(..., min_length=1, max_length=128)
+    conversation_id: str = Field(..., min_length=1, max_length=128)
+    recipient_user_id: str = Field(..., min_length=1, max_length=128)
+    nonce: str = Field(..., min_length=8, max_length=128)
+    sent_at: int
+    payload: dict = Field(default_factory=dict)
+
+
+class CallSignalingOut(BaseModel):
+    event_id: str
+    call_id: str
+    conversation_id: str
+    event_type: str
+    delivered_to: str
+    status: str
+
+
+class CallSignalingErrorOut(BaseModel):
+    code: str
+    message: str
+
+
+_SIGNALING_ERROR_STATUS_MAP = {
+    "validation_error": 400,
+    "unsupported_version": 400,
+    "stale_timestamp": 400,
+    "unauthorized": 403,
+    "forbidden": 403,
+    "call_not_found": 404,
+    "call_lookup_failed": 503,
+    "participant_lookup_failed": 503,
+    "replay_detected": 409,
+    "replay_guard_failed": 503,
+    "invalid_state": 409,
+    "delivery_failed": 503,
+    "rate_limited": 429,
+}
+
+SIGNALING_RATE_LIMIT_WINDOW_SECONDS = int(
+    os.environ.get("MESSAGING_WEBRTC_SIGNALING_RATE_LIMIT_WINDOW_SECONDS", "10")
+)
+SIGNALING_RATE_LIMIT_MAX = int(
+    os.environ.get("MESSAGING_WEBRTC_SIGNALING_RATE_LIMIT_MAX", "60")
+)
+
+
+def _enforce_webrtc_signaling_enabled() -> None:
+    if S.messaging_webrtc_direct_call_kill_switch:
+        raise HTTPException(status_code=403, detail={"code": "feature_disabled", "message": "WebRTC signaling is disabled"})
+    if not S.messaging_webrtc_direct_call_enabled:
+        raise HTTPException(status_code=403, detail={"code": "feature_disabled", "message": "WebRTC direct calls are not enabled"})
+
+
+def _enforce_signaling_rate_limit(user_id: str) -> None:
+    now = int(time.time())
+    bucket = now // SIGNALING_RATE_LIMIT_WINDOW_SECONDS
+    counter_key = f"SIGNALING_RATE#{user_id}#{bucket}"
+    try:
+        resp = tbl_events.update_item(
+            Key={"user_id": counter_key, "event_id": "counter"},
+            UpdateExpression="SET #c = if_not_exists(#c, :zero) + :one, #ttl = :ttl",
+            ExpressionAttributeNames={"#c": "counter", "#ttl": "ttl"},
+            ExpressionAttributeValues={
+                ":zero": 0,
+                ":one": 1,
+                ":ttl": now + SIGNALING_RATE_LIMIT_WINDOW_SECONDS * 2,
+            },
+            ReturnValues="UPDATED_NEW",
+        )
+        count = int(resp.get("Attributes", {}).get("counter", 0))
+        if count > SIGNALING_RATE_LIMIT_MAX:
+            raise HTTPException(
+                status_code=429,
+                detail={"code": "rate_limited", "message": "Signaling rate limit exceeded"},
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # Fail open -- do not block signaling if rate limit check fails
+
+
+SIGNALING_ENDPOINT_RESPONSES = {
+    400: {"model": CallSignalingErrorOut, "description": "Invalid signaling envelope"},
+    403: {"model": CallSignalingErrorOut, "description": "Feature disabled or forbidden"},
+    404: {"model": CallSignalingErrorOut, "description": "Call session not found"},
+    409: {"model": CallSignalingErrorOut, "description": "Replay detected or invalid state"},
+    429: {"model": CallSignalingErrorOut, "description": "Rate limit exceeded"},
+    503: {"model": CallSignalingErrorOut, "description": "Service temporarily unavailable"},
+}
+
+
+@router.post(
+    "/messages/calls/{call_id}/signal",
+    response_model=CallSignalingOut,
+    responses=SIGNALING_ENDPOINT_RESPONSES,
+)
+async def send_signaling_event(
+    call_id: str,
+    body: CallSignalingIn,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    from app.services.messaging_call_signaling import SignalingValidationError, route_signaling_event
+
+    _enforce_webrtc_signaling_enabled()
+    _enforce_signaling_rate_limit(user_id)
+
+    envelope = {
+        "type": body.type,
+        "version": 1,
+        "event_id": body.event_id,
+        "call_id": call_id,
+        "conversation_id": body.conversation_id,
+        "sender_user_id": user_id,
+        "recipient_user_id": body.recipient_user_id,
+        "nonce": body.nonce,
+        "sent_at": body.sent_at,
+        "payload": body.payload,
+    }
+
+    try:
+        ack = route_signaling_event(envelope=envelope, actor_user_id=user_id)
+    except SignalingValidationError as exc:
+        raise HTTPException(
+            status_code=_SIGNALING_ERROR_STATUS_MAP.get(exc.code, 400),
+            detail={"code": exc.code, "message": str(exc)},
+        )
+
+    return CallSignalingOut(
+        event_id=ack.event_id,
+        call_id=ack.call_id,
+        conversation_id=ack.conversation_id,
+        event_type=ack.event_type,
+        delivered_to=ack.delivered_to,
+        status=ack.status,
+    )

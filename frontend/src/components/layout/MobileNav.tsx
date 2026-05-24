@@ -18,6 +18,7 @@ import {
   Settings,
   UsersRound,
   MonitorSmartphone,
+  Radio,
   Scale,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -31,7 +32,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { useAuthStore } from "@/stores/authStore";
 import { canAccessModerationBoard, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
-import { isVncRemoteDesktopEnabled } from "@/lib/featureFlags";
+import { isBroadcastNavigationEnabled, isVncRemoteDesktopEnabled } from "@/lib/featureFlags";
 
 // ─── Tab config ─────────────────────────────────────────────────
 
@@ -48,6 +49,7 @@ const MORE_LINKS = [
   { label: "Billing", path: "/billing", icon: CreditCard },
   { label: "Calendar", path: "/calendar", icon: CalendarDays },
   { label: "Signing", path: "/signing", icon: FilePen },
+  { label: "Broadcast", path: "/broadcast", icon: Radio },
   { label: "Profile", path: "/profile", icon: User },
   { label: "Security", path: "/security", icon: Shield },
   { label: "Alerts", path: "/alerts", icon: Bell },
@@ -69,6 +71,7 @@ export default function MobileNav() {
   const showModerationBoard = canAccessModerationBoard(accessToken);
 
   const moreLinks = MORE_LINKS.filter((item) => {
+    if (item.path === "/broadcast") return isBroadcastNavigationEnabled();
     if (item.path === "/root/roles") return showRootRoleManagement;
     if (item.path === "/remote-desktop") return isVncRemoteDesktopEnabled();
     if (item.path === "/admin/moderation") return showModerationBoard;

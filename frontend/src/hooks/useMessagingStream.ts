@@ -76,6 +76,17 @@ export function useMessagingStream(enabled = true) {
             }),
           );
         }
+
+        if (eventType.startsWith("webrtc.")) {
+          window.dispatchEvent(
+            new CustomEvent("messaging:webrtc-signal", {
+              detail: {
+                ...data,
+                event_type: eventType,
+              },
+            }),
+          );
+        }
       } catch {
         // Ignore parse errors (heartbeat comments, etc.)
       }
@@ -103,6 +114,9 @@ export function useMessagingStream(enabled = true) {
       "call.accept",
       "call.decline",
       "call.end",
+      "webrtc.offer",
+      "webrtc.answer",
+      "webrtc.ice_candidate",
     ];
 
     function connect() {

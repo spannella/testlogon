@@ -74,6 +74,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   MessageSquare,
+  Radio,
   Rss,
   Store,
   ShoppingCart,
@@ -95,6 +96,7 @@ import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
 import { useAuthStore } from "@/stores/authStore";
 import { canAccessModerationBoard, canSeeRootRoleManagement } from "@/lib/adminCapabilities";
+import { isBroadcastNavigationEnabled } from "@/lib/featureFlags";
 
 const MOBILE_NAV_GROUPS = [
   {
@@ -121,6 +123,12 @@ const MOBILE_NAV_GROUPS = [
       { label: "Files", path: "/files", icon: FolderOpen },
       { label: "Calendar", path: "/calendar", icon: CalendarDays },
       { label: "Signing", path: "/signing", icon: FilePen },
+    ],
+  },
+  {
+    title: "Media",
+    items: [
+      { label: "Broadcast", path: "/broadcast", icon: Radio },
     ],
   },
   {
@@ -165,6 +173,7 @@ function MobileSidebar({ onNavigate }: { onNavigate: () => void }) {
       <nav className="flex-1 overflow-y-auto px-2 py-3">
         {MOBILE_NAV_GROUPS.map((group, gi) => {
           const items = group.items.filter((item) => {
+            if (item.path === "/broadcast") return isBroadcastNavigationEnabled();
             if (item.path === "/root/roles") return showRootRoleManagement;
             if (item.path === "/admin/moderation") return showModerationBoard;
             return true;

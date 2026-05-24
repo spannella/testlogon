@@ -596,6 +596,28 @@ def _table_defs() -> List[TableDef]:
         TableDef(os.getenv("EXTERNAL_CALENDARS_TABLE_NAME", "external_calendars"), "external_calendar_id"),
         TableDef(os.getenv("CALENDAR_SYNC_RUNS_TABLE_NAME", "calendar_sync_runs"), "run_id"),
         TableDef(os.getenv("EXTERNAL_EVENT_LINKS_TABLE_NAME", "external_event_links"), "connection_uid_key"),
+        # Video metadata (VOD-001)
+        TableDef(
+            _resolve_table_name(S.video_metadata_table_name, "VideoMetadata"),
+            "video_id",
+            gsi=[
+                {
+                    "index_name": "ByOwnerCreatedAt",
+                    "partition_key": "owner_user_id",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "ByStatusCreatedAt",
+                    "partition_key": "status",
+                    "sort_key": "created_at",
+                },
+                {
+                    "index_name": "BySourceBroadcast",
+                    "partition_key": "source_broadcast_session_id",
+                },
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 

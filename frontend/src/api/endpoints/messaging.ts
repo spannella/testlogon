@@ -871,3 +871,32 @@ export async function getRoutingEvents(conversationId: string, limit = 50): Prom
   );
   return Array.isArray(res) ? res : [];
 }
+
+// ─── WebRTC Signaling ─────────────────────────────────────────────────
+
+export interface SignalingPayload {
+  type: "webrtc.offer" | "webrtc.answer" | "webrtc.ice_candidate";
+  event_id: string;
+  conversation_id: string;
+  recipient_user_id: string;
+  nonce: string;
+  sent_at: number;
+  payload: Record<string, unknown>;
+}
+
+export interface SignalingAck {
+  event_id: string;
+  call_id: string;
+  conversation_id: string;
+  event_type: string;
+  delivered_to: string;
+  status: "delivered" | "duplicate";
+}
+
+export async function sendSignalingEvent(
+  callId: string,
+  data: SignalingPayload,
+): Promise<SignalingAck> {
+  const resp = await api.post<SignalingAck>(`/messaging/messages/calls/${callId}/signal`, data);
+  return resp;
+}

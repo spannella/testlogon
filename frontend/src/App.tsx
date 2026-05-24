@@ -5,7 +5,7 @@ import { Loader2 } from "lucide-react";
 import ProtectedRoute from "@/components/ProtectedRoute";
 import AppShell from "@/components/layout/AppShell";
 import { ErrorPage } from "@/components/shared/ErrorPage";
-import { isCanonicalProfileNavigationEnabled, isVncRemoteDesktopEnabled } from "@/lib/featureFlags";
+import { isBroadcastNavigationEnabled, isCanonicalProfileNavigationEnabled, isVncRemoteDesktopEnabled } from "@/lib/featureFlags";
 
 // ─── Lazy-loaded pages (code-split per route) ───────────────────
 const Login = lazy(() => import("@/pages/Login"));
@@ -45,6 +45,7 @@ const SigningPage = lazy(() => import("@/pages/signing/SigningPage"));
 const QuestionnaireBuilderPage = lazy(() => import("@/pages/questionnaires/QuestionnaireBuilderPage"));
 const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/QuestionnaireRespondentPage"));
 const PublicUserProfilePage = lazy(() => import("@/pages/profile/PublicUserProfilePage"));
+const BroadcastPage = lazy(() => import("@/pages/broadcast/BroadcastPage"));
 
 function PageSpinner() {
   return (
@@ -56,6 +57,7 @@ function PageSpinner() {
 
 export default function App() {
   const showVncRemoteDesktop = isVncRemoteDesktopEnabled();
+  const showBroadcastNavigation = isBroadcastNavigationEnabled();
   const showCanonicalProfileRoute = isCanonicalProfileNavigationEnabled();
 
   return (
@@ -93,6 +95,7 @@ export default function App() {
           <Route path="tickets" element={<TicketsPage />} />
           <Route path="tickets/spaces" element={<TicketSpacesPage />} />
           <Route path="tickets/spaces/:spaceId" element={<TicketSpaceDetailPage />} />
+          {showBroadcastNavigation && <Route path="broadcast" element={<BroadcastPage />} />}
           {showVncRemoteDesktop && <Route path="remote-desktop" element={<RemoteDesktopPage />} />}
           <Route path="security" element={<SecurityPage />} />
           <Route path="profile" element={<ProfilePage />} />
