@@ -23,7 +23,7 @@ The hook encapsulates the full `RTCPeerConnection` lifecycle:
 The hook will be consumed by `ConversationView.tsx` and will:
 - Replace the fake `setTimeout` auto-accept on line 530-531
 - Populate `callResourcesRef.current` with real `peerConnection`, `localStream`, and `remoteStream`
-- Listen for incoming `webrtc.offer`, `webrtc.answer`, and `webrtc.ice_candidate` events already dispatched by `useMessagingStream.ts` (lines 69-77)
+- Listen for incoming `webrtc.offer`, `webrtc.answer`, and `webrtc.ice_candidate` events via SSE (NOTE: `useMessagingStream.ts` currently only dispatches `call.*` events — `webrtc.*` types must be added to `EVENT_TYPES` as a prerequisite)
 - Call the existing `teardownCallResources()` (line 163 of `callStateMachine.ts`) for cleanup
 
 ---
@@ -86,7 +86,9 @@ A Dialog-based overlay rendering different states. It does not need modification
 
 #### SSE Event Dispatch (`frontend/src/hooks/useMessagingStream.ts`, lines 69-77)
 
-All `call.*` events (including `webrtc.offer`, `webrtc.answer`, `webrtc.ice_candidate` per the backend `ALLOWED_SIGNALING_TYPES` set) are re-dispatched as `window` CustomEvents:
+> **GAP**: The current SSE dispatch only fires for `eventType.startsWith("call.")` — it does NOT handle `webrtc.*` prefixed events. The `EVENT_TYPES` array (lines 85-106) also only lists `call.invite`, `call.accept`, `call.decline`, `call.end`. Adding `webrtc.offer`, `webrtc.answer`, `webrtc.ice_candidate` to `EVENT_TYPES` and updating the dispatch condition is a prerequisite for this ticket.
+
+Currently only `call.*` events are re-dispatched as `window` CustomEvents:
 
 ```typescript
 if (eventType.startsWith("call.")) {
@@ -384,7 +386,9 @@ pc.ontrack = (event) => {
 
 ### 3.9 Integration Points with CallRuntimeResources
 
-The hook populates the `callResourcesRef` in `ConversationView.tsx`:
+The hook populates the `callResourcesRef` in `ConversationView.tsx`.
+
+> **NOTE**: The current type of `callResourcesRef` is `React.useRef<{ cleanedUp?: boolean } | null>(null)` — a narrow type that does NOT include `localStream`/`remoteStream`/`peerConnection`. This ref type must be widened to `CallRuntimeResources | null` (importing from `callStateMachine.ts`) before the hook can store streams.
 
 ```typescript
 callResourcesRef.current = {

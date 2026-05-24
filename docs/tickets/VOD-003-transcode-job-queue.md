@@ -89,7 +89,7 @@ The broadcast reconciler (`app/services/broadcast_reconciler.py`) is the closest
 - **No job queue table**: There is no DynamoDB table for transcode jobs.
 - **No worker process**: There is no asyncio task or external worker that picks up and executes transcode jobs.
 - **No progress tracking**: `VideoPipelineJobEvent` defines event types (`job.accepted`, `job.running`, `job.failed`, `job.completed`) but nothing persists or emits them.
-- **No concurrency limiter**: No `asyncio.Semaphore` or similar mechanism exists in the services layer.
+- **No concurrency limiter**: No `asyncio.Semaphore` or similar mechanism exists in the services layer. NOTE: `asyncio.Semaphore` and `asyncio.create_subprocess_exec` are novel patterns in this codebase — no existing precedent. Existing subprocess calls use synchronous `subprocess.run` or `subprocess.Popen`.
 - **No retry logic**: The existing background loops have bare `except Exception: pass` - they retry on the *next* interval tick but have no per-item retry count or backoff.
 - **No SQS queue for video jobs**: The only SQS integration is the newsfeed SSE fan-out poller (`EVENTS_SQS_URL`) and the Jira outbound sync (`app/services/jira_outbound_sync.py`).
 
@@ -622,7 +622,7 @@ These tests require `ffmpeg` on PATH (skip with `pytest.mark.skipif(not shutil.w
 
 3. `test_retry_preserves_attempt_history` - After each retry, `attempt` field increments. `error_message` reflects the most recent failure.
 
-4. `test_max_attempts_exhaustion_emits_alert` - After final failure, verify an alert is created in the alerts table for the tenant (using `app/services/alerts.py:create_alert()`).
+4. `test_max_attempts_exhaustion_emits_alert` - After final failure, verify an alert is created in the alerts table for the tenant (using `app/services/alerts.py:write_alert()`).
 
 ### 5.4 Testing Concurrency Limits
 
@@ -689,7 +689,7 @@ def _emit_job_event(job: dict, event_type: str) -> None:
         output_dash_manifest_uri=job.get("output_dash_manifest_uri"),
     )
     # Publish to tenant's SSE channel
-    create_alert(
+    write_alert(
         user_sub=job["tenant_id"],
         alert_type="transcode_job_event",
         payload=event.model_dump(),

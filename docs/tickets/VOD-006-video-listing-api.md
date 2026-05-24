@@ -496,7 +496,7 @@ import base64
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from app.auth.deps import require_admin_session
+from app.services.sessions import require_admin_session
 from app.core.cursor import encode_cursor, decode_cursor
 from app.core.settings import S
 from app.models_video import (

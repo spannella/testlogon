@@ -345,7 +345,7 @@ interface Props {
 
 ### 4.2 Passing Streams from ConversationView
 
-In `ConversationView.tsx`, the `callResourcesRef` already holds `localStream` and `remoteStream`. Add state to expose them reactively:
+In `ConversationView.tsx`, after widening `callResourcesRef` to type `CallRuntimeResources | null` (currently typed as `{ cleanedUp?: boolean } | null` — prerequisite from CALL-002/003), it will hold `localStream` and `remoteStream`. Add state to expose them reactively:
 
 ```tsx
 const [localStream, setLocalStream] = React.useState<MediaStream | null>(null);

@@ -91,6 +91,10 @@ Key function: `build_rendition_ffmpeg_args()` accepts an `input_url` (can be a f
 network URL) and produces HLS output. This can be reused for VOD transcoding by pointing the
 input at the concatenated archive file.
 
+> **NOTE**: FFmpeg concat demuxer logic does NOT currently exist in the codebase. The concat
+> file format generation and execution must be built from scratch as part of this ticket.
+> No existing function handles segment concatenation.
+
 ### 2.4 Video Pipeline Contract (`app/contracts/video_pipeline_contract.py`)
 
 The existing `VideoPipelineJobRequest` model defines the interface for submitting transcode

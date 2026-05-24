@@ -306,6 +306,14 @@ VideoReviewStatus = Literal["pending_review", "approved", "rejected"]
 
 
 class VideoRendition(BaseModel):
+    """Per-rendition output metadata stored on completed videos.
+    
+    NOTE: This is distinct from `VideoRenditionProfile` in
+    `app/contracts/video_rendition_profiles.py` which defines the
+    encoding PARAMETERS (target bitrate, fps, GOP). This model
+    records the ACTUAL output characteristics after transcoding.
+    The `label` field here corresponds to `VideoRenditionProfile.name`.
+    """
     label: str = Field(min_length=1, max_length=32)
     width: int = Field(ge=1)
     height: int = Field(ge=1)

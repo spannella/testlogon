@@ -334,6 +334,9 @@ const startOutgoingCall = async (mode: DirectCallMode) => {
   }
   
   // Attach to runtime resources
+  // NOTE: callResourcesRef is currently typed as `{ cleanedUp?: boolean } | null`.
+  // It must be widened to `CallRuntimeResources | null` (from callStateMachine.ts)
+  // before this assignment will type-check.
   callResourcesRef.current = {
     ...callResourcesRef.current,
     localStream: stream,
