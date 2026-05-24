@@ -82,6 +82,7 @@ class VideoMetadataModel(BaseModel):
     review_notes: Optional[str] = None
 
     # DRM
+    drm_enabled: bool = False
     drm_policy_id: Optional[str] = None
     drm_key_id: Optional[str] = None
 
@@ -103,6 +104,7 @@ class CreateVideoIn(BaseModel):
     source_s3_key: Optional[str] = None
     encoding_profile_id: Optional[str] = None
     visibility: VideoVisibility = "private"
+    drm_enabled: bool = False
     drm_policy_id: Optional[str] = None
     entitlement_sku: Optional[str] = None
 
@@ -112,6 +114,7 @@ class UpdateVideoIn(BaseModel):
     description: Optional[str] = Field(default=None, max_length=2000)
     visibility: Optional[VideoVisibility] = None
     encoding_profile_id: Optional[str] = None
+    drm_enabled: Optional[bool] = None
     drm_policy_id: Optional[str] = None
     entitlement_sku: Optional[str] = None
 
@@ -135,3 +138,5 @@ class VideoOut(BaseModel):
     visibility: VideoVisibility = "private"
     published_at: Optional[int] = None
     file_size_bytes: Optional[int] = None
+    drm_enabled: bool = False
+    drm_key_uri: Optional[str] = None

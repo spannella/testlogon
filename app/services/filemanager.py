@@ -32,6 +32,7 @@ from fastapi import HTTPException, UploadFile
 from app.core.aws import ddb
 from app.core.aws_clients import s3_client
 from app.core.settings import S
+from app.services.ffmpeg_manager import is_ffmpeg_available
 from app.metrics import (
     FILEMGR_PURGE_RESULTS,
     record_filemgr_bytes,
@@ -1359,7 +1360,7 @@ def mark_media_preview_job_failed(owner: str, job_id: str, *, reason: str, trans
 
 
 def _extract_video_poster_bytes(bucket: str, s3_key: str) -> Optional[Dict[str, Any]]:
-    if not shutil.which("ffmpeg"):
+    if not is_ffmpeg_available():
         return None
     target_height = max(120, int(getattr(S, "filemgr_video_preview_target_height", 360) or 360))
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -1427,7 +1428,7 @@ def _extract_video_poster_bytes(bucket: str, s3_key: str) -> Optional[Dict[str, 
 
 
 def _extract_video_hover_clip_bytes(bucket: str, s3_key: str) -> Optional[Dict[str, Any]]:
-    if not shutil.which("ffmpeg"):
+    if not is_ffmpeg_available():
         return None
     target_height = max(120, int(getattr(S, "filemgr_video_preview_target_height", 360) or 360))
     clip_seconds = max(1, int(getattr(S, "filemgr_video_preview_clip_seconds", 6) or 6))
@@ -1478,7 +1479,7 @@ def _extract_video_hover_clip_bytes(bucket: str, s3_key: str) -> Optional[Dict[s
 
 
 def _extract_audio_waveform_bytes(bucket: str, s3_key: str) -> Optional[Dict[str, Any]]:
-    if not shutil.which("ffmpeg"):
+    if not is_ffmpeg_available():
         return None
     with tempfile.TemporaryDirectory() as tmpdir:
         input_path = f"{tmpdir}/input"
@@ -1665,7 +1666,7 @@ def _maybe_generate_thumbnail(
 ) -> Optional[Dict[str, Any]]:
     if not content_type or not content_type.startswith("video/"):
         return None
-    if not shutil.which("ffmpeg"):
+    if not is_ffmpeg_available():
         return None
     with tempfile.TemporaryDirectory() as tmpdir:
         input_path = f"{tmpdir}/input"

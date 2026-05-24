@@ -5,30 +5,23 @@
  * metadata display, share functionality, and comprehensive error states.
  */
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import Hls from "hls.js";
 import {
   ArrowLeft,
   AlertCircle,
   Loader2,
   Share2,
   RefreshCw,
-  Settings,
   Clock,
   Calendar,
   Video,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
+import { MediaPlayer, type MediaError } from "@/components/shared/MediaPlayer";
 import { getVideoDetail, type VideoDetail } from "@/api/endpoints/videos";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -44,180 +37,6 @@ type PlayerErrorType =
 interface PlayerError {
   type: PlayerErrorType;
   message: string;
-}
-
-interface QualityLevel {
-  index: number;
-  height: number;
-  bitrate: number;
-  label: string;
-}
-
-// ─── Quality Selector ───────────────────────────────────────────────────────
-
-function QualitySelector({
-  levels,
-  currentLevel,
-  onChange,
-}: {
-  levels: QualityLevel[];
-  currentLevel: number;
-  onChange: (level: number) => void;
-}) {
-  if (levels.length === 0) return null;
-
-  const activeLabel =
-    currentLevel === -1
-      ? "Auto"
-      : levels.find((l) => l.index === currentLevel)?.label ?? "Auto";
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="absolute bottom-14 right-3 z-10 gap-1.5 bg-black/60 text-white hover:bg-black/80 hover:text-white text-xs px-2 py-1 h-7"
-          data-testid="quality-selector"
-        >
-          <Settings className="h-3.5 w-3.5" />
-          {activeLabel}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[140px]">
-        <DropdownMenuItem
-          onClick={() => onChange(-1)}
-          className={currentLevel === -1 ? "font-bold" : ""}
-          data-testid="quality-auto"
-        >
-          <span className="flex items-center gap-2">
-            {currentLevel === -1 && (
-              <span className="h-2 w-2 rounded-full bg-green-500" />
-            )}
-            Auto
-          </span>
-        </DropdownMenuItem>
-        {levels.map((level) => (
-          <DropdownMenuItem
-            key={level.index}
-            onClick={() => onChange(level.index)}
-            className={currentLevel === level.index ? "font-bold" : ""}
-            data-testid={`quality-${level.label}`}
-          >
-            <span className="flex items-center gap-2">
-              {currentLevel === level.index && (
-                <span className="h-2 w-2 rounded-full bg-green-500" />
-              )}
-              {level.label}
-            </span>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-// ─── HLS Player ─────────────────────────────────────────────────────────────
-
-function HlsPlayer({
-  src,
-  autoplay = true,
-  onError,
-}: {
-  src: string;
-  autoplay?: boolean;
-  onError: (error: PlayerError) => void;
-}) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const hlsRef = useRef<Hls | null>(null);
-  const [levels, setLevels] = useState<QualityLevel[]>([]);
-  const [currentLevel, setCurrentLevel] = useState(-1);
-
-  useEffect(() => {
-    if (!videoRef.current || !src) return;
-
-    if (Hls.isSupported()) {
-      const hls = new Hls({ startLevel: -1 });
-      hlsRef.current = hls;
-      hls.loadSource(src);
-      hls.attachMedia(videoRef.current);
-
-      hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
-        const parsed: QualityLevel[] = data.levels.map((level, index) => ({
-          index,
-          height: level.height,
-          bitrate: level.bitrate,
-          label: level.height ? `${level.height}p` : `${Math.round(level.bitrate / 1000)}kbps`,
-        }));
-        setLevels(parsed);
-        if (autoplay) {
-          videoRef.current?.play().catch(() => {});
-        }
-      });
-
-      hls.on(Hls.Events.LEVEL_SWITCHED, (_, data) => {
-        setCurrentLevel(data.level);
-      });
-
-      hls.on(Hls.Events.ERROR, (_, data) => {
-        if (!data.fatal) return;
-        if (data.response && (data.response as { code?: number }).code === 403) {
-          onError({
-            type: "expired",
-            message: "Playback session expired. Please refresh to continue watching.",
-          });
-        } else {
-          onError({
-            type: "hls_error",
-            message: "A playback error occurred. Please try again.",
-          });
-        }
-        hls.destroy();
-      });
-
-      return () => {
-        hls.destroy();
-        hlsRef.current = null;
-      };
-    } else if (
-      videoRef.current.canPlayType("application/vnd.apple.mpegurl")
-    ) {
-      // Native HLS (Safari)
-      videoRef.current.src = src;
-      if (autoplay) {
-        videoRef.current.play().catch(() => {});
-      }
-    } else {
-      onError({
-        type: "unsupported",
-        message: "Your browser does not support video playback.",
-      });
-    }
-  }, [src, autoplay, onError]);
-
-  const setQuality = useCallback((level: number) => {
-    if (hlsRef.current) {
-      hlsRef.current.currentLevel = level;
-      setCurrentLevel(level);
-    }
-  }, []);
-
-  return (
-    <div className="relative aspect-video bg-black rounded-lg overflow-hidden" data-testid="video-player-container">
-      <video
-        ref={videoRef}
-        className="w-full h-full"
-        controls
-        playsInline
-        data-testid="video-element"
-      />
-      <QualitySelector
-        levels={levels}
-        currentLevel={currentLevel}
-        onChange={setQuality}
-      />
-    </div>
-  );
 }
 
 // ─── Error Display ──────────────────────────────────────────────────────────
@@ -344,8 +163,11 @@ export default function VideoPlayerPage() {
       ? `${video.hls_manifest_url}?token=${video.playback_token}`
       : null;
 
-  const handleHlsError = useCallback((error: PlayerError) => {
-    setPlayerError(error);
+  const handleMediaError = useCallback((error: MediaError) => {
+    setPlayerError({
+      type: "hls_error",
+      message: error.message || "A playback error occurred. Please try again.",
+    });
   }, []);
 
   const handleRetry = useCallback(() => {
@@ -415,10 +237,13 @@ export default function VideoPlayerPage() {
 
           {/* Active player */}
           {!playerError && playbackUrl && (
-            <HlsPlayer
+            <MediaPlayer
               src={playbackUrl}
-              autoplay={true}
-              onError={handleHlsError}
+              mode="vod"
+              autoplay
+              poster={video.thumbnail_url ?? undefined}
+              title={video.title}
+              onError={handleMediaError}
             />
           )}
 

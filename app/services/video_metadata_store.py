@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -28,6 +29,7 @@ def video_to_item(video: VideoMetadataModel) -> Dict[str, Any]:
         "updated_at": video.updated_at,
         "source_type": video.source_type,
         "visibility": video.visibility,
+        "drm_enabled": video.drm_enabled,
     }
 
     # Optional string fields - only include if set
@@ -58,7 +60,7 @@ def video_to_item(video: VideoMetadataModel) -> Dict[str, Any]:
         if val is not None:
             item[field] = val
 
-    # Optional numeric fields
+    # Optional numeric fields — convert floats to Decimal for DynamoDB
     _optional_num_fields = [
         "duration_seconds",
         "width",
@@ -76,16 +78,26 @@ def video_to_item(video: VideoMetadataModel) -> Dict[str, Any]:
     for field in _optional_num_fields:
         val = getattr(video, field, None)
         if val is not None:
-            item[field] = val
+            if isinstance(val, float):
+                item[field] = Decimal(str(val))
+            else:
+                item[field] = val
 
     # source_broadcast_session_id is a GSI partition key -- must omit if None
     # to avoid DynamoDB storing NULL in GSI key attributes
     if video.source_broadcast_session_id is not None:
         item["source_broadcast_session_id"] = video.source_broadcast_session_id
 
-    # Renditions: store as list of dicts
+    # Renditions: store as list of dicts (convert any floats to Decimal)
     if video.renditions:
-        item["renditions"] = [r.model_dump() for r in video.renditions]
+        rendition_items = []
+        for r in video.renditions:
+            rd = r.model_dump()
+            for k, v in rd.items():
+                if isinstance(v, float):
+                    rd[k] = Decimal(str(v))
+            rendition_items.append(rd)
+        item["renditions"] = rendition_items
 
     return item
 
@@ -143,6 +155,7 @@ def video_from_item(item: Dict[str, Any]) -> VideoMetadataModel:
         reviewed_by=item.get("reviewed_by"),
         reviewed_at=_int_or_none(item.get("reviewed_at")),
         review_notes=item.get("review_notes"),
+        drm_enabled=bool(item.get("drm_enabled", False)),
         drm_policy_id=item.get("drm_policy_id"),
         drm_key_id=item.get("drm_key_id"),
         entitlement_sku=item.get("entitlement_sku"),

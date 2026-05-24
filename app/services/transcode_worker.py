@@ -254,6 +254,21 @@ async def _run_ffmpeg_for_rendition(
     if local_wm:
         args = patch_watermark_input(args, local_wm)
 
+    # VOD-010: Inject HLS encryption args if DRM is enabled for this job
+    _encryption_params = None
+    if rendition.get("drm_enabled") or rendition.get("_drm_enabled"):
+        from app.services.vod_encryption import (
+            get_ffmpeg_encryption_args,
+            prepare_encryption_params,
+        )
+
+        _asset_id = rendition.get("_asset_id", job_id)
+        _encryption_params = prepare_encryption_params(_asset_id, scratch_dir=scratch_dir)
+        if _encryption_params:
+            enc_args = get_ffmpeg_encryption_args(_encryption_params)
+            # Insert encryption args before the output playlist path (last arg)
+            args = args[:-1] + enc_args + args[-1:]
+
     rendition_name = rendition.get("name", f"rendition_{rendition_idx}")
 
     # Estimate expected duration (default 10 minutes if unknown)

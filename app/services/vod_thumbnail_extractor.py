@@ -13,6 +13,7 @@ from typing import List, Optional
 
 from app.core.aws_clients import s3_client
 from app.core.settings import S
+from app.services.ffmpeg_manager import get_ffmpeg_path
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,10 @@ async def extract_thumbnails(
     output_dir.mkdir(parents=True, exist_ok=True)
     results: List[Path] = []
 
-    ffmpeg_bin = S.ffmpeg_binary_path or "ffmpeg"
+    try:
+        ffmpeg_bin = get_ffmpeg_path()
+    except Exception:
+        ffmpeg_bin = S.ffmpeg_binary_path or "ffmpeg"
 
     for ts in ts_list:
         ts_label = f"{int(ts)}s" if ts == int(ts) else f"{ts}s"

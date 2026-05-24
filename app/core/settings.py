@@ -1066,6 +1066,11 @@ class Settings:
     google_calendar_oauth_require_refresh_token: bool = os.environ.get("GOOGLE_CALENDAR_OAUTH_REQUIRE_REFRESH_TOKEN", "true").lower() in ("1", "true", "yes", "on")
     google_calendar_api_retry_after_max_seconds: int = int(os.environ.get("GOOGLE_CALENDAR_API_RETRY_AFTER_MAX_SECONDS", "60"))
 
+    # VOD DRM encryption (VOD-010)
+    vod_drm_enabled: bool = os.environ.get("VOD_DRM_ENABLED", "1") not in ("0", "false", "False")
+    vod_drm_key_root: str = os.environ.get("VOD_DRM_KEY_ROOT", "dev-vod-drm-root-key-change-me")
+    vod_drm_key_server_base_url: str = os.environ.get("VOD_DRM_KEY_SERVER_BASE_URL", "http://localhost:8000/v1/vod/drm")
+
     # Broadcast Recording (BCAST-006)
     broadcast_recordings_table_name: str = os.environ.get("BROADCAST_RECORDINGS_TABLE", "BroadcastRecordings")
     broadcast_recording_enabled: bool = os.environ.get("BROADCAST_RECORDING_ENABLED", "1") not in ("0", "false", "False")

@@ -688,7 +688,7 @@ class TestFileManagerService(unittest.TestCase):
 
         fake_run = _FakeRun()
         with (
-            patch.object(filemanager.shutil, "which", return_value="/usr/bin/ffmpeg"),
+            patch.object(filemanager, "is_ffmpeg_available", return_value=True),
             patch.object(filemanager, "_s3") as s3,
             patch.object(filemanager, "_run_media_tool", side_effect=fake_run),
             patch.object(filemanager, "S", SimpleNamespace(filemgr_video_preview_target_height=240, filemgr_video_preview_clip_seconds=4)),
@@ -704,7 +704,7 @@ class TestFileManagerService(unittest.TestCase):
 
     def test_extract_video_hover_clip_bytes_handles_timeout_safely(self):
         with (
-            patch.object(filemanager.shutil, "which", return_value="/usr/bin/ffmpeg"),
+            patch.object(filemanager, "is_ffmpeg_available", return_value=True),
             patch.object(filemanager, "_s3") as s3,
             patch.object(filemanager, "_run_media_tool", side_effect=filemanager.subprocess.TimeoutExpired(cmd="ffmpeg", timeout=1)),
         ):
@@ -726,7 +726,7 @@ class TestFileManagerService(unittest.TestCase):
 
         fake_run = _FakeRun()
         with (
-            patch.object(filemanager.shutil, "which", return_value="/usr/bin/ffmpeg"),
+            patch.object(filemanager, "is_ffmpeg_available", return_value=True),
             patch.object(filemanager, "_s3") as s3,
             patch.object(filemanager, "_run_media_tool", side_effect=fake_run),
         ):

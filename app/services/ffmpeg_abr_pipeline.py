@@ -10,6 +10,8 @@ from app.contracts.watermark_policy import (
     WatermarkPolicy,
     interpolate_template_variables,
 )
+from app.core.settings import S
+from app.services.ffmpeg_manager import get_ffmpeg_path
 
 
 def _overlay_xy(position: str, margin_x: int, margin_y: int) -> str:
@@ -53,6 +55,7 @@ def build_rendition_ffmpeg_args(
     watermark_policy: WatermarkPolicy,
     tenant_settings: TenantWatermarkSettings | None = None,
     watermark_template_values: dict[str, str] | None = None,
+    encryption_keyinfo_file: str | None = None,
 ) -> list[str]:
     name = rendition["name"]
     width = rendition["width"]
@@ -65,7 +68,11 @@ def build_rendition_ffmpeg_args(
     output_playlist = out_dir / "index.m3u8"
     output_segment = out_dir / "seg_%05d.ts"
 
-    args = ["ffmpeg", "-hide_banner", "-loglevel", "warning", "-y", "-rw_timeout", "5000000", "-i", input_url]
+    try:
+        ffmpeg_bin = get_ffmpeg_path()
+    except Exception:
+        ffmpeg_bin = S.ffmpeg_binary_path or "ffmpeg"
+    args = [ffmpeg_bin, "-hide_banner", "-loglevel", "warning", "-y", "-rw_timeout", "5000000", "-i", input_url]
 
     if watermark_policy.mode == "dynamic_text":
         text = interpolate_template_variables(
@@ -120,6 +127,13 @@ def build_rendition_ffmpeg_args(
         "6",
         "-hls_flags",
         "delete_segments+append_list",
+    ]
+
+    # VOD-010: Inject HLS AES-128 encryption via keyinfo file
+    if encryption_keyinfo_file:
+        args += ["-hls_key_info_file", encryption_keyinfo_file]
+
+    args += [
         "-hls_segment_filename",
         str(output_segment),
         str(output_playlist),

@@ -89,6 +89,8 @@ class VideoDetailOut(BaseModel):
     encoding_error_message: Optional[str] = None
     review_status: Optional[str] = None
     published_at: Optional[int] = None
+    drm_enabled: bool = False
+    drm_key_uri: Optional[str] = None
 
 
 class VideoUpdateIn(BaseModel):
@@ -134,6 +136,16 @@ def _video_to_list_item(video: VideoMetadataModel) -> VideoListItem:
 
 
 def _video_to_detail(video: VideoMetadataModel, *, playback_token: str | None = None, playback_expires_at: int | None = None) -> VideoDetailOut:
+    # Resolve DRM key URI if DRM is enabled for this video
+    drm_key_uri: str | None = None
+    if video.drm_enabled:
+        try:
+            from app.services.vod_drm_keys import get_key_uri
+
+            drm_key_uri = get_key_uri(video.id)
+        except Exception:
+            pass
+
     return VideoDetailOut(
         video_id=video.id,
         owner_user_id=video.owner_user_id,
@@ -160,6 +172,8 @@ def _video_to_detail(video: VideoMetadataModel, *, playback_token: str | None = 
         encoding_error_message=video.encoding_error_message,
         review_status=video.review_status,
         published_at=video.published_at,
+        drm_enabled=video.drm_enabled,
+        drm_key_uri=drm_key_uri,
     )
 
 

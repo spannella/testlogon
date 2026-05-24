@@ -84,6 +84,7 @@ from app.routers.playback_entitlements import router as playback_entitlements_ro
 from app.routers.moderation import router as moderation_router, compat_router as moderation_compat_router
 from app.routers.admin_moderation import router as admin_moderation_router
 from app.routers.vod import router as vod_router
+from app.routers.vod_drm import router as vod_drm_router
 from app.routers.video_listing import router as video_listing_router
 from app.routers.transcode_jobs import router as transcode_jobs_router, video_router as transcode_video_router
 from app.services.billing_reconcile import start_billing_reconcile_task
@@ -204,6 +205,11 @@ def create_app() -> FastAPI:
     async def index():
         return FileResponse(static_dir / "index.html")
 
+    @app.get("/internal/ffmpeg-status")
+    def ffmpeg_status():
+        from app.services.ffmpeg_manager import validate_ffmpeg
+        return validate_ffmpeg()
+
     @app.get("/browser-ssh")
     async def browser_ssh_route():
         if not browser_ssh_terminal_enabled():
@@ -269,6 +275,17 @@ def create_app() -> FastAPI:
     app.include_router(moderation_router)
     app.include_router(moderation_compat_router)
     app.include_router(admin_moderation_router)
+    def _validate_ffmpeg_on_startup():
+        from app.services.ffmpeg_manager import validate_ffmpeg
+        result = validate_ffmpeg()
+        if result["status"] == "unavailable":
+            logger.warning("FFmpeg is not available — video features will be disabled")
+        elif result["status"] == "degraded":
+            logger.warning("FFmpeg validation issues: %s", result["issues"])
+        else:
+            logger.info("FFmpeg ready: %s at %s", result["version"], result["path"])
+
+    app.add_event_handler("startup", _validate_ffmpeg_on_startup)
     app.add_event_handler("startup", validate_startup_root_invariant)
     app.add_event_handler("startup", validate_google_drive_mount_oauth_configuration)
     app.add_event_handler("startup", lambda: setattr(app.state, "calendar_integration_registry", initialize_calendar_integration_registry()))
@@ -314,6 +331,7 @@ def create_app() -> FastAPI:
     app.include_router(playback_entitlements_router)
     app.include_router(video_listing_router)
     app.include_router(vod_router)
+    app.include_router(vod_drm_router)
     app.include_router(transcode_jobs_router)
     app.include_router(transcode_video_router)
     app.add_event_handler("startup", start_billing_reconcile_task)

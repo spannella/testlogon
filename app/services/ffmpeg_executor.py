@@ -21,6 +21,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from app.core.settings import S
+from app.services.ffmpeg_manager import get_ffmpeg_path
 from app.services.ffmpeg_executor_types import (
     FFmpegExecutionResult,
     NonRetryableError,
@@ -187,14 +188,17 @@ def _validate_and_augment_args(args: list[str], expected_duration_us: int) -> li
     if any("\x00" in part for part in args):
         raise ValueError("FFmpeg args contain null byte")
 
-    binary = S.ffmpeg_binary_path or "ffmpeg"
+    try:
+        binary = get_ffmpeg_path()
+    except Exception:
+        binary = S.ffmpeg_binary_path or "ffmpeg"
     # Allow the configured binary name or "ffmpeg"
     if args[0] not in (binary, "ffmpeg"):
         raise ValueError(f"Expected 'ffmpeg' or '{binary}' as first arg, got '{args[0]}'")
 
     augmented = list(args)
 
-    # Replace the binary with the configured path
+    # Replace the binary with the validated path
     augmented[0] = binary
 
     # 1. Add -nostdin to prevent interactive prompts
