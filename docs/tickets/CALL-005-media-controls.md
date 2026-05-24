@@ -1,0 +1,832 @@
+# CALL-005: Add In-Call Media Controls (Mute, Camera, End) with Duration Timer and Quality Indicator
+
+## 1. Overview & Motivation
+
+The WebRTC direct call feature (gated behind `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED`) currently provides call signalling via `app/routers/messaging.py` (endpoints at `/messages/calls/*`), a state machine (`callStateMachine.ts`), and a UI overlay (`CallSessionOverlay.tsx`) for call lifecycle states. CALL-004 added media stream rendering (remote/local `<video>` and `<audio>` elements with `srcObject` management). However, once a call reaches the `"connected"` state, the user has **no interactive media controls**:
+
+- **No mute toggle**: The user cannot mute/unmute their microphone without ending the call entirely.
+- **No camera toggle**: Video calls provide no way to turn the camera on/off mid-call.
+- **No duration timer**: There is no visible indicator of how long the call has been active.
+- **No connection quality indicator**: Users cannot assess whether degraded audio/video is due to network issues.
+- **End call button is isolated**: The existing "End call" button (line 109 of `CallSessionOverlay.tsx`) is the only control in the connected state, rendered inside a generic `DialogFooter` with no visual grouping with other controls.
+
+### Business requirements
+
+1. **Mute toggle**: Toggle local audio track `enabled` state. Visual feedback (icon change + background highlight) must be immediate. Accessibility: aria-label must reflect current state ("Mute microphone" / "Unmute microphone").
+2. **Camera toggle**: Toggle local video track `enabled` state. Only shown for `mode === "video"` calls. When camera is off, the local PiP preview (from CALL-004) must show a "camera off" placeholder.
+3. **End call button**: Remains in the control bar but receives updated styling (circular, red, centered or right-aligned depending on layout).
+4. **Duration timer**: Counts up from `00:00` the moment `phase === "connected"`. Resets on call end. Displayed as monospace tabular-nums text.
+5. **Connection quality indicator**: Reads `RTCPeerConnection.getStats()` periodically to derive a 3-tier quality signal (good/fair/poor). Displays a WiFi-bar or signal icon with color coding.
+
+### Scope boundaries
+
+- This ticket does NOT cover screen sharing (future CALL-006).
+- This ticket does NOT change the call signalling protocol or backend.
+- This ticket does NOT add hold/resume functionality.
+- Media acquisition (`getUserMedia`) is handled by CALL-003; this ticket only manipulates tracks that already exist on `CallRuntimeResources.localStream`.
+
+---
+
+## 2. Current State Analysis
+
+### 2.1 CallSessionOverlay.tsx (124 lines)
+
+**Location**: `frontend/src/pages/messages/CallSessionOverlay.tsx`
+
+The component is a Radix UI `<Dialog>` that renders conditionally based on `session.state`. It receives:
+
+```ts
+interface Props {
+  session: CallSessionUi;
+  isBusy?: boolean;
+  onAccept: () => void;
+  onDecline: () => void;
+  onEnd: () => void;
+  onDismiss: () => void;
+}
+```
+
+**Current connected-state rendering (lines 108-113):**
+
+```tsx
+{isConnected && (
+  <Button variant="destructive" onClick={onEnd} disabled={isBusy} aria-label="End call">
+    <PhoneOff className="mr-2 h-4 w-4" />
+    End call
+  </Button>
+)}
+```
+
+This is the entire connected state UI -- a single destructive button inside `DialogFooter`. There are:
+- No media track controls
+- No timer display
+- No quality indicator
+- No visual grouping or "control bar" container
+
+**Icons imported (line 2):** `Phone, PhoneCall, PhoneIncoming, PhoneOff, Video` from lucide-react. Missing: `Mic, MicOff, Camera, CameraOff, Wifi, WifiOff, Signal`.
+
+**Dialog sizing (line 68):** `className="sm:max-w-md"` -- adequate for audio calls, but video calls (per CALL-004) expand to near-fullscreen. The control bar must adapt to both layouts.
+
+### 2.2 callStateMachine.ts (187 lines)
+
+**Location**: `frontend/src/pages/messages/callStateMachine.ts`
+
+**`CallMachineState` interface (lines 6-17):**
+```ts
+export interface CallMachineState {
+  phase: CallUiState;
+  role: CallRole | null;
+  mode: DirectCallMode;         // "audio" | "video"
+  callId?: string;
+  peerName: string;
+  reasonMessage?: string;
+  retryCount: number;
+  maxRetries: number;
+  isOnline: boolean;
+  isTabVisible: boolean;
+}
+```
+
+Notably, there are **no fields for media control state** (mute, camera off). The state machine is purely concerned with call lifecycle phases and network resilience. Media control state is inherently local (it only affects the user's own tracks) and does not need to be part of the signalling state machine.
+
+**`CallRuntimeResources` interface (lines 154-161):**
+```ts
+export interface CallRuntimeResources {
+  peerConnection?: { close: () => void } | null;
+  localStream?: MediaStream | null;
+  remoteStream?: MediaStream | null;
+  detachListeners?: Array<() => void>;
+  teardownTimers?: Array<number>;
+  cleanedUp?: boolean;
+}
+```
+
+The `localStream` field is the key handle for media controls. `localStream.getAudioTracks()` returns the microphone track(s); `localStream.getVideoTracks()` returns the camera track(s). Setting `track.enabled = false` mutes/disables without stopping the track (which would require re-acquisition).
+
+**`teardownCallResources` (lines 163-186):** Already calls `track.stop()` on all tracks of both streams. This means: after `END_LOCAL` or `END_REMOTE`, all tracks are permanently stopped. Toggling must use `track.enabled`, not `track.stop()`.
+
+The `peerConnection` field is typed as `{ close: () => void } | null` -- a minimal interface. For connection quality stats, we need `RTCPeerConnection.getStats()`. The type must be widened or the quality hook must accept `RTCPeerConnection` directly.
+
+### 2.3 ConversationView.tsx integration (lines 83-85, 466-505, 969-1011)
+
+**Location**: `frontend/src/pages/messages/ConversationView.tsx`
+
+**State machine usage (line 83):**
+```ts
+const [callMachine, dispatchCall] = React.useReducer(callStateReducer, undefined, createInitialCallMachineState);
+```
+
+**Resources ref (line 85):**
+```ts
+const callResourcesRef = React.useRef<{ cleanedUp?: boolean } | null>(null);
+```
+
+Note: The ref is typed as `{ cleanedUp?: boolean } | null`, not as the full `CallRuntimeResources`. This is because the WebRTC setup code (CALL-002/003) populates it at runtime with the full interface, but TypeScript only enforces the minimal shape here. For the media controls to access `localStream`, we either:
+1. Widen this ref type to `CallRuntimeResources | null`, or
+2. Pass `localStream` as a separate prop/ref to the overlay.
+
+**Overlay mounting (lines 969-1011):** The `<CallSessionOverlay>` is rendered unconditionally at the bottom of the component tree. Props are:
+- `session`: Derived from `callMachine` state
+- `isBusy`: From `callActionMutation.isPending`
+- `onAccept/onDecline/onEnd/onDismiss`: Inline handlers dispatching to `callMachine`
+
+**No `localStream`/`remoteStream` props are currently passed to the overlay.** The overlay has no access to media tracks.
+
+### 2.4 Existing test coverage
+
+**Unit tests**: `callStateMachine.test.ts` (83 lines) covers state transitions and `teardownCallResources` idempotency. Does not test media track manipulation.
+
+**Integration tests**: `ConversationView.call_flows.test.tsx` (~180 lines) tests:
+- Outgoing call state transitions (ringing -> connected -> ended)
+- Incoming call accept flow
+- Busy rejection handling
+- Stale event deduplication
+
+Neither test file exercises mute/camera toggle behavior, because no such functionality exists.
+
+### 2.5 UI component inventory
+
+Available shadcn/ui components in `frontend/src/components/ui/`:
+- `button.tsx`: Supports `variant` (default, destructive, outline, secondary, ghost, link) and `size` (default, sm, lg, **icon**). The `icon` size (`h-9 w-9`) is ideal for circular control buttons.
+- `tooltip.tsx`: `Tooltip`, `TooltipTrigger`, `TooltipContent` from `@radix-ui/react-tooltip`. Useful for labeling icon-only controls.
+- `badge.tsx`: Could be used for quality indicator pill.
+
+Lucide icons available (already in `package.json`): `Mic`, `MicOff`, `Camera`, `CameraOff`, `Video`, `VideoOff`, `Wifi`, `WifiOff`, `Signal`, `SignalHigh`, `SignalMedium`, `SignalLow`, `SignalZero`, `Timer`, `Clock`.
+
+---
+
+## 3. Technical Design
+
+### 3.1 New Props on CallSessionOverlay
+
+The overlay must receive access to the local media stream and peer connection for media controls and quality monitoring:
+
+```ts
+interface Props {
+  session: CallSessionUi;
+  isBusy?: boolean;
+  localStream?: MediaStream | null;
+  peerConnection?: RTCPeerConnection | null;
+  onAccept: () => void;
+  onDecline: () => void;
+  onEnd: () => void;
+  onDismiss: () => void;
+}
+```
+
+`localStream` provides access to audio/video tracks for mute/camera toggles.
+`peerConnection` provides access to `getStats()` for quality monitoring.
+
+### 3.2 Mute Toggle
+
+**State:**
+```ts
+const [isMuted, setIsMuted] = React.useState(false);
+```
+
+**Handler:**
+```ts
+const toggleMute = React.useCallback(() => {
+  if (!localStream) return;
+  const audioTracks = localStream.getAudioTracks();
+  const newEnabled = !audioTracks[0]?.enabled;
+  audioTracks.forEach((track) => { track.enabled = newEnabled; });
+  setIsMuted(!newEnabled);
+}, [localStream]);
+```
+
+Key design decisions:
+- We read the **current track state** (`!audioTracks[0]?.enabled`) rather than relying solely on React state, preventing drift if tracks are manipulated externally.
+- We set `track.enabled` (not `track.stop()`). `enabled = false` sends silence frames to the peer, maintaining the RTP stream. `stop()` would require re-acquiring the track from `getUserMedia`.
+- The initial state (`isMuted = false`) must be synchronized if the stream is acquired with tracks already disabled. A `useEffect` will reset `isMuted` when `localStream` changes.
+
+**Reset on stream change:**
+```ts
+React.useEffect(() => {
+  if (!localStream) return;
+  const audioTrack = localStream.getAudioTracks()[0];
+  setIsMuted(audioTrack ? !audioTrack.enabled : false);
+}, [localStream]);
+```
+
+**UI rendering:**
+```tsx
+<Tooltip>
+  <TooltipTrigger asChild>
+    <Button
+      variant={isMuted ? "destructive" : "secondary"}
+      size="icon"
+      className="rounded-full h-12 w-12"
+      onClick={toggleMute}
+      aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
+      aria-pressed={isMuted}
+    >
+      {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+    </Button>
+  </TooltipTrigger>
+  <TooltipContent>{isMuted ? "Unmute" : "Mute"}</TooltipContent>
+</Tooltip>
+```
+
+The `variant="destructive"` when muted provides a strong red visual signal. `aria-pressed` communicates toggle state to screen readers.
+
+### 3.3 Camera Toggle
+
+**State:**
+```ts
+const [isCameraOff, setIsCameraOff] = React.useState(false);
+```
+
+**Handler:**
+```ts
+const toggleCamera = React.useCallback(() => {
+  if (!localStream) return;
+  const videoTracks = localStream.getVideoTracks();
+  if (videoTracks.length === 0) return; // audio-only call, no-op
+  const newEnabled = !videoTracks[0]?.enabled;
+  videoTracks.forEach((track) => { track.enabled = newEnabled; });
+  setIsCameraOff(!newEnabled);
+}, [localStream]);
+```
+
+**Conditional rendering (only for video calls):**
+```tsx
+{session.mode === "video" && (
+  <Tooltip>
+    <TooltipTrigger asChild>
+      <Button
+        variant={isCameraOff ? "destructive" : "secondary"}
+        size="icon"
+        className="rounded-full h-12 w-12"
+        onClick={toggleCamera}
+        aria-label={isCameraOff ? "Turn on camera" : "Turn off camera"}
+        aria-pressed={isCameraOff}
+      >
+        {isCameraOff ? <CameraOff className="h-5 w-5" /> : <Camera className="h-5 w-5" />}
+      </Button>
+    </TooltipTrigger>
+    <TooltipContent>{isCameraOff ? "Camera on" : "Camera off"}</TooltipContent>
+  </Tooltip>
+)}
+```
+
+**Local PiP placeholder when camera is off:**
+
+When `isCameraOff` is true, the local PiP `<video>` element (from CALL-004) should be overlaid with a "camera off" placeholder:
+
+```tsx
+{isCameraOff && (
+  <div className="absolute inset-0 flex items-center justify-center bg-muted/90 rounded-xl">
+    <CameraOff className="h-8 w-8 text-muted-foreground" />
+  </div>
+)}
+```
+
+This is rendered inside the PiP container (`absolute bottom-4 right-4 w-40 h-28 rounded-xl`), positioned above the frozen video frame.
+
+### 3.4 End Call Button (Restyled)
+
+The existing end call button is restyled to match the control bar aesthetic:
+
+```tsx
+<Tooltip>
+  <TooltipTrigger asChild>
+    <Button
+      variant="destructive"
+      size="icon"
+      className="rounded-full h-12 w-12"
+      onClick={onEnd}
+      disabled={isBusy}
+      aria-label="End call"
+    >
+      <PhoneOff className="h-5 w-5" />
+    </Button>
+  </TooltipTrigger>
+  <TooltipContent>End call</TooltipContent>
+</Tooltip>
+```
+
+The text label "End call" is removed in favor of a circular icon-only button matching the mute/camera buttons. The tooltip provides the text label on hover.
+
+### 3.5 Duration Timer
+
+**Hook: `useCallDuration`**
+
+Extracted as a reusable hook to keep the overlay component focused on rendering:
+
+```ts
+function useCallDuration(isConnected: boolean): string {
+  const [elapsed, setElapsed] = React.useState(0);
+  const startRef = React.useRef<number | null>(null);
+
+  React.useEffect(() => {
+    if (!isConnected) {
+      setElapsed(0);
+      startRef.current = null;
+      return;
+    }
+    startRef.current = Date.now();
+    const interval = window.setInterval(() => {
+      if (startRef.current) {
+        setElapsed(Math.floor((Date.now() - startRef.current) / 1000));
+      }
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [isConnected]);
+
+  const minutes = Math.floor(elapsed / 60);
+  const seconds = elapsed % 60;
+  return `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+}
+```
+
+Design notes:
+- Uses `Date.now()` delta rather than incrementing a counter to avoid drift from `setInterval` jitter.
+- Resets to `00:00` when `isConnected` becomes false (handles reconnection scenarios -- if the call reconnects, the timer continues from the original start time because `startRef.current` is only reset when `isConnected` goes `false`).
+- Returns a formatted string for direct rendering.
+
+**Rendering:**
+```tsx
+<span
+  className="text-sm font-mono tabular-nums text-muted-foreground"
+  aria-label={`Call duration: ${duration}`}
+  aria-live="off"
+>
+  {duration}
+</span>
+```
+
+`aria-live="off"` prevents screen readers from announcing every second. The `aria-label` provides a one-time readable description if the user navigates to it.
+
+### 3.6 Connection Quality Indicator
+
+**Hook: `useConnectionQuality`**
+
+```ts
+type ConnectionQuality = "good" | "fair" | "poor" | "unknown";
+
+function useConnectionQuality(
+  peerConnection: RTCPeerConnection | null | undefined,
+  isConnected: boolean,
+): ConnectionQuality {
+  const [quality, setQuality] = React.useState<ConnectionQuality>("unknown");
+
+  React.useEffect(() => {
+    if (!peerConnection || !isConnected) {
+      setQuality("unknown");
+      return;
+    }
+
+    const pollStats = async () => {
+      try {
+        const stats = await peerConnection.getStats();
+        let totalRoundTripTime = 0;
+        let roundTripMeasurements = 0;
+        let packetsLost = 0;
+        let packetsReceived = 0;
+
+        stats.forEach((report) => {
+          if (report.type === "candidate-pair" && report.state === "succeeded") {
+            if (typeof report.currentRoundTripTime === "number") {
+              totalRoundTripTime += report.currentRoundTripTime;
+              roundTripMeasurements += 1;
+            }
+          }
+          if (report.type === "inbound-rtp") {
+            packetsLost += report.packetsLost ?? 0;
+            packetsReceived += report.packetsReceived ?? 0;
+          }
+        });
+
+        const avgRtt = roundTripMeasurements > 0
+          ? totalRoundTripTime / roundTripMeasurements
+          : null;
+        const lossRate = packetsReceived > 0
+          ? packetsLost / (packetsLost + packetsReceived)
+          : 0;
+
+        // Thresholds (aligned with WebRTC best practices):
+        // Good: RTT < 150ms AND loss < 2%
+        // Fair: RTT < 400ms AND loss < 5%
+        // Poor: anything worse
+        if (avgRtt !== null && avgRtt < 0.15 && lossRate < 0.02) {
+          setQuality("good");
+        } else if (avgRtt !== null && avgRtt < 0.4 && lossRate < 0.05) {
+          setQuality("fair");
+        } else if (avgRtt !== null) {
+          setQuality("poor");
+        } else {
+          setQuality("unknown");
+        }
+      } catch {
+        setQuality("unknown");
+      }
+    };
+
+    // Poll every 3 seconds (frequent enough for feedback, not so frequent as to be expensive)
+    const interval = window.setInterval(pollStats, 3000);
+    pollStats(); // immediate first poll
+    return () => window.clearInterval(interval);
+  }, [peerConnection, isConnected]);
+
+  return quality;
+}
+```
+
+**Rendering:**
+```tsx
+const qualityConfig: Record<ConnectionQuality, { icon: React.ReactNode; color: string; label: string }> = {
+  good: { icon: <Signal className="h-4 w-4" />, color: "text-green-500", label: "Good connection" },
+  fair: { icon: <Signal className="h-4 w-4" />, color: "text-yellow-500", label: "Fair connection" },
+  poor: { icon: <Signal className="h-4 w-4" />, color: "text-red-500", label: "Poor connection" },
+  unknown: { icon: <Signal className="h-4 w-4" />, color: "text-muted-foreground", label: "Connection quality unknown" },
+};
+
+// In JSX:
+<Tooltip>
+  <TooltipTrigger asChild>
+    <span className={cn("inline-flex items-center", qualityConfig[quality].color)} aria-label={qualityConfig[quality].label}>
+      {qualityConfig[quality].icon}
+    </span>
+  </TooltipTrigger>
+  <TooltipContent>{qualityConfig[quality].label}</TooltipContent>
+</Tooltip>
+```
+
+### 3.7 Control Bar Layout
+
+The connected state replaces the current `DialogFooter` with a dedicated control bar:
+
+```tsx
+{isConnected && (
+  <div className="flex items-center justify-center gap-4 px-4 py-3" role="toolbar" aria-label="Call controls">
+    {/* Left: Quality + Timer */}
+    <div className="flex items-center gap-2 mr-auto">
+      <ConnectionQualityIndicator quality={quality} />
+      <span className="text-sm font-mono tabular-nums text-muted-foreground">{duration}</span>
+    </div>
+
+    {/* Center: Media controls */}
+    <div className="flex items-center gap-3">
+      <MuteButton isMuted={isMuted} onToggle={toggleMute} />
+      {session.mode === "video" && (
+        <CameraButton isCameraOff={isCameraOff} onToggle={toggleCamera} />
+      )}
+      <EndCallButton onEnd={onEnd} isBusy={isBusy} />
+    </div>
+
+    {/* Right: Peer name */}
+    <div className="ml-auto text-sm text-muted-foreground truncate max-w-[120px]">
+      {session.peerName}
+    </div>
+  </div>
+)}
+```
+
+For video calls, the control bar is positioned at the bottom of the expanded video container (overlaid with a semi-transparent background):
+```tsx
+<div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm rounded-b-2xl">
+  {/* control bar content */}
+</div>
+```
+
+For audio calls, the control bar is the standard `DialogFooter` area below the avatar section.
+
+### 3.8 State Machine Considerations
+
+The `callStateMachine.ts` **does not** need modification for this ticket. Media control state (mute, camera off) is:
+- Purely local (not sent to the peer via signalling)
+- Ephemeral (resets when the call ends)
+- UI-only (does not affect call lifecycle transitions)
+
+Therefore, mute/camera state lives as `useState` inside `CallSessionOverlay` and is reset whenever the component unmounts or `isConnected` becomes false.
+
+However, we must extend `CallRuntimeResources` for the quality indicator:
+
+```ts
+export interface CallRuntimeResources {
+  peerConnection?: RTCPeerConnection | null;  // WIDENED from { close: () => void }
+  localStream?: MediaStream | null;
+  remoteStream?: MediaStream | null;
+  detachListeners?: Array<() => void>;
+  teardownTimers?: Array<number>;
+  cleanedUp?: boolean;
+}
+```
+
+The `peerConnection` field type is widened from `{ close: () => void }` to `RTCPeerConnection | null`. This is backward-compatible because `RTCPeerConnection` satisfies `{ close: () => void }`. The `teardownCallResources` function only calls `.close()`, so no changes are needed there.
+
+### 3.9 Keyboard Accessibility
+
+All control buttons must be keyboard accessible:
+- `M` key: Toggle mute (when overlay is focused)
+- `V` key: Toggle camera (when overlay is focused, video calls only)
+- `Escape`: End call (already handled by Dialog's `onOpenChange`)
+
+Implementation via a `useEffect` keydown listener scoped to the dialog:
+
+```ts
+React.useEffect(() => {
+  if (!isConnected) return;
+  const handler = (e: KeyboardEvent) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (e.key === "m" || e.key === "M") { e.preventDefault(); toggleMute(); }
+    if ((e.key === "v" || e.key === "V") && session.mode === "video") { e.preventDefault(); toggleCamera(); }
+  };
+  document.addEventListener("keydown", handler);
+  return () => document.removeEventListener("keydown", handler);
+}, [isConnected, toggleMute, toggleCamera, session.mode]);
+```
+
+---
+
+## 4. Implementation Plan
+
+### Phase 1: Core media controls (Mute + Camera + End) -- 1 day
+
+**Files modified:**
+
+| File | Change |
+|------|--------|
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | Add `localStream` prop, `isMuted`/`isCameraOff` state, toggle handlers, control bar JSX, new icon imports |
+| `frontend/src/pages/messages/ConversationView.tsx` | Pass `localStream={callResourcesRef.current?.localStream}` to overlay; widen `callResourcesRef` type |
+| `frontend/src/pages/messages/callStateMachine.ts` | Widen `peerConnection` type to `RTCPeerConnection | null` |
+
+**Steps:**
+
+1. **Add new imports to `CallSessionOverlay.tsx`:**
+   - Icons: `Mic, MicOff, Camera, CameraOff` from `lucide-react`
+   - Components: `Tooltip, TooltipTrigger, TooltipContent` from `@/components/ui/tooltip`
+
+2. **Extend Props interface** to accept `localStream?: MediaStream | null`.
+
+3. **Add `isMuted` + `isCameraOff` state** with synchronization effects.
+
+4. **Add `toggleMute` + `toggleCamera` callbacks** using `track.enabled` manipulation.
+
+5. **Replace the connected-state `DialogFooter` content** with the new control bar layout (mute button + optional camera button + end call button).
+
+6. **In `ConversationView.tsx`**, pass `localStream` from `callResourcesRef.current?.localStream ?? null` to the overlay. Since `callResourcesRef` is a mutable ref that gets populated by the WebRTC setup code, we also add a `forceUpdate` trigger when the stream becomes available (using a state counter incremented in the effect that detects stream attachment).
+
+### Phase 2: Duration timer -- 0.5 day
+
+**Files modified:**
+
+| File | Change |
+|------|--------|
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | Add `useCallDuration` hook, render timer in control bar |
+
+**Steps:**
+
+1. **Add `useCallDuration` hook** (inline in the same file or extracted to a `useCallDuration.ts` if preferred).
+
+2. **Render duration string** in the control bar between the quality indicator and the control buttons.
+
+3. **Ensure timer resets** when call transitions out of `connected` state (handled by the `isConnected` dependency).
+
+### Phase 3: Connection quality indicator -- 0.5 day
+
+**Files modified:**
+
+| File | Change |
+|------|--------|
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | Add `peerConnection` prop, `useConnectionQuality` hook, quality icon rendering |
+| `frontend/src/pages/messages/callStateMachine.ts` | Widen `peerConnection` type |
+| `frontend/src/pages/messages/ConversationView.tsx` | Pass `peerConnection` prop to overlay |
+
+**Steps:**
+
+1. **Widen `CallRuntimeResources.peerConnection`** type in `callStateMachine.ts`.
+
+2. **Add `peerConnection` prop** to `CallSessionOverlay`.
+
+3. **Implement `useConnectionQuality` hook** with `getStats()` polling.
+
+4. **Render quality indicator** with color-coded `Signal` icon and tooltip.
+
+### Phase 4: Keyboard shortcuts + accessibility polish -- 0.5 day
+
+**Files modified:**
+
+| File | Change |
+|------|--------|
+| `frontend/src/pages/messages/CallSessionOverlay.tsx` | Add keydown listener effect, `role="toolbar"`, `aria-pressed` attributes |
+
+**Steps:**
+
+1. **Add keydown handler** for `M` (mute) and `V` (camera) shortcuts.
+
+2. **Add `role="toolbar"` and `aria-label="Call controls"`** to the control bar container.
+
+3. **Ensure all buttons have `aria-pressed`** reflecting toggle state.
+
+4. **Add screen reader announcements** via `aria-live="polite"` region for state changes (e.g., "Microphone muted", "Camera turned off").
+
+### Phase 5: Integration verification -- 0.5 day
+
+1. Verify that toggling mute during a connected call sets `localStream.getAudioTracks()[0].enabled = false`.
+2. Verify that toggling camera during a connected video call sets `localStream.getVideoTracks()[0].enabled = false`.
+3. Verify that the timer starts counting on `CONNECT` event and stops on `END_LOCAL`/`END_REMOTE`.
+4. Verify that the quality indicator transitions between good/fair/poor as network conditions change.
+5. Verify that all controls are disabled/hidden when `isConnected` is false.
+6. Verify that track `enabled` state is NOT affected by `teardownCallResources` (it calls `stop()` which is permanent -- but only fires on call end, not on toggle).
+
+### Estimated total: 3 days
+
+---
+
+## 5. Testing Strategy
+
+### 5.1 Unit Tests: `callStateMachine.test.ts` additions
+
+Add tests verifying that `teardownCallResources` does NOT interfere with `track.enabled` toggling (existing test only verifies `stop()` is called):
+
+```ts
+it("teardown does not re-enable disabled tracks before stopping them", () => {
+  const track = { enabled: false, stop: vi.fn() };
+  const resources = {
+    localStream: { getTracks: () => [track] } as unknown as MediaStream,
+    remoteStream: null,
+    peerConnection: null,
+    cleanedUp: false,
+  };
+  teardownCallResources(resources);
+  expect(track.stop).toHaveBeenCalledTimes(1);
+  // enabled state is irrelevant after stop(), but verify no unintended mutation
+  expect(track.enabled).toBe(false);
+});
+```
+
+### 5.2 Unit Tests: New file `CallSessionOverlay.test.tsx`
+
+Test the overlay component in isolation with mocked streams:
+
+```ts
+describe("CallSessionOverlay media controls", () => {
+  const mockAudioTrack = { enabled: true, stop: vi.fn(), kind: "audio" };
+  const mockVideoTrack = { enabled: true, stop: vi.fn(), kind: "video" };
+  const mockLocalStream = {
+    getAudioTracks: () => [mockAudioTrack],
+    getVideoTracks: () => [mockVideoTrack],
+    getTracks: () => [mockAudioTrack, mockVideoTrack],
+  } as unknown as MediaStream;
+
+  it("renders mute button when connected", () => {
+    render(<CallSessionOverlay session={connectedSession} localStream={mockLocalStream} ... />);
+    expect(screen.getByRole("button", { name: "Mute microphone" })).toBeInTheDocument();
+  });
+
+  it("toggles audio track enabled state on mute click", async () => {
+    render(<CallSessionOverlay session={connectedSession} localStream={mockLocalStream} ... />);
+    await userEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
+    expect(mockAudioTrack.enabled).toBe(false);
+    expect(screen.getByRole("button", { name: "Unmute microphone" })).toBeInTheDocument();
+  });
+
+  it("toggles video track enabled state on camera click", async () => {
+    render(<CallSessionOverlay session={connectedVideoSession} localStream={mockLocalStream} ... />);
+    await userEvent.click(screen.getByRole("button", { name: "Turn off camera" }));
+    expect(mockVideoTrack.enabled).toBe(false);
+    expect(screen.getByRole("button", { name: "Turn on camera" })).toBeInTheDocument();
+  });
+
+  it("does not render camera button for audio-only calls", () => {
+    render(<CallSessionOverlay session={connectedAudioSession} localStream={mockLocalStream} ... />);
+    expect(screen.queryByRole("button", { name: /camera/i })).not.toBeInTheDocument();
+  });
+
+  it("displays duration timer that increments", async () => {
+    vi.useFakeTimers();
+    render(<CallSessionOverlay session={connectedSession} localStream={mockLocalStream} ... />);
+    expect(screen.getByText("00:00")).toBeInTheDocument();
+    await act(() => { vi.advanceTimersByTime(65_000); });
+    expect(screen.getByText("01:05")).toBeInTheDocument();
+    vi.useRealTimers();
+  });
+
+  it("resets timer when call ends", async () => {
+    const { rerender } = render(
+      <CallSessionOverlay session={connectedSession} localStream={mockLocalStream} ... />
+    );
+    await act(() => { vi.advanceTimersByTime(30_000); });
+    rerender(<CallSessionOverlay session={endedSession} localStream={null} ... />);
+    // Timer should not be visible in ended state
+    expect(screen.queryByText(/\d{2}:\d{2}/)).not.toBeInTheDocument();
+  });
+
+  it("shows quality indicator with good/fair/poor states", () => {
+    // Render with mocked peerConnection that returns stats
+    render(<CallSessionOverlay session={connectedSession} peerConnection={mockPc} ... />);
+    expect(screen.getByLabelText(/connection/i)).toBeInTheDocument();
+  });
+
+  it("handles keyboard shortcut M for mute toggle", async () => {
+    render(<CallSessionOverlay session={connectedSession} localStream={mockLocalStream} ... />);
+    fireEvent.keyDown(document, { key: "m" });
+    expect(mockAudioTrack.enabled).toBe(false);
+  });
+
+  it("handles keyboard shortcut V for camera toggle in video mode", async () => {
+    render(<CallSessionOverlay session={connectedVideoSession} localStream={mockLocalStream} ... />);
+    fireEvent.keyDown(document, { key: "v" });
+    expect(mockVideoTrack.enabled).toBe(false);
+  });
+});
+```
+
+### 5.3 Integration Tests: `ConversationView.call_flows.test.tsx` additions
+
+Add tests verifying that the overlay receives `localStream` and that toggling controls works end-to-end through ConversationView:
+
+```ts
+it("passes localStream to overlay when call is connected", async () => {
+  // Setup: Populate callResourcesRef with a mock stream
+  // Trigger: Start outgoing call -> connect
+  // Assert: Mute button is rendered in the overlay
+});
+
+it("mute toggle disables audio track through ConversationView integration", async () => {
+  // Setup: Connected call with localStream populated
+  // Action: Click mute button
+  // Assert: track.enabled === false
+});
+```
+
+### 5.4 E2E Tests: `frontend/e2e/call-media-controls.spec.ts`
+
+Since actual WebRTC connections cannot be established in Playwright (no real peer), E2E tests focus on:
+
+1. **UI presence**: When a call reaches connected state (via mocked SSE events), the control bar renders with mute, camera (for video), end, timer, and quality indicator.
+2. **Button state toggling**: Clicking mute changes `aria-pressed` and swaps the icon.
+3. **Keyboard shortcuts**: Pressing `M` toggles mute state.
+4. **Timer format**: Timer displays and increments (using fake timers or waiting 2 seconds).
+
+```ts
+test.describe("Section XX: Call media controls", () => {
+  test("shows mute and end buttons when audio call is connected", async ({ page }) => {
+    await injectAuth(page, "alice");
+    await page.goto(`/messages/${convoId}`);
+    // Simulate connected call via custom event dispatch
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("messaging:call-event", {
+        detail: { event_type: "call.invite", conversation_id: "...", mode: "audio", ... }
+      }));
+    });
+    // Accept the call
+    await page.getByRole("button", { name: "Accept call" }).click();
+    // Verify controls
+    await expect(page.getByRole("button", { name: "Mute microphone" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "End call" })).toBeVisible();
+    await expect(page.getByText(/\d{2}:\d{2}/)).toBeVisible();
+  });
+
+  test("shows camera toggle only for video calls", async ({ page }) => {
+    // Same setup with mode: "video"
+    await expect(page.getByRole("button", { name: "Turn off camera" })).toBeVisible();
+  });
+
+  test("mute button toggles aria-pressed", async ({ page }) => {
+    // Connected state
+    const muteBtn = page.getByRole("button", { name: "Mute microphone" });
+    await expect(muteBtn).toHaveAttribute("aria-pressed", "false");
+    await muteBtn.click();
+    await expect(page.getByRole("button", { name: "Unmute microphone" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("timer increments each second", async ({ page }) => {
+    // Connected state, wait 2 seconds
+    await expect(page.getByText("00:00")).toBeVisible();
+    await page.waitForTimeout(2100);
+    await expect(page.getByText("00:02")).toBeVisible();
+  });
+});
+```
+
+### 5.5 Manual Testing Checklist
+
+| Scenario | Steps | Expected Result |
+|----------|-------|-----------------|
+| Mute during audio call | Connect audio call -> click Mic button | Icon changes to MicOff, button turns red, remote party hears silence |
+| Unmute during audio call | While muted -> click Mic button | Icon changes to Mic, button returns to secondary, audio resumes |
+| Camera off during video call | Connect video call -> click Camera button | Icon changes to CameraOff, local PiP shows placeholder, remote sees frozen last frame or black |
+| Camera on during video call | While camera off -> click Camera button | Icon changes to Camera, local PiP resumes live feed |
+| End call via control bar | While connected -> click End (red) button | Call ends, teardown fires, overlay transitions to "ended" state |
+| Timer accuracy | Connect call, wait 5 min | Timer shows ~05:00 (within 1s drift) |
+| Timer reset on reconnect | Connected -> network drop -> reconnect | Timer continues from original start (does not reset on reconnection) |
+| Timer reset on new call | End call -> start new call -> connect | Timer starts fresh at 00:00 |
+| Quality indicator: good | Localhost-to-localhost call (RTT <10ms) | Green signal icon, tooltip "Good connection" |
+| Quality indicator: poor | Throttle network to 3G in DevTools | Red signal icon, tooltip "Poor connection" |
+| Keyboard: M to mute | Press M while overlay focused | Same as clicking mute button |
+| Keyboard: V to toggle camera | Press V during video call | Same as clicking camera button |
+| Accessibility: screen reader | Navigate controls with VoiceOver/NVDA | Buttons announce "Mute microphone, toggle button, not pressed" |
+
+### 5.6 Edge Cases to Cover
+
+1. **`localStream` is null** (stream not yet acquired when overlay renders connected): All toggle buttons should be disabled. Timer still runs.
+2. **Stream has no audio tracks** (permissions denied for microphone): Mute button disabled with tooltip "No microphone available".
+3. **Stream has no video tracks** (audio call or permissions denied): Camera button not rendered.
+4. **Rapid toggle clicking**: Debounce not needed (track.enabled is synchronous), but verify no React state race.
+5. **Call reconnects after mute**: Mute state should persist across reconnection because `localStream` instance persists (tracks are reused, not re-acquired).
+6. **Tab hidden during call**: Timer should continue running (uses `setInterval` not `requestAnimationFrame`). Quality polling pauses (tab hidden -> interval may be throttled by browser, which is acceptable).
+7. **`peerConnection.getStats()` throws**: Quality hook catches errors and returns `"unknown"`.
+8. **Multiple audio tracks** (rare, e.g., tab capture + mic): All audio tracks are toggled together.
