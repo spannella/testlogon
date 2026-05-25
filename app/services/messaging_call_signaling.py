@@ -20,6 +20,11 @@ ALLOWED_SIGNALING_TYPES = {
     "webrtc.answer",
     "webrtc.ice_candidate",
     "call.end",
+    "call.recording_request",
+    "call.recording_accept",
+    "call.recording_decline",
+    "call.recording_started",
+    "call.recording_stopped",
 }
 MAX_SIGNALING_SKEW_SECONDS = int(os.getenv("MESSAGING_WEBRTC_SIGNALING_MAX_SKEW_SECONDS", "120"))
 NONCE_TTL_SECONDS = int(os.getenv("MESSAGING_WEBRTC_SIGNALING_NONCE_TTL_SECONDS", "600"))
@@ -29,7 +34,11 @@ MAX_IDENTIFIER_LENGTH = 128
 STATE_ALLOWED_SIGNALING_TYPES: dict[str, set[str]] = {
     "invited": {"call.invite", "call.ring", "call.accept", "call.decline", "call.end"},
     "accepted": {"webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "call.end"},
-    "connected": {"webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "call.end"},
+    "connected": {
+        "webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "call.end",
+        "call.recording_request", "call.recording_accept", "call.recording_decline",
+        "call.recording_started", "call.recording_stopped",
+    },
 }
 
 

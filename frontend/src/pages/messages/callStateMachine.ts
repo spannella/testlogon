@@ -14,6 +14,9 @@ export interface CallMachineState {
   maxRetries: number;
   isOnline: boolean;
   isTabVisible: boolean;
+  recordingState: "idle" | "requesting" | "consent_pending" | "recording" | "stopped";
+  recordingId: string | null;
+  recordingRequestedBy: string | null;
 }
 
 export type CallMachineEvent =
@@ -33,7 +36,13 @@ export type CallMachineEvent =
   | { type: "END_LOCAL" }
   | { type: "END_REMOTE"; message?: string }
   | { type: "FAIL"; message?: string }
-  | { type: "RESET" };
+  | { type: "RESET" }
+  | { type: "RECORDING_REQUEST_SENT" }
+  | { type: "RECORDING_REQUEST_RECEIVED"; requestedBy: string }
+  | { type: "RECORDING_ACCEPTED"; recordingId: string }
+  | { type: "RECORDING_DECLINED" }
+  | { type: "RECORDING_STARTED"; recordingId: string }
+  | { type: "RECORDING_STOPPED" };
 
 export const createInitialCallMachineState = (): CallMachineState => ({
   phase: "idle",
@@ -44,6 +53,9 @@ export const createInitialCallMachineState = (): CallMachineState => ({
   maxRetries: 2,
   isOnline: true,
   isTabVisible: true,
+  recordingState: "idle",
+  recordingId: null,
+  recordingRequestedBy: null,
 });
 
 const withPhase = (state: CallMachineState, phase: CallUiState, patch?: Partial<CallMachineState>): CallMachineState => ({
@@ -145,6 +157,30 @@ export function callStateReducer(state: CallMachineState, event: CallMachineEven
     case "RESET": {
       if (!["declined", "busy", "timeout", "ended", "failure"].includes(state.phase)) return state;
       return createInitialCallMachineState();
+    }
+    // Recording events — orthogonal to call phase (only valid when connected)
+    case "RECORDING_REQUEST_SENT": {
+      if (state.phase !== "connected") return state;
+      return { ...state, recordingState: "requesting" };
+    }
+    case "RECORDING_REQUEST_RECEIVED": {
+      if (state.phase !== "connected") return state;
+      return { ...state, recordingState: "consent_pending", recordingRequestedBy: event.requestedBy };
+    }
+    case "RECORDING_ACCEPTED": {
+      if (state.phase !== "connected") return state;
+      return { ...state, recordingState: "recording", recordingId: event.recordingId };
+    }
+    case "RECORDING_DECLINED": {
+      if (state.phase !== "connected") return state;
+      return { ...state, recordingState: "idle", recordingId: null, recordingRequestedBy: null };
+    }
+    case "RECORDING_STARTED": {
+      if (state.phase !== "connected") return state;
+      return { ...state, recordingState: "recording", recordingId: event.recordingId };
+    }
+    case "RECORDING_STOPPED": {
+      return { ...state, recordingState: "stopped", recordingRequestedBy: null };
     }
     default:
       return state;

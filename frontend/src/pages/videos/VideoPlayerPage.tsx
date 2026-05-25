@@ -16,13 +16,14 @@ import {
   RefreshCw,
   Clock,
   Calendar,
+  Download,
   Video,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MediaPlayer, type MediaError } from "@/components/shared/MediaPlayer";
-import { getVideoDetail, type VideoDetail } from "@/api/endpoints/videos";
+import { getVideoDetail, getVideoDownload, type VideoDetail } from "@/api/endpoints/videos";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -119,6 +120,7 @@ export default function VideoPlayerPage() {
   const navigate = useNavigate();
   const [playerError, setPlayerError] = useState<PlayerError | null>(null);
   const [copied, setCopied] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const {
     data: video,
@@ -194,6 +196,27 @@ export default function VideoPlayerPage() {
     }
   }, [videoId]);
 
+  const handleDownload = useCallback(async () => {
+    if (!videoId) return;
+    setIsDownloading(true);
+    try {
+      const resp = await getVideoDownload(videoId);
+      window.open(resp.download_url, "_blank");
+    } catch {
+      // Error handled silently — user can retry
+    } finally {
+      setTimeout(() => setIsDownloading(false), 2000);
+    }
+  }, [videoId]);
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return "";
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  };
+
   // ─── Render ─────────────────────────────────────────────────────────────────
 
   return (
@@ -259,6 +282,30 @@ export default function VideoPlayerPage() {
             />
           )}
         </>
+      )}
+
+      {/* Download button (VOD-012) */}
+      {video && !fetchLevelError && video.download_available && (
+        <div className="flex items-center gap-3" data-testid="download-section">
+          <Button
+            onClick={handleDownload}
+            disabled={isDownloading}
+            className="gap-2"
+            data-testid="download-mp4-button"
+          >
+            {isDownloading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4" />
+            )}
+            Download MP4
+          </Button>
+          {video.download_mp4_size_bytes != null && video.download_mp4_size_bytes > 0 && (
+            <span className="text-sm text-muted-foreground" data-testid="download-size">
+              {formatFileSize(video.download_mp4_size_bytes)}
+            </span>
+          )}
+        </div>
       )}
 
       {/* Metadata — always shown when video data is loaded, regardless of player errors */}

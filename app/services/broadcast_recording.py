@@ -40,6 +40,13 @@ class RecordingRecord:
     created_at: int = 0
     completed_at: int = 0
     expires_at: int = 0
+    # Download fields (BCAST-008)
+    allow_download: bool = True
+    allow_viewer_download: bool = False
+    mp4_s3_key: str = ""
+    mp4_size_bytes: int = 0
+    mp4_generated_at: int = 0
+    s3_concatenated_key: str = ""
 
 
 def _record_from_item(item: Dict[str, Any]) -> RecordingRecord:
@@ -63,6 +70,13 @@ def _record_from_item(item: Dict[str, Any]) -> RecordingRecord:
         created_at=int(item.get("created_at", 0)),
         completed_at=int(item.get("completed_at", 0)),
         expires_at=int(item.get("expires_at", 0)),
+        # Download fields (BCAST-008)
+        allow_download=item.get("allow_download", True),
+        allow_viewer_download=item.get("allow_viewer_download", False),
+        mp4_s3_key=item.get("mp4_s3_key", ""),
+        mp4_size_bytes=int(item.get("mp4_size_bytes", 0)),
+        mp4_generated_at=int(item.get("mp4_generated_at", 0)),
+        s3_concatenated_key=item.get("s3_concatenated_key", ""),
     )
 
 
@@ -87,6 +101,13 @@ def _record_to_item(rec: RecordingRecord) -> Dict[str, Any]:
         "created_at": rec.created_at,
         "completed_at": rec.completed_at,
         "expires_at": rec.expires_at,
+        # Download fields (BCAST-008)
+        "allow_download": rec.allow_download,
+        "allow_viewer_download": rec.allow_viewer_download,
+        "mp4_s3_key": rec.mp4_s3_key,
+        "mp4_size_bytes": rec.mp4_size_bytes,
+        "mp4_generated_at": rec.mp4_generated_at,
+        "s3_concatenated_key": rec.s3_concatenated_key,
     }
     # Remove empty strings for non-key attributes to keep items lean
     return {k: v for k, v in item.items() if v != "" and v != [] or k in ("recording_id", "session_id", "status", "scope", "created_at")}
@@ -204,3 +225,40 @@ def mint_recording_thumbnail_url(recording: RecordingRecord) -> Optional[str]:
         return None
     bucket = S.broadcast_recording_vod_bucket
     return f"/mock/s3/{bucket}/{recording.s3_thumbnail_key}"
+
+
+def mint_recording_download_url(recording: RecordingRecord) -> Dict[str, Any]:
+    """Generate a presigned S3 download URL for the recording MP4.
+
+    The URL includes Content-Disposition: attachment to force browser download.
+    """
+    ttl = S.broadcast_recording_download_ttl_seconds
+    expires_at = _now_ts() + ttl
+    bucket = S.broadcast_recording_vod_bucket
+    filename = f"recording-{recording.session_id[:12]}.mp4"
+
+    if S.dev_mode:
+        # Dev mode: return mock URL
+        download_url = f"/mock/s3/{bucket}/{recording.mp4_s3_key}?expires={expires_at}&disposition=attachment"
+    else:
+        # Production: generate real S3 presigned URL
+        import boto3
+        s3_client = boto3.client("s3")
+        download_url = s3_client.generate_presigned_url(
+            ClientMethod="get_object",
+            Params={
+                "Bucket": bucket,
+                "Key": recording.mp4_s3_key,
+                "ResponseContentDisposition": f'attachment; filename="{filename}"',
+                "ResponseContentType": "video/mp4",
+            },
+            ExpiresIn=ttl,
+        )
+
+    return {
+        "download_url": download_url,
+        "download_expires_at": expires_at,
+        "file_size_bytes": recording.mp4_size_bytes,
+        "filename": filename,
+        "content_type": "video/mp4",
+    }

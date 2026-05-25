@@ -222,7 +222,31 @@ export interface BroadcastRecordingResponse {
   created_at: number;
   completed_at: number | null;
   expires_at: number | null;
+  // Download fields (BCAST-008)
+  allow_download?: boolean;
+  allow_viewer_download?: boolean;
+  download_available?: boolean;
+  mp4_size_bytes?: number;
+}
+
+export interface BroadcastRecordingDownload {
+  download_url: string;
+  download_expires_at: number;
+  file_size_bytes: number;
+  filename: string;
+  content_type: string;
 }
 
 export const getRecording = (sessionId: string) =>
   api.get<BroadcastRecordingResponse>(`/broadcast/sessions/${sessionId}/recording`);
+
+export const getRecordingDownload = (sessionId: string, viewer = false) =>
+  api.get<BroadcastRecordingDownload>(
+    `/broadcast/sessions/${sessionId}/recording/download`,
+    { params: viewer ? { viewer: true } : undefined } as never,
+  );
+
+export const updateRecordingDownloadSettings = (sessionId: string, allowViewerDownload: boolean) =>
+  api.patch(`/broadcast/sessions/${sessionId}/recording/download-settings`, {
+    allow_viewer_download: allowViewerDownload,
+  });

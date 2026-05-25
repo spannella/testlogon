@@ -23,6 +23,7 @@ from app.services.broadcast_recording import (
     get_recording_by_session,
     mint_recording_playback_url,
     mint_recording_thumbnail_url,
+    mint_recording_download_url,
 )
 from app.services.broadcast_audit import query_broadcast_actions, record_broadcast_action
 from app.services.broadcast_orchestrator import (
@@ -608,6 +609,23 @@ class BroadcastRecordingOut(BaseModel):
     created_at: int
     completed_at: Optional[int] = None
     expires_at: Optional[int] = None
+    # Download fields (BCAST-008)
+    allow_download: bool = True
+    allow_viewer_download: bool = False
+    download_available: bool = False
+    mp4_size_bytes: Optional[int] = None
+
+
+class BroadcastRecordingDownloadOut(BaseModel):
+    download_url: str
+    download_expires_at: int
+    file_size_bytes: int
+    filename: str
+    content_type: str = "video/mp4"
+
+
+class BroadcastRecordingDownloadSettingsIn(BaseModel):
+    allow_viewer_download: bool
 
 
 @router.get("/sessions/{session_id}/recording", response_model=BroadcastRecordingOut)
@@ -655,7 +673,101 @@ def get_recording_route(session_id: str, ctx: dict = Depends(_ctx)):
         created_at=recording.created_at,
         completed_at=recording.completed_at if recording.completed_at else None,
         expires_at=recording.expires_at if recording.expires_at else None,
+        # Download fields (BCAST-008)
+        allow_download=recording.allow_download,
+        allow_viewer_download=recording.allow_viewer_download,
+        download_available=bool(recording.mp4_s3_key and recording.status == "ready"),
+        mp4_size_bytes=recording.mp4_size_bytes if recording.mp4_s3_key else None,
     )
+
+
+# ─── Recording Download Endpoints (BCAST-008) ────────────────────
+
+
+@router.get("/sessions/{session_id}/recording/download", response_model=BroadcastRecordingDownloadOut)
+def download_recording_route(
+    session_id: str,
+    viewer: bool = False,
+    ctx: dict = Depends(_ctx),
+):
+    """Generate a presigned download URL for the recording MP4."""
+    from app.core.settings import S as _S
+    if not _S.broadcast_recording_download_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "BROADCAST_RECORDING_DOWNLOAD_DISABLED", "detail": "Download feature is disabled"},
+        )
+
+    recording = get_recording_by_session(session_id)
+    if not recording:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "BROADCAST_RECORDING_NOT_FOUND", "detail": "No recording found for this session"},
+        )
+    if recording.status == "expired":
+        raise HTTPException(
+            status_code=410,
+            detail={"code": "BROADCAST_RECORDING_EXPIRED", "detail": "Recording has expired"},
+        )
+    if recording.status != "ready":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=202,
+            content={"code": "BROADCAST_RECORDING_PROCESSING", "detail": "Recording is still being processed"},
+        )
+    if not recording.mp4_s3_key:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "BROADCAST_RECORDING_MP4_NOT_AVAILABLE", "detail": "MP4 file has not been generated for this recording"},
+        )
+
+    # Permission check
+    user_sub = ctx["user_sub"]
+    if viewer:
+        if not recording.allow_viewer_download:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "BROADCAST_RECORDING_DOWNLOAD_FORBIDDEN", "detail": "Broadcaster has not enabled viewer downloads"},
+            )
+    else:
+        # Broadcaster download: verify the requester is the owner
+        if user_sub != recording.created_by:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "BROADCAST_RECORDING_DOWNLOAD_FORBIDDEN", "detail": "Only the broadcaster can download this recording"},
+            )
+
+    # Mint presigned URL
+    download = mint_recording_download_url(recording)
+    return BroadcastRecordingDownloadOut(**download)
+
+
+@router.patch("/sessions/{session_id}/recording/download-settings")
+def update_download_settings_route(
+    session_id: str,
+    body: BroadcastRecordingDownloadSettingsIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Toggle viewer download permission for a recording."""
+    from app.services.broadcast_recording import update_recording_status
+    recording = get_recording_by_session(session_id)
+    if not recording:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "BROADCAST_RECORDING_NOT_FOUND", "detail": "No recording found for this session"},
+        )
+    if ctx["user_sub"] != recording.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "detail": "Only the broadcaster can modify settings"},
+        )
+
+    update_recording_status(
+        recording.recording_id,
+        recording.status,
+        allow_viewer_download=body.allow_viewer_download,
+    )
+    return {"ok": True, "allow_viewer_download": body.allow_viewer_download}
 
 
 # ─── Live Chat Endpoints (BCAST-005) ─────────────────────────────

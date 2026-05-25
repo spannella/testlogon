@@ -1071,6 +1071,11 @@ class Settings:
     vod_drm_key_root: str = os.environ.get("VOD_DRM_KEY_ROOT", "dev-vod-drm-root-key-change-me")
     vod_drm_key_server_base_url: str = os.environ.get("VOD_DRM_KEY_SERVER_BASE_URL", "http://localhost:8000/v1/vod/drm")
 
+    # VOD Download (VOD-012)
+    video_download_enabled: bool = os.environ.get("VIDEO_DOWNLOAD_ENABLED", "1") not in ("0", "false", "False")
+    video_download_url_ttl_seconds: int = int(os.environ.get("VIDEO_DOWNLOAD_URL_TTL_SECONDS", "3600"))
+    video_download_rate_limit_per_10m: int = int(os.environ.get("VIDEO_DOWNLOAD_RATE_LIMIT_PER_10M", "5"))
+
     # Broadcast Recording (BCAST-006)
     broadcast_recordings_table_name: str = os.environ.get("BROADCAST_RECORDINGS_TABLE", "BroadcastRecordings")
     broadcast_recording_enabled: bool = os.environ.get("BROADCAST_RECORDING_ENABLED", "1") not in ("0", "false", "False")
@@ -1080,6 +1085,21 @@ class Settings:
     broadcast_recording_max_segments: int = int(os.environ.get("BROADCAST_RECORDING_MAX_SEGMENTS", "10000"))
     broadcast_recording_worker_inline: bool = os.environ.get("BROADCAST_RECORDING_WORKER_INLINE", os.environ.get("DEV_MODE", "1")) not in ("0", "false", "False")
     broadcast_recording_mock_on_no_ffmpeg: bool = os.environ.get("BROADCAST_RECORDING_MOCK_ON_NO_FFMPEG", "1") not in ("0", "false", "False")
+
+    # Recording MP4 download (BCAST-008)
+    broadcast_recording_download_enabled: bool = os.environ.get("BROADCAST_RECORDING_DOWNLOAD_ENABLED", "1") not in ("0", "false", "False")
+    broadcast_recording_download_ttl_seconds: int = int(os.environ.get("BROADCAST_RECORDING_DOWNLOAD_TTL_SECONDS", "14400"))
+    broadcast_recording_mp4_auto_generate: bool = os.environ.get("BROADCAST_RECORDING_MP4_AUTO_GENERATE", "1") not in ("0", "false", "False")
+
+    # Call Recording (CALL-009)
+    call_recording_enabled: bool = os.environ.get("CALL_RECORDING_ENABLED", "1") not in ("0", "false", "False")
+    call_recording_max_duration_seconds: int = int(os.environ.get("CALL_RECORDING_MAX_DURATION_SECONDS", "3600"))
+    call_recording_upload_ttl_seconds: int = int(os.environ.get("CALL_RECORDING_UPLOAD_TTL_SECONDS", "600"))
+    call_recording_max_file_size_bytes: int = int(os.environ.get("CALL_RECORDING_MAX_FILE_SIZE_BYTES", str(2 * 1024**3)))
+    call_recording_retention_days: int = int(os.environ.get("CALL_RECORDING_RETENTION_DAYS", "90"))
+    call_recording_s3_prefix: str = os.environ.get("CALL_RECORDING_S3_PREFIX", "call-recordings/")
+    call_recordings_table_name: str = os.environ.get("DDB_CALL_RECORDINGS_TABLE", "CallRecordings")
+    call_recording_download_ttl_seconds: int = int(os.environ.get("CALL_RECORDING_DOWNLOAD_TTL_SECONDS", "3600"))
 
 
 S = Settings()

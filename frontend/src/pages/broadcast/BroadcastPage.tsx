@@ -13,6 +13,7 @@ import {
   ExternalLink,
   Eye,
   Video,
+  Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,6 +39,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -65,6 +67,8 @@ import {
   mintPlaybackUrl,
   getAuditLog,
   getRecording,
+  getRecordingDownload,
+  updateRecordingDownloadSettings,
   type BroadcastSession,
   type BroadcastProfile,
   type BroadcastSessionStatus,
@@ -553,6 +557,14 @@ export default function BroadcastPage() {
   );
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const val = bytes / Math.pow(1024, i);
+  return `${val.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
+}
+
 // ─── Session Detail Dialog ────────────────��─────────────────────
 
 function SessionDetailDialog({
@@ -577,6 +589,8 @@ function SessionDetailDialog({
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [recordingData, setRecordingData] = useState<BroadcastRecordingResponse | null>(null);
   const [showRecordingPlayer, setShowRecordingPlayer] = useState(false);
+  const [downloadLoading, setDownloadLoading] = useState(false);
+  const [allowViewerDownload, setAllowViewerDownload] = useState(false);
 
   const mintMut = useMutation({
     mutationFn: (id: string) => mintPlaybackUrl(id),
@@ -728,8 +742,56 @@ function SessionDetailDialog({
                   </p>
                 </div>
               )}
+              {session.status === "stopped" && recordingQuery.data?.download_available && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={downloadLoading}
+                  onClick={async () => {
+                    setDownloadLoading(true);
+                    try {
+                      const resp = await getRecordingDownload(session.id);
+                      window.open(resp.download_url, "_blank");
+                    } catch {
+                      // ignore
+                    } finally {
+                      setDownloadLoading(false);
+                    }
+                  }}
+                >
+                  {downloadLoading ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Download className="h-3 w-3 mr-1" />}
+                  Download MP4{recordingQuery.data.mp4_size_bytes ? ` (${formatFileSize(recordingQuery.data.mp4_size_bytes)})` : ""}
+                </Button>
+              )}
             </div>
           </div>
+
+          {/* Viewer download toggle (BCAST-008) */}
+          {session.status === "stopped" && recordingQuery.data?.status === "ready" && (
+            <div className="space-y-2">
+              <h4 className="text-sm font-medium">Download Settings</h4>
+              <div className="rounded-md border p-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label>Allow viewer downloads</Label>
+                    <p className="text-sm text-muted-foreground">Let viewers download this recording as an MP4</p>
+                  </div>
+                  <Switch
+                    checked={recordingQuery.data.allow_viewer_download ?? allowViewerDownload}
+                    onCheckedChange={async (checked) => {
+                      setAllowViewerDownload(checked);
+                      try {
+                        await updateRecordingDownloadSettings(session.id, checked);
+                        recordingQuery.refetch();
+                      } catch {
+                        setAllowViewerDownload(!checked);
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* AWS Resources */}
           {(session.aws_input_arn || session.aws_channel_arn || session.mediapackage_endpoint || session.s3_archive_prefix) && (

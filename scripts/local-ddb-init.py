@@ -586,6 +586,17 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"start_ts_sort": "N"},
         ),
+        # CallRecordings: pk=recording_id, GSIs ByCallId + ByConversation + ByStatus (CALL-009)
+        TableDef(
+            _resolve_table_name(S.call_recordings_table_name, "CallRecordings"),
+            "recording_id",
+            gsi=[
+                {"index_name": "ByCallIdCreatedAt", "partition_key": "call_id", "sort_key": "created_at"},
+                {"index_name": "ByConversationCreatedAt", "partition_key": "conversation_id", "sort_key": "created_at"},
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # MessageLegalHolds: pk=hold_id, GSIs ByConversationStatusCreatedAt + ByStatusCreatedAt
         TableDef(
             _resolve_table_name(S.message_legal_holds_table_name, "MessageLegalHolds"),

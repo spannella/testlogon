@@ -87,6 +87,7 @@ from app.routers.vod import router as vod_router
 from app.routers.vod_drm import router as vod_drm_router
 from app.routers.video_listing import router as video_listing_router
 from app.routers.transcode_jobs import router as transcode_jobs_router, video_router as transcode_video_router
+from app.routers.call_recording import router as call_recording_router
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
@@ -334,6 +335,7 @@ def create_app() -> FastAPI:
     app.include_router(vod_drm_router)
     app.include_router(transcode_jobs_router)
     app.include_router(transcode_video_router)
+    app.include_router(call_recording_router)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)
     app.add_event_handler("startup", start_filemgr_mount_reconcile_task)

@@ -94,6 +94,13 @@ class VideoMetadataModel(BaseModel):
     published_at: Optional[int] = None
     deleted_at: Optional[int] = None
 
+    # Download (VOD-012)
+    allow_download: bool = False
+    download_mp4_key: str = ""
+    download_mp4_size_bytes: int = 0
+    download_mp4_status: str = ""  # "", "generating", "ready", "failed"
+    download_count: int = 0
+
 
 class CreateVideoIn(BaseModel):
     title: str = Field(min_length=1, max_length=256)
@@ -117,6 +124,7 @@ class UpdateVideoIn(BaseModel):
     drm_enabled: Optional[bool] = None
     drm_policy_id: Optional[str] = None
     entitlement_sku: Optional[str] = None
+    allow_download: Optional[bool] = None
 
 
 class VideoOut(BaseModel):
@@ -140,3 +148,8 @@ class VideoOut(BaseModel):
     file_size_bytes: Optional[int] = None
     drm_enabled: bool = False
     drm_key_uri: Optional[str] = None
+
+    # Download (VOD-012)
+    allow_download: bool = False
+    download_available: bool = False
+    download_mp4_size_bytes: Optional[int] = None

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Phone, PhoneCall, PhoneIncoming, PhoneOff, Video, Mic, MicOff, VideoOff, ShieldAlert, Signal } from "lucide-react";
+import { Phone, PhoneCall, PhoneIncoming, PhoneOff, Video, Mic, MicOff, VideoOff, ShieldAlert, Signal, Circle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -52,6 +52,14 @@ interface Props {
   onDismiss: () => void;
   onToggleMute?: () => void;
   onToggleCamera?: () => void;
+  isRecording?: boolean;
+  recordingDuration?: number;
+  onRequestRecording?: () => void;
+  onStopRecording?: () => void;
+  recordingEnabled?: boolean;
+  showRecordingConsent?: boolean;
+  recordingConsentFrom?: string | null;
+  onConsentRecording?: (accept: boolean) => void;
 }
 
 const outcomeCopy: Record<Extract<CallUiState, "declined" | "busy" | "timeout" | "ended" | "failure">, string> = {
@@ -140,9 +148,13 @@ interface CallControlsProps {
   onToggleCamera: () => void;
   onEnd: () => void;
   isBusy: boolean;
+  isRecording?: boolean;
+  onRequestRecording?: () => void;
+  onStopRecording?: () => void;
+  recordingEnabled?: boolean;
 }
 
-function CallControls({ mode, isMuted, isCameraOff, onToggleMute, onToggleCamera, onEnd, isBusy }: CallControlsProps) {
+function CallControls({ mode, isMuted, isCameraOff, onToggleMute, onToggleCamera, onEnd, isBusy, isRecording, onRequestRecording, onStopRecording, recordingEnabled }: CallControlsProps) {
   return (
     <div className="flex items-center justify-center gap-3">
       <Button
@@ -177,8 +189,31 @@ function CallControls({ mode, isMuted, isCameraOff, onToggleMute, onToggleCamera
       >
         <PhoneOff className="h-5 w-5" />
       </Button>
+
+      {recordingEnabled && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              size="icon"
+              variant={isRecording ? "destructive" : "outline"}
+              className="h-10 w-10 rounded-full"
+              onClick={isRecording ? onStopRecording : onRequestRecording}
+              aria-label={isRecording ? "Stop recording" : "Record call"}
+            >
+              <Circle className={cn("h-4 w-4", isRecording && "fill-red-500 animate-pulse")} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{isRecording ? "Stop Recording" : "Record Call"}</TooltipContent>
+        </Tooltip>
+      )}
     </div>
   );
+}
+
+function formatRecordingDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60).toString().padStart(2, "0");
+  const s = (seconds % 60).toString().padStart(2, "0");
+  return `${m}:${s}`;
 }
 
 // ─── Connection quality indicator ─────────────────────────────────────────────
@@ -244,6 +279,14 @@ export function CallSessionOverlay({
   onDismiss,
   onToggleMute,
   onToggleCamera,
+  isRecording,
+  recordingDuration,
+  onRequestRecording,
+  onStopRecording,
+  recordingEnabled,
+  showRecordingConsent,
+  recordingConsentFrom,
+  onConsentRecording,
 }: Props) {
   const isIncoming = session.state === "incoming_ringing";
   const isOutgoing = ["outgoing_inviting", "outgoing_ringing", "outgoing_connecting", "reconnecting"].includes(session.state);
@@ -342,6 +385,14 @@ export function CallSessionOverlay({
             </div>
           </div>
 
+          {/* Recording indicator */}
+          {isRecording && (
+            <div className="absolute top-4 right-4 flex items-center gap-2 bg-red-600/90 text-white px-3 py-1 rounded-full text-sm font-medium animate-pulse" data-testid="recording-indicator">
+              <Circle className="h-2 w-2 fill-white" />
+              REC {formatRecordingDuration(recordingDuration ?? 0)}
+            </div>
+          )}
+
           {/* Controls bar */}
           <div className="flex items-center justify-center px-4 py-4 bg-background">
             <CallControls
@@ -352,8 +403,32 @@ export function CallSessionOverlay({
               onToggleCamera={onToggleCamera ?? (() => {})}
               onEnd={onEnd}
               isBusy={isBusy}
+              isRecording={isRecording}
+              onRequestRecording={onRequestRecording}
+              onStopRecording={onStopRecording}
+              recordingEnabled={recordingEnabled}
             />
           </div>
+
+          {/* Recording consent dialog */}
+          {showRecordingConsent && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/60 z-50" data-testid="recording-consent-dialog">
+              <div className="bg-background rounded-lg p-6 max-w-sm mx-4 shadow-xl">
+                <h3 className="text-lg font-semibold mb-2">Recording Request</h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  {recordingConsentFrom ?? session.peerName} wants to record this call. Both audio and video will be captured. Do you consent to being recorded?
+                </p>
+                <div className="flex gap-2 justify-end">
+                  <Button variant="outline" onClick={() => onConsentRecording?.(false)} aria-label="Decline recording">
+                    Decline
+                  </Button>
+                  <Button variant="destructive" onClick={() => onConsentRecording?.(true)} aria-label="Allow recording">
+                    <Circle className="h-3 w-3 fill-current mr-2" /> Allow Recording
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Visually hidden DialogTitle for accessibility */}
           <DialogHeader className="sr-only">
@@ -404,6 +479,14 @@ export function CallSessionOverlay({
             </div>
           </div>
 
+          {/* Recording indicator for audio calls */}
+          {isRecording && (
+            <div className="flex items-center gap-2 bg-red-600/90 text-white px-3 py-1 rounded-full text-sm font-medium animate-pulse w-fit" data-testid="recording-indicator">
+              <Circle className="h-2 w-2 fill-white" />
+              REC {formatRecordingDuration(recordingDuration ?? 0)}
+            </div>
+          )}
+
           {/* Controls */}
           <DialogFooter className="justify-center sm:justify-center">
             <CallControls
@@ -414,8 +497,30 @@ export function CallSessionOverlay({
               onToggleCamera={onToggleCamera ?? (() => {})}
               onEnd={onEnd}
               isBusy={isBusy}
+              isRecording={isRecording}
+              onRequestRecording={onRequestRecording}
+              onStopRecording={onStopRecording}
+              recordingEnabled={recordingEnabled}
             />
           </DialogFooter>
+
+          {/* Recording consent dialog for audio calls */}
+          {showRecordingConsent && (
+            <div className="border rounded-lg p-4 mt-2 bg-muted/30" data-testid="recording-consent-dialog">
+              <p className="text-sm font-medium mb-2">Recording Request</p>
+              <p className="text-xs text-muted-foreground mb-3">
+                {recordingConsentFrom ?? session.peerName} wants to record this call. Do you consent?
+              </p>
+              <div className="flex gap-2 justify-end">
+                <Button size="sm" variant="outline" onClick={() => onConsentRecording?.(false)} aria-label="Decline recording">
+                  Decline
+                </Button>
+                <Button size="sm" variant="destructive" onClick={() => onConsentRecording?.(true)} aria-label="Allow recording">
+                  <Circle className="h-3 w-3 fill-current mr-2" /> Allow
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     );

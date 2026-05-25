@@ -67,12 +67,25 @@ export interface VideoDetail {
   encoding_error_message?: string | null;
   review_status?: string | null;
   published_at?: number | null;
+  // Download (VOD-012)
+  allow_download?: boolean;
+  download_available?: boolean;
+  download_mp4_size_bytes?: number;
+}
+
+export interface VideoDownloadResponse {
+  download_url: string;
+  download_expires_at: number;
+  file_size_bytes: number;
+  filename: string;
+  content_type: string;
 }
 
 export interface VideoUpdateRequest {
   title?: string;
   description?: string;
   visibility?: string;
+  allow_download?: boolean;
 }
 
 // ─── API calls ──────────────────────────────────────────────────────────────
@@ -99,3 +112,6 @@ export const updateVideo = (videoId: string, body: VideoUpdateRequest) =>
 
 export const deleteVideo = (videoId: string) =>
   api.del(`/ui/videos/${videoId}`);
+
+export const getVideoDownload = (videoId: string) =>
+  api.get<VideoDownloadResponse>(`/ui/videos/${videoId}/download`);

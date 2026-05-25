@@ -91,12 +91,17 @@ class VideoDetailOut(BaseModel):
     published_at: Optional[int] = None
     drm_enabled: bool = False
     drm_key_uri: Optional[str] = None
+    # Download (VOD-012)
+    allow_download: bool = False
+    download_available: bool = False
+    download_mp4_size_bytes: Optional[int] = None
 
 
 class VideoUpdateIn(BaseModel):
     title: Optional[str] = Field(default=None, min_length=1, max_length=256)
     description: Optional[str] = Field(default=None, max_length=2000)
     visibility: Optional[VideoVisibility] = None
+    allow_download: Optional[bool] = None
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -146,6 +151,13 @@ def _video_to_detail(video: VideoMetadataModel, *, playback_token: str | None = 
         except Exception:
             pass
 
+    # Download availability (VOD-012)
+    download_available = (
+        video.allow_download
+        and video.download_mp4_key != ""
+        and video.download_mp4_status == "ready"
+    )
+
     return VideoDetailOut(
         video_id=video.id,
         owner_user_id=video.owner_user_id,
@@ -174,6 +186,9 @@ def _video_to_detail(video: VideoMetadataModel, *, playback_token: str | None = 
         published_at=video.published_at,
         drm_enabled=video.drm_enabled,
         drm_key_uri=drm_key_uri,
+        allow_download=video.allow_download,
+        download_available=download_available,
+        download_mp4_size_bytes=video.download_mp4_size_bytes if video.download_mp4_size_bytes else None,
     )
 
 
@@ -282,10 +297,68 @@ def update_video_endpoint(
         title=body.title,
         description=body.description,
         visibility=body.visibility,
+        allow_download=body.allow_download,
     )
 
     updated = update_video(video_id, update_data)
+
+    # VOD-012: Trigger MP4 generation when allow_download is toggled on
+    if body.allow_download is True and updated.download_mp4_status != "ready":
+        from app.services.vod_mp4_generator import generate_download_mp4
+
+        gen_result = generate_download_mp4(updated)
+        # Apply generation result to the video
+        patch_data = UpdateVideoIn()
+        updated_data = updated.model_dump()
+        updated_data.update(gen_result)
+        updated_data["updated_at"] = now_ts()
+        from app.models_video import VideoMetadataModel as VMM
+        updated = VMM(**updated_data)
+        from app.core.tables import T
+        from app.services.video_metadata_store import video_to_item
+        T.video_metadata.put_item(Item=video_to_item(updated))
+
     return _video_to_detail(updated)
+
+
+@router.get("/{video_id}/download")
+def download_video_endpoint(
+    video_id: str,
+    user=Depends(require_ui_session),
+):
+    """Generate and return a presigned download URL for the video's MP4 (VOD-012)."""
+    if not S.video_download_enabled:
+        raise HTTPException(status_code=503, detail="downloads temporarily disabled")
+
+    video = get_video(video_id)
+    user_sub = user["user_sub"]
+
+    # Authorization: owner always allowed; non-owner needs published + public/unlisted
+    is_owner = video.owner_user_id == user_sub
+    if not is_owner:
+        is_public = video.status == "published" and video.visibility in ("public", "unlisted")
+        if not is_public:
+            raise HTTPException(status_code=403, detail="forbidden")
+
+    if not video.allow_download:
+        raise HTTPException(status_code=403, detail="downloads not enabled for this video")
+
+    if not video.download_mp4_key or video.download_mp4_status != "ready":
+        raise HTTPException(status_code=404, detail="download mp4 not ready")
+
+    from app.services.vod_mp4_generator import mint_video_download_url
+    from app.services.video_metadata_store import increment_download_count
+
+    ttl = S.video_download_url_ttl_seconds
+    result = mint_video_download_url(video, ttl)
+
+    # Increment download counter (best-effort)
+    try:
+        increment_download_count(video_id)
+    except Exception:
+        logger.warning("Failed to increment download count for %s", video_id)
+
+    return result
 
 
 @router.delete("/{video_id}", status_code=204)

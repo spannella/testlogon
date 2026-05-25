@@ -83,6 +83,17 @@ def video_to_item(video: VideoMetadataModel) -> Dict[str, Any]:
             else:
                 item[field] = val
 
+    # Download fields (VOD-012)
+    item["allow_download"] = video.allow_download
+    if video.download_mp4_key:
+        item["download_mp4_key"] = video.download_mp4_key
+    if video.download_mp4_size_bytes:
+        item["download_mp4_size_bytes"] = video.download_mp4_size_bytes
+    if video.download_mp4_status:
+        item["download_mp4_status"] = video.download_mp4_status
+    if video.download_count:
+        item["download_count"] = video.download_count
+
     # source_broadcast_session_id is a GSI partition key -- must omit if None
     # to avoid DynamoDB storing NULL in GSI key attributes
     if video.source_broadcast_session_id is not None:
@@ -162,6 +173,12 @@ def video_from_item(item: Dict[str, Any]) -> VideoMetadataModel:
         visibility=item.get("visibility") or "private",
         published_at=_int_or_none(item.get("published_at")),
         deleted_at=_int_or_none(item.get("deleted_at")),
+        # Download (VOD-012)
+        allow_download=bool(item.get("allow_download", False)),
+        download_mp4_key=item.get("download_mp4_key") or "",
+        download_mp4_size_bytes=int(item.get("download_mp4_size_bytes") or 0),
+        download_mp4_status=item.get("download_mp4_status") or "",
+        download_count=int(item.get("download_count") or 0),
     )
 
 
@@ -486,6 +503,19 @@ def delete_video(video_id: str, owner_user_id: str) -> None:
         }
     )
     T.video_metadata.put_item(Item=video_to_item(updated))
+
+
+def increment_download_count(video_id: str) -> None:
+    """Atomically increment download_count on a video record."""
+    T.video_metadata.update_item(
+        Key={"video_id": video_id},
+        UpdateExpression="SET download_count = if_not_exists(download_count, :zero) + :one, updated_at = :now",
+        ExpressionAttributeValues={
+            ":zero": 0,
+            ":one": 1,
+            ":now": now_ts(),
+        },
+    )
 
 
 def get_video_by_broadcast_session(session_id: str) -> Optional[VideoMetadataModel]:
