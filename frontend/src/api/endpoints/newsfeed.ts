@@ -175,3 +175,12 @@ export interface ReportFeedContentReq {
 
 export const reportFeedContent = (body: ReportFeedContentReq) =>
   api.post<{ ok: boolean; report_id: string }>("/moderation/reports", body);
+
+export function issueVideoPostEntitlement(postId: string) {
+  return api.post<{
+    video_id: string;
+    hls_manifest_url: string;
+    playback_token: string;
+    playback_expires_at: number;
+  }>(`/ui/posts/${postId}/video/entitlement`);
+}

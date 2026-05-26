@@ -967,6 +967,15 @@ class Settings:
     newsfeed_unlock_throttle_max_attempts: int = int(os.environ.get("NEWSFEED_UNLOCK_THROTTLE_MAX_ATTEMPTS", "6"))
     newsfeed_tip_lottery_enabled: bool = os.environ.get("NEWSFEED_TIP_LOTTERY_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 
+    # VOD File Bridge (VOD-014)
+    vod_file_bridge_enabled: bool = os.environ.get("VOD_FILE_BRIDGE_ENABLED", "1") not in ("0", "false", "False")
+    vod_file_bridge_default_folder: str = os.environ.get("VOD_FILE_BRIDGE_DEFAULT_FOLDER", "/Videos/")
+    vod_file_bridge_auto_link: bool = os.environ.get("VOD_FILE_BRIDGE_AUTO_LINK", "1") not in ("0", "false", "False")
+
+    # VOD Sharing (VOD-013)
+    video_sharing_enabled: bool = os.environ.get("VIDEO_SHARING_ENABLED", "1") not in ("0", "false", "False")
+    video_share_playback_token_ttl_seconds: int = int(os.environ.get("VIDEO_SHARE_PLAYBACK_TOKEN_TTL_SECONDS", "300"))
+
     # Messaging feature flags
     messaging_encrypted_messages_enabled: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_ENABLED", "false").lower() == "true"
     messaging_encrypted_messages_kill_switch: bool = os.environ.get("MESSAGING_ENCRYPTED_MESSAGES_KILL_SWITCH", "false").lower() == "true"
@@ -1090,6 +1099,9 @@ class Settings:
     broadcast_recording_download_enabled: bool = os.environ.get("BROADCAST_RECORDING_DOWNLOAD_ENABLED", "1") not in ("0", "false", "False")
     broadcast_recording_download_ttl_seconds: int = int(os.environ.get("BROADCAST_RECORDING_DOWNLOAD_TTL_SECONDS", "14400"))
     broadcast_recording_mp4_auto_generate: bool = os.environ.get("BROADCAST_RECORDING_MP4_AUTO_GENERATE", "1") not in ("0", "false", "False")
+
+    # Newsfeed Video Posts (FEED-001)
+    newsfeed_video_posts_enabled: bool = os.environ.get("NEWSFEED_VIDEO_POSTS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 
     # Call Recording (CALL-009)
     call_recording_enabled: bool = os.environ.get("CALL_RECORDING_ENABLED", "1") not in ("0", "false", "False")

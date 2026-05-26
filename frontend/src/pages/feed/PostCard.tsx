@@ -28,6 +28,7 @@ import { SharePostDialog } from "./SharePostDialog";
 import { FilePreview } from "@/pages/files/FilePreview";
 import { ReportContentModal, type ReportContentPayload } from "@/components/shared/ReportContentModal";
 import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
+import { VideoPostPlayer } from "./VideoPostPlayer";
 import type { FeedPost, PaymentMethod, PostFileAttachment } from "@/api/types";
 import type { FileEntry } from "@/api/types";
 import { isTipLotteryEnabled } from "@/config/featureFlags";
@@ -456,6 +457,26 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
             />
           )}
         </div>
+
+        {/* Video embed */}
+        {post.video && !isLocked && (
+          <VideoPostPlayer postId={post.post_id} video={post.video} className="mt-3" />
+        )}
+        {post.video && isLocked && (
+          <div className="mt-3 relative aspect-video rounded-lg overflow-hidden">
+            {post.video.thumbnail_url ? (
+              <img src={post.video.thumbnail_url} alt="" className="w-full h-full object-cover blur-lg" />
+            ) : (
+              <div className="w-full h-full bg-muted" />
+            )}
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/50">
+              <Lock className="h-8 w-8 text-white mb-2" />
+              <p className="text-white text-sm font-medium">
+                Unlock for ${((post.unlock_price_cents ?? 0) / 100).toFixed(2)}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Image grid */}
         {imageUrls.length > 0 && (

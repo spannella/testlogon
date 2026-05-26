@@ -58,6 +58,7 @@ import { ApiError } from "@/api/client";
 import type { GalleryImageItem, Message, MeetingPollAttachment, PaymentMethod } from "@/api/types";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import { FileMessageCard } from "./FileMessageCard";
+import { VideoShareCard } from "./VideoShareCard";
 import { ReadReceipts, ViewTracker } from "./ReadReceipts";
 import { ForwardDialog } from "./ForwardDialog";
 import { MessageDetailsSheet } from "./MessageDetailsSheet";
@@ -1463,6 +1464,14 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
             </>
           )}
           {message.kind === "file_share" && message.text && (
+            <p className="mt-1 text-sm">{message.text}</p>
+          )}
+
+          {/* ── Video share card ── */}
+          {message.kind === "video_share" && message.video_share && (
+            <VideoShareCard videoShare={message.video_share} />
+          )}
+          {message.kind === "video_share" && message.text && (
             <p className="mt-1 text-sm">{message.text}</p>
           )}
 

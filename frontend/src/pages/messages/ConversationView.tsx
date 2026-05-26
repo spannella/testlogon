@@ -13,6 +13,7 @@ import {
   sendImageMessage,
   sendGalleryMessage,
   sendFileShareMessage,
+  sendVideoShareMessage,
   sendCalendarShareMessage,
   sendCalendarEventMessage,
   sendMeetingPollMessage,
@@ -46,6 +47,8 @@ import { CallSessionOverlay, type CallSessionUi, type CallUiState } from "./Call
 import { callStateReducer, createInitialCallMachineState, teardownCallResources, type CallRuntimeResources } from "./callStateMachine";
 import { useRtcPeerConnection } from "@/hooks/useRtcPeerConnection";
 import { useMediaCapture } from "@/hooks/useMediaCapture";
+import { useCallRecording } from "@/hooks/useCallRecording";
+import { isCallRecordingEnabled } from "@/lib/featureFlags";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -396,6 +399,16 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     onError: () => toast.error("Failed to share file"),
   });
 
+  const videoShareMut = useMutation({
+    mutationFn: (params: { video_id: string; text?: string }) =>
+      sendVideoShareMessage(convoId, params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.detail || "Failed to share video"),
+  });
+
   const sendCalendarShare = useMutation({
     mutationFn: (params: SendCalendarShareReq) => sendCalendarShareMessage(convoId, params),
     onSuccess: () => {
@@ -494,6 +507,49 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
       callResourcesRef.current = rtcResources;
     }
   }, [rtcResources]);
+
+  const callRecordingEnabled = callsEnabled && isCallRecordingEnabled();
+  const callRecording = useCallRecording({
+    callId: callMachine.callId,
+    userId: userId ?? "",
+    localStream: rtcLocalStream ?? mediaCapture.stream ?? null,
+    remoteStream: rtcRemoteStream ?? null,
+    isConnected: callMachine.phase === "connected",
+    enabled: callRecordingEnabled,
+  });
+
+  React.useEffect(() => {
+    if (callRecording.recordingState === "recording" && callRecording.recordingId) {
+      dispatchCall({ type: "RECORDING_STARTED", recordingId: callRecording.recordingId });
+    } else if (callRecording.recordingState === "consent_pending" && callRecording.consentPendingFrom) {
+      dispatchCall({ type: "RECORDING_REQUEST_RECEIVED", requestedBy: callRecording.consentPendingFrom });
+    } else if (callRecording.recordingState === "consent_pending" && callRecording.isInitiator) {
+      dispatchCall({ type: "RECORDING_REQUEST_SENT" });
+    } else if (["stopping", "uploading", "complete"].includes(callRecording.recordingState)) {
+      dispatchCall({ type: "RECORDING_STOPPED" });
+    }
+  }, [callRecording.recordingState, callRecording.recordingId, callRecording.consentPendingFrom, callRecording.isInitiator]);
+
+  React.useEffect(() => {
+    if (callRecording.recordingState === "recording") {
+      const handler = (e: BeforeUnloadEvent) => {
+        e.preventDefault();
+        e.returnValue = "A recording is in progress. If you leave, the recording will be lost.";
+      };
+      window.addEventListener("beforeunload", handler);
+      return () => window.removeEventListener("beforeunload", handler);
+    }
+  }, [callRecording.recordingState]);
+
+  React.useEffect(() => {
+    if (callRecording.recordingState === "uploading") {
+      toast.loading("Uploading call recording...", { id: "recording-upload" });
+    } else if (callRecording.recordingState === "complete") {
+      toast.success("Call recording saved.", { id: "recording-upload" });
+    } else if (callRecording.recordingState === "error") {
+      toast.error(`Recording failed: ${callRecording.error ?? "Unknown error"}`, { id: "recording-upload" });
+    }
+  }, [callRecording.recordingState, callRecording.error]);
 
   const clearCallTimeout = React.useCallback(() => {
     if (callTimeoutRef.current) {
@@ -954,11 +1010,12 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         })}
         onSendGallery={(params) => sendGallery.mutate(params)}
         onSendFileShare={(params) => sendFileShare.mutate(params)}
+        onSendVideoShare={(params) => videoShareMut.mutate(params)}
         onSendCalendarShare={(params) => sendCalendarShare.mutate(params)}
         onSendCalendarEvent={(params) => sendCalendarEvent.mutate(params)}
         onSendMeetingPoll={(params) => sendMeetingPoll.mutate(params)}
         onSendLottery={!isGroup && dmLotteryEnabled ? (params) => sendLottery.mutate(params) : undefined}
-        sending={sendText.isPending || sendImage.isPending || sendGallery.isPending || sendFileShare.isPending || sendCalendarShare.isPending || sendCalendarEvent.isPending || sendMeetingPoll.isPending || sendLottery.isPending}
+        sending={sendText.isPending || sendImage.isPending || sendGallery.isPending || sendFileShare.isPending || videoShareMut.isPending || sendCalendarShare.isPending || sendCalendarEvent.isPending || sendMeetingPoll.isPending || sendLottery.isPending}
         onKeystroke={onKeystroke}
         replyingTo={replyingTo}
         onCancelReply={() => setReplyingTo(null)}
@@ -1074,19 +1131,6 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
             },
           );
         }}
-        onEnd={() => {
-          if (!callMachine.callId) {
-            dispatchCall({ type: "END_LOCAL" });
-            return;
-          }
-          callActionMutation.mutate(
-            { action: "end", callId: callMachine.callId },
-            {
-              onSuccess: () => dispatchCall({ type: "END_REMOTE" }),
-              onError: () => dispatchCall({ type: "FAIL" }),
-            },
-          );
-        }}
         isMuted={isMuted}
         isCameraOff={isCameraOff}
         onToggleMute={() => {
@@ -1105,7 +1149,26 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
             setIsCameraOff(!videoTrack.enabled);
           }
         }}
+        onEnd={() => {
+          if (callRecording.recordingState === "recording") {
+            callRecording.stopRecording();
+          }
+          if (!callMachine.callId) {
+            dispatchCall({ type: "END_LOCAL" });
+            return;
+          }
+          callActionMutation.mutate(
+            { action: "end", callId: callMachine.callId },
+            {
+              onSuccess: () => dispatchCall({ type: "END_REMOTE" }),
+              onError: () => dispatchCall({ type: "FAIL" }),
+            },
+          );
+        }}
         onDismiss={() => {
+          if (callRecording.recordingState === "recording") {
+            callRecording.stopRecording();
+          }
           clearCallTimeout();
           teardownCallResources(callResourcesRef.current);
           mediaCapture.release();
@@ -1113,6 +1176,14 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
           setIsCameraOff(false);
           dispatchCall({ type: "RESET" });
         }}
+        isRecording={callRecording.recordingState === "recording"}
+        recordingDuration={callRecording.duration}
+        onRequestRecording={() => callRecording.requestRecording()}
+        onStopRecording={() => callRecording.stopRecording()}
+        recordingEnabled={callRecordingEnabled}
+        showRecordingConsent={callRecording.recordingState === "consent_pending" && !!callRecording.consentPendingFrom}
+        recordingConsentFrom={callRecording.consentPendingFrom}
+        onConsentRecording={(accept: boolean) => callRecording.respondToRequest(accept)}
       />
     </div>
   );

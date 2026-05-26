@@ -1,7 +1,7 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOfflineStore } from "@/stores/offlineStore";
-import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip, Clock, Globe } from "lucide-react";
+import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip, Clock, Globe, Video } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -25,6 +25,8 @@ import type { CreateDraftPostReq, DraftPost, FileEntry } from "@/api/types";
 import { reportDraftLifecycleEvent } from "@/lib/newsfeedDraftTelemetry";
 import { isNewsfeedDraftsEnabled } from "@/lib/featureFlags";
 import { invalidateFeedCaches } from "@/lib/feedCacheInvalidation";
+import { FeedVideoPickerDialog } from "./VideoPickerDialog";
+import type { VideoListItem } from "@/api/endpoints/videos";
 
 const MAX_IMAGES = 10;
 const MAX_FILES = 5;
@@ -136,6 +138,8 @@ export function CreatePost() {
   const [unlockLimitEnabled, setUnlockLimitEnabled] = useState(false);
   const [unlockLimit, setUnlockLimit] = useState("");
   const [unlockLimitError, setUnlockLimitError] = useState<string | null>(null);
+  const [pendingVideo, setPendingVideo] = useState<VideoListItem | null>(null);
+  const [videoPickerOpen, setVideoPickerOpen] = useState(false);
   const { data: capabilities } = useQuery({
     queryKey: ["feed", "capabilities"],
     queryFn: getFeedCapabilities,
@@ -313,6 +317,7 @@ export function CreatePost() {
             }
           : {}),
         ...(parsedUnlockLimit ? { unlock_limit: parsedUnlockLimit } : {}),
+        ...(pendingVideo ? { video_id: pendingVideo.video_id } : {}),
       });
     },
     onSuccess: async (resp, target) => {
@@ -635,6 +640,7 @@ export function CreatePost() {
             }
           : {}),
         ...(parsedUnlockLimit ? { unlock_limit: parsedUnlockLimit } : {}),
+        ...(pendingVideo ? { video_id: pendingVideo.video_id } : {}),
       };
       addToQueue({ type: "create_post", payload: queuedPayload });
       toast.info("You're offline — post queued and will publish when reconnected");
@@ -877,6 +883,24 @@ export function CreatePost() {
             </div>
           )}
 
+          {pendingVideo && (
+            <div className="flex items-center gap-3 p-2 border rounded-md bg-muted/50">
+              {pendingVideo.thumbnail_url && (
+                <img
+                  src={pendingVideo.thumbnail_url}
+                  alt=""
+                  className="h-12 w-20 object-cover rounded"
+                />
+              )}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium truncate">{pendingVideo.title}</p>
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => setPendingVideo(null)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
+
           {lockEnabled && (
             <div className="rounded-md border border-border bg-muted/30 p-2 text-xs space-y-1.5">
               <div className="flex items-center gap-2">
@@ -977,6 +1001,17 @@ export function CreatePost() {
                 <Paperclip className="mr-1 h-3.5 w-3.5" />
                 Attach File
                 {pendingFiles.length > 0 && <span className="ml-1 text-xs text-muted-foreground">({pendingFiles.length}/{MAX_FILES})</span>}
+              </Button>
+
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setVideoPickerOpen(true)}
+                disabled={uploading || imageUrls.length > 0}
+                title={imageUrls.length > 0 ? "Remove images first to attach a video" : "Attach video"}
+              >
+                <Video className="h-4 w-4" />
               </Button>
 
               {/* Lock toggle */}
@@ -1119,6 +1154,15 @@ export function CreatePost() {
             onClose={() => setAttachFilePickerOpen(false)}
             onSelect={handleAttachFileSelect}
             showPermission={false}
+          />
+
+          <FeedVideoPickerDialog
+            open={videoPickerOpen}
+            onClose={() => setVideoPickerOpen(false)}
+            onSelect={(video) => {
+              setPendingVideo(video);
+              setVideoPickerOpen(false);
+            }}
           />
         </form>
       </CardContent>

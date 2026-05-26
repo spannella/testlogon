@@ -192,6 +192,13 @@ async def execute_transcode_job(job: Dict[str, Any]) -> None:
         except Exception:
             logger.warning("Could not transition video %s to published", job["video_id"])
 
+        # VOD-014: Auto-link to file manager
+        try:
+            from app.services.vod_file_bridge import link_video_to_filemanager
+            link_video_to_filemanager(job["video_id"])
+        except Exception:
+            logger.warning("VOD-014: Could not link video %s to file manager", job["video_id"], exc_info=True)
+
     except Exception as e:
         error_msg = str(e)[:4096]
         attempt = int(job.get("attempt", 0))

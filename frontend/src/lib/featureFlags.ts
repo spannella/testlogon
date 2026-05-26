@@ -122,3 +122,6 @@ export const googleCalendarWritebackEnabled = toBool(env.VITE_GOOGLE_CALENDAR_WR
 export const isGoogleCalendarSyncEnabled = () => googleCalendarSyncEnabled;
 export const isGoogleCalendarWritebackEnabled = () =>
   isGoogleCalendarSyncEnabled() && googleCalendarWritebackEnabled;
+
+export const callRecordingEnabled = toBool(env.VITE_CALL_RECORDING_ENABLED, false);
+export const isCallRecordingEnabled = () => callRecordingEnabled;

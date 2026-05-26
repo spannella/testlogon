@@ -1203,6 +1203,7 @@ def _content_from_payload(req: ContentFieldsMixin) -> Dict[str, Any]:
 
 class CreatePostRequest(ContentFieldsMixin):
     image_urls: List[str] = Field(default_factory=list)
+    video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
     visibility: Literal["followers", "public"] = "followers"
     lock_type: Optional[Literal["fixed_price", "tip_lottery"]] = None
     unlock_price_cents: Optional[int] = Field(default=None, ge=0)
@@ -1261,6 +1262,16 @@ class CreatePostRequest(ContentFieldsMixin):
     }
 
 
+class PostVideoEmbed(BaseModel):
+    video_id: str
+    title: str
+    thumbnail_url: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    hls_manifest_url: Optional[str] = None
+    playback_token: Optional[str] = None
+    playback_expires_at: Optional[int] = None
+
+
 class PostResponse(BaseModel):
     post_id: str
     author_id: str
@@ -1296,6 +1307,7 @@ class PostResponse(BaseModel):
     lottery_version: Optional[int] = None
     like_count: int = 0
     comment_count: int = 0
+    video: Optional[PostVideoEmbed] = None
 
 
 class ScheduledPostsResponse(BaseModel):
@@ -1395,6 +1407,7 @@ class FeedCapabilitiesResponse(BaseModel):
 
 class EditPostRequest(ContentFieldsMixin):
     image_urls: Optional[List[str]] = None
+    video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
     publish_at: Optional[int] = Field(default=None, ge=0)
     schedule_timezone: Optional[str] = Field(default=None, min_length=1, max_length=64)
     scheduled_at_local: Optional[str] = Field(default=None, min_length=1, max_length=32)
@@ -1415,11 +1428,13 @@ class DraftPostResponse(BaseModel):
     image_urls: List[str] = Field(default_factory=list)
     file_paths: List[str] = Field(default_factory=list)
     unlock_price_cents: Optional[int] = Field(default=None, ge=0)
+    video_id: Optional[str] = None
 
 
 class CreateDraftPostRequest(ContentFieldsMixin):
     image_urls: List[str] = Field(default_factory=list)
     file_paths: List[str] = Field(default_factory=list)
+    video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
     unlock_price_cents: Optional[int] = Field(default=None, ge=0)
 
     model_config = {
@@ -1461,6 +1476,7 @@ class UpdateDraftPostRequest(BaseModel):
     image_urls: Optional[List[str]] = None
     file_paths: Optional[List[str]] = None
     unlock_price_cents: Optional[int] = Field(default=None, ge=0)
+    video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
     expected_updated_at: Optional[str] = None
 
     model_config = {
@@ -1814,6 +1830,26 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
     lottery_tip_cents = int(post["lottery_tip_cents"]) if post.get("lottery_tip_cents") is not None else None
     lottery_quiet_period_seconds = int(post["lottery_quiet_period_seconds"]) if post.get("lottery_quiet_period_seconds") is not None else None
     lottery_version = int(post["lottery_version"]) if post.get("lottery_version") is not None else None
+
+    # Video embed metadata (FEED-001)
+    video_embed = None
+    raw_video_id = post.get("video_id")
+    if raw_video_id and isinstance(raw_video_id, str):
+        try:
+            from app.services.video_metadata_store import get_video as _feed_vid
+            _vr = _feed_vid(raw_video_id)
+            video_embed = {
+                "video_id": raw_video_id,
+                "title": _vr.title,
+                "thumbnail_url": _vr.thumbnail_url,
+                "duration_seconds": _vr.duration_seconds,
+                "hls_manifest_url": None if locked_body else _vr.hls_manifest_url,
+                "playback_token": None,
+                "playback_expires_at": None,
+            }
+        except Exception:
+            video_embed = None
+
     return {
         "post_id": post_id,
         "author_id": post.get("user_id", ""),
@@ -1832,6 +1868,7 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "body_format": body_format,
         "body_version": body_version,
         "image_urls": image_urls,
+        "video": video_embed,
         "file_attachments": file_attachments,
         "visibility": post.get("visibility", "followers"),
         "locked": bool(post.get("locked")),
@@ -3009,6 +3046,22 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         lock_type = "fixed_price"
 
     locked = lock_type is not None
+
+    # --- Video validation (FEED-001) ---
+    video_id = getattr(req, "video_id", None)
+    if video_id:
+        if req.image_urls:
+            raise HTTPException(status_code=400, detail="video_id and image_urls are mutually exclusive; provide one or the other")
+        from app.services.video_metadata_store import get_video as _feed_get_video
+        try:
+            _vid_record = _feed_get_video(video_id)
+        except HTTPException:
+            raise HTTPException(status_code=400, detail="video not found")
+        if _vid_record.owner_user_id != user_id:
+            raise HTTPException(status_code=403, detail="video is not owned by this user")
+        if _vid_record.status != "published":
+            raise HTTPException(status_code=400, detail="video must be in published status to attach to a post")
+
     content = _content_from_payload(req)
     _emit_newsfeed_content_metric(
         "create_post",
@@ -3036,6 +3089,7 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "GSI2SK": f"{created_at}#POST#{post_id}",
         **content,
         "image_urls": req.image_urls,
+        "video_id": video_id,
         "visibility": req.visibility,
         "locked": locked,
         "lock_type": lock_type,
@@ -3090,6 +3144,7 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         body_format=content["body_format"],
         body_version=content["body_version"],
         image_urls=req.image_urls,
+        video=None,
         visibility=req.visibility,
         locked=locked,
         lock_type=lock_type,
@@ -3694,6 +3749,42 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep):
         )
 
     return {"ok": True, "tip_total_cents": int(updated.get("tip_total_cents", 0))}
+
+
+@router.post("/posts/{post_id}/video/entitlement")
+def issue_video_post_entitlement(post_id: str, user_id: UserIdDep = None):
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail="post not found")
+    vid = post.get("video_id")
+    if not vid:
+        raise HTTPException(status_code=400, detail="post has no video")
+    is_locked = bool(post.get("locked"))
+    if is_locked:
+        is_owner = post.get("user_id") == user_id
+        if not is_owner and not has_unlocked(user_id, post_id):
+            raise HTTPException(status_code=403, detail="post is locked")
+    from app.services.playback_entitlements import issue_playback_entitlement
+    from app.services.video_metadata_store import get_video as _ent_vid
+    video = _ent_vid(vid)
+    if video.status != "published" or not video.hls_manifest_url:
+        raise HTTPException(status_code=400, detail="video is not available for playback")
+    ttl = getattr(S, "video_playback_token_ttl_seconds", 300) or 300
+    result = issue_playback_entitlement(
+        tenant_id=video.owner_user_id,
+        asset_id=video.id,
+        session_id=f"feed_{user_id}_{post_id}",
+        device_id="browser",
+        profile="auto",
+        audience="playback",
+        ttl_seconds=ttl,
+    )
+    return {
+        "video_id": vid,
+        "hls_manifest_url": video.hls_manifest_url,
+        "playback_token": result.get("token"),
+        "playback_expires_at": result.get("expires_at_epoch"),
+    }
 
 
 @router.post("/posts/{post_id}/reactions")

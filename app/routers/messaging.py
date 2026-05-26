@@ -1985,6 +1985,12 @@ class CreateFileShareMessageIn(BaseModel):
         return self
 
 
+class CreateVideoShareMessageIn(BaseModel):
+    video_id: str = Field(min_length=1, max_length=128)
+    text: Optional[str] = Field(default=None, max_length=2000)
+    send_at: Optional[int] = None
+
+
 class CreateCalendarShareMessageIn(BaseModel):
     calendar_id: str
     permission: Literal["read", "write"] = "read"
@@ -2282,7 +2288,7 @@ class MessageOut(BaseModel):
     message_id: str
     sender_id: str
     created_at: int
-    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll"]
+    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll", "video_share"]
     text: Optional[str] = None
     image: Optional[Dict[str, Any]] = None
     file: Optional[Dict[str, Any]] = None
@@ -2290,6 +2296,7 @@ class MessageOut(BaseModel):
     calendar_share: Optional[Dict[str, Any]] = None
     calendar_event: Optional[Dict[str, Any]] = None
     meeting_poll: Optional[Dict[str, Any]] = None
+    video_share: Optional[Dict[str, Any]] = None
     lottery: Optional[Dict[str, Any]] = None
     preview: Optional[Dict[str, Any]] = None
     # Gallery message fields
@@ -2741,6 +2748,20 @@ def _gallery_item_from_message(message: Dict[str, Any], gallery_type: str) -> Op
             content_type=str(file_payload.get("content_type") or "").strip() or None,
             size=int(size) if isinstance(size, (int, float)) else None,
         )
+
+    if gallery_type == "video" and kind == "video_share":
+        vs = message.get("video_share") or {}
+        url = vs.get("hls_manifest_url") or vs.get("thumbnail_url") or ""
+        if url:
+            return GalleryItemOut(
+                message_id=message_id,
+                conversation_id=conversation_id,
+                sender_id=sender_id,
+                created_at=created_at,
+                type="video",
+                url=url,
+                thumbnail_url=vs.get("thumbnail_url"),
+            )
 
     include_audio = os.getenv("MESSAGING_GALLERY_INCLUDE_AUDIO", "0") in ("1", "true", "True")
     if gallery_type == "file" and (kind == "file" or (include_audio and kind == "audio")):
@@ -3319,7 +3340,7 @@ def _message_search_text(message_item: dict) -> str:
 
 
 def _is_searchable_kind(kind: Optional[str]) -> bool:
-    return kind in {"text", "file", "audio", "video"}
+    return kind in {"text", "file", "audio", "video", "video_share"}
 
 
 
@@ -3841,6 +3862,49 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         meeting_poll_out = {k: raw.get(k) for k in
             ["poll_id", "creator_id", "title", "duration_minutes", "status", "confirmed_slot_id"]}
 
+    # Video share message projection
+    video_share_out: Optional[Dict[str, Any]] = None
+    if merged_item.get("kind") == "video_share":
+        raw_vs = merged_item.get("video_share") or {}
+        vid = raw_vs.get("video_id")
+        hls_url = None
+        playback_token = None
+        playback_expires_at = None
+        if vid and viewer_user_id:
+            try:
+                from app.services.video_metadata_store import get_video as _vs_get
+                vr = _vs_get(vid)
+                hls_url = vr.hls_manifest_url
+                from app.services.playback_entitlements import issue_playback_entitlement
+                ttl = getattr(S, "video_share_playback_token_ttl_seconds", 300) or 300
+                ent = issue_playback_entitlement(
+                    tenant_id=vr.owner_user_id,
+                    asset_id=vr.id,
+                    session_id=f"msg_{viewer_user_id}",
+                    device_id="browser",
+                    profile="auto",
+                    audience="playback",
+                    ttl_seconds=ttl,
+                )
+                playback_token = ent.get("token")
+                playback_expires_at = ent.get("expires_at_epoch")
+            except Exception:
+                pass
+        video_share_out = {
+            "video_id": raw_vs.get("video_id"),
+            "owner_user_id": raw_vs.get("owner_user_id"),
+            "title": raw_vs.get("title"),
+            "thumbnail_url": raw_vs.get("thumbnail_url"),
+            "duration_seconds": float(raw_vs["duration_seconds"]) if raw_vs.get("duration_seconds") else None,
+            "width": int(raw_vs["width"]) if raw_vs.get("width") else None,
+            "height": int(raw_vs["height"]) if raw_vs.get("height") else None,
+            "visibility": raw_vs.get("visibility"),
+            "drm_enabled": bool(raw_vs.get("drm_enabled", False)),
+            "hls_manifest_url": hls_url,
+            "playback_token": playback_token,
+            "playback_expires_at": playback_expires_at,
+        }
+
     thread_id_value = str(merged_item.get(MESSAGE_FIELD_THREAD_ID) or "").strip()
     has_thread = False
     thread_reply_count: Optional[int] = None
@@ -3863,6 +3927,7 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         calendar_share=calendar_share_out,
         calendar_event=calendar_event_out,
         meeting_poll=meeting_poll_out,
+        video_share=video_share_out,
         lottery=lottery_out,
         preview=preview,
         free_images=free_images_out,
@@ -8256,6 +8321,129 @@ def create_file_share_message(
         actor_user_id=user_id,
         event_type="message.sent",
         payload={"mutation": "send", "scheduled": is_scheduled_fs, "message": _serialize_message_event_payload(item, user_id)},
+    )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    return _message_out_from_item(item, user_id)
+
+
+@router.post("/conversations/{conversation_id}/messages/video-share", response_model=MessageOut)
+def create_video_share_message(
+    conversation_id: str,
+    inp: CreateVideoShareMessageIn,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    if not getattr(S, "video_sharing_enabled", True):
+        raise HTTPException(403, "video sharing is disabled")
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+
+    from app.services.video_metadata_store import get_video as _get_vod_video
+    try:
+        video = _get_vod_video(inp.video_id)
+    except HTTPException:
+        raise HTTPException(404, "video not found")
+
+    is_owner = video.owner_user_id == user_id
+    if not is_owner:
+        if video.status != "published":
+            raise HTTPException(403, "video is not published")
+        if video.visibility == "private":
+            raise HTTPException(403, "cannot share a private video you do not own")
+    if is_owner and video.status not in ("approved", "published"):
+        raise HTTPException(400, "video must be approved or published to share")
+
+    from decimal import Decimal as _DecVS
+    video_share_data: Dict[str, Any] = {
+        "video_id": video.id,
+        "owner_user_id": video.owner_user_id,
+        "title": video.title,
+        "thumbnail_url": video.thumbnail_url,
+        "duration_seconds": _DecVS(str(video.duration_seconds)) if video.duration_seconds is not None else None,
+        "width": video.width,
+        "height": video.height,
+        "visibility": video.visibility,
+        "drm_enabled": getattr(video, "drm_enabled", False),
+    }
+
+    ts = now_ts()
+    deliver_at_vs: Optional[int] = None
+    is_scheduled_vs = False
+    if inp.send_at is not None:
+        if inp.send_at <= ts + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        deliver_at_vs = inp.send_at
+        is_scheduled_vs = True
+
+    mid = "m_" + new_id()
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "video_share",
+        "video_share": video_share_data,
+        "reactions": {},
+    }
+    if inp.text:
+        item["text"] = inp.text
+    if is_scheduled_vs:
+        item["status"] = "scheduled"
+        item["deliver_at"] = deliver_at_vs
+
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+
+    tbl_msgs.put_item(Item=item)
+
+    if not is_scheduled_vs:
+        _bump_unread_counts(conversation_id, user_id, participants)
+        _record_delivery_receipts(conversation_id, mid, user_id, participants)
+
+        preview_text = inp.text or f"[Shared video: {video_share_data['title']}]"
+        tbl_convos.update_item(
+            Key={"conversation_id": conversation_id},
+            UpdateExpression="SET last_message_at = :ts, last_message_preview = :p, last_message_id = :mid",
+            ExpressionAttributeValues={":ts": ts, ":p": preview_text[:200], ":mid": mid},
+        )
+
+        _fanout_new_message_event(
+            conversation_id=conversation_id,
+            sender_id=user_id,
+            message_item=item,
+            payload={
+                "message_id": mid,
+                "created_at": ts,
+                "message": _serialize_message_event_payload(item, user_id),
+            },
+            respect_mute=False,
+        )
+
+    audit_event(
+        "messaging_message_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=mid,
+        kind="video_share",
+        scheduled=is_scheduled_vs,
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": is_scheduled_vs, "message": _serialize_message_event_payload(item, user_id)},
     )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     return _message_out_from_item(item, user_id)

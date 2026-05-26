@@ -622,6 +622,25 @@ export async function sendFileShareMessage(
   return adaptMessage(res);
 }
 
+// ─── Video Share Messages ──────────────────────────────────────
+
+export interface SendVideoShareReq {
+  video_id: string;
+  text?: string;
+  send_at?: number;
+}
+
+export async function sendVideoShareMessage(
+  conversationId: string,
+  body: SendVideoShareReq,
+): Promise<Message> {
+  const res = await api.post<Message>(
+    `/messaging/conversations/${conversationId}/messages/video-share`,
+    body,
+  );
+  return adaptMessage(res);
+}
+
 // ─── Gallery Messages ──────────────────────────────────────────
 
 /**
@@ -923,4 +942,34 @@ export interface TurnCredentialsResp {
 
 export async function fetchTurnCredentials(callId: string): Promise<TurnCredentialsResp> {
   return api.post<TurnCredentialsResp>(`/messaging/messages/calls/${callId}/turn-credentials`, {});
+}
+
+// ─── Call Recording ───────────────────────────────────────────────────
+
+export async function getConversationRecordings(conversationId: string): Promise<{ items: Array<{
+  recording_id: string;
+  call_id: string;
+  conversation_id: string;
+  status: string;
+  duration_seconds: number | null;
+  file_size_bytes: number | null;
+  created_at: number;
+  download_url: string | null;
+}> }> {
+  return api.get<{ items: Array<{
+    recording_id: string;
+    call_id: string;
+    conversation_id: string;
+    status: string;
+    duration_seconds: number | null;
+    file_size_bytes: number | null;
+    created_at: number;
+    download_url: string | null;
+  }> }>(`/ui/messaging/messages/recordings`, { conversation_id: conversationId });
+}
+
+export async function getRecordingDownloadUrl(recordingId: string): Promise<{ download_url: string; expires_at: number }> {
+  return api.get<{ download_url: string; expires_at: number }>(
+    `/ui/messaging/messages/recordings/${recordingId}/download`,
+  );
 }

@@ -808,7 +808,7 @@ export interface Message {
   message_id: string;
   conversation_id: string;
   sender_id: string;
-  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll";
+  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share";
   created_at: number;
   text?: string;
   image?: MessageImage;
@@ -821,6 +821,20 @@ export interface Message {
   calendar_share?: CalendarShareAttachment;
   calendar_event?: CalendarEventAttachment;
   meeting_poll?: MeetingPollAttachment;
+  video_share?: {
+    video_id: string;
+    owner_user_id: string;
+    title: string;
+    thumbnail_url?: string;
+    duration_seconds?: number;
+    width?: number;
+    height?: number;
+    visibility: string;
+    drm_enabled: boolean;
+    hls_manifest_url?: string;
+    playback_token?: string;
+    playback_expires_at?: number;
+  };
   lottery?: {
     message_type: "lottery_dm";
     lock_state: "locked" | "unlocked";
@@ -1718,6 +1732,15 @@ export interface FeedPost {
   body_format?: "plain" | "markdown" | "rich";
   body_version?: number;
   image_urls?: string[];
+  video?: {
+    video_id: string;
+    title: string;
+    thumbnail_url?: string | null;
+    duration_seconds?: number | null;
+    hls_manifest_url?: string | null;
+    playback_token?: string | null;
+    playback_expires_at?: number | null;
+  } | null;
   file_attachments?: PostFileAttachment[];
   lock_expired?: boolean | null;
   lock_type?: "fixed_price" | "tip_lottery";
@@ -1795,6 +1818,7 @@ export interface CreatePostReq {
   lottery_winner_user_id?: string;
   lottery_won_at?: string;
   lottery_version?: number;
+  video_id?: string;
 }
 
 export interface CreateCommentReq {

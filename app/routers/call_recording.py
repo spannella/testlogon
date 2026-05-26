@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.core.settings import S
@@ -440,21 +440,28 @@ async def get_call_recording(
 async def list_user_recordings(
     request: Request,
     user_id: str = Depends(_get_user_id),
+    conversation_id: Optional[str] = Query(default=None),
 ):
     """List recordings the user participated in."""
-    from app.services.call_recording_store import _table, _record_from_item
+    from app.services.call_recording_store import _table, _record_from_item, get_recordings_for_conversation
 
-    # Scan and filter by participant — acceptable for v1 with limited data
-    table = _table()
-    items = []
-    response = table.scan(Limit=200)
-    for item in response.get("Items", []):
-        participants = item.get("participants") or []
-        if user_id in participants and str(item.get("status", "")) != "deleted":
-            items.append(item)
+    if conversation_id:
+        # Use conversation GSI for targeted lookup
+        conv_recordings = get_recordings_for_conversation(conversation_id)
+        recordings = [r for r in conv_recordings if user_id in r.participants and r.status != "deleted"]
+        recordings.sort(key=lambda r: r.created_at, reverse=True)
+    else:
+        # Scan and filter by participant — acceptable for v1 with limited data
+        table = _table()
+        items = []
+        response = table.scan(Limit=200)
+        for item in response.get("Items", []):
+            participants = item.get("participants") or []
+            if user_id in participants and str(item.get("status", "")) != "deleted":
+                items.append(item)
 
-    recordings = [_record_from_item(item) for item in items]
-    recordings.sort(key=lambda r: r.created_at, reverse=True)
+        recordings = [_record_from_item(item) for item in items]
+        recordings.sort(key=lambda r: r.created_at, reverse=True)
 
     out_items = []
     for recording in recordings[:50]:

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { FilePickerDialog } from "./FilePickerDialog";
+import { VideoPickerDialog } from "./VideoPickerDialog";
 import { useConversationDrafts } from "./useConversationDrafts";
 
 interface ComposeBarProps {
@@ -55,6 +56,7 @@ interface ComposeBarProps {
     tip_payment_method_id?: string;
   }) => void;
   onSendFileShare?: (params: SendFileShareReq) => void;
+  onSendVideoShare?: (params: { video_id: string; text?: string }) => void;
   onSendCalendarShare?: (params: SendCalendarShareReq) => void;
   onSendCalendarEvent?: (params: SendCalendarEventReq) => void;
   onSendMeetingPoll?: (params: SendMeetingPollReq) => void;
@@ -82,6 +84,7 @@ export function ComposeBar({
   onSendAudioRecording,
   onSendGallery,
   onSendFileShare,
+  onSendVideoShare,
   onSendCalendarShare,
   onSendCalendarEvent,
   onSendMeetingPoll,
@@ -143,6 +146,7 @@ export function ComposeBar({
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const [filePickerOpen, setFilePickerOpen] = React.useState(false);
+  const [videoPickerOpen, setVideoPickerOpen] = React.useState(false);
   const [pendingFileShare, setPendingFileShare] = React.useState<{
     entry: FileEntry;
     permission: "read" | "write";
@@ -1504,6 +1508,19 @@ export function ComposeBar({
             <FolderOpen className="h-4 w-4" />
           </Button>
         )}
+        {onSendVideoShare && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            onClick={() => setVideoPickerOpen(true)}
+            disabled={disabled || sending}
+            aria-label="Share video"
+          >
+            <Video className="h-4 w-4" />
+          </Button>
+        )}
         {(onSendCalendarShare || onSendCalendarEvent || onSendMeetingPoll) && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -1693,6 +1710,15 @@ export function ComposeBar({
         onSelect={(entry, perm) => {
           setPendingFileShare({ entry, permission: perm });
           setFilePickerOpen(false);
+        }}
+      />
+      <VideoPickerDialog
+        open={videoPickerOpen}
+        onClose={() => setVideoPickerOpen(false)}
+        onSelect={(video) => {
+          onSendVideoShare?.({ video_id: video.video_id, text: text.trim() || undefined });
+          setText("");
+          setVideoPickerOpen(false);
         }}
       />
       {onSendCalendarShare && (
