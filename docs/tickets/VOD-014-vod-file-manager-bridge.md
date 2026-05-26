@@ -72,7 +72,7 @@ From `filemanager.py::upload_file()`, a file node DynamoDB item contains:
     "content_type": "video/mp4",
     "duration_seconds": 120,
     "thumbnail": {"bucket": "...", "key": "..._thumb.jpg", "content_type": "image/jpeg"},
-    "s3_bucket": "local-uploads",
+    "s3_bucket": "local-filemgr",
     "s3_key": "{user}/objects/{uuid}",
     "etag": "\"abc123\"",
     "media_inspection": {...},          # ffprobe output
@@ -111,7 +111,7 @@ The S3 key pattern is `videos/{user_sub}/{video_id}/{filename}` in bucket `local
 
 ### 2.5 File Manager S3 Key Pattern
 
-File manager uses `{user_sub}/objects/{uuid}` in bucket `local-uploads` (the same bucket as VOD uploads). Both systems use `local-uploads` as the source bucket.
+File manager uses `{user_sub}/objects/{uuid}` in bucket `local-filemgr` (`S.filemgr_bucket`, from `FILEMGR_BUCKET` env var). VOD uses `local-uploads` (`S.video_upload_bucket`). **These are different S3 buckets.** When linking VOD videos to the file manager, the file node's `s3_bucket` field is set to the VOD bucket (`S.video_upload_bucket`), creating a cross-bucket reference. This works because the file manager reads `item["s3_bucket"]` per-node for downloads, so each node can reference any bucket.
 
 ---
 
@@ -209,7 +209,8 @@ def link_video_to_filemanager(
         if exc.status_code != 404:
             raise
 
-    # Resolve S3 location — use original source key in local-uploads
+    # Resolve S3 location — cross-bucket reference: file node points to VOD bucket, not filemgr bucket.
+    # This works because file manager reads item["s3_bucket"] per-node for downloads.
     s3_bucket = S.video_upload_bucket or "local-uploads"
     s3_key = video.source_s3_key or ""
     if not s3_key:
@@ -491,7 +492,7 @@ def _enqueue_transcode_for_import(
         video_id=video_id,
         tenant_id=owner,
         source_uri=f"s3://{bucket}/{s3_key}",
-        renditions=[],  # Use default encoding profile
+        rendition_profiles=[],  # Use default encoding profile
     )
 ```
 
@@ -676,7 +677,7 @@ In `frontend/src/pages/files/FilesPage.tsx` and `FileTable.tsx`:
 **Badge**: Files with `vod_linked: true` display a "Video" badge (purple, with Film icon) next to the filename.
 
 **Actions dropdown** gains two new items for VOD-linked files:
-- **Watch** — navigates to `/videos/player/{vod_video_id}` (VideoPlayerPage).
+- **Watch** — navigates to `/videos/{vod_video_id}` (VideoPlayerPage).
 - **Edit Metadata** — navigates to `/videos` with the video selected for editing.
 
 For video files that are NOT yet linked (no `vod_video_id`), show:
@@ -821,7 +822,7 @@ Follows existing E2E patterns (cookie auth via `injectAuth`, CSRF headers).
 | # | Test | Description |
 |---|------|-------------|
 | 3.1 | Video badge visible | Navigate to `/files`, assert "Video" badge on linked file. |
-| 3.2 | Watch action navigates to player | Click "Watch" dropdown item, assert URL contains `/videos/player/`. |
+| 3.2 | Watch action navigates to player | Click "Watch" dropdown item, assert URL contains `/videos/`. |
 | 3.3 | Send to VOD action for unlinked video | Upload a video via file manager, click "Send to VOD", assert toast + file refreshes with badge. |
 | 3.4 | Thumbnail displays from VOD | Assert poster image element uses `vod_thumbnail_url` source. |
 

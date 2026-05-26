@@ -88,7 +88,7 @@ The `file_share` message kind (`app/routers/messaging.py`, line 8148) provides t
 
 `app/models_video.py` defines `VideoMetadataModel` with:
 - `id`, `owner_user_id`, `title`, `description`
-- `status`: `created | encoding | encoded | approved | published | failed`
+- `status`: `created | probing | probe_failed | pending_encoding | encoding | encoding_failed | pending_review | approved | rejected | published | archived | deleted`
 - `visibility`: `private | unlisted | public`
 - `thumbnail_url`, `hls_manifest_url`
 - `duration_seconds`, `width`, `height`
@@ -123,12 +123,12 @@ This component is already used by `VideoPlayerPage.tsx` and can be embedded dire
 
 | Endpoint | Purpose |
 |----------|---------|
-| `GET /ui/videos/mine` | List caller's own videos (all statuses/visibilities) |
+| `GET /ui/videos` | List caller's own videos (all statuses/visibilities) |
 | `GET /ui/videos/public` | List all published+public videos |
 | `GET /ui/videos/creator/{id}` | List a creator's published+public videos |
 | `GET /ui/videos/{id}` | Get video detail (owner sees all; non-owner requires published+public/unlisted) |
 
-The VideoPickerDialog will use `/ui/videos/mine` for the owner's library and the detail endpoint for validation.
+The VideoPickerDialog will use `GET /ui/videos` for the owner's library and the detail endpoint for validation.
 
 ---
 
@@ -189,7 +189,7 @@ The `video_share` dict is a snapshot of key metadata at send time. This ensures 
 
 **Path**: `POST /ui/messaging/conversations/{conversation_id}/messages/video-share`
 
-**Auth**: `require_ui_session` (cookie + CSRF) or Bearer token
+**Auth**: `get_messaging_user_id` (supports cookie+CSRF, Bearer token, and API key auth — same as all other message creation endpoints)
 
 **Request body**: `CreateVideoShareMessageIn`
 
@@ -273,7 +273,7 @@ def create_video_share_message(
 
     # 7. Post-send side effects (if not scheduled)
     if not is_scheduled:
-        participants = _get_participants(conversation_id)
+        participants = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))["Items"]
         _bump_unread_counts(conversation_id, user_id, participants)
         _record_delivery_receipts(conversation_id, mid, user_id, participants)
 
@@ -348,7 +348,7 @@ This means every time a conversation is fetched, the viewer receives a fresh pla
 
 ### 3.5 Gallery Index Integration
 
-The video share messages should appear in the conversation gallery under the "video" tab. Update `_gallery_entry_from_message_item` to handle `kind == "video_share"`:
+The video share messages should appear in the conversation gallery under the "video" tab. Update `_gallery_item_from_message` to handle `kind == "video_share"`:
 
 ```python
 if gallery_type == "video" and kind == "video_share":
@@ -1049,9 +1049,9 @@ test("134.3 Video title shown on the card", async ({ page }) => {
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/ui/messaging/conversations/{id}/messages/video-share` | `require_ui_session` | Create a video share message |
-| GET | `/ui/messaging/conversations/{id}/messages` | `require_ui_session` | (Existing) Extended: returns `video_share` field with playback token for `video_share` messages |
-| GET | `/ui/videos/mine` | `require_ui_session` | (Existing) Used by VideoPickerDialog to list shareable videos |
+| POST | `/ui/messaging/conversations/{id}/messages/video-share` | `get_messaging_user_id` | Create a video share message |
+| GET | `/ui/messaging/conversations/{id}/messages` | `get_messaging_user_id` | (Existing) Extended: returns `video_share` field with playback token for `video_share` messages |
+| GET | `/ui/videos` | `require_ui_session` | (Existing) Used by VideoPickerDialog to list shareable videos |
 | GET | `/ui/videos/{id}` | `require_ui_session` | (Existing) Used for live metadata refresh during message rendering |
 
 ---

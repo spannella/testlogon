@@ -33,6 +33,8 @@ The VOD pipeline is complete (VOD-001 through VOD-012) and creators can upload, 
 
 ### 2.1 Newsfeed Post Model
 
+> **Implementation note**: There is no separate `app/services/newsfeed.py` — all newsfeed logic (models, helpers, endpoints) lives in `app/routers/newsfeed.py` (~4500 lines).
+
 Posts are stored in the `app_single_table` DynamoDB table with:
 - **PK**: `POST#{post_id}`, **SK**: `META`
 - **Content fields** (via `ContentFieldsMixin`): `body`, `body_plain`, `body_markdown`, `body_rich`, `body_format`, `body_version`
@@ -167,7 +169,7 @@ if video_id:
         video = get_video(video_id)
     except HTTPException:
         raise HTTPException(status_code=400, detail="video not found")
-    if video.owner_user_id != user_id:
+    if video.owner_user_id != user_id:  # Note: video metadata field is `video.id`, not `video.video_id`
         raise HTTPException(status_code=403, detail="video is not owned by this user")
     if video.status != "published":
         raise HTTPException(
@@ -184,6 +186,8 @@ post_item = {
     "video_id": video_id,  # None if no video attached
 }
 ```
+
+> **Implementation note**: `create_post` builds `post_item` as an explicit dict (lines 3023–3054) and returns `PostResponse(...)` with explicit field assignments (lines 3076–3110), not `**kwargs`. Add `video_id` to both the dict literal and the `PostResponse(...)` call.
 
 #### 3.2.3 Post Serialization (`_post_to_dict`)
 
@@ -237,14 +241,14 @@ def issue_video_post_entitlement(post_id: str, user_id: UserIdDep):
         raise HTTPException(status_code=400, detail="post has no video")
 
     # Check lock status (viewer must have unlocked if locked)
+    # Use the existing `has_unlocked(user_id, post_id)` helper (line 2104)
+    # which checks the unlock record in DDB — same pattern used by
+    # tip/comment/reaction endpoints throughout newsfeed.py
     is_locked = bool(post.get("locked"))
     if is_locked:
-        unlock_key = {"pk": pk_unlock(user_id), "sk": f"POST#{post_id}"}
-        unlock_record = ddb_get_item(unlock_key)
-        if not unlock_record:
-            is_owner = post.get("user_id") == user_id
-            if not is_owner:
-                raise HTTPException(status_code=403, detail="post is locked")
+        is_owner = post.get("user_id") == user_id
+        if not is_owner and not has_unlocked(user_id, post_id):
+            raise HTTPException(status_code=403, detail="post is locked")
 
     from app.services.playback_entitlements import issue_playback_entitlement
     from app.services.video_metadata_store import get_video
@@ -531,6 +535,7 @@ export function VideoPostPlayer({ postId, video, className }: VideoPostPlayerPro
 | 5 | `app/routers/newsfeed.py` | Add `PostVideoEmbed` model and include in `PostResponse` |
 | 6 | `app/routers/newsfeed.py` | Add `POST /posts/{post_id}/video/entitlement` endpoint |
 | 7 | `app/routers/newsfeed.py` | Handle `video_id` in `edit_post` (with same validation) |
+| 8 | `app/routers/newsfeed.py` | Add `video_id` to `CreateDraftPostRequest`, `UpdateDraftPostRequest`, and `DraftPostResponse` |
 
 ### 4.2 Phase 2: Frontend (UI)
 
@@ -695,8 +700,8 @@ The `video_id` field uses a regex pattern (`^v_[a-f0-9]{32}$`) to prevent inject
 If a phased rollout is desired, gate the video button in `CreatePost` behind a feature flag:
 
 ```python
-# Backend: settings.py
-newsfeed_video_posts_enabled: bool = True
+# Backend: app/core/settings.py — uses os.environ.get() pattern (frozen dataclass)
+newsfeed_video_posts_enabled: bool = os.environ.get("NEWSFEED_VIDEO_POSTS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 ```
 
 ```typescript
