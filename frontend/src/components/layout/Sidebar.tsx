@@ -28,7 +28,16 @@ import {
   Scale,
   Wrench,
   Compass,
+  PlaySquare,
+  BarChart3,
+  ShieldCheck,
+  Share2,
+  Tag,
+  Webhook,
+  Globe,
+  CalendarClock,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -44,6 +53,7 @@ import { isBroadcastNavigationEnabled, isVncRemoteDesktopEnabled, isDevtoolsLogU
 
 interface NavItem {
   label: string;
+  i18nKey?: string;
   path: string;
   icon: React.ReactNode;
   badge?: number;
@@ -51,62 +61,77 @@ interface NavItem {
 
 interface NavGroup {
   title: string;
+  i18nKey?: string;
   items: NavItem[];
 }
 
 const NAV_GROUPS: NavGroup[] = [
   {
     title: "Main",
+    i18nKey: "nav.main",
     items: [
-      { label: "Dashboard", path: "/", icon: <LayoutDashboard className="h-5 w-5" /> },
-      { label: "Messages", path: "/messages", icon: <MessageSquare className="h-5 w-5" /> },
-      { label: "Contacts", path: "/contacts", icon: <BookUser className="h-5 w-5" /> },
-      { label: "Helpdesk", path: "/helpdesk", icon: <Headphones className="h-5 w-5" /> },
-      { label: "Feed", path: "/feed", icon: <Rss className="h-5 w-5" /> },
-      { label: "Discover", path: "/discover", icon: <Compass className="h-5 w-5" /> },
+      { label: "Dashboard", i18nKey: "nav.dashboard", path: "/", icon: <LayoutDashboard className="h-5 w-5" /> },
+      { label: "Messages", i18nKey: "nav.messages", path: "/messages", icon: <MessageSquare className="h-5 w-5" /> },
+      { label: "Contacts", i18nKey: "nav.contacts", path: "/contacts", icon: <BookUser className="h-5 w-5" /> },
+      { label: "Helpdesk", i18nKey: "nav.helpdesk", path: "/helpdesk", icon: <Headphones className="h-5 w-5" /> },
+      { label: "Feed", i18nKey: "nav.feed", path: "/feed", icon: <Rss className="h-5 w-5" /> },
+      { label: "Discover", i18nKey: "nav.discover", path: "/discover", icon: <Compass className="h-5 w-5" /> },
     ],
   },
   {
     title: "Commerce",
+    i18nKey: "nav.commerce",
     items: [
-      { label: "Shop", path: "/shop", icon: <Store className="h-5 w-5" /> },
-      { label: "Cart", path: "/cart", icon: <ShoppingCart className="h-5 w-5" /> },
-      { label: "Billing", path: "/billing", icon: <CreditCard className="h-5 w-5" /> },
-      { label: "Orders", path: "/purchases", icon: <ClipboardList className="h-5 w-5" /> },
-      { label: "Subscriptions", path: "/subscriptions", icon: <Repeat className="h-5 w-5" /> },
+      { label: "Shop", i18nKey: "nav.shop", path: "/shop", icon: <Store className="h-5 w-5" /> },
+      { label: "Cart", i18nKey: "nav.cart", path: "/cart", icon: <ShoppingCart className="h-5 w-5" /> },
+      { label: "Billing", i18nKey: "nav.billing", path: "/billing", icon: <CreditCard className="h-5 w-5" /> },
+      { label: "Orders", i18nKey: "nav.orders", path: "/purchases", icon: <ClipboardList className="h-5 w-5" /> },
+      { label: "Subscriptions", i18nKey: "nav.subscriptions", path: "/subscriptions", icon: <Repeat className="h-5 w-5" /> },
+      { label: "Analytics", i18nKey: "nav.analytics", path: "/analytics", icon: <BarChart3 className="h-5 w-5" /> },
+      { label: "Referrals", i18nKey: "nav.referrals", path: "/referrals", icon: <Share2 className="h-5 w-5" /> },
+      { label: "Promo Codes", i18nKey: "nav.promoCodes", path: "/promo", icon: <Tag className="h-5 w-5" /> },
     ],
   },
   {
     title: "Productivity",
+    i18nKey: "nav.productivity",
     items: [
-      { label: "Files", path: "/files", icon: <FolderOpen className="h-5 w-5" /> },
-      { label: "Projects", path: "/projects", icon: <FolderKanban className="h-5 w-5" /> },
-      { label: "Calendar", path: "/calendar", icon: <CalendarDays className="h-5 w-5" /> },
-      { label: "Signing", path: "/signing", icon: <FilePen className="h-5 w-5" /> },
+      { label: "Files", i18nKey: "nav.files", path: "/files", icon: <FolderOpen className="h-5 w-5" /> },
+      { label: "Projects", i18nKey: "nav.projects", path: "/projects", icon: <FolderKanban className="h-5 w-5" /> },
+      { label: "Calendar", i18nKey: "nav.calendar", path: "/calendar", icon: <CalendarDays className="h-5 w-5" /> },
+      { label: "Scheduled", i18nKey: "nav.scheduled", path: "/scheduler", icon: <CalendarClock className="h-5 w-5" /> },
+      { label: "Signing", i18nKey: "nav.signing", path: "/signing", icon: <FilePen className="h-5 w-5" /> },
     ],
   },
   {
     title: "Media",
+    i18nKey: "nav.media",
     items: [
-      { label: "Videos", path: "/videos", icon: <Video className="h-5 w-5" /> },
-      { label: "Broadcast", path: "/broadcast", icon: <Radio className="h-5 w-5" /> },
+      { label: "Gallery", i18nKey: "nav.gallery", path: "/gallery", icon: <PlaySquare className="h-5 w-5" /> },
+      { label: "Videos", i18nKey: "nav.videos", path: "/videos", icon: <Video className="h-5 w-5" /> },
+      { label: "Broadcast", i18nKey: "nav.broadcast", path: "/broadcast", icon: <Radio className="h-5 w-5" /> },
     ],
   },
   {
     title: "Account",
+    i18nKey: "nav.account",
     items: [
-      { label: "Profile", path: "/profile", icon: <User className="h-5 w-5" /> },
-      { label: "Security", path: "/security", icon: <Shield className="h-5 w-5" /> },
-      { label: "Alerts", path: "/alerts", icon: <Bell className="h-5 w-5" /> },
-      { label: "Tickets", path: "/tickets", icon: <LifeBuoy className="h-5 w-5" /> },
-      { label: "Ticket Spaces", path: "/tickets/spaces", icon: <LifeBuoy className="h-5 w-5" /> },
-      { label: "Remote Desktop", path: "/remote-desktop", icon: <MonitorSmartphone className="h-5 w-5" /> },
-      { label: "Settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
-      { label: "Role Management", path: "/root/roles", icon: <UsersRound className="h-5 w-5" /> },
-      { label: "Moderation Board", path: "/admin/moderation", icon: <Scale className="h-5 w-5" /> },
-      { label: "Payment Incidents", path: "/admin/payment-incidents", icon: <CreditCard className="h-5 w-5" /> },
-      { label: "Video Review", path: "/admin/video-review", icon: <Video className="h-5 w-5" /> },
-      { label: "DMCA Claims", path: "/admin/dmca", icon: <Scale className="h-5 w-5" /> },
+      { label: "Profile", i18nKey: "nav.profile", path: "/profile", icon: <User className="h-5 w-5" /> },
+      { label: "Security", i18nKey: "nav.security", path: "/security", icon: <Shield className="h-5 w-5" /> },
+      { label: "Alerts", i18nKey: "nav.alerts", path: "/alerts", icon: <Bell className="h-5 w-5" /> },
+      { label: "Tickets", i18nKey: "nav.tickets", path: "/tickets", icon: <LifeBuoy className="h-5 w-5" /> },
+      { label: "Ticket Spaces", i18nKey: "nav.ticketSpaces", path: "/tickets/spaces", icon: <LifeBuoy className="h-5 w-5" /> },
+      { label: "Remote Desktop", i18nKey: "nav.remoteDesktop", path: "/remote-desktop", icon: <MonitorSmartphone className="h-5 w-5" /> },
+      { label: "Settings", i18nKey: "nav.settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
+      { label: "Privacy", i18nKey: "nav.privacy", path: "/settings/privacy", icon: <ShieldCheck className="h-5 w-5" /> },
+      { label: "Webhooks", i18nKey: "nav.webhooks", path: "/settings/webhooks", icon: <Webhook className="h-5 w-5" /> },
+      { label: "Geo Rules", i18nKey: "nav.geoRules", path: "/settings/geo", icon: <Globe className="h-5 w-5" /> },
+      { label: "Role Management", i18nKey: "nav.roleManagement", path: "/root/roles", icon: <UsersRound className="h-5 w-5" /> },
+      { label: "Moderation Board", i18nKey: "nav.moderationBoard", path: "/admin/moderation", icon: <Scale className="h-5 w-5" /> },
+      { label: "Payment Incidents", i18nKey: "nav.paymentIncidents", path: "/admin/payment-incidents", icon: <CreditCard className="h-5 w-5" /> },
+      { label: "Video Review", i18nKey: "nav.videoReview", path: "/admin/video-review", icon: <Video className="h-5 w-5" /> },
+      { label: "DMCA Claims", i18nKey: "nav.dmcaClaims", path: "/admin/dmca", icon: <Scale className="h-5 w-5" /> },
+      { label: "Refund Queue", i18nKey: "nav.refundQueue", path: "/admin/refunds", icon: <CreditCard className="h-5 w-5" /> },
     ],
   },
 ];
@@ -114,6 +139,7 @@ const NAV_GROUPS: NavGroup[] = [
 // ─── Sidebar Component ──────────────────────────────────────────
 
 export default function Sidebar() {
+  const { t } = useTranslation();
   const collapsed = useUiStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useUiStore((s) => s.toggleSidebar);
   const location = useLocation();
@@ -180,7 +206,7 @@ export default function Sidebar() {
             {gi > 0 && <Separator className="my-2" />}
             {!collapsed && (
               <span className="mb-1 block px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                {group.title}
+                {group.i18nKey ? t(group.i18nKey) : group.title}
               </span>
             )}
             <ul className="space-y-0.5">
@@ -208,7 +234,7 @@ export default function Sidebar() {
                       )}
                     </span>
                     {!collapsed && (
-                      <span className="truncate">{item.label}</span>
+                      <span className="truncate">{item.i18nKey ? t(item.i18nKey) : item.label}</span>
                     )}
                     {!collapsed && badge > 0 && (
                       <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground">
@@ -224,7 +250,7 @@ export default function Sidebar() {
                       <Tooltip>
                         <TooltipTrigger asChild>{link}</TooltipTrigger>
                         <TooltipContent side="right" sideOffset={8}>
-                          {item.label}
+                          {item.i18nKey ? t(item.i18nKey) : item.label}
                         </TooltipContent>
                       </Tooltip>
                     </li>
@@ -278,7 +304,7 @@ export default function Sidebar() {
               ) : (
                 <>
                   <PanelLeftClose className="h-4 w-4" />
-                  <span className="ml-2">Collapse</span>
+                  <span className="ml-2">{t("nav.collapse")}</span>
                 </>
               )}
             </Button>

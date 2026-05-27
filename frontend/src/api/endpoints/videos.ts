@@ -71,6 +71,8 @@ export interface VideoDetail {
   allow_download?: boolean;
   download_available?: boolean;
   download_mp4_size_bytes?: number;
+  // Watermarked Downloads (VOD-020)
+  watermark_downloads?: boolean;
 }
 
 export interface VideoDownloadResponse {

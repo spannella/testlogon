@@ -18,6 +18,7 @@ import {
   sendCalendarEventMessage,
   sendMeetingPollMessage,
   createLotteryMessage,
+  sendVoiceMessage,
   markRead,
   claimHelpdeskConversation,
   createCallInvite,
@@ -48,13 +49,14 @@ import { callStateReducer, createInitialCallMachineState, teardownCallResources,
 import { useRtcPeerConnection } from "@/hooks/useRtcPeerConnection";
 import { useMediaCapture } from "@/hooks/useMediaCapture";
 import { useCallRecording } from "@/hooks/useCallRecording";
-import { isCallRecordingEnabled } from "@/lib/featureFlags";
+import { isCallRecordingEnabled, isGroupCallsEnabled } from "@/lib/featureFlags";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { GroupCallButton } from "./GroupCallOverlay";
 
 interface ConversationViewProps {
   conversation: Conversation;
@@ -451,6 +453,38 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
       }
       toast.error("Failed to send lottery message");
     },
+  });
+
+  const sendVoice = useMutation({
+    mutationFn: (args: {
+      blob: Blob;
+      meta: {
+        duration: number;
+        waveform: number[];
+        contentType: string;
+        consumption_policy?: "none" | "listen_once";
+        reply_to_message_id?: string | null;
+        send_at?: number | null;
+      };
+    }) =>
+      sendVoiceMessage(convoId, args.blob, {
+        durationSeconds: args.meta.duration,
+        waveform: args.meta.waveform,
+        contentType: args.meta.contentType,
+        consumption_policy: args.meta.consumption_policy,
+        reply_to_message_id: args.meta.reply_to_message_id,
+        send_at: args.meta.send_at,
+      }),
+    onSuccess: (_data, args) => {
+      queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
+      queryClient.invalidateQueries({ queryKey: ["conversations"] });
+      if (args.meta.send_at) {
+        toast.success("Voice message scheduled");
+      } else {
+        toast.success("Voice message sent");
+      }
+    },
+    onError: () => toast.error("Failed to send voice message"),
   });
 
   const claimMutation = useMutation({
@@ -852,6 +886,9 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
             </Button>
           </>
         )}
+        {isGroup && isGroupCallsEnabled() && (
+          <GroupCallButton conversationId={convoId} userId={userId ?? ""} isGroup={isGroup} />
+        )}
         <Button
           variant="ghost"
           size="icon"
@@ -1015,7 +1052,8 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
         onSendCalendarEvent={(params) => sendCalendarEvent.mutate(params)}
         onSendMeetingPoll={(params) => sendMeetingPoll.mutate(params)}
         onSendLottery={!isGroup && dmLotteryEnabled ? (params) => sendLottery.mutate(params) : undefined}
-        sending={sendText.isPending || sendImage.isPending || sendGallery.isPending || sendFileShare.isPending || videoShareMut.isPending || sendCalendarShare.isPending || sendCalendarEvent.isPending || sendMeetingPoll.isPending || sendLottery.isPending}
+        onSendVoiceMessage={(blob, meta) => sendVoice.mutate({ blob, meta })}
+        sending={sendText.isPending || sendImage.isPending || sendGallery.isPending || sendFileShare.isPending || videoShareMut.isPending || sendCalendarShare.isPending || sendCalendarEvent.isPending || sendMeetingPoll.isPending || sendLottery.isPending || sendVoice.isPending}
         onKeystroke={onKeystroke}
         replyingTo={replyingTo}
         onCancelReply={() => setReplyingTo(null)}

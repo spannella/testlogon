@@ -2,11 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+from decimal import Decimal
 from typing import Any, Dict, Final, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ARCHIVE_EVENT_SCHEMA_VERSION: Final[int] = 1
+
+
+class _DecimalEncoder(json.JSONEncoder):
+    """JSON encoder that converts DynamoDB Decimal values to int or float."""
+
+    def default(self, o: Any) -> Any:  # noqa: ANN401
+        if isinstance(o, Decimal):
+            return float(o) if o % 1 else int(o)
+        return super().default(o)
 
 ARCHIVE_EVENT_TAXONOMY: Final[tuple[str, ...]] = (
     "message.sent",
@@ -28,7 +38,7 @@ _HEX64_LEN: Final[int] = 64
 
 def canonical_serialize_payload(payload: Mapping[str, Any]) -> str:
     """Return deterministic JSON encoding used for compliance archive hashing."""
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, cls=_DecimalEncoder)
 
 
 def compute_payload_hash(payload: Mapping[str, Any]) -> str:

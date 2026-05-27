@@ -55,7 +55,18 @@ def video_to_item(video: VideoMetadataModel) -> Dict[str, Any]:
         "drm_key_id",
         "entitlement_sku",
         "access_mode",
+        # Clipping provenance (VOD-015)
+        "source_video_id",
+        "created_via",
+        # Gallery (VOD-017)
+        "category",
+        "gallery_status",
     ]
+    # List fields — store as-is (DynamoDB supports lists natively)
+    if video.source_video_ids:
+        item["source_video_ids"] = video.source_video_ids
+    if video.tags:
+        item["tags"] = video.tags
     for field in _optional_str_fields:
         val = getattr(video, field, None)
         if val is not None:
@@ -78,6 +89,15 @@ def video_to_item(video: VideoMetadataModel) -> Dict[str, Any]:
         "price_cents",
         "purchase_count",
         "revenue_cents",
+        # Clipping provenance (VOD-015)
+        "clip_start_seconds",
+        "clip_end_seconds",
+        # Gallery (VOD-017)
+        "view_count",
+        "like_count",
+        "comment_count",
+        "trending_score",
+        "trending_score_sort",
     ]
     for field in _optional_num_fields:
         val = getattr(video, field, None)
@@ -97,6 +117,35 @@ def video_to_item(video: VideoMetadataModel) -> Dict[str, Any]:
         item["download_mp4_status"] = video.download_mp4_status
     if video.download_count:
         item["download_count"] = video.download_count
+
+    # Watermarked Downloads (VOD-020)
+    item["watermark_downloads"] = video.watermark_downloads
+
+    # Gallery (VOD-017)
+    item["gallery_published"] = video.gallery_published
+    # gallery_status is a GSI partition key — omit if None to avoid storing NULL
+    # (already handled in _optional_str_fields)
+
+    # Ad-Supported (VOD-018)
+    if video.ad_config is not None:
+        item["ad_config"] = video.ad_config
+    item["ads_free_for_subscribers"] = video.ads_free_for_subscribers
+    if video.ad_revenue_cents:
+        item["ad_revenue_cents"] = video.ad_revenue_cents
+    if video.ad_impression_count:
+        item["ad_impression_count"] = video.ad_impression_count
+
+    # Purchase Tiers (VOD-019)
+    if video.available_purchase_types:
+        item["available_purchase_types"] = video.available_purchase_types
+    if video.view_once_price_cents is not None:
+        item["view_once_price_cents"] = video.view_once_price_cents
+    if video.rental_price_cents is not None:
+        item["rental_price_cents"] = video.rental_price_cents
+    if video.rental_duration_hours is not None:
+        item["rental_duration_hours"] = video.rental_duration_hours
+    if video.download_price_cents is not None:
+        item["download_price_cents"] = video.download_price_cents
 
     # source_broadcast_session_id is a GSI partition key -- must omit if None
     # to avoid DynamoDB storing NULL in GSI key attributes
@@ -187,6 +236,36 @@ def video_from_item(item: Dict[str, Any]) -> VideoMetadataModel:
         download_mp4_size_bytes=int(item.get("download_mp4_size_bytes") or 0),
         download_mp4_status=item.get("download_mp4_status") or "",
         download_count=int(item.get("download_count") or 0),
+        # Watermarked Downloads (VOD-020)
+        watermark_downloads=bool(item.get("watermark_downloads", False)),
+        # Clipping provenance (VOD-015)
+        source_video_id=item.get("source_video_id"),
+        clip_start_seconds=_float_or_none(item.get("clip_start_seconds")),
+        clip_end_seconds=_float_or_none(item.get("clip_end_seconds")),
+        created_via=item.get("created_via"),
+        # Concatenation provenance (VOD-016)
+        source_video_ids=item.get("source_video_ids") or None,
+        # Gallery (VOD-017)
+        gallery_published=bool(item.get("gallery_published", False)),
+        gallery_status=item.get("gallery_status"),
+        category=item.get("category"),
+        tags=list(item.get("tags") or []),
+        view_count=int(item.get("view_count") or 0),
+        like_count=int(item.get("like_count") or 0),
+        comment_count=int(item.get("comment_count") or 0),
+        trending_score=float(item.get("trending_score") or 0),
+        trending_score_sort=_int_or_none(item.get("trending_score_sort")),
+        # Ad-Supported (VOD-018)
+        ad_config=item.get("ad_config"),
+        ads_free_for_subscribers=bool(item.get("ads_free_for_subscribers", False)),
+        ad_revenue_cents=int(item.get("ad_revenue_cents") or 0),
+        ad_impression_count=int(item.get("ad_impression_count") or 0),
+        # Purchase Tiers (VOD-019)
+        available_purchase_types=item.get("available_purchase_types") or [],
+        view_once_price_cents=_int_or_none(item.get("view_once_price_cents")),
+        rental_price_cents=_int_or_none(item.get("rental_price_cents")),
+        rental_duration_hours=_int_or_none(item.get("rental_duration_hours")),
+        download_price_cents=_int_or_none(item.get("download_price_cents")),
     )
 
 
@@ -523,6 +602,62 @@ def increment_download_count(video_id: str) -> None:
             ":one": 1,
             ":now": now_ts(),
         },
+    )
+
+
+def update_clip_fields(
+    *,
+    video_id: str,
+    source_video_id: str,
+    clip_start_seconds: float,
+    clip_end_seconds: float,
+    created_via: str = "clip",
+) -> None:
+    """Set clipping provenance fields on a video record (VOD-015)."""
+    from decimal import Decimal as _D
+
+    T.video_metadata.update_item(
+        Key={"video_id": video_id},
+        UpdateExpression=(
+            "SET source_video_id = :svid, clip_start_seconds = :cs, "
+            "clip_end_seconds = :ce, created_via = :cv, updated_at = :ua"
+        ),
+        ExpressionAttributeValues={
+            ":svid": source_video_id,
+            ":cs": _D(str(clip_start_seconds)),
+            ":ce": _D(str(clip_end_seconds)),
+            ":cv": created_via,
+            ":ua": now_ts(),
+        },
+    )
+
+
+def update_concat_fields(
+    *,
+    video_id: str,
+    source_video_ids: List[str],
+    created_via: str = "concat",
+    duration_seconds: Optional[float] = None,
+) -> None:
+    """Set concatenation provenance fields on a video record (VOD-016)."""
+    from decimal import Decimal as _D
+
+    update_expr = (
+        "SET source_video_ids = :svids, created_via = :cv, updated_at = :ua"
+    )
+    values: Dict[str, Any] = {
+        ":svids": source_video_ids,
+        ":cv": created_via,
+        ":ua": now_ts(),
+    }
+    if duration_seconds is not None:
+        update_expr += ", duration_seconds = :dur"
+        values[":dur"] = _D(str(duration_seconds))
+
+    T.video_metadata.update_item(
+        Key={"video_id": video_id},
+        UpdateExpression=update_expr,
+        ExpressionAttributeValues=values,
     )
 
 

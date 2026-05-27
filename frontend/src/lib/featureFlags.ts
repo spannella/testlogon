@@ -125,3 +125,7 @@ export const isGoogleCalendarWritebackEnabled = () =>
 
 export const callRecordingEnabled = toBool(env.VITE_CALL_RECORDING_ENABLED, false);
 export const isCallRecordingEnabled = () => callRecordingEnabled;
+
+export const groupCallsEnabled = toBool(env.VITE_GROUP_CALLS_ENABLED, true);
+export const groupCallsKillSwitch = toBool(env.VITE_GROUP_CALLS_KILL_SWITCH, false);
+export const isGroupCallsEnabled = () => groupCallsEnabled && !groupCallsKillSwitch;

@@ -43,7 +43,7 @@ import { Separator } from "@/components/ui/separator";
 import { useAuthStore } from "@/stores/authStore";
 import { useUiStore, type Theme } from "@/stores/uiStore";
 import { logout as apiLogout } from "@/api/endpoints/auth";
-import { getAlerts, markRead } from "@/api/endpoints/alerts";
+import { getAlerts, markAllAlertRead } from "@/api/endpoints/alerts";
 import { getProfile } from "@/api/endpoints/profile";
 import { useAlertStream } from "@/hooks/useAlertStream";
 import type { Profile } from "@/api/types";
@@ -128,13 +128,7 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
   });
 
   const markAllRead = useMutation({
-    mutationFn: () => {
-      const ids = (recentAlerts.data?.alerts ?? [])
-        .filter((a) => !a.read_at)
-        .map((a) => a.alert_id);
-      if (ids.length === 0) return Promise.resolve({ ok: true, updated: 0 });
-      return markRead({ alert_ids: ids });
-    },
+    mutationFn: () => markAllAlertRead(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["alerts"] });
       resetUnread();

@@ -1,0 +1,16 @@
+{
+  "errors.rate_limited": "Trop de requêtes. Veuillez réessayer dans {seconds} secondes.",
+  "errors.unauthorized": "Veuillez vous connecter pour continuer.",
+  "errors.not_found": "La ressource demandée est introuvable.",
+  "errors.server_error": "Une erreur interne est survenue. Veuillez réessayer plus tard.",
+  "errors.invalid_locale": "Code de langue non valide.",
+  "errors.too_many_login_attempts": "Trop de tentatives de connexion. Veuillez réessayer plus tard.",
+  "errors.invalid_credentials": "E-mail ou mot de passe non valide.",
+  "errors.session_expired": "Votre session a expiré. Veuillez vous reconnecter.",
+  "errors.forbidden": "Vous n'avez pas la permission d'effectuer cette action.",
+  "errors.validation_error": "La requête contient des données non valides.",
+  "alerts.broadcast_starting_in": "Diffusion commençant dans {duration}",
+  "alerts.new_message": "Vous avez un nouveau message",
+  "alerts.payment_received": "Paiement de {amount} reçu",
+  "alerts.subscription_renewed": "Votre abonnement a été renouvelé"
+}

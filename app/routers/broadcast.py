@@ -18,6 +18,9 @@ from app.services.broadcast_store import (
     list_profiles_by_creator,
     list_sessions_by_creator,
     list_sessions_by_status,
+    transition_session_status,
+    list_scheduled_sessions_by_creator,
+    update_session_fields,
 )
 from app.services.broadcast_recording import (
     get_recording_by_session,
@@ -118,6 +121,29 @@ class BroadcastSessionOut(BaseModel):
     aws_input_arn: Optional[str] = None
     aws_channel_arn: Optional[str] = None
     provider_state_snapshot: dict = Field(default_factory=dict)
+    # Scheduling fields (BCAST-009)
+    scheduled_at: Optional[int] = None
+    schedule_status: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    cancelled_at: Optional[str] = None
+    announcement_post_id: Optional[str] = None
+
+
+class BroadcastScheduleIn(BaseModel):
+    scheduled_at: int = Field(..., description="Unix timestamp >= min lead time from now")
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    description: Optional[str] = Field(default=None, max_length=2000)
+
+
+class BroadcastRescheduleIn(BaseModel):
+    scheduled_at: int = Field(..., description="New Unix timestamp, >= min lead time from now")
+
+
+class BroadcastScheduledListOut(BaseModel):
+    items: List[BroadcastSessionOut] = Field(default_factory=list)
+    count: int = 0
 
 
 class BroadcastDeleteOut(BaseModel):
@@ -251,6 +277,17 @@ def list_sessions_route(
     return BroadcastSessionListOut(items=items, has_more=bool(result.get("cursor")))
 
 
+@router.get("/sessions/scheduled", response_model=BroadcastScheduledListOut)
+def list_scheduled_sessions_route(
+    limit: int = Query(default=50, ge=1, le=200),
+    ctx: dict = Depends(_ctx),
+):
+    """List the caller's scheduled broadcasts."""
+    items = list_scheduled_sessions_by_creator(ctx["user_sub"], limit=limit)
+    out_items = [_to_session_out(s) for s in items]
+    return BroadcastScheduledListOut(items=out_items, count=len(out_items))
+
+
 @router.get("/profiles", response_model=BroadcastProfileListOut)
 def list_profiles_route(
     limit: int = Query(default=200, ge=1, le=200),
@@ -371,9 +408,13 @@ def delete_session_route(session_id: str, request: Request, ctx: dict = Depends(
 
 
 @router.get("/sessions/{session_id}", response_model=BroadcastSessionOut)
-def get_session_route(session_id: str, ctx: dict = Depends(_ctx)):
-    _ = ctx
+def get_session_route(session_id: str, request: Request, ctx: dict = Depends(_ctx)):
     session = get_session(session_id)
+    # Geo-check: non-owners are subject to geo-blocking
+    if session.created_by != ctx["user_sub"]:
+        from app.services.geo_check import check_geo_access
+        raw = T.broadcast_sessions.get_item(Key={"session_id": session_id}).get("Item", {})
+        check_geo_access(request, raw.get("geo_mode"), raw.get("geo_countries"))
     return _to_session_out(session)
 
 
@@ -442,9 +483,14 @@ class ViewerCountOut(BaseModel):
 
 
 @router.post("/sessions/{session_id}/viewers/join", response_model=ViewerJoinOut)
-def viewer_join_route(session_id: str, ctx: dict = Depends(_ctx)):
+def viewer_join_route(session_id: str, request: Request, ctx: dict = Depends(_ctx)):
     """Register as a viewer. Called when playback begins."""
-    _ = get_session(session_id)  # 404 if session doesn't exist
+    session = get_session(session_id)  # 404 if session doesn't exist
+    # Geo-check for viewers
+    if session.created_by != ctx["user_sub"]:
+        from app.services.geo_check import check_geo_access
+        raw = T.broadcast_sessions.get_item(Key={"session_id": session_id}).get("Item", {})
+        check_geo_access(request, raw.get("geo_mode"), raw.get("geo_countries"))
     result = register_viewer(session_id, ctx["user_sub"])
     return ViewerJoinOut(**result)
 
@@ -769,6 +815,380 @@ def update_download_settings_route(
         allow_viewer_download=body.allow_viewer_download,
     )
     return {"ok": True, "allow_viewer_download": body.allow_viewer_download}
+
+
+# ─── Go-Private Endpoints (BCAST-011) ───────────────────────────
+
+
+class PrivateRequestIn(BaseModel):
+    rate_per_minute_cents: int = Field(..., ge=100, le=10000)
+    payment_method_id: str = Field(..., min_length=1, max_length=128)
+    max_duration_minutes: int = Field(default=60, ge=5, le=120)
+
+
+class PrivateRequestOut(BaseModel):
+    request_id: str
+    private_session_id: str
+    session_id: str
+    viewer_id: str
+    viewer_display_name: str = ""
+    rate_per_minute_cents: int
+    status: str
+    behavior: Optional[str] = None
+    call_id: Optional[str] = None
+    max_duration_minutes: int = 60
+    requested_at: int
+    accepted_at: Optional[int] = None
+    started_at: Optional[int] = None
+    ended_at: Optional[int] = None
+    ended_by: Optional[str] = None
+    total_billed_cents: int = 0
+
+
+class PrivateRequestListOut(BaseModel):
+    requests: List[PrivateRequestOut] = Field(default_factory=list)
+
+
+class PrivateRequestAcceptIn(BaseModel):
+    behavior: str = Field(..., pattern="^(pause|end|continue)$")
+
+
+class PrivateAcceptOut(BaseModel):
+    private_session_id: str
+    session_id: str
+    status: str
+    behavior: str
+    call_id: str
+    rate_per_minute_cents: int
+
+
+class PrivateSessionEndOut(BaseModel):
+    private_session_id: str
+    session_id: str
+    status: str
+    duration_seconds: int
+    total_billed_cents: int
+    ended_by: str
+
+
+@router.post(
+    "/sessions/{session_id}/private/request",
+    response_model=PrivateRequestOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def submit_private_request_route(
+    session_id: str,
+    body: PrivateRequestIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Viewer requests a private 1-on-1 session with the broadcaster."""
+    from app.services.broadcast_private import create_private_request
+    from app.core.tables import T as _T
+
+    session = get_session(session_id)
+    if session.status != "live":
+        raise HTTPException(
+            status_code=403,
+            detail="Private requests are only available during live broadcasts.",
+        )
+
+    viewer_id = ctx["user_sub"]
+    if viewer_id == session.created_by:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot request a private session on your own broadcast.",
+        )
+
+    # Validate payment method
+    pm_item = _T.billing.get_item(
+        Key={"pk": f"USER#{viewer_id}", "sk": f"PM#{body.payment_method_id}"}
+    ).get("Item")
+    if not pm_item:
+        raise HTTPException(status_code=400, detail="Payment method not found.")
+
+    # Resolve display name
+    display_name = viewer_id
+    try:
+        profile_item = _T.profile.get_item(Key={"user_sub": viewer_id}).get("Item")
+        if profile_item and profile_item.get("display_name"):
+            display_name = profile_item["display_name"]
+    except Exception:
+        pass
+
+    min_rate = session.private_min_rate_cents or 100
+
+    result = create_private_request(
+        session_id=session_id,
+        viewer_id=viewer_id,
+        viewer_display_name=display_name,
+        rate_per_minute_cents=body.rate_per_minute_cents,
+        payment_method_id=body.payment_method_id,
+        max_duration_minutes=body.max_duration_minutes,
+        min_rate_cents=min_rate,
+    )
+
+    # SSE: notify creator
+    broadcast_sse_publish(session_id, {
+        "_type": "private:request",
+        "viewer_id": viewer_id,
+        "viewer_display_name": display_name,
+        "rate_per_minute_cents": body.rate_per_minute_cents,
+        "request_id": result["private_session_id"],
+    })
+
+    return PrivateRequestOut(**result)
+
+
+@router.get(
+    "/sessions/{session_id}/private/requests",
+    response_model=PrivateRequestListOut,
+)
+def list_private_requests_route(
+    session_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """List pending private requests (operator/creator only)."""
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        _require_operator_role(ctx)
+
+    from app.services.broadcast_private import list_pending_requests
+    requests = list_pending_requests(session_id)
+    return PrivateRequestListOut(requests=[PrivateRequestOut(**r) for r in requests])
+
+
+@router.post(
+    "/sessions/{session_id}/private/{request_id}/accept",
+    response_model=PrivateAcceptOut,
+)
+def accept_private_request_route(
+    session_id: str,
+    request_id: str,
+    body: PrivateRequestAcceptIn,
+    request: Request,
+    ctx: dict = Depends(_ctx),
+):
+    """Creator accepts a private session request."""
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the broadcaster can accept private requests.")
+
+    from app.services.broadcast_private import accept_private_request, get_private_session
+    from app.services.messaging_call_sessions import create_call_session
+
+    # Fetch the request to get viewer info
+    priv_item = get_private_session(session_id, request_id)
+    if not priv_item:
+        raise HTTPException(status_code=404, detail="Private request not found.")
+
+    viewer_id = priv_item.get("viewer_id", "")
+
+    # Create WebRTC call record linked to broadcast
+    call_id = f"bcast_call_{uuid4().hex}"
+    create_call_session(
+        call_id=call_id,
+        conversation_id=f"bcast_private_{session_id}",
+        caller_user_id=session.created_by,
+        callee_user_id=viewer_id,
+        initial_mode="video",
+        state="invited",
+        broadcast_session_id=session_id,
+    )
+
+    # Accept the private request in DDB
+    result = accept_private_request(session_id, request_id, body.behavior, call_id)
+
+    # Transition broadcast to private status
+    transition_session_status(
+        session_id=session_id,
+        to_status="private",
+        reason="go_private",
+        actor=ctx["user_sub"],
+        extra_fields={
+            "private_session_id": request_id,
+            "private_behavior": body.behavior,
+        },
+    )
+
+    # Record audit event
+    record_broadcast_action(
+        action="go_private",
+        actor=ctx["user_sub"],
+        correlation_id=_correlation_id(request),
+        resource_type="session",
+        resource_id=session_id,
+        metadata={"private_session_id": request_id, "behavior": body.behavior, "viewer_id": viewer_id},
+    )
+
+    # SSE events
+    broadcast_sse_publish(session_id, {
+        "_type": "private:accepted",
+        "private_session_id": request_id,
+        "behavior": body.behavior,
+        "call_id": call_id,
+        "viewer_id": viewer_id,
+    })
+    if body.behavior == "pause":
+        broadcast_sse_publish(session_id, {
+            "_type": "private:broadcast_paused",
+            "session_id": session_id,
+            "message": "Creator is in a private session",
+        })
+
+    return PrivateAcceptOut(
+        private_session_id=request_id,
+        session_id=session_id,
+        status="accepted",
+        behavior=body.behavior,
+        call_id=call_id,
+        rate_per_minute_cents=result["rate_per_minute_cents"],
+    )
+
+
+@router.post("/sessions/{session_id}/private/{request_id}/decline")
+def decline_private_request_route(
+    session_id: str,
+    request_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Creator declines a private session request."""
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the broadcaster can decline private requests.")
+
+    from app.services.broadcast_private import decline_private_request
+
+    declined = decline_private_request(session_id, request_id)
+    if not declined:
+        raise HTTPException(status_code=404, detail="Private request not found or not pending.")
+
+    broadcast_sse_publish(session_id, {
+        "_type": "private:declined",
+        "request_id": request_id,
+    })
+
+    return {"ok": True, "request_id": request_id}
+
+
+@router.post("/sessions/{session_id}/private/{request_id}/cancel")
+def cancel_private_request_route(
+    session_id: str,
+    request_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Viewer cancels their own pending private request."""
+    from app.services.broadcast_private import cancel_private_request
+
+    cancelled = cancel_private_request(session_id, request_id, ctx["user_sub"])
+    if not cancelled:
+        raise HTTPException(status_code=404, detail="Request not found, not pending, or not yours.")
+
+    broadcast_sse_publish(session_id, {
+        "_type": "private:cancelled",
+        "request_id": request_id,
+    })
+
+    return {"ok": True, "request_id": request_id}
+
+
+@router.post(
+    "/sessions/{session_id}/private/{private_id}/end",
+    response_model=PrivateSessionEndOut,
+)
+def end_private_session_route(
+    session_id: str,
+    private_id: str,
+    request: Request,
+    ctx: dict = Depends(_ctx),
+):
+    """End an active private session (either party can end)."""
+    from app.services.broadcast_private import end_private_session, get_private_session as _get_priv
+
+    session = get_session(session_id)
+    priv_item = _get_priv(session_id, private_id)
+    if not priv_item:
+        raise HTTPException(status_code=404, detail="Private session not found.")
+
+    viewer_id = priv_item.get("viewer_id", "")
+    if ctx["user_sub"] not in (session.created_by, viewer_id):
+        raise HTTPException(status_code=403, detail="Only the broadcaster or viewer can end the private session.")
+
+    ended_by = "creator" if ctx["user_sub"] == session.created_by else "viewer"
+
+    result = end_private_session(session_id, private_id, ended_by)
+
+    # Clear private_session_id from broadcast session
+    update_session_fields(session_id, {"private_session_id": None, "private_behavior": None})
+
+    # Record audit
+    record_broadcast_action(
+        action="end_private",
+        actor=ctx["user_sub"],
+        correlation_id=_correlation_id(request),
+        resource_type="session",
+        resource_id=session_id,
+        metadata={"private_session_id": private_id, "ended_by": ended_by, "total_billed_cents": result["total_billed_cents"]},
+    )
+
+    # SSE
+    broadcast_sse_publish(session_id, {
+        "_type": "private:ended",
+        "private_session_id": private_id,
+        "duration_seconds": result["duration_seconds"],
+        "total_billed_cents": result["total_billed_cents"],
+    })
+
+    return PrivateSessionEndOut(**result)
+
+
+@router.get("/sessions/{session_id}/private/status")
+def get_private_status_route(
+    session_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Get current private session status for a broadcast."""
+    _ = ctx
+    from app.services.broadcast_private import get_private_status
+    result = get_private_status(session_id)
+    if not result:
+        return {"status": "none"}
+    return result
+
+
+@router.post("/sessions/{session_id}/resume", response_model=BroadcastSessionOut)
+def resume_broadcast_route(
+    session_id: str,
+    request: Request,
+    ctx: dict = Depends(_ctx),
+):
+    """Resume broadcast from private mode back to live."""
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the broadcaster can resume the broadcast.")
+
+    if session.status != "private":
+        raise HTTPException(status_code=409, detail="Broadcast is not in private mode.")
+
+    # Check no active private session remains
+    from app.services.broadcast_private import get_private_status
+    priv_status = get_private_status(session_id)
+    if priv_status and priv_status.get("status") in ("active", "accepted"):
+        raise HTTPException(status_code=409, detail="Private session is still active. End it first.")
+
+    updated = transition_session_status(
+        session_id=session_id,
+        to_status="live",
+        reason="resume_from_private",
+        actor=ctx["user_sub"],
+        extra_fields={"private_session_id": None, "private_behavior": None},
+    )
+
+    broadcast_sse_publish(session_id, {
+        "_type": "private:broadcast_resumed",
+        "session_id": session_id,
+    })
+
+    return _to_session_out(updated)
 
 
 # ─── Live Chat Endpoints (BCAST-005) ─────────────────────────────
@@ -1276,3 +1696,835 @@ def clear_broadcast_price_route(
     if not cleared:
         raise HTTPException(status_code=404, detail="Product not on shelf.")
     return {"ok": True, "item_id": item_id}
+
+
+# ─── Broadcast Scheduling Endpoints (BCAST-009) ───────────────────────
+
+
+@router.post("/sessions/{session_id}/schedule", response_model=BroadcastSessionOut)
+def schedule_session_route(
+    session_id: str,
+    body: BroadcastScheduleIn,
+    request: Request,
+    ctx: dict = Depends(_ctx),
+):
+    """Schedule a draft broadcast session for a future time."""
+    from app.core.settings import S as _S
+    from app.core.time import now_ts
+
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the session creator can schedule.")
+
+    if session.status not in ("draft",):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "BROADCAST_INVALID_STATE", "detail": "Session must be in draft status to schedule."},
+        )
+
+    now = now_ts()
+    min_lead = _S.broadcast_schedule_min_lead_time_seconds
+    if body.scheduled_at < now + min_lead:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "SCHEDULE_TOO_SOON", "detail": f"scheduled_at must be at least {min_lead} seconds in the future"},
+        )
+
+    # Transition draft -> scheduled and set scheduling fields
+    updated = transition_session_status(
+        session_id=session_id,
+        to_status="scheduled",
+        reason="schedule-requested",
+        actor=ctx["user_sub"],
+        extra_fields={
+            "scheduled_at": body.scheduled_at,
+            "schedule_status": "scheduled",
+            "name": body.name or session.name,
+            "description": body.description or session.description,
+        },
+    )
+
+    # BCAST-010: Create announcement post in newsfeed
+    try:
+        from app.services.broadcast_newsfeed import create_announcement_post
+        announcement_post_id = create_announcement_post(
+            session_id=session_id,
+            creator_id=ctx["user_sub"],
+            session_name=body.name or session.name,
+            session_description=body.description or session.description,
+            scheduled_at=body.scheduled_at,
+        )
+        if announcement_post_id:
+            update_session_fields(session_id, {"announcement_post_id": announcement_post_id})
+            updated = get_session(session_id)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("Announcement post creation failed for session %s (non-fatal)", session_id)
+
+    record_broadcast_action(
+        action="schedule_session",
+        actor=ctx["user_sub"],
+        correlation_id=_correlation_id(request),
+        resource_type="session",
+        resource_id=session_id,
+        metadata={"scheduled_at": body.scheduled_at},
+    )
+    return _to_session_out(updated)
+
+
+@router.post("/sessions/{session_id}/reschedule", response_model=BroadcastSessionOut)
+def reschedule_session_route(
+    session_id: str,
+    body: BroadcastRescheduleIn,
+    request: Request,
+    ctx: dict = Depends(_ctx),
+):
+    """Reschedule an already-scheduled broadcast session."""
+    from app.core.settings import S as _S
+    from app.core.time import now_ts
+
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the session creator can reschedule.")
+
+    if session.schedule_status != "scheduled":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "BROADCAST_NOT_SCHEDULED", "detail": "Session is not currently scheduled."},
+        )
+
+    now = now_ts()
+    min_lead = _S.broadcast_schedule_min_lead_time_seconds
+    if body.scheduled_at < now + min_lead:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "SCHEDULE_TOO_SOON", "detail": f"scheduled_at must be at least {min_lead} seconds in the future"},
+        )
+
+    # Cancel old reminders, update scheduled_at
+    from app.services.broadcast_reminders import cancel_reminders_for_session
+    cancel_reminders_for_session(session_id)
+
+    updated = update_session_fields(session_id, {"scheduled_at": body.scheduled_at})
+
+    record_broadcast_action(
+        action="reschedule_session",
+        actor=ctx["user_sub"],
+        correlation_id=_correlation_id(request),
+        resource_type="session",
+        resource_id=session_id,
+        metadata={"scheduled_at": body.scheduled_at},
+    )
+    return _to_session_out(updated)
+
+
+@router.post("/sessions/{session_id}/cancel-schedule", response_model=BroadcastSessionOut)
+def cancel_schedule_route(
+    session_id: str,
+    request: Request,
+    ctx: dict = Depends(_ctx),
+):
+    """Cancel a scheduled broadcast, transitioning it to cancelled."""
+    from app.services.broadcast_store import now_iso
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the session creator can cancel the schedule.")
+
+    if session.schedule_status != "scheduled":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "BROADCAST_NOT_SCHEDULED", "detail": "Session is not currently scheduled."},
+        )
+
+    # Cancel reminders
+    from app.services.broadcast_reminders import cancel_reminders_for_session
+    cancel_reminders_for_session(session_id)
+
+    # BCAST-010: Delete announcement post if it exists
+    if session.announcement_post_id:
+        try:
+            from app.services.broadcast_newsfeed import delete_broadcast_post
+            delete_broadcast_post(post_id=session.announcement_post_id, user_id=ctx["user_sub"])
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Announcement post deletion failed for session %s (non-fatal)", session_id)
+
+    # Transition scheduled -> cancelled
+    updated = transition_session_status(
+        session_id=session_id,
+        to_status="cancelled",
+        reason="schedule-cancelled",
+        actor=ctx["user_sub"],
+        extra_fields={
+            "schedule_status": "cancelled",
+            "cancelled_at": now_iso(),
+            "announcement_post_id": None,
+        },
+    )
+
+    record_broadcast_action(
+        action="cancel_scheduled_session",
+        actor=ctx["user_sub"],
+        correlation_id=_correlation_id(request),
+        resource_type="session",
+        resource_id=session_id,
+        metadata={},
+    )
+    return _to_session_out(updated)
+
+
+@router.post("/sessions/{session_id}/remind-me")
+def register_reminder_route(
+    session_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Register a reminder for the current user at T-30m before the broadcast."""
+    session = get_session(session_id)
+    if not session.scheduled_at or session.schedule_status != "scheduled":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "BROADCAST_NOT_SCHEDULED", "detail": "Session is not scheduled."},
+        )
+
+    remind_at = session.scheduled_at - 1800  # 30 minutes before
+    from app.core.time import now_ts
+    if remind_at <= now_ts():
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "REMINDER_TOO_LATE", "detail": "Reminder time has already passed."},
+        )
+
+    from app.services.broadcast_reminders import register_reminder
+    result = register_reminder(
+        session_id=session_id,
+        user_id=ctx["user_sub"],
+        remind_at_ts=remind_at,
+        session_name=session.name or "Broadcast",
+        interval=1800,
+    )
+    return result
+
+
+@router.delete("/sessions/{session_id}/remind-me")
+def cancel_reminder_route(
+    session_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Cancel the current user's reminder for a broadcast."""
+    from app.services.broadcast_reminders import cancel_reminder
+    return cancel_reminder(session_id, ctx["user_sub"])
+
+
+@router.get("/sessions/{session_id}/ical")
+def download_ical_route(
+    session_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Download iCal invite for a scheduled broadcast."""
+    from fastapi.responses import Response
+    session = get_session(session_id)
+    if not session.scheduled_at:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "NOT_SCHEDULED", "detail": "Session has no scheduled time."},
+        )
+
+    from app.services.broadcast_reminders import generate_ical
+    ical_content = generate_ical(
+        session_id=session_id,
+        name=session.name or "Broadcast",
+        description=session.description or "",
+        scheduled_at=session.scheduled_at,
+        frontend_base_url="http://localhost:3000",
+    )
+    return Response(
+        content=ical_content,
+        media_type="text/calendar",
+        headers={"Content-Disposition": 'attachment; filename="broadcast.ics"'},
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  BCAST-012 — Private Chat Tiers (Paid 1-on-1 Text Chat + Voyeur)
+# ═══════════════════════════════════════════════════════════════════
+
+from app.services.broadcast_private_chat import (
+    purchase_private_chat as _pchat_purchase,
+    send_private_chat_message as _pchat_send_msg,
+    get_private_chat_history as _pchat_get_history,
+    end_private_chat as _pchat_end,
+    extend_private_chat as _pchat_extend,
+    list_active_chats as _pchat_list_active,
+    update_chat_settings as _pchat_update_settings,
+    get_chat_status as _pchat_get_status,
+    get_private_chat as _pchat_get_chat,
+    get_voyeur_item as _pchat_get_voyeur,
+)
+
+
+# ─── Request / Response Models ────────────────────────────────────
+
+
+class PrivateChatPurchaseIn(BaseModel):
+    tier: int = Field(..., ge=1, le=2, description="1 = participant, 2 = voyeur")
+    duration_minutes: int = Field(..., ge=5, le=60, description="Duration in minutes")
+    payment_method_id: str = Field(..., min_length=1, max_length=128)
+    chat_id: Optional[str] = Field(default=None, description="Required for tier 2 (voyeur)")
+
+
+class PrivateChatPurchaseOut(BaseModel):
+    chat_id: str
+    session_id: str
+    tier: int
+    duration_minutes: int
+    total_paid_cents: int
+    rate_per_minute_cents: int
+    expires_at: int
+    status: str
+
+
+class PrivateChatMessageIn(BaseModel):
+    text: str = Field(..., min_length=1, max_length=500)
+
+
+class PrivateChatMessageOut(BaseModel):
+    message_id: str
+    session_id: str
+    sender_id: str
+    sender_display_name: str = ""
+    text: str = ""
+    kind: str = "private_chat"
+    private_chat_id: Optional[str] = None
+    created_at: int = 0
+    deleted: bool = False
+    filtered: bool = False
+
+
+class PrivateChatHistoryOut(BaseModel):
+    messages: List[PrivateChatMessageOut] = Field(default_factory=list)
+    has_more: bool = False
+    oldest_sort_key: Optional[str] = None
+
+
+class PrivateChatExtendIn(BaseModel):
+    duration_minutes: int = Field(..., ge=5, le=60)
+    payment_method_id: str = Field(..., min_length=1, max_length=128)
+
+
+class PrivateChatExtendOut(BaseModel):
+    chat_id: str
+    session_id: str
+    expires_at: int
+    purchased_minutes: int
+    total_paid_cents: int
+    status: str
+
+
+class PrivateChatStatusOut(BaseModel):
+    chat_id: str
+    session_id: str
+    viewer_id: str = ""
+    viewer_display_name: str = ""
+    status: str = ""
+    tier: int = 1
+    rate_per_minute_cents: int = 0
+    purchased_minutes: int = 0
+    remaining_seconds: int = 0
+    started_at: int = 0
+    expires_at: int = 0
+    voyeur_count: int = 0
+
+
+class PrivateChatSummaryOut(BaseModel):
+    chat_id: str
+    viewer_id: str
+    viewer_display_name: str = ""
+    tier: int = 1
+    rate_per_minute_cents: int = 0
+    purchased_minutes: int = 0
+    remaining_seconds: int = 0
+    status: str = ""
+    started_at: int = 0
+    expires_at: int = 0
+    voyeur_count: int = 0
+    total_revenue_cents: int = 0
+
+
+class PrivateChatListOut(BaseModel):
+    chats: List[PrivateChatSummaryOut] = Field(default_factory=list)
+
+
+class PrivateChatSettingsIn(BaseModel):
+    private_chat_enabled: Optional[bool] = None
+    private_chat_rate_per_minute_cents: Optional[int] = Field(default=None, ge=100, le=10000)
+    voyeur_rate_per_minute_cents: Optional[int] = Field(default=None, ge=50, le=5000)
+    private_chat_time_blocks: Optional[List[int]] = None
+    private_chat_max_concurrent: Optional[int] = Field(default=None, ge=1, le=20)
+
+
+class PrivateChatTiersOut(BaseModel):
+    private_chat_enabled: bool = False
+    private_chat_rate_per_minute_cents: int = 500
+    voyeur_rate_per_minute_cents: int = 100
+    private_chat_time_blocks: List[int] = Field(default_factory=lambda: [5, 15, 30, 60])
+    private_chat_max_concurrent: int = 5
+    private_chat_voyeur_enabled: bool = False
+
+
+# ─── Endpoints ────────────────────────────────────────────────────
+
+
+def _ensure_private_chat_enabled():
+    from app.core.settings import S
+    if not S.broadcast_private_chat_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="Private chat feature is disabled.",
+        )
+
+
+@router.put(
+    "/sessions/{session_id}/chat-tiers",
+    response_model=PrivateChatTiersOut,
+)
+def configure_chat_tiers_route(
+    session_id: str,
+    body: PrivateChatSettingsIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Configure private chat tier pricing (operator/creator only)."""
+    _ensure_private_chat_enabled()
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        _require_operator_role(ctx)
+
+    settings_dict = body.model_dump(exclude_none=True)
+    _pchat_update_settings(session_id, settings_dict)
+
+    # Also update the BroadcastSessionModel fields via update_session_fields
+    # so they survive put_item transitions
+    model_fields: dict = {}
+    if body.private_chat_enabled is not None:
+        model_fields["private_chat_enabled"] = body.private_chat_enabled
+    if body.private_chat_time_blocks is not None:
+        tiers_list = [
+            {"minutes": m, "price_cents": (body.private_chat_rate_per_minute_cents or 500) * m}
+            for m in body.private_chat_time_blocks
+        ]
+        model_fields["private_chat_tiers"] = tiers_list
+    if model_fields:
+        update_session_fields(session_id, model_fields)
+
+    # Re-fetch to return current state
+    updated = get_session(session_id)
+    time_blocks = body.private_chat_time_blocks or [5, 15, 30, 60]
+    return PrivateChatTiersOut(
+        private_chat_enabled=updated.private_chat_enabled,
+        private_chat_rate_per_minute_cents=body.private_chat_rate_per_minute_cents or 500,
+        voyeur_rate_per_minute_cents=body.voyeur_rate_per_minute_cents or 100,
+        private_chat_time_blocks=time_blocks,
+        private_chat_max_concurrent=body.private_chat_max_concurrent or 5,
+        private_chat_voyeur_enabled=updated.private_chat_voyeur_enabled,
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/chat-tiers",
+    response_model=PrivateChatTiersOut,
+)
+def get_chat_tiers_route(
+    session_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Get private chat tier pricing for a broadcast session."""
+    session = get_session(session_id)
+
+    # Extract time blocks from tiers list or default
+    time_blocks = [5, 15, 30, 60]
+    rate = 500
+    voyeur_rate = 100
+    max_concurrent = 5
+
+    if session.private_chat_tiers:
+        time_blocks = [t.get("minutes", 5) if isinstance(t, dict) else int(t) for t in session.private_chat_tiers]
+        if session.private_chat_tiers and isinstance(session.private_chat_tiers[0], dict):
+            first = session.private_chat_tiers[0]
+            mins = first.get("minutes", 5)
+            price = first.get("price_cents", 500 * mins)
+            rate = price // mins if mins else 500
+
+    return PrivateChatTiersOut(
+        private_chat_enabled=session.private_chat_enabled,
+        private_chat_rate_per_minute_cents=rate,
+        voyeur_rate_per_minute_cents=int(session.private_chat_voyeur_price_cents or voyeur_rate),
+        private_chat_time_blocks=time_blocks,
+        private_chat_max_concurrent=max_concurrent,
+        private_chat_voyeur_enabled=session.private_chat_voyeur_enabled,
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/private-chat/purchase",
+    response_model=PrivateChatPurchaseOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def purchase_private_chat_route(
+    session_id: str,
+    body: PrivateChatPurchaseIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Purchase a private chat session (tier 1) or voyeur access (tier 2)."""
+    _ensure_private_chat_enabled()
+    from app.core.tables import T as _T
+
+    session = get_session(session_id)
+    if session.status != "live":
+        raise HTTPException(
+            status_code=403,
+            detail="Private chat is only available during live broadcasts.",
+        )
+
+    if not session.private_chat_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="Private chat is not enabled for this broadcast.",
+        )
+
+    viewer_id = ctx["user_sub"]
+    if viewer_id == session.created_by:
+        raise HTTPException(
+            status_code=403,
+            detail="Cannot purchase a private chat on your own broadcast.",
+        )
+
+    # Validate tier 2 requires chat_id
+    if body.tier == 2 and not body.chat_id:
+        raise HTTPException(status_code=400, detail="chat_id is required for tier 2 (voyeur).")
+    if body.tier == 1 and body.chat_id:
+        raise HTTPException(status_code=400, detail="chat_id must not be provided for tier 1.")
+
+    # Validate voyeur enabled for tier 2
+    if body.tier == 2:
+        from app.core.settings import S
+        if not S.broadcast_private_chat_voyeur_enabled and not session.private_chat_voyeur_enabled:
+            raise HTTPException(status_code=403, detail="Voyeur mode is not enabled for this broadcast.")
+
+    # Validate payment method
+    pm_item = _T.billing.get_item(
+        Key={"pk": f"USER#{viewer_id}", "sk": f"PM#{body.payment_method_id}"}
+    ).get("Item")
+    if not pm_item:
+        raise HTTPException(status_code=400, detail="Payment method not found.")
+
+    # Resolve display name
+    display_name = viewer_id
+    try:
+        profile_item = _T.profile.get_item(Key={"user_sub": viewer_id}).get("Item")
+        if profile_item and profile_item.get("display_name"):
+            display_name = profile_item["display_name"]
+    except Exception:
+        pass
+
+    # Determine rate
+    if body.tier == 1:
+        rate = 500  # default
+        if session.private_chat_tiers and isinstance(session.private_chat_tiers[0], dict):
+            first = session.private_chat_tiers[0]
+            mins = first.get("minutes", 5)
+            price = first.get("price_cents", 500 * mins)
+            rate = price // mins if mins else 500
+    else:
+        rate = int(session.private_chat_voyeur_price_cents or 100)
+
+    # Get max concurrent from session or default
+    max_concurrent = 5
+
+    result = _pchat_purchase(
+        session_id=session_id,
+        viewer_id=viewer_id,
+        viewer_display_name=display_name,
+        tier=body.tier,
+        duration_minutes=body.duration_minutes,
+        payment_method_id=body.payment_method_id,
+        rate_per_minute_cents=rate,
+        chat_id=body.chat_id,
+        creator_id=session.created_by,
+        max_concurrent=max_concurrent,
+    )
+
+    return PrivateChatPurchaseOut(**result)
+
+
+@router.post(
+    "/sessions/{session_id}/private-chat/{chat_id}/message",
+    response_model=PrivateChatMessageOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def send_private_chat_message_route(
+    session_id: str,
+    chat_id: str,
+    body: PrivateChatMessageIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Send a message in a private chat. Only tier 1 participant and creator can send."""
+    _ensure_private_chat_enabled()
+    from app.core.tables import T as _T
+
+    session = get_session(session_id)
+    chat = _pchat_get_chat(session_id, chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Private chat not found.")
+
+    if chat.get("status") not in ("active", "expiring"):
+        raise HTTPException(status_code=409, detail="Private chat has ended or expired.")
+
+    sender_id = ctx["user_sub"]
+
+    # Only tier 1 viewer or creator can send
+    if sender_id != chat.get("viewer_id") and sender_id != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the participant or creator can send messages.")
+
+    # Resolve display name
+    display_name = sender_id
+    try:
+        profile_item = _T.profile.get_item(Key={"user_sub": sender_id}).get("Item")
+        if profile_item and profile_item.get("display_name"):
+            display_name = profile_item["display_name"]
+    except Exception:
+        pass
+
+    result = _pchat_send_msg(
+        session_id=session_id,
+        chat_id=chat_id,
+        sender_id=sender_id,
+        sender_display_name=display_name,
+        text=body.text,
+    )
+
+    return PrivateChatMessageOut(**result)
+
+
+@router.get(
+    "/sessions/{session_id}/private-chat/{chat_id}/messages",
+    response_model=PrivateChatHistoryOut,
+)
+def get_private_chat_messages_route(
+    session_id: str,
+    chat_id: str,
+    limit: int = Query(default=100, ge=1, le=200),
+    before: Optional[str] = Query(default=None),
+    ctx: dict = Depends(_ctx),
+):
+    """Get message history for a private chat."""
+    _ensure_private_chat_enabled()
+
+    session = get_session(session_id)
+    user_id = ctx["user_sub"]
+
+    # Validate access: tier 1 viewer, active voyeur, or creator
+    chat = _pchat_get_chat(session_id, chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Private chat not found.")
+
+    is_viewer = user_id == chat.get("viewer_id")
+    is_creator = user_id == session.created_by
+    is_voyeur = False
+    if not is_viewer and not is_creator:
+        voyeur = _pchat_get_voyeur(session_id, chat_id, user_id)
+        if voyeur and voyeur.get("status") in ("active", "expiring"):
+            is_voyeur = True
+
+    if not (is_viewer or is_creator or is_voyeur):
+        raise HTTPException(status_code=403, detail="You do not have access to this chat.")
+
+    result = _pchat_get_history(session_id, chat_id, limit=limit, before_sort_key=before)
+    return PrivateChatHistoryOut(
+        messages=[PrivateChatMessageOut(**m) for m in result["messages"]],
+        has_more=result["has_more"],
+        oldest_sort_key=result.get("oldest_sort_key"),
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/private-chat/{chat_id}/end",
+)
+def end_private_chat_route(
+    session_id: str,
+    chat_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """End a private chat. Tier 1 viewer or creator can end."""
+    _ensure_private_chat_enabled()
+
+    session = get_session(session_id)
+    user_id = ctx["user_sub"]
+
+    chat = _pchat_get_chat(session_id, chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Private chat not found.")
+
+    is_viewer = user_id == chat.get("viewer_id")
+    is_creator = user_id == session.created_by
+
+    if not (is_viewer or is_creator):
+        raise HTTPException(status_code=403, detail="Only the participant or creator can end the chat.")
+
+    ended_reason = "creator_ended" if is_creator else "viewer_ended"
+    _pchat_end(session_id, chat_id, ended_reason)
+
+    return {"ok": True, "chat_id": chat_id, "ended_reason": ended_reason}
+
+
+@router.post(
+    "/sessions/{session_id}/private-chat/{chat_id}/voyeur",
+    response_model=PrivateChatPurchaseOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def join_voyeur_route(
+    session_id: str,
+    chat_id: str,
+    body: PrivateChatExtendIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Join as a voyeur on an active private chat."""
+    _ensure_private_chat_enabled()
+    from app.core.tables import T as _T
+    from app.core.settings import S
+
+    session = get_session(session_id)
+    if session.status != "live":
+        raise HTTPException(status_code=403, detail="Private chat is only available during live broadcasts.")
+
+    if not S.broadcast_private_chat_voyeur_enabled and not session.private_chat_voyeur_enabled:
+        raise HTTPException(status_code=403, detail="Voyeur mode is not enabled for this broadcast.")
+
+    viewer_id = ctx["user_sub"]
+    if viewer_id == session.created_by:
+        raise HTTPException(status_code=403, detail="Cannot voyeur your own broadcast.")
+
+    # Validate payment method
+    pm_item = _T.billing.get_item(
+        Key={"pk": f"USER#{viewer_id}", "sk": f"PM#{body.payment_method_id}"}
+    ).get("Item")
+    if not pm_item:
+        raise HTTPException(status_code=400, detail="Payment method not found.")
+
+    display_name = viewer_id
+    try:
+        profile_item = _T.profile.get_item(Key={"user_sub": viewer_id}).get("Item")
+        if profile_item and profile_item.get("display_name"):
+            display_name = profile_item["display_name"]
+    except Exception:
+        pass
+
+    voyeur_rate = int(session.private_chat_voyeur_price_cents or 100)
+
+    result = _pchat_purchase(
+        session_id=session_id,
+        viewer_id=viewer_id,
+        viewer_display_name=display_name,
+        tier=2,
+        duration_minutes=body.duration_minutes,
+        payment_method_id=body.payment_method_id,
+        rate_per_minute_cents=voyeur_rate,
+        chat_id=chat_id,
+        creator_id=session.created_by,
+    )
+
+    return PrivateChatPurchaseOut(**result)
+
+
+@router.get(
+    "/sessions/{session_id}/private-chat/{chat_id}/status",
+    response_model=PrivateChatStatusOut,
+)
+def get_private_chat_status_route(
+    session_id: str,
+    chat_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Get private chat status including time remaining and voyeur count."""
+    _ensure_private_chat_enabled()
+
+    result = _pchat_get_status(session_id, chat_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Private chat not found.")
+
+    return PrivateChatStatusOut(**result)
+
+
+@router.get(
+    "/sessions/{session_id}/private-chats",
+    response_model=PrivateChatListOut,
+)
+def list_private_chats_route(
+    session_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """List all active private chats for a broadcast (creator only)."""
+    _ensure_private_chat_enabled()
+
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        _require_operator_role(ctx)
+
+    chats = _pchat_list_active(session_id)
+    return PrivateChatListOut(chats=[PrivateChatSummaryOut(**c) for c in chats])
+
+
+@router.post(
+    "/sessions/{session_id}/private-chat/{chat_id}/extend",
+    response_model=PrivateChatExtendOut,
+)
+def extend_private_chat_route(
+    session_id: str,
+    chat_id: str,
+    body: PrivateChatExtendIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Extend a private chat by purchasing additional time."""
+    _ensure_private_chat_enabled()
+    from app.core.tables import T as _T
+
+    session = get_session(session_id)
+    user_id = ctx["user_sub"]
+
+    chat = _pchat_get_chat(session_id, chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="Private chat not found.")
+
+    is_viewer = user_id == chat.get("viewer_id")
+    is_voyeur = False
+    if not is_viewer:
+        voyeur = _pchat_get_voyeur(session_id, chat_id, user_id)
+        if voyeur and voyeur.get("status") in ("active", "expiring"):
+            is_voyeur = True
+
+    if not (is_viewer or is_voyeur):
+        raise HTTPException(status_code=403, detail="Only the participant or their voyeur can extend.")
+
+    # Validate payment method
+    pm_item = _T.billing.get_item(
+        Key={"pk": f"USER#{user_id}", "sk": f"PM#{body.payment_method_id}"}
+    ).get("Item")
+    if not pm_item:
+        raise HTTPException(status_code=400, detail="Payment method not found.")
+
+    if is_viewer:
+        rate = int(chat.get("rate_per_minute_cents", 500))
+    else:
+        rate = int(session.private_chat_voyeur_price_cents or 100)
+
+    result = _pchat_extend(
+        session_id=session_id,
+        chat_id=chat_id,
+        viewer_id=user_id,
+        additional_minutes=body.duration_minutes,
+        payment_method_id=body.payment_method_id,
+        rate_per_minute_cents=rate,
+        platform_fee_pct=20,
+        creator_id=session.created_by,
+        is_voyeur=is_voyeur,
+    )
+
+    return PrivateChatExtendOut(**result)

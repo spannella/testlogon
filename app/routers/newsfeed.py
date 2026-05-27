@@ -1893,6 +1893,9 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "liked_by_me": liked_by_me,
         "reactions_counts": reactions_counts,
         "my_reactions": my_reactions,
+        # BCAST-010: broadcast post type and metadata
+        "post_type": post.get("post_type", "standard"),
+        "broadcast_meta": post.get("broadcast_meta"),
     }
 
 

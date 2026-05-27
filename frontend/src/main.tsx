@@ -21,6 +21,25 @@ import { Toaster } from "@/components/ui/sonner";
 import App from "./App";
 import "./globals.css";
 
+// Initialize i18n before rendering
+import "./i18n";
+import { RTLProvider } from "@/components/layout/RTLProvider";
+
+// ── Referral attribution cookie (AFFILIATE-001) ────────────────
+// If the URL contains ?ref=CODE, store it in a 30-day cookie so the
+// backend can attribute the signup when the user registers.
+(() => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const refCode = params.get("ref");
+    if (refCode && /^[A-Za-z0-9]{8}$/.test(refCode)) {
+      document.cookie = `ref_attribution=${refCode}; path=/; max-age=${30 * 86400}; SameSite=Lax`;
+    }
+  } catch {
+    // Ignore — attribution is best-effort.
+  }
+})();
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -36,10 +55,12 @@ createRoot(document.getElementById("root")!).render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
         <TooltipProvider delayDuration={300}>
-          <BrowserRouter>
-            <App />
-          </BrowserRouter>
-          <Toaster richColors position="top-right" />
+          <RTLProvider>
+            <BrowserRouter>
+              <App />
+            </BrowserRouter>
+            <Toaster richColors position="top-right" />
+          </RTLProvider>
         </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>

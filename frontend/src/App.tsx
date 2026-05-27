@@ -53,6 +53,18 @@ const BroadcastPage = lazy(() => import("@/pages/broadcast/BroadcastPage"));
 const LivePlayer = lazy(() => import("@/pages/broadcast/LivePlayer"));
 const DmcaClaimForm = lazy(() => import("@/pages/dmca/DmcaClaimForm"));
 const DmcaDashboardPage = lazy(() => import("@/pages/admin/DmcaDashboardPage"));
+const RateLimitDashboard = lazy(() => import("@/pages/admin/RateLimitDashboard"));
+const GalleryPage = lazy(() => import("@/pages/gallery/GalleryPage"));
+const GalleryVideoDetailPage = lazy(() => import("@/pages/gallery/VideoDetailPage"));
+const AnalyticsPage = lazy(() => import("@/pages/analytics/AnalyticsPage"));
+const PrivacyPage = lazy(() => import("@/pages/settings/PrivacyPage"));
+const WebhooksPage = lazy(() => import("@/pages/settings/WebhooksPage"));
+const GeoRulesPage = lazy(() => import("@/pages/settings/GeoRulesPage"));
+const ReferralDashboard = lazy(() => import("@/pages/referrals/ReferralDashboard"));
+const PromoCodesPage = lazy(() => import("@/pages/promo/PromoCodesPage"));
+const SchedulerPage = lazy(() => import("@/pages/scheduler/SchedulerPage"));
+const RefundRequestsPage = lazy(() => import("@/pages/billing/RefundRequestsPage"));
+const AdminRefundQueuePage = lazy(() => import("@/pages/admin/AdminRefundQueuePage"));
 
 function PageSpinner() {
   return (
@@ -92,7 +104,9 @@ export default function App() {
           <Route path="projects/:projectId" element={<ProjectDetailPage />} />
           <Route path="questionnaires/:questionnaireId/builder" element={<QuestionnaireBuilderPage />} />
           <Route path="billing" element={<BillingPage />} />
+          <Route path="billing/refunds" element={<RefundRequestsPage />} />
           <Route path="calendar" element={<CalendarPage />} />
+          <Route path="scheduler" element={<SchedulerPage />} />
           <Route path="shop" element={<CatalogPage />} />
           <Route path="shop/:categoryId/:itemId" element={<ProductDetail />} />
           <Route path="cart" element={<CartPage />} />
@@ -104,6 +118,8 @@ export default function App() {
           <Route path="tickets" element={<TicketsPage />} />
           <Route path="tickets/spaces" element={<TicketSpacesPage />} />
           <Route path="tickets/spaces/:spaceId" element={<TicketSpaceDetailPage />} />
+          <Route path="gallery" element={<GalleryPage />} />
+          <Route path="gallery/:videoId" element={<GalleryVideoDetailPage />} />
           <Route path="videos" element={<VideosPage />} />
           <Route path="videos/:videoId" element={<VideoPlayerPage />} />
           {showBroadcastNavigation && <Route path="broadcast" element={<BroadcastPage />} />}
@@ -111,15 +127,23 @@ export default function App() {
           <Route path="security" element={<SecurityPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="settings/privacy" element={<PrivacyPage />} />
+          <Route path="settings/webhooks" element={<WebhooksPage />} />
+          <Route path="settings/geo" element={<GeoRulesPage />} />
           <Route path="purchases" element={<PurchasesPage />} />
           <Route path="purchases/:txnId" element={<PurchasesPage />} />
           <Route path="subscriptions" element={<SubscriptionsPage />} />
+          <Route path="analytics" element={<AnalyticsPage />} />
+          <Route path="referrals" element={<ReferralDashboard />} />
+          <Route path="promo" element={<PromoCodesPage />} />
           <Route path="root/roles" element={<RootRoleManagementPage />} />
           <Route path="admin/moderation" element={<ModerationBoardPage />} />
           <Route path="admin/payment-incidents" element={<PaymentIncidentQueuePage />} />
           <Route path="admin/video-review" element={<VideoReviewQueuePage />} />
           <Route path="dmca/submit" element={<DmcaClaimForm />} />
           <Route path="admin/dmca" element={<DmcaDashboardPage />} />
+          <Route path="admin/refunds" element={<AdminRefundQueuePage />} />
+          <Route path="admin/rate-limits" element={<RateLimitDashboard />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

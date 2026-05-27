@@ -236,13 +236,20 @@ export async function api<T>(
     return retryRes.json() as Promise<T>;
   }
 
-  // Handle 403 — permission denied
+  // Handle 403 — permission denied or geo-blocked
   if (res.status === 403) {
     const body = await res.json().catch(() => null);
-    const detail = normalizeErrorDetail(
-      (body as Record<string, unknown>)?.detail,
-      "Permission denied",
-    );
+    const rawDetail = (body as Record<string, unknown>)?.detail;
+
+    // Geo-blocked responses: store details for GeoBlockedPage rendering
+    if (rawDetail && typeof rawDetail === "object" && (rawDetail as Record<string, unknown>).code === "geo_blocked") {
+      (window as any).__geoBlocked = rawDetail;
+      const geoMsg = (rawDetail as Record<string, unknown>).message ?? "This content is not available in your region.";
+      if (!silent403) toast.error(String(geoMsg));
+      throw new ApiError(403, String(geoMsg), body);
+    }
+
+    const detail = normalizeErrorDetail(rawDetail, "Permission denied");
     if (!silent403) toast.error(detail);
     throw new ApiError(403, detail, body);
   }

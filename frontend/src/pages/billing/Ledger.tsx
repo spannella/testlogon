@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Download, Receipt } from "lucide-react";
+import { Download, Receipt, RotateCcw } from "lucide-react";
+import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +11,7 @@ import { DataTable, type ColumnDef, type SortState } from "@/components/shared/D
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { getLedger } from "@/api/endpoints/billing";
+import { RefundRequestDialog } from "./RefundRequestDialog";
 import type { LedgerEntry } from "@/api/types";
 
 function formatCents(cents: number): string {
@@ -40,6 +42,19 @@ function stateVariant(state: string) {
     default:
       return "neutral" as const;
   }
+}
+
+function isEligibleForRefund(entry: LedgerEntry): boolean {
+  // Eligible if: settled, positive amount, within 30 days, and is a debit type
+  if (entry.state !== "settled") return false;
+  if (entry.amount_cents <= 0) return false;
+  const thirtyDaysAgo = Date.now() / 1000 - 30 * 86400;
+  if (entry.ts < thirtyDaysAgo) return false;
+  // Exclude refund_credit entries
+  if (entry.type === "refund_credit") return false;
+  // Needs an entry_id
+  if (!(entry as Record<string, unknown>).entry_id) return false;
+  return true;
 }
 
 const columns: ColumnDef<LedgerEntry>[] = [
@@ -101,6 +116,7 @@ export function Ledger() {
   const [sort, setSort] = useState<SortState>({ column: "date", direction: "desc" });
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [refundTransaction, setRefundTransaction] = useState<LedgerEntry | null>(null);
 
   const ledgerQuery = useQuery({
     queryKey: ["billing", "ledger"],
@@ -185,7 +201,13 @@ export function Ledger() {
             className="w-40"
           />
         </div>
-        <div className="ml-auto">
+        <div className="ml-auto flex gap-2">
+          <Link to="/billing/refunds">
+            <Button variant="outline" size="sm">
+              <RotateCcw className="mr-1 h-3.5 w-3.5" />
+              My Refund Requests
+            </Button>
+          </Link>
           <Button variant="outline" size="sm" onClick={exportCsv} disabled={sorted.length === 0}>
             <Download className="mr-1 h-3.5 w-3.5" />
             Export CSV
@@ -209,9 +231,36 @@ export function Ledger() {
         }
       />
 
+      {/* Per-row refund button */}
+      {sorted.some(isEligibleForRefund) && (
+        <div className="space-y-1">
+          {sorted.filter(isEligibleForRefund).map((entry) => (
+            <div key={entry.sk} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+              <span>
+                <span className="capitalize">{entry.type?.replace(/_/g, " ")}</span>
+                {" — "}{formatCents(entry.amount_cents)} — {formatDate(entry.ts)}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setRefundTransaction(entry)}
+              >
+                <RotateCcw className="mr-1 h-3 w-3" />
+                Request Refund
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+
       <p className="text-xs text-muted-foreground text-right">
         Showing {sorted.length} of {entries.length} entries
       </p>
+
+      <RefundRequestDialog
+        transaction={refundTransaction}
+        onClose={() => setRefundTransaction(null)}
+      />
     </div>
   );
 }

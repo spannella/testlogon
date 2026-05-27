@@ -30,6 +30,7 @@ import { ReportContentModal, type ReportContentPayload } from "@/components/shar
 import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 import { VideoPostPlayer } from "./VideoPostPlayer";
 import type { FeedPost, PaymentMethod, PostFileAttachment } from "@/api/types";
+import { BroadcastPostCard } from "@/components/newsfeed/BroadcastPostCard";
 import type { FileEntry } from "@/api/types";
 import { isTipLotteryEnabled } from "@/config/featureFlags";
 
@@ -370,6 +371,11 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
             onEdit={() => setEditOpen(true)}
           />
         </div>
+
+        {/* BCAST-010: Broadcast post card */}
+        {post.broadcast_meta && (
+          <BroadcastPostCard broadcastMeta={post.broadcast_meta} />
+        )}
 
         {/* Post body */}
         <div className="mt-3">

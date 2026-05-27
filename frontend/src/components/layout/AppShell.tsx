@@ -76,6 +76,7 @@ import {
   MessageSquare,
   Radio,
   Video,
+  PlaySquare,
   Rss,
   Store,
   ShoppingCart,
@@ -85,6 +86,7 @@ import {
   FolderOpen,
   FilePen,
   CalendarDays,
+  CalendarClock,
   User,
   Shield,
   Settings,
@@ -92,6 +94,12 @@ import {
   LifeBuoy,
   UsersRound,
   Scale,
+  ShieldCheck,
+  BarChart3,
+  Share2,
+  Tag,
+  Webhook,
+  Globe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -116,6 +124,9 @@ const MOBILE_NAV_GROUPS = [
       { label: "Billing", path: "/billing", icon: CreditCard },
       { label: "Orders", path: "/purchases", icon: ClipboardList },
       { label: "Subscriptions", path: "/subscriptions", icon: Repeat },
+      { label: "Analytics", path: "/analytics", icon: BarChart3 },
+      { label: "Referrals", path: "/referrals", icon: Share2 },
+      { label: "Promo Codes", path: "/promo", icon: Tag },
     ],
   },
   {
@@ -123,12 +134,14 @@ const MOBILE_NAV_GROUPS = [
     items: [
       { label: "Files", path: "/files", icon: FolderOpen },
       { label: "Calendar", path: "/calendar", icon: CalendarDays },
+      { label: "Scheduled", path: "/scheduler", icon: CalendarClock },
       { label: "Signing", path: "/signing", icon: FilePen },
     ],
   },
   {
     title: "Media",
     items: [
+      { label: "Gallery", path: "/gallery", icon: PlaySquare },
       { label: "Videos", path: "/videos", icon: Video },
       { label: "Broadcast", path: "/broadcast", icon: Radio },
     ],
@@ -142,6 +155,9 @@ const MOBILE_NAV_GROUPS = [
       { label: "Tickets", path: "/tickets", icon: LifeBuoy },
   { label: "Ticket Spaces", path: "/tickets/spaces", icon: LifeBuoy },
       { label: "Settings", path: "/settings", icon: Settings },
+      { label: "Privacy", path: "/settings/privacy", icon: ShieldCheck },
+      { label: "Webhooks", path: "/settings/webhooks", icon: Webhook },
+      { label: "Geo Rules", path: "/settings/geo", icon: Globe },
       { label: "Role Mgmt", path: "/root/roles", icon: UsersRound },
       { label: "Moderation Board", path: "/admin/moderation", icon: Scale },
       { label: "Video Review", path: "/admin/video-review", icon: Video },

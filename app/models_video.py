@@ -107,6 +107,42 @@ class VideoMetadataModel(BaseModel):
     download_mp4_status: str = ""  # "", "generating", "ready", "failed"
     download_count: int = 0
 
+    # Watermarked Downloads (VOD-020)
+    watermark_downloads: bool = False
+
+    # Clipping (VOD-015)
+    source_video_id: Optional[str] = None
+    clip_start_seconds: Optional[float] = None
+    clip_end_seconds: Optional[float] = None
+    created_via: Optional[str] = None  # "upload", "clip", "combine", "broadcast_archive"
+
+    # Concatenation (VOD-016)
+    source_video_ids: Optional[List[str]] = None
+
+    # Gallery (VOD-017)
+    gallery_published: bool = False
+    gallery_status: Optional[str] = None  # "published", None — GSI partition key
+    category: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    view_count: int = 0
+    like_count: int = 0
+    comment_count: int = 0
+    trending_score: float = 0.0
+    trending_score_sort: Optional[int] = None  # int version for DDB GSI sort key
+
+    # Ad-Supported (VOD-018)
+    ad_config: Optional[dict] = None  # {pre_roll, mid_roll_interval_seconds, post_roll}
+    ads_free_for_subscribers: bool = False
+    ad_revenue_cents: int = 0
+    ad_impression_count: int = 0
+
+    # Purchase Tiers (VOD-019)
+    available_purchase_types: List[str] = Field(default_factory=list)  # "standard","view_once","rental","download"
+    view_once_price_cents: Optional[int] = None
+    rental_price_cents: Optional[int] = None
+    rental_duration_hours: Optional[int] = None
+    download_price_cents: Optional[int] = None
+
 
 class CreateVideoIn(BaseModel):
     title: str = Field(min_length=1, max_length=256)
@@ -131,6 +167,14 @@ class UpdateVideoIn(BaseModel):
     drm_policy_id: Optional[str] = None
     entitlement_sku: Optional[str] = None
     allow_download: Optional[bool] = None
+
+
+class ClipVideoIn(BaseModel):
+    """Request body for creating a clip from an existing video (VOD-015)."""
+
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+    title: Optional[str] = Field(default=None, min_length=1, max_length=256)
 
 
 class VideoOut(BaseModel):
@@ -159,3 +203,5 @@ class VideoOut(BaseModel):
     allow_download: bool = False
     download_available: bool = False
     download_mp4_size_bytes: Optional[int] = None
+    # Watermarked Downloads (VOD-020)
+    watermark_downloads: bool = False

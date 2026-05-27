@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video } from "lucide-react";
+import { Send, Paperclip, Loader2, Lock, Eye, EyeOff, EyeOff as EyeSlash, Headphones, X, ImageIcon, Clock, Reply, Globe, DollarSign, FileText, Images, FolderOpen, CalendarDays, CalendarCheck, Users, Dices, Video, Mic } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { FilePickerDialog } from "./FilePickerDialog";
 import { VideoPickerDialog } from "./VideoPickerDialog";
+import { VoiceRecorder } from "./VoiceRecorder";
 import { useConversationDrafts } from "./useConversationDrafts";
 
 interface ComposeBarProps {
@@ -61,6 +62,7 @@ interface ComposeBarProps {
   onSendCalendarEvent?: (params: SendCalendarEventReq) => void;
   onSendMeetingPoll?: (params: SendMeetingPollReq) => void;
   onSendLottery?: (params: Omit<CreateLotteryMessageReq, "conversation_id">) => void;
+  onSendVoiceMessage?: (blob: Blob, meta: { duration: number; waveform: number[]; contentType: string; consumption_policy?: "none" | "listen_once"; reply_to_message_id?: string | null; send_at?: number | null }) => void;
   sending?: boolean;
   disabled?: boolean;
   onKeystroke?: () => void;
@@ -89,6 +91,7 @@ export function ComposeBar({
   onSendCalendarEvent,
   onSendMeetingPoll,
   onSendLottery,
+  onSendVoiceMessage,
   sending,
   disabled,
   onKeystroke,
@@ -110,6 +113,7 @@ export function ComposeBar({
   const [viewOnceImage, setViewOnceImage] = React.useState(false);
   const [viewOnceVideo, setViewOnceVideo] = React.useState(false);
   const [listenOnceAudio, setListenOnceAudio] = React.useState(false);
+  const [voiceRecording, setVoiceRecording] = React.useState(false);
   const [pendingFile, setPendingFile] = React.useState<{ file: File; previewUrl: string; kind: "image" | "video" | "audio" } | null>(null);
   const [lockEnabled, setLockEnabled] = React.useState(false);
   const [lockPrice, setLockPrice] = React.useState("");
@@ -1472,6 +1476,18 @@ export function ComposeBar({
             />
           </>
         )}
+        {onSendVoiceMessage && !voiceRecording && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 shrink-0"
+            onClick={() => setVoiceRecording(true)}
+            disabled={disabled || sending || encrypting || !!pendingFile || galleryMode || lotteryMode}
+            aria-label="Record voice message"
+          >
+            <Mic className="h-4 w-4" />
+          </Button>
+        )}
         {onSendGallery && (
           <Button
             variant={galleryMode ? "secondary" : "ghost"}
@@ -1580,33 +1596,51 @@ export function ComposeBar({
           </Button>
         )}
 
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            if (draftsEnabled) {
-              const trimmed = e.target.value.trim();
-              setDraftDirty(trimmed.length > 0 && trimmed !== lastPersistedDraftTextRef.current);
+        {voiceRecording && onSendVoiceMessage ? (
+          <div className="flex-1">
+            <VoiceRecorder
+              onComplete={(blob, meta) => {
+                setVoiceRecording(false);
+                onSendVoiceMessage(blob, {
+                  ...meta,
+                  consumption_policy: listenOnceAudio ? "listen_once" : "none",
+                  reply_to_message_id: replyingTo?.message_id ?? null,
+                  send_at: scheduledAt ? Math.floor(scheduledAt.getTime() / 1000) : null,
+                });
+                onCancelReply?.();
+              }}
+              onCancel={() => setVoiceRecording(false)}
+            />
+          </div>
+        ) : (
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              if (draftsEnabled) {
+                const trimmed = e.target.value.trim();
+                setDraftDirty(trimmed.length > 0 && trimmed !== lastPersistedDraftTextRef.current);
+              }
+              onKeystroke?.();
+            }}
+            onKeyDown={handleKeyDown}
+            onInput={handleInput}
+            placeholder={
+              lotteryMode
+                ? "Lottery mode enabled — configure outcomes above"
+                : (encryptEnabled ? "Type an encrypted message..." : "Type a message...")
             }
-            onKeystroke?.();
-          }}
-          onKeyDown={handleKeyDown}
-          onInput={handleInput}
-          placeholder={
-            lotteryMode
-              ? "Lottery mode enabled — configure outcomes above"
-              : (encryptEnabled ? "Type an encrypted message..." : "Type a message...")
-          }
-          rows={1}
-          disabled={disabled || sending || encrypting}
-          className={cn(
-            "flex-1 resize-none rounded-xl border border-input bg-transparent px-4 py-2 text-sm",
-            "placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-            "disabled:cursor-not-allowed disabled:opacity-50",
-            "max-h-[120px]",
-          )}
-        />
+            rows={1}
+            disabled={disabled || sending || encrypting}
+            className={cn(
+              "flex-1 resize-none rounded-xl border border-input bg-transparent px-4 py-2 text-sm",
+              "placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+              "disabled:cursor-not-allowed disabled:opacity-50",
+              "max-h-[120px]",
+            )}
+          />
+        )}
 
         <div className="relative">
           <Button

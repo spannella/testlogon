@@ -84,6 +84,26 @@ class Tables:
     vod_entitlements: Any
     appeals: Any
     creator_payouts: Any
+    broadcast_reminders: Any
+    broadcast_private_sessions: Any
+    video_views: Any
+    video_likes: Any
+    ad_impressions: Any
+    call_billing_ledger: Any
+    rate_limits: Any
+    rate_limit_events: Any
+    analytics_rollups: Any
+    data_requests: Any
+    data_request_audit: Any
+    webhook_endpoints: Any
+    webhook_deliveries: Any
+    promo_codes: Any
+    scheduled_actions: Any
+    watermark_jobs: Any
+    recommendations: Any
+    refund_requests: Any
+    translations: Any
+    group_call_sessions: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -162,4 +182,24 @@ T = Tables(
     vod_entitlements=ddb.Table(S.vod_entitlements_table_name),
     appeals=ddb.Table(S.appeals_table_name),
     creator_payouts=ddb.Table(S.creator_payouts_table_name),
+    broadcast_reminders=ddb.Table(S.broadcast_reminders_table_name),
+    broadcast_private_sessions=ddb.Table(S.broadcast_private_sessions_table_name),
+    video_views=ddb.Table(S.video_views_table_name),
+    video_likes=ddb.Table(S.video_likes_table_name),
+    ad_impressions=ddb.Table(S.ad_impressions_table_name),
+    call_billing_ledger=ddb.Table(S.call_billing_ledger_table_name),
+    rate_limits=ddb.Table(S.rate_limits_table_name),
+    rate_limit_events=ddb.Table(S.rate_limit_events_table_name),
+    analytics_rollups=ddb.Table(S.analytics_rollups_table_name),
+    data_requests=ddb.Table(S.data_requests_table_name),
+    data_request_audit=ddb.Table(S.data_request_audit_table_name),
+    webhook_endpoints=ddb.Table(S.webhook_endpoints_table_name),
+    webhook_deliveries=ddb.Table(S.webhook_deliveries_table_name),
+    promo_codes=ddb.Table(S.promo_codes_table_name),
+    scheduled_actions=ddb.Table(S.scheduled_actions_table_name),
+    watermark_jobs=ddb.Table(S.watermark_jobs_table_name),
+    recommendations=ddb.Table(S.recommendations_table_name),
+    refund_requests=ddb.Table(S.refund_requests_table_name),
+    translations=ddb.Table(S.translations_table_name),
+    group_call_sessions=ddb.Table(S.group_call_sessions_table_name),
 )

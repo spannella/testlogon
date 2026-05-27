@@ -17,6 +17,7 @@ import {
   Clock,
   Calendar,
   Download,
+  Scissors,
   Video,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MediaPlayer, type MediaError } from "@/components/shared/MediaPlayer";
 import { getVideoDetail, getVideoDownload, type VideoDetail } from "@/api/endpoints/videos";
+import ClipDialog from "@/components/shared/ClipDialog";
+import WatermarkedDownloadButton from "./WatermarkedDownloadButton";
+import { useAuthStore } from "@/stores/authStore";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -121,6 +125,8 @@ export default function VideoPlayerPage() {
   const [playerError, setPlayerError] = useState<PlayerError | null>(null);
   const [copied, setCopied] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [clipDialogOpen, setClipDialogOpen] = useState(false);
+  const currentUserId = useAuthStore((s) => s.userId);
 
   const {
     data: video,
@@ -284,22 +290,26 @@ export default function VideoPlayerPage() {
         </>
       )}
 
-      {/* Download button (VOD-012) */}
+      {/* Download button (VOD-012 / VOD-020) */}
       {video && !fetchLevelError && video.download_available && (
         <div className="flex items-center gap-3" data-testid="download-section">
-          <Button
-            onClick={handleDownload}
-            disabled={isDownloading}
-            className="gap-2"
-            data-testid="download-mp4-button"
-          >
-            {isDownloading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Download className="h-4 w-4" />
-            )}
-            Download MP4
-          </Button>
+          {video.watermark_downloads ? (
+            <WatermarkedDownloadButton videoId={video.video_id} />
+          ) : (
+            <Button
+              onClick={handleDownload}
+              disabled={isDownloading}
+              className="gap-2"
+              data-testid="download-mp4-button"
+            >
+              {isDownloading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              Download MP4
+            </Button>
+          )}
           {video.download_mp4_size_bytes != null && video.download_mp4_size_bytes > 0 && (
             <span className="text-sm text-muted-foreground" data-testid="download-size">
               {formatFileSize(video.download_mp4_size_bytes)}
@@ -331,6 +341,21 @@ export default function VideoPlayerPage() {
                 )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                {video.owner_user_id === currentUserId &&
+                  video.status === "published" &&
+                  video.duration_seconds != null &&
+                  video.duration_seconds > 0 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      onClick={() => setClipDialogOpen(true)}
+                      data-testid="clip-button"
+                    >
+                      <Scissors className="h-4 w-4" />
+                      Clip
+                    </Button>
+                  )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -398,6 +423,17 @@ export default function VideoPlayerPage() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {/* Clip Dialog (VOD-015) */}
+      {video && video.duration_seconds != null && video.duration_seconds > 0 && (
+        <ClipDialog
+          videoId={video.video_id}
+          durationSeconds={video.duration_seconds}
+          title={video.title}
+          open={clipDialogOpen}
+          onOpenChange={setClipDialogOpen}
+        />
       )}
     </div>
   );

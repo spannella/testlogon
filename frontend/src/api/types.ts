@@ -368,6 +368,7 @@ export interface Alert {
   read_at?: number;
   ts: number;
   ttl_epoch?: number;
+  priority?: "urgent" | "normal" | "low";
 }
 
 export interface AlertsResp {
@@ -577,6 +578,37 @@ export interface StripeRefundReq {
   payment_intent_id: string;
   amount_cents?: number;
   reason?: string;
+}
+
+// ── Refund Requests (BILLING-001) ────────────────────────────────────────
+
+export interface RefundRequestIn {
+  transaction_entry_id: string;
+  reason: string;
+  amount_cents?: number;
+}
+
+export interface RefundRequestOut {
+  refund_request_id: string;
+  status: string;
+  amount_cents: number;
+  currency: string;
+  reason: string;
+  transaction_type?: string;
+  transaction_entry_id?: string;
+  created_at: number;
+  admin_notes?: string | null;
+  completed_at?: number | null;
+  requester_user_id?: string;
+}
+
+export interface AdminRefundApproveIn {
+  notes?: string;
+  amount_cents?: number;
+}
+
+export interface AdminRefundDenyIn {
+  notes: string;
 }
 
 export interface SetPriorityReq {
@@ -808,7 +840,7 @@ export interface Message {
   message_id: string;
   conversation_id: string;
   sender_id: string;
-  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share";
+  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message";
   created_at: number;
   text?: string;
   image?: MessageImage;
@@ -834,6 +866,13 @@ export interface Message {
     hls_manifest_url?: string;
     playback_token?: string;
     playback_expires_at?: number;
+  };
+  voice_message?: {
+    audio_url: string;
+    audio_content_type: string;
+    audio_size_bytes: number;
+    duration_seconds: number;
+    waveform_data: number[];
   };
   lottery?: {
     message_type: "lottery_dm";
@@ -1721,6 +1760,24 @@ export interface PostFileAttachment {
   url: string;
 }
 
+/** Metadata attached to broadcast-related newsfeed posts (BCAST-010). */
+export interface BroadcastPostMeta {
+  session_id: string;
+  post_type: "broadcast_announcement" | "broadcast_live" | "broadcast_vod";
+  session_name?: string;
+  session_description?: string;
+  thumbnail_url?: string;
+  scheduled_at?: number;
+  started_at?: string;
+  stopped_at?: string;
+  recording_id?: string;
+  recording_duration_seconds?: number;
+  recording_playback_url?: string;
+  peak_viewer_count?: number;
+  is_live: boolean;
+  broadcast_url?: string;
+}
+
 export interface FeedPost {
   post_id: string;
   author_id: string;
@@ -1770,6 +1827,10 @@ export interface FeedPost {
   published_at?: string;
   schedule_timezone?: string;
   scheduled_at_local?: string;
+  /** BCAST-010: post type for broadcast-related posts */
+  post_type?: string;
+  /** BCAST-010: broadcast metadata for broadcast post types */
+  broadcast_meta?: BroadcastPostMeta;
 }
 
 export interface FeedComment {
@@ -2604,4 +2665,612 @@ export interface QuestionnaireAnalyticsResp {
       top_validation_hotspots: QuestionnaireAnalyticsPoint[];
     };
   };
+}
+
+// ─── Rate Limiting (PLATFORM-001) ────────────────────────────────
+
+export interface RateLimitGlobalIpConfig {
+  window_seconds: number;
+  max_requests: number;
+  enabled: boolean;
+}
+
+export interface RateLimitGroupConfig {
+  description: string;
+  paths: string[];
+  window_seconds: number;
+  max_requests_per_user: number;
+  max_requests_per_ip: number;
+  bypass_roles: string[];
+  is_override: boolean;
+}
+
+export interface RateLimitConfigResponse {
+  global_ip: RateLimitGlobalIpConfig;
+  groups: Record<string, RateLimitGroupConfig>;
+}
+
+export interface RateLimitEvent {
+  pk: string;
+  sk: string;
+  endpoint_group: string;
+  identity_type: string;
+  identity_value: string;
+  endpoint: string;
+  method: string;
+  status: string;
+  count: number;
+  limit: number;
+}
+
+export interface RateLimitTopOffenderIp {
+  ip: string;
+  rejected_count: number;
+  last_seen: number;
+}
+
+export interface RateLimitTopOffenderUser {
+  user_sub: string;
+  rejected_count: number;
+  last_seen: number;
+}
+
+export interface RateLimitTopOffendersResponse {
+  top_ips: RateLimitTopOffenderIp[];
+  top_users: RateLimitTopOffenderUser[];
+}
+
+// -- Creator Analytics Dashboard (ANALYTICS-001) --
+
+export interface AnalyticsTopContentItem {
+  content_id: string;
+  content_type: string;
+  title: string;
+  views: number;
+  revenue_cents: number;
+  engagement_rate: number;
+}
+
+export interface AnalyticsOverview {
+  period_views: number;
+  period_revenue_cents: number;
+  period_new_subscribers: number;
+  total_subscribers: number;
+  top_content: AnalyticsTopContentItem[];
+  currency: string;
+}
+
+export interface AnalyticsRevenueTimeSeriesItem {
+  date: string;
+  total_cents: number;
+  tips_cents: number;
+  subscriptions_cents: number;
+  unlocks_cents: number;
+  vod_cents: number;
+  ads_cents: number;
+  calls_cents: number;
+}
+
+export interface AnalyticsRevenueBreakdown {
+  tips: number;
+  subscriptions: number;
+  unlocks: number;
+  vod: number;
+  ads: number;
+  calls: number;
+}
+
+export interface AnalyticsRevenue {
+  total_cents: number;
+  breakdown: AnalyticsRevenueBreakdown;
+  time_series: AnalyticsRevenueTimeSeriesItem[];
+  currency: string;
+}
+
+export interface AnalyticsViewsTimeSeriesItem {
+  date: string;
+  views: number;
+  unique_viewers: number;
+  watch_time_seconds: number;
+}
+
+export interface AnalyticsViews {
+  time_series: AnalyticsViewsTimeSeriesItem[];
+  total_views: number;
+  total_watch_time_seconds: number;
+}
+
+export interface AnalyticsSubscribersTimeSeriesItem {
+  date: string;
+  new: number;
+  churned: number;
+  net: number;
+  total: number;
+}
+
+export interface AnalyticsSubscribers {
+  time_series: AnalyticsSubscribersTimeSeriesItem[];
+  current_total: number;
+  net_change: number;
+}
+
+export interface AnalyticsTopContent {
+  items: AnalyticsTopContentItem[];
+  total_items: number;
+}
+
+export interface AnalyticsCountryItem {
+  code: string;
+  name: string;
+  viewers: number;
+  percentage: number;
+}
+
+export interface AnalyticsDeviceItem {
+  type: string;
+  viewers: number;
+  percentage: number;
+}
+
+export interface AnalyticsAudience {
+  countries: AnalyticsCountryItem[];
+  devices: AnalyticsDeviceItem[];
+  total_unique_viewers: number;
+}
+
+export interface AnalyticsRefresh {
+  ok: boolean;
+  message: string;
+  days_refreshed: number;
+}
+
+export interface AnalyticsDateRangeParams {
+  from_date?: string;
+  to_date?: string;
+  granularity?: string;
+  sort_by?: string;
+  limit?: number;
+}
+
+// ─── Privacy / GDPR (PRIVACY-001) ────────────────────────────────
+
+export interface ExportRequestBody {
+  include_messages: boolean;
+  include_files: boolean;
+  include_billing: boolean;
+  include_profile: boolean;
+}
+
+export interface DeleteAccountBody {
+  password: string;
+  reason?: string;
+}
+
+export interface DataRequest {
+  request_id: string;
+  request_type: "export" | "deletion";
+  status: "pending" | "processing" | "completed" | "cancelled" | "failed" | "rejected" | "held";
+  created_at: number;
+  updated_at?: number;
+  completed_at?: number;
+  grace_period_ends_at?: number;
+  export_size_bytes?: number;
+  export_download_url?: string;
+  deletion_reason?: string;
+  deletion_summary?: Record<string, unknown>;
+  retention_hold?: boolean;
+  retention_hold_reason?: string;
+  user_sub?: string;
+  admin_actor?: string;
+  admin_note?: string;
+}
+
+export interface DataRequestListResp {
+  requests: DataRequest[];
+  next_cursor?: string;
+}
+
+export interface DataRequestAuditEntry {
+  action: string;
+  actor: string;
+  created_at: number;
+  details?: Record<string, unknown>;
+}
+
+// ─── Stories / Ephemeral Content (FEED-002) ─────────────────────
+
+export interface Story {
+  story_id: string;
+  author_id: string;
+  media_type: "image" | "video";
+  media_url: string;
+  text_overlay?: string;
+  link_url?: string;
+  link_label?: string;
+  duration_seconds?: number;
+  created_at: string;
+  expires_at: number;
+  view_count: number;
+  highlighted: boolean;
+  highlight_group_id?: string;
+}
+
+export interface StoryBarEntry {
+  user_id: string;
+  latest_story_id: string;
+  latest_media_url: string;
+  story_count: number;
+  has_unseen: boolean;
+  is_own: boolean;
+}
+
+export interface StoryViewer {
+  user_id: string;
+  viewed_at: string;
+}
+
+export interface StoryHighlightGroup {
+  highlight_group_id: string;
+  title: string;
+  cover_url?: string;
+  created_at: string;
+  stories: Story[];
+}
+
+export interface CreateStoryReq {
+  media_type: "image" | "video";
+  media_url: string;
+  text_overlay?: string;
+  link_url?: string;
+  link_label?: string;
+  duration_seconds?: number;
+}
+
+export interface CreateStoryResp {
+  story_id: string;
+  expires_at: number;
+  media_url: string;
+  created_at: string;
+}
+
+export interface StoryBarResp {
+  bar: StoryBarEntry[];
+}
+
+export interface StoryViewResp {
+  ok: boolean;
+  already_viewed: boolean;
+}
+
+export interface StoryViewersResp {
+  viewers: StoryViewer[];
+  total_count: number;
+}
+
+export interface UserStoriesResp {
+  stories: Story[];
+}
+
+export interface UserHighlightsResp {
+  groups: StoryHighlightGroup[];
+}
+
+export interface CreateHighlightGroupReq {
+  title: string;
+  cover_url?: string;
+}
+
+export interface CreateHighlightGroupResp {
+  highlight_group_id: string;
+  title: string;
+  created_at: string;
+}
+
+// ─── Referral / Affiliate (AFFILIATE-001) ───────────────────────
+
+export interface ReferralCode {
+  code: string;
+  active: boolean;
+  commission_tier: string;
+  referral_count?: number;
+  created_at: string;
+}
+
+export interface ReferralCodeCreateResp {
+  code: string;
+  link: string;
+  commission_tier: string;
+  created_at: string;
+}
+
+export interface ReferralDashboardStats {
+  total_referrals: number;
+  confirmed_referrals: number;
+  pending_referrals: number;
+  total_earned_cents: number;
+  pending_commission_cents: number;
+  paid_commission_cents: number;
+  available_for_withdrawal_cents: number;
+  referral_codes: ReferralCode[];
+}
+
+export interface AffiliateCommission {
+  source_type: string;
+  referred_user_id: string;
+  gross_amount_cents: number;
+  net_amount_cents: number;
+  commission_cents: number;
+  commission_rate_bps: number;
+  status: string;
+  created_at: string;
+}
+
+export interface CommissionListResp {
+  commissions: AffiliateCommission[];
+  next_cursor: string | null;
+}
+
+export interface ReferralAttribution {
+  referred_by: {
+    user_id: string;
+    attributed_at: string;
+  } | null;
+}
+
+export interface ReferralItem {
+  referred_user_id: string;
+  referral_code: string;
+  status: string;
+  attributed_at: string;
+}
+
+// ─── Webhooks (PLATFORM-002) ────────────────────────────────────
+
+export interface WebhookEndpointOut {
+  endpoint_id: string;
+  url: string;
+  description: string;
+  event_types: string[];
+  enabled: boolean;
+  secret: string | null;
+  created_at: number;
+  updated_at: number;
+  last_delivery_at: number | null;
+  failure_count: number;
+  disabled_reason: string | null;
+}
+
+export interface WebhookEndpointCreateReq {
+  url: string;
+  description: string;
+  event_types: string[];
+}
+
+export interface WebhookEndpointUpdateReq {
+  url?: string;
+  description?: string;
+  event_types?: string[];
+  enabled?: boolean;
+}
+
+export interface WebhookDeliveryOut {
+  delivery_id: string;
+  endpoint_id: string;
+  event_type: string;
+  event_id: string;
+  status: string;
+  attempt_count: number;
+  max_attempts: number;
+  next_retry_at: number | null;
+  last_attempt_at: number | null;
+  last_response_code: number | null;
+  last_response_body: string | null;
+  last_error: string | null;
+  created_at: number;
+  payload: string | null;
+}
+
+export interface WebhookTestResult {
+  delivery_id: string;
+  status: string;
+  response_code: number | null;
+  response_body: string | null;
+  error: string | null;
+  duration_ms: number;
+}
+
+export interface WebhookHealthSummary {
+  total_endpoints: number;
+  enabled_endpoints: number;
+  disabled_endpoints: number;
+  total_deliveries_24h: number;
+  success_count_24h: number;
+  failed_count_24h: number;
+  dead_letter_count_24h: number;
+}
+
+export interface WebhookEventType {
+  type: string;
+  description: string;
+}
+
+
+// ─── Geo-Blocking (GEO-001) ────────────────────────────────────
+
+export interface GeoRestrictionRequest {
+  geo_mode: "allow" | "block" | null;
+  geo_countries: string[] | null;
+}
+
+export interface GeoRestrictionOut {
+  ok: boolean;
+  geo_mode: string | null;
+  geo_countries: string[] | null;
+}
+
+export interface GeoCountry {
+  code: string;
+  name: string;
+}
+
+export interface GeoCountriesListOut {
+  countries: GeoCountry[];
+}
+
+export interface MyCountryOut {
+  country: string | null;
+  ip: string;
+  source: string;
+}
+
+export interface GeoCheckResult {
+  allowed: boolean;
+  country: string | null;
+  geo_mode: string | null;
+  matched_rule: string | null;
+}
+
+// ─── Promo Codes & Coupons (PROMO-001) ──────────────────────────
+
+export interface PromoCodeOut {
+  code_id: string;
+  code: string;
+  discount_type: "percentage" | "fixed_amount" | "free_trial";
+  discount_value: number;
+  free_trial_days: number;
+  applies_to: string[];
+  min_purchase_cents: number;
+  max_uses: number;
+  max_uses_per_user: number;
+  current_uses: number;
+  expires_at: number;
+  active: boolean;
+  created_at: number;
+  creator_user_id: string;
+}
+
+export interface PromoCodeListOut {
+  items: PromoCodeOut[];
+  next_cursor: string | null;
+}
+
+export interface PromoCodeStatsOut extends PromoCodeOut {
+  stats?: {
+    total_redemptions: number;
+    total_discount_cents: number;
+    redemptions: Array<{
+      user_id: string;
+      redeemed_at: number;
+      discount_applied_cents: number;
+      checkout_type: string;
+    }>;
+  };
+}
+
+export interface PromoValidateOut {
+  valid: boolean;
+  code_id: string | null;
+  discount_type: string | null;
+  discount_cents: number;
+  final_price_cents: number;
+  free_trial_days: number;
+  message: string | null;
+}
+
+export interface PromoDeactivateOut {
+  ok: boolean;
+  code_id: string;
+  active: boolean;
+}
+
+
+// ─── Group Video Calls (CALL-012) ────────────────────────────────
+
+export interface GroupCallMediaStatus {
+  audio: boolean;
+  video: boolean;
+  screen: boolean;
+}
+
+export interface GroupCallParticipant {
+  user_id: string;
+  display_name: string;
+  joined_at: number;
+  left_at: number;
+  media_status: GroupCallMediaStatus;
+  connection_quality: string;
+  state: string;
+}
+
+export interface GroupCallSignalingInfo {
+  mode: string;
+  ice_servers: Array<Record<string, string>>;
+}
+
+export interface GroupCallOut {
+  call_id: string;
+  conversation_id: string;
+  creator_user_id: string;
+  state: string;
+  mode: string;
+  max_participants: number;
+  current_participant_count: number;
+  participants: GroupCallParticipant[];
+  created_at: number;
+  started_at: number;
+  end_ts: number;
+  end_reason: string;
+  duration_seconds: number;
+  signaling?: GroupCallSignalingInfo;
+}
+
+export interface GroupCallJoinOut {
+  call_id: string;
+  state: string;
+  mode: string;
+  current_participant_count: number;
+  participants: GroupCallParticipant[];
+  signaling: GroupCallSignalingInfo;
+}
+
+export interface GroupCallLeaveOut {
+  ok: boolean;
+  call_ended: boolean;
+  remaining_participants: number;
+}
+
+export interface GroupCallEndOut {
+  ok: boolean;
+  call_id: string;
+  duration_seconds: number;
+  total_participants: number;
+}
+
+export interface GroupCallParticipantsOut {
+  participants: GroupCallParticipant[];
+  total_active: number;
+  total_joined: number;
+}
+
+export interface GroupCallActiveOut {
+  active: boolean;
+  call_id?: string;
+  state?: string;
+  mode?: string;
+  current_participant_count?: number;
+  participants?: GroupCallParticipant[];
+}
+
+export interface GroupCallHistoryOut {
+  calls: GroupCallOut[];
+}
+
+export interface GroupCallMediaUpdateOut {
+  ok: boolean;
+  media_status: GroupCallMediaStatus;
+}
+
+export interface GroupCallSignalOut {
+  ok: boolean;
+  relayed_to: string;
 }

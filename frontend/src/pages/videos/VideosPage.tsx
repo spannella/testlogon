@@ -12,6 +12,7 @@ import {
   X,
   Film,
   CloudUpload,
+  Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -45,6 +46,7 @@ import {
 import { PageHeader } from "@/components/shared/PageHeader";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import CombineVideosDialog from "@/components/shared/CombineVideosDialog";
 import {
   presignVideoUpload,
   completeVideoUpload,
@@ -216,6 +218,7 @@ export default function VideosPage() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [editVideo, setEditVideo] = useState<VideoListItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<VideoListItem | null>(null);
+  const [combineOpen, setCombineOpen] = useState(false);
 
   // ─── Video List Query ────────────────────────────────────────────────────
   const {
@@ -416,10 +419,16 @@ export default function VideosPage() {
         title="Videos"
         description="Upload, manage, and publish your video content"
         actions={
-          <Button onClick={() => fileInputRef.current?.click()}>
-            <Upload className="mr-2 h-4 w-4" />
-            Upload Video
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setCombineOpen(true)}>
+              <Layers className="mr-2 h-4 w-4" />
+              Combine Videos
+            </Button>
+            <Button onClick={() => fileInputRef.current?.click()}>
+              <Upload className="mr-2 h-4 w-4" />
+              Upload Video
+            </Button>
+          </div>
         }
       />
 
@@ -542,6 +551,9 @@ export default function VideosPage() {
         }}
         loading={deleteMutation.isPending}
       />
+
+      {/* Combine Videos Dialog (VOD-016) */}
+      <CombineVideosDialog open={combineOpen} onOpenChange={setCombineOpen} />
     </div>
   );
 }

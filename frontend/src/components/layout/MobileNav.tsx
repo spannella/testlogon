@@ -20,9 +20,17 @@ import {
   MonitorSmartphone,
   Radio,
   Video,
+  PlaySquare,
   Scale,
   Compass,
+  BarChart3,
+  ShieldCheck,
+  Share2,
+  Tag,
+  Webhook,
+  Globe,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import {
   Sheet,
@@ -39,37 +47,45 @@ import { isBroadcastNavigationEnabled, isVncRemoteDesktopEnabled } from "@/lib/f
 // ─── Tab config ─────────────────────────────────────────────────
 
 const PRIMARY_TABS = [
-  { label: "Home", path: "/", icon: LayoutDashboard },
-  { label: "Messages", path: "/messages", icon: MessageSquare },
-  { label: "Files", path: "/files", icon: FolderOpen },
-  { label: "Shop", path: "/shop", icon: Store },
+  { label: "Home", i18nKey: "nav.dashboard", path: "/", icon: LayoutDashboard },
+  { label: "Messages", i18nKey: "nav.messages", path: "/messages", icon: MessageSquare },
+  { label: "Files", i18nKey: "nav.files", path: "/files", icon: FolderOpen },
+  { label: "Shop", i18nKey: "nav.shop", path: "/shop", icon: Store },
 ];
 
 const MORE_LINKS = [
-  { label: "Feed", path: "/feed", icon: Rss },
-  { label: "Discover", path: "/discover", icon: Compass },
-  { label: "Cart", path: "/cart", icon: ShoppingCart },
-  { label: "Billing", path: "/billing", icon: CreditCard },
-  { label: "Calendar", path: "/calendar", icon: CalendarDays },
-  { label: "Signing", path: "/signing", icon: FilePen },
-  { label: "Videos", path: "/videos", icon: Video },
-  { label: "Broadcast", path: "/broadcast", icon: Radio },
-  { label: "Profile", path: "/profile", icon: User },
-  { label: "Security", path: "/security", icon: Shield },
-  { label: "Alerts", path: "/alerts", icon: Bell },
-  { label: "Tickets", path: "/tickets", icon: LifeBuoy },
-  { label: "Ticket Spaces", path: "/tickets/spaces", icon: LifeBuoy },
-  { label: "Remote Desktop", path: "/remote-desktop", icon: MonitorSmartphone },
-  { label: "Settings", path: "/settings", icon: Settings },
-  { label: "Role Mgmt", path: "/root/roles", icon: UsersRound },
-  { label: "Moderation Board", path: "/admin/moderation", icon: Scale },
-  { label: "Video Review", path: "/admin/video-review", icon: Video },
-  { label: "DMCA Claims", path: "/admin/dmca", icon: Scale },
+  { label: "Feed", i18nKey: "nav.feed", path: "/feed", icon: Rss },
+  { label: "Discover", i18nKey: "nav.discover", path: "/discover", icon: Compass },
+  { label: "Cart", i18nKey: "nav.cart", path: "/cart", icon: ShoppingCart },
+  { label: "Billing", i18nKey: "nav.billing", path: "/billing", icon: CreditCard },
+  { label: "Calendar", i18nKey: "nav.calendar", path: "/calendar", icon: CalendarDays },
+  { label: "Signing", i18nKey: "nav.signing", path: "/signing", icon: FilePen },
+  { label: "Gallery", i18nKey: "nav.gallery", path: "/gallery", icon: PlaySquare },
+  { label: "Videos", i18nKey: "nav.videos", path: "/videos", icon: Video },
+  { label: "Broadcast", i18nKey: "nav.broadcast", path: "/broadcast", icon: Radio },
+  { label: "Profile", i18nKey: "nav.profile", path: "/profile", icon: User },
+  { label: "Security", i18nKey: "nav.security", path: "/security", icon: Shield },
+  { label: "Alerts", i18nKey: "nav.alerts", path: "/alerts", icon: Bell },
+  { label: "Tickets", i18nKey: "nav.tickets", path: "/tickets", icon: LifeBuoy },
+  { label: "Ticket Spaces", i18nKey: "nav.ticketSpaces", path: "/tickets/spaces", icon: LifeBuoy },
+  { label: "Remote Desktop", i18nKey: "nav.remoteDesktop", path: "/remote-desktop", icon: MonitorSmartphone },
+  { label: "Settings", i18nKey: "nav.settings", path: "/settings", icon: Settings },
+  { label: "Privacy", i18nKey: "nav.privacy", path: "/settings/privacy", icon: ShieldCheck },
+  { label: "Webhooks", i18nKey: "nav.webhooks", path: "/settings/webhooks", icon: Webhook },
+  { label: "Geo Rules", i18nKey: "nav.geoRules", path: "/settings/geo", icon: Globe },
+  { label: "Role Mgmt", i18nKey: "nav.roleManagement", path: "/root/roles", icon: UsersRound },
+  { label: "Moderation Board", i18nKey: "nav.moderationBoard", path: "/admin/moderation", icon: Scale },
+  { label: "Video Review", i18nKey: "nav.videoReview", path: "/admin/video-review", icon: Video },
+  { label: "DMCA Claims", i18nKey: "nav.dmcaClaims", path: "/admin/dmca", icon: Scale },
+  { label: "Analytics", i18nKey: "nav.analytics", path: "/analytics", icon: BarChart3 },
+  { label: "Referrals", i18nKey: "nav.referrals", path: "/referrals", icon: Share2 },
+  { label: "Promo Codes", i18nKey: "nav.promoCodes", path: "/promo", icon: Tag },
 ];
 
 // ─── MobileNav Component ────────────────────────────────────────
 
 export default function MobileNav() {
+  const { t } = useTranslation();
   const [moreOpen, setMoreOpen] = React.useState(false);
   const navigate = useNavigate();
   const accessToken = useAuthStore((s) => s.accessToken);
@@ -104,7 +120,7 @@ export default function MobileNav() {
             }
           >
             <tab.icon className="h-5 w-5" />
-            {tab.label}
+            {tab.i18nKey ? t(tab.i18nKey) : tab.label}
           </NavLink>
         ))}
         <button
@@ -135,7 +151,7 @@ export default function MobileNav() {
                 }}
               >
                 <link.icon className="h-5 w-5" />
-                <span className="text-[10px]">{link.label}</span>
+                <span className="text-[10px]">{link.i18nKey ? t(link.i18nKey) : link.label}</span>
               </Button>
             ))}
           </div>

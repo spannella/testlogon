@@ -1309,6 +1309,7 @@ class ProfileBase(BaseModel):
     languages: Optional[List[LanguageIn]] = None
     profile_photo_url: Optional[str] = None
     cover_photo_url: Optional[str] = None
+    locale: Optional[str] = None
 
 
 class ProfilePatchReq(ProfileBase):
@@ -1393,6 +1394,38 @@ class StripeRefundReq(BaseModel):
     payment_intent_id: str
     amount_cents: Optional[int] = Field(default=None, ge=1)
     reason: Optional[str] = None
+
+
+# ── Refund Requests (BILLING-001) ────────────────────────────────────────────
+
+class RefundRequestIn(BaseModel):
+    transaction_entry_id: str = Field(min_length=1)
+    reason: str = Field(min_length=10, max_length=2000)
+    amount_cents: Optional[int] = Field(default=None, ge=1)
+
+
+class RefundRequestOut(BaseModel):
+    refund_request_id: str
+    status: str
+    amount_cents: int
+    currency: str = "USD"
+    reason: str
+    transaction_type: Optional[str] = None
+    transaction_entry_id: Optional[str] = None
+    created_at: int
+    admin_notes: Optional[str] = None
+    completed_at: Optional[int] = None
+    requester_user_id: Optional[str] = None
+
+
+class AdminRefundApproveIn(BaseModel):
+    notes: Optional[str] = None
+    amount_cents: Optional[int] = Field(default=None, ge=1)
+
+
+class AdminRefundDenyIn(BaseModel):
+    notes: str = Field(min_length=1, max_length=2000)
+
 
 class VerifyMicrodepositsReq(BaseModel):
     setup_intent_id: str
@@ -2349,6 +2382,21 @@ class MarkAllReadResponse(BaseModel):
     marked_count: int
 
 
+# --------------------------------------------------------------------------- #
+#  NOTIFY-001: Notification Delivery Enhancements                               #
+# --------------------------------------------------------------------------- #
+
+class UnreadCountSentinelResponse(BaseModel):
+    """Response for GET /ui/alerts/unread-count (sentinel-based)."""
+    count: int = Field(..., ge=0)
+
+
+class MarkAllReadSentinelResponse(BaseModel):
+    """Response for POST /ui/alerts/mark-all-read (sentinel-based)."""
+    ok: bool = True
+    count: int = 0
+
+
 # ---------------------------------------------------------------------------
 # SOC-005: Public Profile
 # ---------------------------------------------------------------------------
@@ -2407,3 +2455,618 @@ class PublicPostListResponse(BaseModel):
     items: List[PublicPostSummary]
     next_cursor: Optional[str] = None
     total_count: int = 0
+
+
+# -- Creator Analytics Dashboard (ANALYTICS-001) --
+
+class AnalyticsTopContentItem(BaseModel):
+    content_id: str = ""
+    content_type: str = ""  # "vod" | "post"
+    title: str = ""
+    views: int = 0
+    revenue_cents: int = 0
+    engagement_rate: float = 0.0
+
+
+class AnalyticsOverviewOut(BaseModel):
+    period_views: int = 0
+    period_revenue_cents: int = 0
+    period_new_subscribers: int = 0
+    total_subscribers: int = 0
+    top_content: List[AnalyticsTopContentItem] = Field(default_factory=list)
+    currency: str = "USD"
+
+
+class AnalyticsRevenueTimeSeriesItem(BaseModel):
+    date: str
+    total_cents: int = 0
+    tips_cents: int = 0
+    subscriptions_cents: int = 0
+    unlocks_cents: int = 0
+    vod_cents: int = 0
+    ads_cents: int = 0
+    calls_cents: int = 0
+
+
+class AnalyticsRevenueBreakdown(BaseModel):
+    tips: int = 0
+    subscriptions: int = 0
+    unlocks: int = 0
+    vod: int = 0
+    ads: int = 0
+    calls: int = 0
+
+
+class AnalyticsRevenueOut(BaseModel):
+    total_cents: int = 0
+    breakdown: AnalyticsRevenueBreakdown = Field(default_factory=AnalyticsRevenueBreakdown)
+    time_series: List[AnalyticsRevenueTimeSeriesItem] = Field(default_factory=list)
+    currency: str = "USD"
+
+
+class AnalyticsViewsTimeSeriesItem(BaseModel):
+    date: str
+    views: int = 0
+    unique_viewers: int = 0
+    watch_time_seconds: int = 0
+
+
+class AnalyticsViewsOut(BaseModel):
+    time_series: List[AnalyticsViewsTimeSeriesItem] = Field(default_factory=list)
+    total_views: int = 0
+    total_watch_time_seconds: int = 0
+
+
+class AnalyticsSubscribersTimeSeriesItem(BaseModel):
+    date: str
+    new: int = 0
+    churned: int = 0
+    net: int = 0
+    total: int = 0
+
+
+class AnalyticsSubscribersOut(BaseModel):
+    time_series: List[AnalyticsSubscribersTimeSeriesItem] = Field(default_factory=list)
+    current_total: int = 0
+    net_change: int = 0
+
+
+class AnalyticsTopContentOut(BaseModel):
+    items: List[AnalyticsTopContentItem] = Field(default_factory=list)
+    total_items: int = 0
+
+
+class AnalyticsCountryItem(BaseModel):
+    code: str
+    name: str = ""
+    viewers: int = 0
+    percentage: float = 0.0
+
+
+class AnalyticsDeviceItem(BaseModel):
+    type: str
+    viewers: int = 0
+    percentage: float = 0.0
+
+
+class AnalyticsAudienceOut(BaseModel):
+    countries: List[AnalyticsCountryItem] = Field(default_factory=list)
+    devices: List[AnalyticsDeviceItem] = Field(default_factory=list)
+    total_unique_viewers: int = 0
+
+
+class AnalyticsRefreshOut(BaseModel):
+    ok: bool = True
+    message: str = ""
+    days_refreshed: int = 0
+
+
+# -- Privacy / GDPR (PRIVACY-001) --
+
+class ExportRequestIn(BaseModel):
+    include_messages: bool = True
+    include_files: bool = True
+    include_billing: bool = True
+    include_profile: bool = True
+
+class DeleteAccountRequestIn(BaseModel):
+    password: str
+    reason: Optional[str] = None
+
+class AdminPrivacyActionIn(BaseModel):
+    note: Optional[str] = None
+
+class AdminHoldIn(BaseModel):
+    reason: str
+
+class DataRequestOut(BaseModel):
+    request_id: str
+    request_type: str
+    status: str
+    created_at: int
+    updated_at: Optional[int] = None
+    completed_at: Optional[int] = None
+    grace_period_ends_at: Optional[int] = None
+    export_size_bytes: Optional[int] = None
+    export_download_url: Optional[str] = None
+    deletion_reason: Optional[str] = None
+    deletion_summary: Optional[Dict[str, Any]] = None
+    retention_hold: bool = False
+    retention_hold_reason: Optional[str] = None
+    user_sub: Optional[str] = None
+    admin_actor: Optional[str] = None
+    admin_note: Optional[str] = None
+
+class DataRequestListOut(BaseModel):
+    requests: List[DataRequestOut]
+    next_cursor: Optional[str] = None
+
+class DataRequestAuditEntry(BaseModel):
+    action: str
+    actor: str
+    created_at: int
+    details: Optional[Dict[str, Any]] = None
+
+
+# ─── Rate Limiting (PLATFORM-001) ────────────────────────────────
+
+class RateLimitGlobalIpConfig(BaseModel):
+    window_seconds: int = 60
+    max_requests: int = 300
+    enabled: bool = True
+
+
+class RateLimitGroupConfig(BaseModel):
+    description: str = ""
+    paths: List[str] = Field(default_factory=list)
+    window_seconds: int = 60
+    max_requests_per_user: int = 120
+    max_requests_per_ip: int = 200
+    bypass_roles: List[str] = Field(default_factory=list)
+    is_override: bool = False
+
+
+class RateLimitConfigResponse(BaseModel):
+    global_ip: RateLimitGlobalIpConfig
+    groups: Dict[str, RateLimitGroupConfig]
+
+
+class RateLimitUpdateConfigReq(BaseModel):
+    group: str
+    window_seconds: Optional[int] = None
+    max_requests_per_user: Optional[int] = None
+    max_requests_per_ip: Optional[int] = None
+    bypass_roles: Optional[List[str]] = None
+
+
+class RateLimitUpdateConfigResp(BaseModel):
+    ok: bool = True
+    group: str = ""
+    previous: Dict[str, Any] = Field(default_factory=dict)
+    updated: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RateLimitTopOffenderIp(BaseModel):
+    ip: str = ""
+    rejected_count: int = 0
+    last_seen: int = 0
+
+
+class RateLimitTopOffenderUser(BaseModel):
+    user_sub: str = ""
+    rejected_count: int = 0
+    last_seen: int = 0
+
+
+class RateLimitTopOffendersResp(BaseModel):
+    top_ips: List[RateLimitTopOffenderIp] = Field(default_factory=list)
+    top_users: List[RateLimitTopOffenderUser] = Field(default_factory=list)
+
+
+class RateLimitBlocklistAddReq(BaseModel):
+    ip: str
+    reason: str = ""
+    expires_in_hours: Optional[int] = None
+
+
+class RateLimitAllowlistAddReq(BaseModel):
+    cidr: str
+    reason: str = ""
+
+
+# ─── Webhooks (PLATFORM-002) ──────────────────────────────────────
+
+class WebhookEndpointCreateReq(BaseModel):
+    url: str
+    description: str = ""
+    event_types: List[str]
+
+class WebhookEndpointUpdateReq(BaseModel):
+    url: Optional[str] = None
+    description: Optional[str] = None
+    event_types: Optional[List[str]] = None
+    enabled: Optional[bool] = None
+
+class WebhookEndpointOut(BaseModel):
+    endpoint_id: str
+    url: str
+    description: str = ""
+    event_types: List[str] = Field(default_factory=list)
+    enabled: bool = True
+    secret: Optional[str] = None
+    created_at: int = 0
+    updated_at: int = 0
+    last_delivery_at: Optional[int] = None
+    failure_count: int = 0
+    disabled_reason: Optional[str] = None
+
+class WebhookDeliveryOut(BaseModel):
+    delivery_id: str
+    endpoint_id: str
+    event_type: str = ""
+    event_id: str = ""
+    status: str = "pending"
+    attempt_count: int = 0
+    max_attempts: int = 5
+    next_retry_at: Optional[int] = None
+    last_attempt_at: Optional[int] = None
+    last_response_code: Optional[int] = None
+    last_response_body: Optional[str] = None
+    last_error: Optional[str] = None
+    created_at: int = 0
+    payload: Optional[str] = None
+
+class WebhookTestResult(BaseModel):
+    delivery_id: str
+    status: str
+    response_code: Optional[int] = None
+    response_body: Optional[str] = None
+    error: Optional[str] = None
+    duration_ms: int = 0
+
+class WebhookHealthSummary(BaseModel):
+    total_endpoints: int = 0
+    enabled_endpoints: int = 0
+    disabled_endpoints: int = 0
+    total_deliveries_24h: int = 0
+    success_count_24h: int = 0
+    failed_count_24h: int = 0
+    dead_letter_count_24h: int = 0
+
+class AdminEndpointDisableReq(BaseModel):
+    reason: str = "admin_disabled"
+
+
+# ─── Unified Content Scheduling (SCHED-001) ─────────────────────
+
+SCHEDULED_ACTION_TYPES = {"post", "file_share", "catalog_sale"}
+
+
+class ScheduledActionCreateIn(BaseModel):
+    action_type: str
+    scheduled_at: int
+    title: str = ""
+    description: str = ""
+    payload: dict = {}
+    notify_before_seconds: int = 0
+
+    @model_validator(mode="after")
+    def _validate_type(self):
+        if self.action_type not in SCHEDULED_ACTION_TYPES:
+            raise ValueError(f"Invalid action_type: {self.action_type}")
+        return self
+
+
+class ScheduledActionUpdateIn(BaseModel):
+    scheduled_at: Optional[int] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    payload: Optional[dict] = None
+    notify_before_seconds: Optional[int] = None
+
+
+class ScheduledActionOut(BaseModel):
+    action_id: str
+    action_type: str
+    status: str
+    scheduled_at: int
+    created_at: int
+    updated_at: Optional[int] = None
+    completed_at: Optional[int] = None
+    title: str = ""
+    description: str = ""
+    payload: dict = {}
+    error: Optional[str] = None
+    retry_count: int = 0
+    max_retries: int = 3
+    notify_before_seconds: int = 0
+    reminder_sent: bool = False
+
+
+class ScheduledActionListOut(BaseModel):
+    actions: list[ScheduledActionOut] = []
+    cursor: Optional[str] = None
+
+
+class ScheduledCalendarOut(BaseModel):
+    actions: list[ScheduledActionOut] = []
+    total: int = 0
+
+
+class ScheduledPostIn(BaseModel):
+    text: str = ""
+    image_urls: list[str] = []
+    lock_price_cents: int = 0
+    visibility: str = "public"
+    scheduled_at: int = 0
+
+
+class CatalogSaleIn(BaseModel):
+    sale_price_cents: int
+    sale_starts_at: int
+    sale_ends_at: int
+    sale_label: str = ""
+
+
+class CatalogSaleOut(BaseModel):
+    start_action_id: str
+    end_action_id: str
+    sale_starts_at: int
+    sale_ends_at: int
+
+
+# ─── Geo-Blocking (GEO-001) ─────────────────────────────────────
+
+
+_VALID_ISO_COUNTRY_CODES = {
+    "AD","AE","AF","AG","AI","AL","AM","AO","AQ","AR","AS","AT","AU","AW","AX",
+    "AZ","BA","BB","BD","BE","BF","BG","BH","BI","BJ","BL","BM","BN","BO","BQ",
+    "BR","BS","BT","BV","BW","BY","BZ","CA","CC","CD","CF","CG","CH","CI","CK",
+    "CL","CM","CN","CO","CR","CU","CV","CW","CX","CY","CZ","DE","DJ","DK","DM",
+    "DO","DZ","EC","EE","EG","EH","ER","ES","ET","FI","FJ","FK","FM","FO","FR",
+    "GA","GB","GD","GE","GF","GG","GH","GI","GL","GM","GN","GP","GQ","GR","GS",
+    "GT","GU","GW","GY","HK","HM","HN","HR","HT","HU","ID","IE","IL","IM","IN",
+    "IO","IQ","IR","IS","IT","JE","JM","JO","JP","KE","KG","KH","KI","KM","KN",
+    "KP","KR","KW","KY","KZ","LA","LB","LC","LI","LK","LR","LS","LT","LU","LV",
+    "LY","MA","MC","MD","ME","MF","MG","MH","MK","ML","MM","MN","MO","MP","MQ",
+    "MR","MS","MT","MU","MV","MW","MX","MY","MZ","NA","NC","NE","NF","NG","NI",
+    "NL","NO","NP","NR","NU","NZ","OM","PA","PE","PF","PG","PH","PK","PL","PM",
+    "PN","PR","PS","PT","PW","PY","QA","RE","RO","RS","RU","RW","SA","SB","SC",
+    "SD","SE","SG","SH","SI","SJ","SK","SL","SM","SN","SO","SR","SS","ST","SV",
+    "SX","SY","SZ","TC","TD","TF","TG","TH","TJ","TK","TL","TM","TN","TO","TR",
+    "TT","TV","TW","TZ","UA","UG","UM","US","UY","UZ","VA","VC","VE","VG","VI",
+    "VN","VU","WF","WS","YE","YT","ZA","ZM","ZW",
+}
+
+
+class GeoRestrictionRequest(BaseModel):
+    geo_mode: Optional[Literal["allow", "block"]] = None
+    geo_countries: Optional[List[str]] = Field(default=None, max_length=250)
+
+    @model_validator(mode="after")
+    def validate_geo_fields(self):
+        if self.geo_mode and not self.geo_countries:
+            raise ValueError("geo_countries is required when geo_mode is set")
+        if self.geo_countries:
+            for code in self.geo_countries:
+                if not re.match(r"^[A-Z]{2}$", code):
+                    raise ValueError(f"invalid country code: {code}")
+                if code not in _VALID_ISO_COUNTRY_CODES:
+                    raise ValueError(f"invalid country code: {code}")
+        if self.geo_mode is None:
+            self.geo_countries = None
+        return self
+
+
+class GeoRestrictionOut(BaseModel):
+    ok: bool = True
+    geo_mode: Optional[str] = None
+    geo_countries: Optional[List[str]] = None
+
+
+class GeoCountryOut(BaseModel):
+    code: str
+    name: str
+
+
+class GeoCountriesListOut(BaseModel):
+    countries: List[GeoCountryOut]
+
+
+class MyCountryOut(BaseModel):
+    country: Optional[str] = None
+    ip: str
+    source: str
+
+
+class GeoCheckResult(BaseModel):
+    allowed: bool
+    country: Optional[str] = None
+    geo_mode: Optional[str] = None
+    matched_rule: Optional[str] = None
+
+
+# ─── Promo Codes & Coupons (PROMO-001) ──────────────────────────
+
+
+class PromoCodeCreateIn(BaseModel):
+    code: str = Field(..., min_length=3, max_length=30)
+    discount_type: Literal["percentage", "fixed_amount", "free_trial"]
+    discount_value: int = 0
+    free_trial_days: int = 0
+    applies_to: List[Literal["subscription", "vod", "shop"]] = Field(default=["subscription"])
+    min_purchase_cents: int = 0
+    max_uses: int = 0  # 0 = unlimited
+    max_uses_per_user: int = 1
+    expires_at: int = 0  # 0 = no expiry
+
+
+class PromoCodeUpdateIn(BaseModel):
+    active: Optional[bool] = None
+    expires_at: Optional[int] = None
+    max_uses: Optional[int] = None
+
+
+class PromoCodeOut(BaseModel):
+    code_id: str
+    code: str
+    discount_type: str
+    discount_value: int = 0
+    free_trial_days: int = 0
+    applies_to: List[str] = []
+    min_purchase_cents: int = 0
+    max_uses: int = 0
+    max_uses_per_user: int = 1
+    current_uses: int = 0
+    expires_at: int = 0
+    active: bool = True
+    created_at: int = 0
+    creator_user_id: str = ""
+
+
+class PromoCodeListOut(BaseModel):
+    items: List[PromoCodeOut] = []
+    next_cursor: Optional[str] = None
+
+
+class PromoRedemptionOut(BaseModel):
+    user_id: str
+    redeemed_at: int
+    discount_applied_cents: int = 0
+    original_price_cents: int = 0
+    final_price_cents: int = 0
+    checkout_type: str = ""
+    checkout_item_id: str = ""
+
+
+class PromoCodeStatsOut(PromoCodeOut):
+    stats: Optional[dict] = None
+
+
+class PromoValidateIn(BaseModel):
+    code: str
+    checkout_type: Literal["subscription", "vod", "shop"]
+    item_price_cents: int = 0
+    creator_user_id: str
+
+
+class PromoValidateOut(BaseModel):
+    valid: bool
+    code_id: Optional[str] = None
+    discount_type: Optional[str] = None
+    discount_cents: int = 0
+    final_price_cents: int = 0
+    free_trial_days: int = 0
+    message: Optional[str] = None
+
+
+class PromoRedeemIn(BaseModel):
+    code: str
+    user_id: str
+    original_price_cents: int = 0
+    final_price_cents: int = 0
+    checkout_type: str = ""
+    checkout_item_id: str = ""
+
+
+class PromoDeactivateOut(BaseModel):
+    ok: bool = True
+    code_id: str
+    active: bool = False
+
+
+# ─── Group Video Calls (CALL-012) ────────────────────────────────
+
+
+class GroupCallMediaStatus(BaseModel):
+    audio: bool = True
+    video: bool = True
+    screen: bool = False
+
+
+class GroupCallParticipantOut(BaseModel):
+    user_id: str
+    display_name: str = ""
+    joined_at: int = 0
+    left_at: int = 0
+    media_status: GroupCallMediaStatus = GroupCallMediaStatus()
+    connection_quality: str = "good"
+    state: str = "active"
+
+
+class GroupCallCreateIn(BaseModel):
+    conversation_id: str
+    mode: Literal["audio", "video"] = "video"
+    max_participants: int = Field(default=8, ge=2, le=8)
+
+
+class GroupCallSignalingInfo(BaseModel):
+    mode: str = "mesh"
+    ice_servers: list[dict] = []
+
+
+class GroupCallOut(BaseModel):
+    call_id: str
+    conversation_id: str
+    creator_user_id: str
+    state: str = "created"
+    mode: str = "video"
+    max_participants: int = 8
+    current_participant_count: int = 0
+    participants: list[GroupCallParticipantOut] = []
+    created_at: int = 0
+    started_at: int = 0
+    end_ts: int = 0
+    end_reason: str = ""
+    duration_seconds: int = 0
+    signaling: Optional[GroupCallSignalingInfo] = None
+
+
+class GroupCallJoinOut(BaseModel):
+    call_id: str
+    state: str
+    mode: str
+    current_participant_count: int
+    participants: list[GroupCallParticipantOut]
+    signaling: GroupCallSignalingInfo = GroupCallSignalingInfo()
+
+
+class GroupCallLeaveOut(BaseModel):
+    ok: bool = True
+    call_ended: bool = False
+    remaining_participants: int = 0
+
+
+class GroupCallEndOut(BaseModel):
+    ok: bool = True
+    call_id: str
+    duration_seconds: int = 0
+    total_participants: int = 0
+
+
+class GroupCallParticipantsOut(BaseModel):
+    participants: list[GroupCallParticipantOut] = []
+    total_active: int = 0
+    total_joined: int = 0
+
+
+class GroupCallSignalIn(BaseModel):
+    type: str  # "offer", "answer", "ice_candidate"
+    target_user_id: str
+    payload: dict = {}
+
+
+class GroupCallSignalOut(BaseModel):
+    ok: bool = True
+    relayed_to: str = ""
+
+
+class GroupCallMediaUpdateIn(BaseModel):
+    audio: Optional[bool] = None
+    video: Optional[bool] = None
+    screen: Optional[bool] = None
+
+
+class GroupCallMediaUpdateOut(BaseModel):
+    ok: bool = True
+    media_status: GroupCallMediaStatus = GroupCallMediaStatus()

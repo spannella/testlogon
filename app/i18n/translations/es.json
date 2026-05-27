@@ -1,0 +1,16 @@
+{
+  "errors.rate_limited": "Demasiadas solicitudes. Intenta de nuevo en {seconds} segundos.",
+  "errors.unauthorized": "Inicia sesión para continuar.",
+  "errors.not_found": "El recurso solicitado no fue encontrado.",
+  "errors.server_error": "Ocurrió un error interno. Intenta de nuevo más tarde.",
+  "errors.invalid_locale": "Código de idioma no válido.",
+  "errors.too_many_login_attempts": "Demasiados intentos de inicio de sesión. Intenta de nuevo más tarde.",
+  "errors.invalid_credentials": "Correo o contraseña no válidos.",
+  "errors.session_expired": "Tu sesión ha expirado. Inicia sesión de nuevo.",
+  "errors.forbidden": "No tienes permiso para realizar esta acción.",
+  "errors.validation_error": "La solicitud contiene datos no válidos.",
+  "alerts.broadcast_starting_in": "Transmisión comenzando en {duration}",
+  "alerts.new_message": "Tienes un nuevo mensaje",
+  "alerts.payment_received": "Pago de {amount} recibido",
+  "alerts.subscription_renewed": "Tu suscripción ha sido renovada"
+}

@@ -95,16 +95,27 @@ from app.routers.vod_drm import router as vod_drm_router
 from app.routers.video_listing import router as video_listing_router
 from app.routers.transcode_jobs import router as transcode_jobs_router, video_router as transcode_video_router
 from app.routers.call_recording import router as call_recording_router
+from app.routers.call_billing import router as call_billing_router
+from app.routers.group_calls import router as group_calls_router
 from app.routers.vod_bridge import router as vod_bridge_router
 from app.routers.creator_earnings import router as creator_earnings_router
+from app.routers.creator_analytics import router as creator_analytics_router
 from app.routers.creator_payouts import router as creator_payouts_router
 from app.routers.admin_payouts import router as admin_payouts_router
+from app.routers.admin_rate_limits import router as admin_rate_limits_router
+from app.routers.privacy import router as privacy_router, admin_router as admin_privacy_router
+from app.routers.referrals import router as referrals_router, internal_router as referrals_internal_router
+from app.routers.promo_codes import router as promo_codes_router
+from app.routers.stories import router as stories_router
+from app.routers.watermark import router as watermark_router, internal_router as watermark_internal_router
+from app.middleware.rate_limit import rate_limit_middleware_factory
 from app.services.billing_reconcile import start_billing_reconcile_task
 from app.services.billing_dunning import start_billing_dunning_task
 from app.services.filemanager import start_filemgr_purge_task
 from app.services.api_usage_metering import record_api_usage_from_response, enforce_account_quota_pre_request
 from app.services.api_metering_policy import build_limit_denial_headers
 from app.routers.messaging import start_scheduled_messages_task
+from app.services.broadcast_scheduler import start_broadcast_scheduler_task, start_broadcast_reminder_task
 from app.services.projects_reconcile import start_projects_reconcile_task
 from app.services.provider_oauth import validate_google_drive_mount_oauth_configuration
 from app.services.filemanager_mount_reconcile import start_filemgr_mount_reconcile_task
@@ -123,6 +134,20 @@ from app.services.api_key_rollout import validate_api_key_rollout_settings
 from app.services.playback_entitlements import validate_playback_entitlement, PlaybackEntitlementError
 from app.services.broadcast_reconciler import start_broadcast_reconciler_task
 from app.services.transcode_worker import start_transcode_worker_task
+from app.routers.webhooks import router as webhooks_router
+from app.services.webhook_dispatcher import start_webhook_dispatcher_task
+from app.routers.geo_rules import router as geo_rules_router
+from app.routers.scheduler import router as scheduler_router
+from app.routers.i18n import router as i18n_router
+from app.services.unified_scheduler import start_unified_scheduler_task
+from app.routers.refund_requests import router as refund_requests_router
+from app.routers.recommendations import (
+    gallery_for_you_router as reco_gallery_router,
+    similar_router as reco_similar_router,
+    creator_suggestions_router as reco_creator_router,
+    engagement_router as reco_engagement_router,
+    internal_router as reco_internal_router,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +260,7 @@ def create_app() -> FastAPI:
         return FileResponse(static_dir / "broadcast-devtools.html")
 
     app.add_middleware(CORSMiddleware, **_build_cors_options())
+    app.middleware("http")(rate_limit_middleware_factory())
     app.middleware("http")(_api_usage_metering_middleware())
     app.middleware("http")(_playback_entitlement_middleware())
     if METRICS_ENABLED:
@@ -322,6 +348,8 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_billing_dunning_task)
     app.add_event_handler("startup", start_filemgr_purge_task)
     app.add_event_handler("startup", start_scheduled_messages_task)
+    app.add_event_handler("startup", start_broadcast_scheduler_task)
+    app.add_event_handler("startup", start_broadcast_reminder_task)
     app.include_router(purchase_history_router)
     app.include_router(shoppingcart_router)
     app.include_router(catalog_router)
@@ -348,21 +376,49 @@ def create_app() -> FastAPI:
     app.include_router(kyc_cases_router)
     app.include_router(vnc_sessions_router)
     app.include_router(playback_entitlements_router)
+    # Recommendation routes MUST be registered before video_listing_router
+    # so /gallery/for-you and /{video_id}/similar match before /{video_id}
+    app.include_router(reco_gallery_router)
+    app.include_router(reco_similar_router)
+    app.include_router(reco_creator_router)
+    app.include_router(reco_engagement_router)
+    app.include_router(reco_internal_router)
+    # Watermark router registered before video_listing_router so
+    # /my-downloads matches before /{video_id} (VOD-020)
+    app.include_router(watermark_router)
     app.include_router(video_listing_router)
     app.include_router(vod_router)
     app.include_router(vod_drm_router)
     app.include_router(transcode_jobs_router)
     app.include_router(transcode_video_router)
     app.include_router(call_recording_router)
+    app.include_router(call_billing_router)
+    app.include_router(group_calls_router)
     app.include_router(vod_bridge_router)
     app.include_router(creator_earnings_router)
+    app.include_router(creator_analytics_router)
     app.include_router(creator_payouts_router)
     app.include_router(admin_payouts_router)
+    app.include_router(admin_rate_limits_router)
+    app.include_router(privacy_router)
+    app.include_router(admin_privacy_router)
+    app.include_router(stories_router)
+    app.include_router(referrals_router)
+    app.include_router(referrals_internal_router)
+    app.include_router(webhooks_router)
+    app.include_router(refund_requests_router)
+    app.include_router(promo_codes_router)
+    app.include_router(geo_rules_router)
+    app.include_router(scheduler_router)
+    app.include_router(i18n_router)
+    app.include_router(watermark_internal_router)
+    app.add_event_handler("startup", start_unified_scheduler_task)
     app.add_event_handler("startup", start_billing_reconcile_task)
     app.add_event_handler("startup", start_projects_reconcile_task)
     app.add_event_handler("startup", start_filemgr_mount_reconcile_task)
     app.add_event_handler("startup", start_broadcast_reconciler_task)
     app.add_event_handler("startup", start_transcode_worker_task)
+    app.add_event_handler("startup", start_webhook_dispatcher_task)
 
     uncovered_policy_routes: set[str] = set()
     for route in app.routes:

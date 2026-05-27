@@ -29,6 +29,7 @@ PROFILE_FIELDS = (
     "languages",
     "profile_photo_url",
     "cover_photo_url",
+    "locale",
 )
 
 
@@ -52,6 +53,7 @@ PROFILE_FIELD_VISIBILITY = {
     "languages": "member",
     "profile_photo_url": "public",
     "cover_photo_url": "public",
+    "locale": "private",
 }
 
 if set(PROFILE_FIELD_VISIBILITY.keys()) != set(PROFILE_FIELDS):
@@ -183,6 +185,14 @@ def normalize_profile_payload(data: Dict[str, Any]) -> Dict[str, Any]:
         out["profile_photo_url"] = _clean_str(data.get("profile_photo_url"), max_len=512)
     if "cover_photo_url" in data:
         out["cover_photo_url"] = _clean_str(data.get("cover_photo_url"), max_len=512)
+    if "locale" in data:
+        locale_val = _clean_str(data.get("locale"), max_len=10)
+        # Validate against supported locales
+        from app.core.settings import S as _settings
+        supported = [loc.strip() for loc in _settings.i18n_supported_locales.split(",") if loc.strip()]
+        if locale_val and locale_val not in supported:
+            raise HTTPException(400, "unsupported locale")
+        out["locale"] = locale_val
     return out
 
 
@@ -203,6 +213,7 @@ def empty_profile() -> Dict[str, Any]:
         "languages": [],
         "profile_photo_url": None,
         "cover_photo_url": None,
+        "locale": None,
     }
 
 

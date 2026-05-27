@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye, EyeOff, CreditCard, Check, FileText, CalendarDays, CalendarCheck, Users, Flag, Dices } from "lucide-react";
+import { MoreHorizontal, Forward, Trash2, Lock, Loader2, Pencil, Info, Download, X, Reply, Smile, DollarSign, Eye, EyeOff, CreditCard, Check, FileText, CalendarDays, CalendarCheck, Users, Flag, Dices, Mic } from "lucide-react";
 import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -58,6 +58,7 @@ import { ApiError } from "@/api/client";
 import type { GalleryImageItem, Message, MeetingPollAttachment, PaymentMethod } from "@/api/types";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import { FileMessageCard } from "./FileMessageCard";
+import { WaveformPlayer } from "./WaveformPlayer";
 import { VideoShareCard } from "./VideoShareCard";
 import { ReadReceipts, ViewTracker } from "./ReadReceipts";
 import { ForwardDialog } from "./ForwardDialog";
@@ -157,6 +158,7 @@ function replyPreviewText(msg: Message): string {
   if (msg.kind === "image") return "[Image]";
   if (msg.kind === "video") return "[Video]";
   if (msg.kind === "audio") return "[Audio]";
+  if (msg.kind === "voice_message") return "[Voice message]";
   if (msg.kind === "file") return msg.file?.name ? `[File: ${msg.file.name}]` : "[File]";
   if (msg.is_encrypted) return "[Encrypted message]";
   return (msg.text ?? "").slice(0, 80) || "[Message]";
@@ -1473,6 +1475,22 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
           )}
           {message.kind === "video_share" && message.text && (
             <p className="mt-1 text-sm">{message.text}</p>
+          )}
+
+          {/* ── Voice message ── */}
+          {message.kind === "voice_message" && message.voice_message && (
+            <div className="mt-1" data-testid="voice-message-bubble">
+              <div className="flex items-center gap-2 mb-1">
+                <Mic className="h-4 w-4 text-muted-foreground shrink-0" />
+                <span className="text-xs text-muted-foreground">Voice message</span>
+              </div>
+              <WaveformPlayer
+                audioUrl={message.voice_message.audio_url}
+                waveform={message.voice_message.waveform_data}
+                durationSeconds={message.voice_message.duration_seconds}
+                consumed={message.consumption_state === "consumed"}
+              />
+            </div>
           )}
 
           {/* ── Calendar share card ── */}

@@ -1,5 +1,6 @@
 import { PageHeader } from "@/components/shared/PageHeader";
 import { NewsFeed } from "./NewsFeed";
+import { StoryBar } from "./StoryBar";
 
 export default function FeedPage() {
   return (
@@ -8,6 +9,7 @@ export default function FeedPage() {
         title="Feed"
         description="See what's happening in your community"
       />
+      <StoryBar />
       <NewsFeed />
     </div>
   );

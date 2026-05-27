@@ -973,3 +973,84 @@ export async function getRecordingDownloadUrl(recordingId: string): Promise<{ do
     `/ui/messaging/messages/recordings/${recordingId}/download`,
   );
 }
+
+// ─── Voice Messages (MSG-002) ───────────────────────────────────────────────
+
+export interface PresignVoiceReq {
+  content_type: string;
+  size_bytes: number;
+  duration_seconds: number;
+}
+
+export interface CreateVoiceReq {
+  message_id: string;
+  s3_key: string;
+  content_type: string;
+  size_bytes: number;
+  duration_seconds: number;
+  waveform_data: number[];
+  consumption_policy?: "none" | "listen_once";
+  reply_to_message_id?: string | null;
+  send_at?: number | null;
+}
+
+export async function presignVoiceMessage(
+  conversationId: string,
+  body: PresignVoiceReq,
+): Promise<{ message_id: string; upload_url: string; s3_key: string }> {
+  return api.post<{ message_id: string; upload_url: string; s3_key: string }>(
+    `/messaging/conversations/${conversationId}/voice-message/presign`,
+    body,
+  );
+}
+
+export async function createVoiceMessage(
+  conversationId: string,
+  body: CreateVoiceReq,
+): Promise<Message> {
+  return api.post<Message>(
+    `/messaging/conversations/${conversationId}/voice-message`,
+    body,
+  );
+}
+
+export async function sendVoiceMessage(
+  conversationId: string,
+  audioBlob: Blob,
+  meta: {
+    durationSeconds: number;
+    waveform: number[];
+    contentType: string;
+    consumption_policy?: "none" | "listen_once";
+    reply_to_message_id?: string | null;
+    send_at?: number | null;
+  },
+): Promise<Message> {
+  // 1. Get presigned URL
+  const presign = await presignVoiceMessage(conversationId, {
+    content_type: meta.contentType,
+    size_bytes: audioBlob.size,
+    duration_seconds: meta.durationSeconds,
+  });
+
+  // 2. Upload blob to S3
+  const uploadResp = await fetch(presign.upload_url, {
+    method: "PUT",
+    body: audioBlob,
+    headers: { "Content-Type": meta.contentType },
+  });
+  if (!uploadResp.ok) throw new Error("Failed to upload voice recording");
+
+  // 3. Create message record
+  return createVoiceMessage(conversationId, {
+    message_id: presign.message_id,
+    s3_key: presign.s3_key,
+    content_type: meta.contentType,
+    size_bytes: audioBlob.size,
+    duration_seconds: meta.durationSeconds,
+    waveform_data: meta.waveform,
+    consumption_policy: meta.consumption_policy ?? "none",
+    reply_to_message_id: meta.reply_to_message_id ?? null,
+    send_at: meta.send_at ?? null,
+  });
+}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from typing import Any, Dict, List, Optional
@@ -85,6 +86,7 @@ def _alert_out(item: Dict[str, Any]) -> Dict[str, Any]:
         "read": item.get("read", False),
         "read_at": item.get("read_at", 0),
         "toast_delivered": item.get("toast_delivered", False),
+        "priority": item.get("priority", "normal"),
     }
 
 
@@ -160,13 +162,23 @@ async def mark_read(body: MarkReadReq, ctx: Dict[str, str] = Depends(require_ui_
     updated = 0
     for aid in body.alert_ids[:200]:
         try:
-            T.alerts.update_item(
+            # Only count items that were previously unread
+            resp = T.alerts.update_item(
                 Key={"user_sub": ctx["user_sub"], "alert_id": aid},
                 UpdateExpression="SET #r=:t, read_at=:ts",
+                ConditionExpression="#r = :f",
                 ExpressionAttributeNames={"#r": "read"},
-                ExpressionAttributeValues={":t": True, ":ts": ts},
+                ExpressionAttributeValues={":t": True, ":ts": ts, ":f": False},
+                ReturnValues="ALL_NEW",
             )
             updated += 1
+        except Exception:
+            pass
+    # Decrement sentinel count for each alert marked read
+    if updated > 0 and S.notification_unread_count_enabled:
+        try:
+            from app.services.notification_unread import decrement_unread_count
+            decrement_unread_count(ctx["user_sub"], updated)
         except Exception:
             pass
     return {"ok": True, "updated": updated}
@@ -246,18 +258,27 @@ async def set_webhook_prefs(body: AlertWebhookPrefsReq, ctx: Dict[str, str] = De
 
 @router.get("/alerts/unread-count")
 async def get_unread_count(ctx: Dict[str, str] = Depends(require_ui_session)):
-    from app.services.social_alerts import get_unread_alert_count
     user_sub = ctx["user_sub"]
-    count = get_unread_alert_count(user_sub, cap=99)
-    return {"unread_count": count}
+    if S.notification_unread_count_enabled:
+        from app.services.notification_unread import get_unread_count as _get_count
+        count = _get_count(user_sub)
+    else:
+        from app.services.social_alerts import get_unread_alert_count
+        count = get_unread_alert_count(user_sub, cap=99)
+    return {"count": count, "unread_count": count}
 
 
 @router.post("/alerts/mark-all-read")
 async def mark_all_read(ctx: Dict[str, str] = Depends(require_ui_session)):
-    from app.services.social_alerts import mark_all_alerts_read
     user_sub = ctx["user_sub"]
+    # Reset sentinel counter
+    if S.notification_unread_count_enabled:
+        from app.services.notification_unread import reset_unread_count
+        reset_unread_count(user_sub)
+    # Also mark individual alert rows as read
+    from app.services.social_alerts import mark_all_alerts_read
     marked = mark_all_alerts_read(user_sub)
-    return {"marked_count": marked}
+    return {"ok": True, "count": 0, "marked_count": marked}
 
 
 @router.get("/alerts/type-preferences")
@@ -434,10 +455,25 @@ async def alerts_stream(ctx: Dict[str, str] = Depends(require_ui_session)):
 
     async def gen():
         try:
-            yield "event: hello\ndata: {}\n\n"
+            # Send initial sync with current unread count
+            try:
+                if S.notification_unread_count_enabled:
+                    from app.services.notification_unread import get_unread_count as _get_count
+                    count = _get_count(user_sub)
+                else:
+                    count = 0
+                yield "event: hello\ndata: " + json.dumps({"type": "sync", "unread_count": count}, separators=(",", ":")) + "\n\n"
+            except Exception:
+                yield "event: hello\ndata: {}\n\n"
+
+            heartbeat_interval = 30  # seconds
             while True:
-                item = await q.get()
-                yield "event: alert\ndata: " + json.dumps(item, separators=(",", ":")) + "\n\n"
+                try:
+                    item = await asyncio.wait_for(q.get(), timeout=heartbeat_interval)
+                    yield "event: alert\ndata: " + json.dumps(item, separators=(",", ":"), default=str) + "\n\n"
+                except asyncio.TimeoutError:
+                    # Send heartbeat
+                    yield "event: heartbeat\ndata: " + json.dumps({"ts": now_ts()}, separators=(",", ":")) + "\n\n"
         finally:
             sse_unsubscribe(user_sub, q)
 

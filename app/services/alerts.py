@@ -278,6 +278,11 @@ def write_alert(user_sub: str, *, event: str, outcome: str, title: str, details:
         else:
             safe_details[k] = str(v)[:512]
 
+    # Determine priority for this alert
+    from app.services.alert_priority import get_alert_priority
+    alert_type = safe_details.get("alert_type") or event
+    priority = get_alert_priority(str(alert_type))
+
     item = {
         "user_sub": user_sub,
         "alert_id": alert_id,
@@ -288,15 +293,27 @@ def write_alert(user_sub: str, *, event: str, outcome: str, title: str, details:
         "details": safe_details,
         "read": False,
         "read_at": 0,
+        "priority": priority,
     }
     try:
         T.alerts.put_item(Item=with_ttl(item, ttl_epoch=ttl))
     except Exception:
         pass
 
-    # Also publish to SSE subscribers
+    # Increment atomic unread count sentinel
+    unread_delta = 0
+    if S.notification_unread_count_enabled:
+        try:
+            from app.services.notification_unread import increment_unread_count
+            increment_unread_count(user_sub)
+            unread_delta = 1
+        except Exception:
+            pass
+
+    # Publish to SSE subscribers with priority and unread_delta
     try:
-        sse_publish_alert(user_sub, item)
+        sse_item = {**item, "toast_priority": priority, "unread_delta": unread_delta}
+        sse_publish_alert(user_sub, sse_item)
     except Exception:
         pass
 
@@ -613,31 +630,43 @@ def audit_event(event: str, user_sub: str, request=None, **fields: Any) -> None:
                 subj, body = ticket_template
                 send_alert_email(emails, subj, body)
             else:
-                subj = f"[Alert] {alert_type}: {event} ({outcome})"
-                lines = [
-                    f"Type: {alert_type}",
-                    f"Event: {event}",
-                    f"Outcome: {outcome}",
-                    f"Time: {payload.get('ts')}",
-                ]
-                if identity:
-                    display_name = identity.get("display_name")
-                    if display_name:
-                        lines.append(f"User: {display_name}")
-                    email = identity.get("email")
-                    if email:
-                        lines.append(f"Profile email: {email}")
-                if request is not None:
-                    lines.append(f"IP: {payload.get('ip','')}")
-                    lines.append(f"User-Agent: {payload.get('user_agent','')}")
-                if alert_id:
-                    lines.append(f"Alert-ID: {alert_id}")
-                reason = fields.get("reason")
-                if reason:
-                    lines.append(f"Reason: {str(reason)[:200]}")
-                lines.append("")
-                lines.append(json.dumps(payload, indent=2)[:4000])
-                send_alert_email(emails, subj, "\n".join(lines))
+                # Try NOTIFY-001 HTML email templates
+                html_template = None
+                if S.notification_email_templates_enabled:
+                    try:
+                        from app.services.alert_email_templates import render_alert_email_template
+                        html_template = render_alert_email_template(alert_type, payload)
+                    except Exception:
+                        pass
+                if html_template is not None:
+                    subj, body = html_template
+                    send_alert_email(emails, subj, body)
+                else:
+                    subj = f"[Alert] {alert_type}: {event} ({outcome})"
+                    lines = [
+                        f"Type: {alert_type}",
+                        f"Event: {event}",
+                        f"Outcome: {outcome}",
+                        f"Time: {payload.get('ts')}",
+                    ]
+                    if identity:
+                        display_name = identity.get("display_name")
+                        if display_name:
+                            lines.append(f"User: {display_name}")
+                        email = identity.get("email")
+                        if email:
+                            lines.append(f"Profile email: {email}")
+                    if request is not None:
+                        lines.append(f"IP: {payload.get('ip','')}")
+                        lines.append(f"User-Agent: {payload.get('user_agent','')}")
+                    if alert_id:
+                        lines.append(f"Alert-ID: {alert_id}")
+                    reason = fields.get("reason")
+                    if reason:
+                        lines.append(f"Reason: {str(reason)[:200]}")
+                    lines.append("")
+                    lines.append(json.dumps(payload, indent=2)[:4000])
+                    send_alert_email(emails, subj, "\n".join(lines))
     except Exception:
         pass
 

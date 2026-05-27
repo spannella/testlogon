@@ -67,6 +67,14 @@ export const alertEmailConfirm = (challengeId: string, code: string) =>
 export const alertEmailRemove = (email: string) =>
   api.post<AlertPreferences>("/ui/alerts/emails/remove", { email });
 
+// ─── Unread count & mark-all-read ────────────────────────────────
+
+export const getUnreadCount = () =>
+  api.get<{ count: number; unread_count: number }>("/ui/alerts/unread-count");
+
+export const markAllAlertRead = () =>
+  api.post<{ ok: boolean; count: number; marked_count: number }>("/ui/alerts/mark-all-read", {});
+
 // ─── SSE stream URL ──────────────────────────────────────────────
 
 export const alertStreamUrl = "/ui/alerts/stream";

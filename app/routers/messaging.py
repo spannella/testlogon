@@ -1933,6 +1933,24 @@ class CreateImageMessageIn(BaseModel):
     preview_key: Optional[str] = Field(default=None, max_length=500)
 
 
+class PresignVoiceMessageRequest(BaseModel):
+    content_type: str = Field(pattern=r"^audio/(webm|mp4|ogg|wav)")
+    size_bytes: int = Field(ge=1, le=52_428_800)  # 50MB max
+    duration_seconds: float = Field(ge=0.5, le=300)  # 0.5s to 5 minutes
+
+
+class CreateVoiceMessageRequest(BaseModel):
+    message_id: str = Field(pattern=r"^m_[a-f0-9]{32}$")
+    s3_key: str
+    content_type: str
+    size_bytes: int = Field(ge=1)
+    duration_seconds: float = Field(ge=0.5, le=300)
+    waveform_data: List[float] = Field(min_length=10, max_length=200)
+    consumption_policy: Literal["none", "listen_once"] = "none"
+    reply_to_message_id: Optional[str] = None
+    send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
+
+
 class GalleryImageItemIn(BaseModel):
     bucket: str = Field(min_length=1, max_length=200)
     key: str = Field(min_length=1, max_length=500)
@@ -2288,7 +2306,7 @@ class MessageOut(BaseModel):
     message_id: str
     sender_id: str
     created_at: int
-    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll", "video_share"]
+    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll", "video_share", "voice_message"]
     text: Optional[str] = None
     image: Optional[Dict[str, Any]] = None
     file: Optional[Dict[str, Any]] = None
@@ -2298,6 +2316,7 @@ class MessageOut(BaseModel):
     meeting_poll: Optional[Dict[str, Any]] = None
     video_share: Optional[Dict[str, Any]] = None
     lottery: Optional[Dict[str, Any]] = None
+    voice_message: Optional[Dict[str, Any]] = None
     preview: Optional[Dict[str, Any]] = None
     # Gallery message fields
     free_images: Optional[List[Dict[str, Any]]] = None
@@ -3905,6 +3924,26 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
             "playback_expires_at": playback_expires_at,
         }
 
+    # Voice message projection
+    voice_message_out: Optional[Dict[str, Any]] = None
+    if merged_item.get("kind") == "voice_message" and not content_hidden:
+        from urllib.parse import quote as _vm_url_quote
+        _vm_s3_key = str(merged_item.get("audio_url") or "")
+        _vm_audio_url = ""
+        if _vm_s3_key:
+            if S.dev_mode:
+                _vm_audio_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_vm_url_quote(_vm_s3_key, safe='/')}"
+            else:
+                _vm_audio_url = _vm_s3_key  # In prod, generate presigned URL as needed
+        raw_waveform = merged_item.get("waveform_data") or []
+        voice_message_out = {
+            "audio_url": _vm_audio_url,
+            "audio_content_type": merged_item.get("audio_content_type"),
+            "audio_size_bytes": int(merged_item.get("audio_size_bytes", 0)),
+            "duration_seconds": float(merged_item.get("duration_seconds", 0)),
+            "waveform_data": [float(v) for v in raw_waveform],
+        }
+
     thread_id_value = str(merged_item.get(MESSAGE_FIELD_THREAD_ID) or "").strip()
     has_thread = False
     thread_reply_count: Optional[int] = None
@@ -3928,6 +3967,7 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         calendar_event=calendar_event_out,
         meeting_poll=meeting_poll_out,
         video_share=video_share_out,
+        voice_message=voice_message_out,
         lottery=lottery_out,
         preview=preview,
         free_images=free_images_out,
@@ -5189,6 +5229,18 @@ def _emit_no_agents_online_notice(*, conversation_id: str, user_id: str, now: in
 
 
 
+def _ddb_safe(value: Any) -> Any:
+    """Recursively convert Python float to Decimal for DynamoDB compatibility."""
+    from decimal import Decimal as _DdbDec
+    if isinstance(value, float):
+        return _DdbDec(str(value))
+    if isinstance(value, dict):
+        return {k: _ddb_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_ddb_safe(v) for v in value]
+    return value
+
+
 def fanout_event_to_conversation(
     conversation_id: str,
     sender_id: str,
@@ -5200,6 +5252,7 @@ def fanout_event_to_conversation(
     participants = resp.get("Items", [])
     ts = now_ts()
     ttl = ts + 7 * 24 * 3600
+    safe_payload = _ddb_safe(payload)
 
     with tbl_events.batch_writer() as bw:
         for p in participants:
@@ -5219,7 +5272,7 @@ def fanout_event_to_conversation(
                     "type": event_type,
                     "created_at": ts,
                     "conversation_id": conversation_id,
-                    "payload": payload,
+                    "payload": safe_payload,
                     "ttl": ttl,
                 }
             )
@@ -8036,6 +8089,190 @@ def create_image_message(
             consumption_policy=inp.consumption_policy,
             cohort=_extract_once_media_cohort(req),
         )
+    return message
+
+
+# ─── Voice Message Endpoints (MSG-002) ──────────────────────────────────────
+
+
+@router.post("/conversations/{conversation_id}/voice-message/presign")
+def presign_voice_message(
+    conversation_id: str,
+    body: PresignVoiceMessageRequest,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Get a presigned S3 upload URL for a voice recording."""
+    if not S.voice_message_enabled:
+        raise HTTPException(404, "Voice messages are not enabled")
+    require_participant_active(user_id, conversation_id)
+    from urllib.parse import quote as _vm_pq
+    msg_id = "m_" + uuid.uuid4().hex
+    ext = "webm"
+    if "mp4" in body.content_type:
+        ext = "mp4"
+    elif "ogg" in body.content_type:
+        ext = "ogg"
+    elif "wav" in body.content_type:
+        ext = "wav"
+    s3_key = f"voice-messages/{conversation_id}/{msg_id}.{ext}"
+    if S.dev_mode:
+        upload_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_vm_pq(s3_key, safe='/')}"
+    else:
+        upload_url = s3.generate_presigned_url(
+            ClientMethod="put_object",
+            Params={"Bucket": S3_BUCKET_IMAGES, "Key": s3_key, "ContentType": body.content_type},
+            ExpiresIn=300,
+        )
+    return {"message_id": msg_id, "upload_url": upload_url, "s3_key": s3_key}
+
+
+@router.post("/conversations/{conversation_id}/voice-message", response_model=MessageOut)
+def create_voice_message(
+    conversation_id: str,
+    body: CreateVoiceMessageRequest,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Create a voice message after uploading the audio to S3."""
+    if not S.voice_message_enabled:
+        raise HTTPException(404, "Voice messages are not enabled")
+    require_participant_active(user_id, conversation_id)
+    convo = _get_conversation_or_404(conversation_id)
+    _enforce_helpdesk_send_constraints(conversation_id=conversation_id, convo=convo, user_id=user_id, req=req)
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+    for participant in participants:
+        pid = participant.get("user_id")
+        if pid and pid != user_id:
+            require_subscription_access(user_id, pid)
+    _enforce_message_send_quota_precheck(user_id=user_id, conversation_id=conversation_id, req=req)
+    _validate_reply_target(conversation_id, body.reply_to_message_id)
+
+    ts = now_ts()
+
+    # Validate scheduled send
+    deliver_at: Optional[int] = None
+    is_scheduled = False
+    if body.send_at is not None:
+        if body.send_at <= ts + 5:
+            raise HTTPException(400, "send_at must be at least 5 seconds in the future")
+        deliver_at = body.send_at
+        is_scheduled = True
+
+    mid = body.message_id
+    max_samples = S.voice_message_waveform_samples
+    waveform = [max(0.0, min(1.0, float(v))) for v in body.waveform_data[:max_samples]]
+
+    from decimal import Decimal as _DecVM
+    waveform_dec = [_DecVM(str(v)) for v in waveform]
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "voice_message",
+        "text": None,
+        "audio_url": body.s3_key,
+        "audio_content_type": body.content_type,
+        "audio_size_bytes": body.size_bytes,
+        "duration_seconds": _DecVM(str(body.duration_seconds)),
+        "waveform_data": waveform_dec,
+        "reactions": {},
+    }
+
+    if body.consumption_policy != CONSUMPTION_POLICY_NONE:
+        item["consumption_policy"] = body.consumption_policy
+        item["media_kind"] = "audio"
+
+    # Scheduling
+    if is_scheduled:
+        item["status"] = "scheduled"
+        item["deliver_at"] = deliver_at
+
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+    item.update(
+        _build_reply_linkage_fields(
+            conversation_id=conversation_id,
+            reply_to_message_id=body.reply_to_message_id,
+            actor_user_id=user_id,
+            created_at=ts,
+        )
+    )
+
+    tbl_msgs.put_item(Item=item)
+
+    _send_single_destination_message(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        message_id=mid,
+        created_at=ts,
+        message_item=item,
+        participants=participants,
+        is_scheduled=is_scheduled,
+        preview_text="[Voice message]",
+        consumption_policy=body.consumption_policy,
+        media_kind="audio" if body.consumption_policy != CONSUMPTION_POLICY_NONE else None,
+    )
+
+    from urllib.parse import quote as _vm_url_quote2
+    _vm_audio_url_out = ""
+    if body.s3_key:
+        if S.dev_mode:
+            _vm_audio_url_out = f"/mock/s3/{S3_BUCKET_IMAGES}/{_vm_url_quote2(body.s3_key, safe='/')}"
+        else:
+            _vm_audio_url_out = body.s3_key
+
+    message = MessageOut(
+        conversation_id=conversation_id,
+        message_id=mid,
+        sender_id=user_id,
+        created_at=ts,
+        kind="voice_message",
+        voice_message={
+            "audio_url": _vm_audio_url_out,
+            "audio_content_type": body.content_type,
+            "audio_size_bytes": body.size_bytes,
+            "duration_seconds": float(body.duration_seconds),
+            "waveform_data": waveform,
+        },
+        reply_to_message_id=item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=item.get(MESSAGE_FIELD_PARENT_ID),
+        thread_id=item.get(MESSAGE_FIELD_THREAD_ID),
+        thread_root_message_id=item.get(MESSAGE_FIELD_THREAD_ROOT_ID),
+        consumption_policy=body.consumption_policy if body.consumption_policy != CONSUMPTION_POLICY_NONE else None,
+        media_kind="audio" if body.consumption_policy != CONSUMPTION_POLICY_NONE else None,
+        consumption_state=CONSUMPTION_STATE_PENDING if body.consumption_policy != CONSUMPTION_POLICY_NONE else None,
+        scheduled=is_scheduled,
+        deliver_at=deliver_at,
+    )
+    if not is_scheduled:
+        message = _apply_message_receipts(message, item, participants)
+    audit_event(
+        "messaging_message_sent",
+        user_id,
+        req,
+        outcome="success",
+        conversation_id=conversation_id,
+        message_id=mid,
+        kind="voice_message",
+        reply_to_message_id=item.get(MESSAGE_FIELD_REPLY_TO_ID),
+        parent_message_id=item.get(MESSAGE_FIELD_PARENT_ID),
+    )
+    _emit_message_lifecycle_archive_event_or_503(
+        mutation="send",
+        event_ts=ts,
+        conversation_id=conversation_id,
+        message_id=mid,
+        actor_user_id=user_id,
+        event_type="message.sent",
+        payload={"mutation": "send", "scheduled": is_scheduled, "message": _serialize_message_event_payload(item, user_id)},
+    )
+    _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
     return message
 
 
@@ -12329,6 +12566,8 @@ class CallInviteIn(BaseModel):
     callee_user_id: str
     initial_mode: str = "audio"
     idempotency_key: Optional[str] = None
+    paid: bool = False
+    rate_cents_per_min: Optional[int] = None
 
 
 class CallInviteOut(BaseModel):
@@ -12339,6 +12578,8 @@ class CallInviteOut(BaseModel):
     state: str
     initial_mode: str
     start_ts: int
+    paid: bool = False
+    rate_cents_per_minute: Optional[int] = None
 
 
 class CallAcceptIn(BaseModel):
@@ -12387,6 +12628,30 @@ async def create_call_invite(
     user_id: str = Depends(get_messaging_user_id),
 ):
     from app.services.messaging_call_lifecycle import CallLifecycleError, create_invite
+    from app.core.settings import S as _settings
+
+    paid = body.paid
+    rate_cents = 0
+    max_dur = 0
+
+    if paid:
+        if not _settings.call_billing_enabled:
+            raise HTTPException(400, detail={"code": "feature_disabled", "message": "Paid calls are not enabled"})
+        from app.services.call_billing_timer import get_call_rate, check_balance_for_paid_call
+        rate_settings = get_call_rate(body.callee_user_id)
+        if not rate_settings or not rate_settings.enabled:
+            raise HTTPException(400, detail={"code": "paid_calls_disabled", "message": "Creator has not enabled paid calls"})
+        rate_cents = rate_settings.rate_cents_per_minute
+        max_dur = rate_settings.max_duration_minutes * 60
+        try:
+            check_balance_for_paid_call(
+                caller_user_id=user_id,
+                rate_cents_per_minute=rate_cents,
+                min_balance_minutes=rate_settings.min_balance_minutes,
+            )
+        except ValueError as ve:
+            detail = ve.args[0] if ve.args else {"code": "insufficient_balance"}
+            raise HTTPException(402, detail=detail)
 
     try:
         record, _event = create_invite(
@@ -12397,6 +12662,9 @@ async def create_call_invite(
             callee_user_id=body.callee_user_id,
             initial_mode=body.initial_mode,
             idempotency_key=body.idempotency_key,
+            paid=paid,
+            rate_cents_per_min=rate_cents,
+            max_duration_seconds=max_dur,
         )
         return CallInviteOut(
             call_id=record.call_id,
@@ -12406,6 +12674,8 @@ async def create_call_invite(
             state=record.state,
             initial_mode=record.initial_mode,
             start_ts=record.start_ts,
+            paid=record.paid,
+            rate_cents_per_minute=record.rate_cents_per_min if record.paid else None,
         )
     except CallLifecycleError as exc:
         raise _call_error_to_http(exc)

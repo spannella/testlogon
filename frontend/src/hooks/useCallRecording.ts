@@ -8,7 +8,7 @@
  * - State management for UI indicators
  */
 import * as React from "react";
-import apiClient from "@/api/client";
+import { api as apiClient } from "@/api/client";
 
 export type RecordingState =
   | "idle"

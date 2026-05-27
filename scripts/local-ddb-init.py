@@ -514,7 +514,9 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
                 {"index_name": "ByCreatorCreatedAt", "partition_key": "created_by", "sort_key": "created_at"},
+                {"index_name": "ByScheduledAt", "partition_key": "schedule_status", "sort_key": "scheduled_at"},
             ],
+            attr_types={"scheduled_at": "N"},
         ),
         TableDef(
             _resolve_table_name(S.broadcast_outputs_table_name, "BroadcastOutputs"),
@@ -641,6 +643,17 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # CallBillingLedger: pk=call_id, sk=entry_id, GSIs ByCallerCreatedAt + ByCreatorCreatedAt (CALL-011)
+        TableDef(
+            _resolve_table_name(S.call_billing_ledger_table_name, "CallBillingLedger"),
+            "call_id",
+            "entry_id",
+            gsi=[
+                {"index_name": "ByCallerCreatedAt", "partition_key": "caller_user_id", "sort_key": "created_at"},
+                {"index_name": "ByCreatorCreatedAt", "partition_key": "creator_user_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
         # MessageLegalHolds: pk=hold_id, GSIs ByConversationStatusCreatedAt + ByStatusCreatedAt
         TableDef(
             _resolve_table_name(S.message_legal_holds_table_name, "MessageLegalHolds"),
@@ -704,8 +717,18 @@ def _table_defs() -> List[TableDef]:
                     "index_name": "BySourceBroadcast",
                     "partition_key": "source_broadcast_session_id",
                 },
+                {
+                    "index_name": "ByCategory",
+                    "partition_key": "category",
+                    "sort_key": "trending_score_sort",
+                },
+                {
+                    "index_name": "ByGalleryPublished",
+                    "partition_key": "gallery_status",
+                    "sort_key": "published_at",
+                },
             ],
-            attr_types={"created_at": "N"},
+            attr_types={"created_at": "N", "trending_score_sort": "N", "published_at": "N"},
         ),
         # Transcode jobs (VOD-003)
         TableDef(
@@ -737,6 +760,181 @@ def _table_defs() -> List[TableDef]:
             gsi=[
                 {"index_name": "ByUserCreatedAt", "partition_key": "user_id", "sort_key": "created_at"},
                 {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Broadcast Reminders (BCAST-009)
+        TableDef(
+            os.environ.get("DDB_BROADCAST_REMINDERS", "BroadcastReminders"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByRemindAt", "partition_key": "remind_status", "sort_key": "remind_at"},
+            ],
+            attr_types={"remind_at": "N"},
+        ),
+        # Broadcast Private Sessions (BCAST-011/012)
+        TableDef(
+            os.environ.get("DDB_BROADCAST_PRIVATE_SESSIONS", "BroadcastPrivateSessions"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "BySessionCreatedAt", "partition_key": "session_id", "sort_key": "created_at"},
+                {"index_name": "ByUserCreatedAt", "partition_key": "user_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Video Views (VOD-017)
+        TableDef(
+            os.environ.get("DDB_VIDEO_VIEWS", "VideoViews"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByVideoViewedAt", "partition_key": "video_id", "sort_key": "viewed_at"},
+            ],
+            attr_types={"viewed_at": "N"},
+        ),
+        # Video Likes (VOD-017)
+        TableDef(
+            os.environ.get("DDB_VIDEO_LIKES", "VideoLikes"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByVideoLikedAt", "partition_key": "video_id", "sort_key": "liked_at"},
+                {"index_name": "ByUserLikedAt", "partition_key": "user_id", "sort_key": "liked_at"},
+            ],
+            attr_types={"liked_at": "N"},
+        ),
+        # Ad Impressions (VOD-018)
+        TableDef(
+            os.environ.get("DDB_AD_IMPRESSIONS", "AdImpressions"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByVideoCreatedAt", "partition_key": "video_id", "sort_key": "created_at"},
+                {"index_name": "ByCreatorCreatedAt", "partition_key": "creator_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Rate limiting (PLATFORM-001)
+        TableDef(
+            _resolve_table_name(S.rate_limits_table_name, "rate_limits"),
+            "pk",
+            "sk",
+        ),
+        TableDef(
+            _resolve_table_name(S.rate_limit_events_table_name, "rate_limit_events"),
+            "pk",
+            "sk",
+        ),
+        # Analytics Rollups (ANALYTICS-001)
+        TableDef(
+            os.environ.get("DDB_ANALYTICS_ROLLUPS", "AnalyticsRollups"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByDateCreatedAt", "partition_key": "date_scope", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Privacy / GDPR (PRIVACY-001)
+        TableDef(
+            _resolve_table_name(S.data_requests_table_name, "data_requests"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "ByType", "partition_key": "request_type", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.data_request_audit_table_name, "data_request_audit"),
+            "pk",
+            "sk",
+        ),
+        # Webhooks (PLATFORM-002)
+        TableDef(
+            _resolve_table_name(S.webhook_endpoints_table_name, "webhook_endpoints"),
+            "pk",
+            "sk",
+        ),
+        TableDef(
+            _resolve_table_name(S.webhook_deliveries_table_name, "webhook_deliveries"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "next_retry_at"},
+                {"index_name": "ByUser", "partition_key": "user_sub", "sort_key": "created_at"},
+            ],
+            attr_types={"next_retry_at": "N", "created_at": "N"},
+        ),
+        # Promo Codes & Coupons (PROMO-001)
+        TableDef(
+            _resolve_table_name(S.promo_codes_table_name, "PromoCodes"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCreatorCreatedAt", "partition_key": "creator_scope", "sort_key": "created_at"},
+                {"index_name": "ByCodeString", "partition_key": "code_lookup_pk", "sort_key": "code_lookup_sk"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Unified Content Scheduling (SCHED-001)
+        TableDef(
+            _resolve_table_name(S.scheduled_actions_table_name, "scheduled_actions"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByDue", "partition_key": "GSI_DUE_PK", "sort_key": "GSI_DUE_SK"},
+                {"index_name": "ByType", "partition_key": "GSI_TYPE_PK", "sort_key": "GSI_TYPE_SK"},
+            ],
+            attr_types={"GSI_DUE_SK": "N", "GSI_TYPE_SK": "N"},
+        ),
+        # Watermark Jobs (VOD-020)
+        TableDef(
+            _resolve_table_name(S.watermark_jobs_table_name, "watermark_jobs"),
+            "job_id",
+            gsi=[
+                {"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"},
+            ],
+            attr_types={"GSI1SK": "N"},
+        ),
+        # Content Recommendations (DISC-001)
+        TableDef(
+            _resolve_table_name(S.recommendations_table_name, "recommendations"),
+            "pk",
+            "sk",
+        ),
+        # Internationalization (PLATFORM-003)
+        TableDef(
+            _resolve_table_name(S.translations_table_name, "translations"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "pk"},
+            ],
+        ),
+        # Refund Requests (BILLING-001)
+        TableDef(
+            _resolve_table_name(S.refund_requests_table_name, "RefundRequests"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status_scope", "sort_key": "created_at"},
+                {"index_name": "ByRequesterCreatedAt", "partition_key": "requester_scope", "sort_key": "created_at"},
+                {"index_name": "ByTransactionId", "partition_key": "transaction_entry_id"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # GroupCallSessions: pk=pk, sk=sk, GSIs ByConversationCreatedAt + ByStateCreatedAt (CALL-012)
+        TableDef(
+            _resolve_table_name(S.group_call_sessions_table_name, "GroupCallSessions"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByConversationCreatedAt", "partition_key": "conversation_id", "sort_key": "created_at"},
+                {"index_name": "ByStateCreatedAt", "partition_key": "state", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
         ),
@@ -920,6 +1118,7 @@ def main() -> None:
         created.append(table.name)
     _wait_for_tables(ddb, created)
     _enable_ttl_if_needed(ddb, _resolve_table_name(S.api_usage_table_name, "api_usage_events"))
+    _enable_ttl_if_needed(ddb, os.getenv("APP_TABLE", "app_single_table"))
     print(f"Ensured {len(created)} DynamoDB tables exist.")
 
 

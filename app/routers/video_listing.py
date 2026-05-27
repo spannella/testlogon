@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from decimal import Decimal
@@ -96,6 +96,8 @@ class VideoDetailOut(BaseModel):
     allow_download: bool = False
     download_available: bool = False
     download_mp4_size_bytes: Optional[int] = None
+    # Watermarked Downloads (VOD-020)
+    watermark_downloads: bool = False
     # Pay-per-view (MON-001)
     price_cents: Optional[int] = None
     access_mode: Optional[str] = None
@@ -106,6 +108,28 @@ class VideoDetailOut(BaseModel):
     subscription_available: bool = False
     purchase_available: bool = False
     subscription_upsell: bool = False
+    # Purchase Tiers (VOD-019)
+    available_purchase_types: List[str] = Field(default_factory=list)
+    view_once_price_cents: Optional[int] = None
+    rental_price_cents: Optional[int] = None
+    rental_duration_hours: Optional[int] = None
+    download_price_cents: Optional[int] = None
+    purchase_type: str = "permanent"
+    views_remaining: int = -1
+    rental_expires_at: Optional[int] = None
+    rental_remaining_seconds: Optional[int] = None
+    download_allowed: bool = False
+    # Ad-supported (VOD-018)
+    ads_enabled: bool = False
+    ads_free_for_subscribers: bool = False
+    ad_config: Optional[dict] = None
+    # Clipping provenance (VOD-015)
+    source_video_id: Optional[str] = None
+    clip_start_seconds: Optional[float] = None
+    clip_end_seconds: Optional[float] = None
+    created_via: Optional[str] = None
+    # Concatenation provenance (VOD-016)
+    source_video_ids: Optional[List[str]] = None
 
 
 class VideoUpdateIn(BaseModel):
@@ -161,6 +185,13 @@ def _video_to_detail(
     subscription_available: bool = False,
     purchase_available: bool = False,
     subscription_upsell: bool = False,
+    # VOD-018 fields
+    ads_enabled: bool = False,
+    # VOD-019 fields
+    purchase_type: str = "permanent",
+    views_remaining: int = -1,
+    expires_at: int = 0,
+    download_allowed: bool = False,
 ) -> VideoDetailOut:
     # Resolve DRM key URI if DRM is enabled for this video
     drm_key_uri: str | None = None
@@ -210,6 +241,7 @@ def _video_to_detail(
         allow_download=video.allow_download,
         download_available=download_available,
         download_mp4_size_bytes=video.download_mp4_size_bytes if video.download_mp4_size_bytes else None,
+        watermark_downloads=video.watermark_downloads,
         price_cents=video.price_cents,
         access_mode=video.access_mode,
         purchase_count=video.purchase_count,
@@ -218,6 +250,28 @@ def _video_to_detail(
         subscription_available=subscription_available,
         purchase_available=purchase_available,
         subscription_upsell=subscription_upsell,
+        # Ad-supported (VOD-018)
+        ads_enabled=ads_enabled,
+        ads_free_for_subscribers=video.ads_free_for_subscribers,
+        ad_config=video.ad_config,
+        # Clipping provenance (VOD-015)
+        source_video_id=video.source_video_id,
+        clip_start_seconds=video.clip_start_seconds,
+        clip_end_seconds=video.clip_end_seconds,
+        created_via=video.created_via,
+        # Concatenation provenance (VOD-016)
+        source_video_ids=video.source_video_ids,
+        # Purchase Tiers (VOD-019)
+        available_purchase_types=video.available_purchase_types or [],
+        view_once_price_cents=video.view_once_price_cents,
+        rental_price_cents=video.rental_price_cents,
+        rental_duration_hours=video.rental_duration_hours,
+        download_price_cents=video.download_price_cents,
+        purchase_type=purchase_type,
+        views_remaining=views_remaining,
+        rental_expires_at=expires_at if expires_at > 0 else None,
+        rental_remaining_seconds=max(0, expires_at - now_ts()) if expires_at > 0 else None,
+        download_allowed=download_allowed,
     )
 
 
@@ -290,9 +344,318 @@ def admin_list_by_status(
     return VideoListOut(items=items, cursor=encode_cursor(_sanitize_cursor(result.get("cursor"))))
 
 
+# ─── Video Gallery Hub (VOD-017) ────────────────────────────────────────────
+#
+# These endpoints MUST be registered before GET /{video_id} to avoid
+# FastAPI treating "gallery" as a video_id path parameter.
+
+
+class GalleryVideoItem(BaseModel):
+    video_id: str
+    title: str
+    description: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    category: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    view_count: int = 0
+    like_count: int = 0
+    comment_count: int = 0
+    owner_user_id: str
+    price_cents: Optional[int] = None
+    access_mode: Optional[str] = None
+    created_at: int = 0
+    published_at: Optional[int] = None
+
+
+class GalleryListOut(BaseModel):
+    videos: List[GalleryVideoItem]
+    categories: List[dict] = Field(default_factory=list)
+    cursor: Optional[str] = None
+
+
+class GallerySearchOut(BaseModel):
+    videos: List[GalleryVideoItem]
+    cursor: Optional[str] = None
+
+
+class PublishToGalleryIn(BaseModel):
+    category: str = Field(min_length=1, max_length=50)
+    tags: List[str] = Field(default_factory=list)
+    title: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    description: Optional[str] = Field(default=None, max_length=2000)
+
+
+class PublishToGalleryOut(BaseModel):
+    video_id: str
+    gallery_published: bool
+    category: str
+    tags: List[str]
+    published_at: int
+
+
+class ViewRecordOut(BaseModel):
+    view_count: int
+    is_new_view: bool
+
+
+class LikeToggleOut(BaseModel):
+    liked: bool
+    like_count: int
+
+
+class LikeCheckOut(BaseModel):
+    liked: bool
+
+
+class VideoCommentIn(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class VideoCommentOut(BaseModel):
+    comment_id: str
+    video_id: str
+    user_id: str
+    text: str
+    created_at: int
+
+
+class VideoCommentListOut(BaseModel):
+    comments: List[VideoCommentOut]
+    cursor: Optional[str] = None
+
+
+class CategoriesOut(BaseModel):
+    categories: List[dict]
+
+
+def _video_to_gallery_item(video) -> GalleryVideoItem:
+    return GalleryVideoItem(
+        video_id=video.id,
+        title=video.title,
+        description=video.description,
+        thumbnail_url=video.thumbnail_url,
+        duration_seconds=video.duration_seconds,
+        category=video.category,
+        tags=video.tags or [],
+        view_count=video.view_count,
+        like_count=video.like_count,
+        comment_count=video.comment_count,
+        owner_user_id=video.owner_user_id,
+        price_cents=video.price_cents,
+        access_mode=video.access_mode,
+        created_at=video.created_at,
+        published_at=video.published_at,
+    )
+
+
+@router.get("/gallery", response_model=GalleryListOut)
+def browse_gallery_endpoint(
+    category: Optional[str] = Query(default=None),
+    limit: int = Query(default=24, ge=1, le=100),
+    cursor: Optional[str] = Query(default=None),
+    user=Depends(require_ui_session),
+):
+    """Browse the video gallery hub."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_gallery import browse_gallery, GALLERY_CATEGORIES
+
+    decoded_cursor = decode_cursor(cursor)
+    result = browse_gallery(category=category, cursor=decoded_cursor, limit=limit)
+    videos = [_video_to_gallery_item(v) for v in result["items"]]
+    return GalleryListOut(
+        videos=videos,
+        categories=GALLERY_CATEGORIES,
+        cursor=encode_cursor(_sanitize_cursor(result.get("cursor"))),
+    )
+
+
+@router.get("/gallery/search", response_model=GallerySearchOut)
+def search_gallery_endpoint(
+    q: str = Query(min_length=1, max_length=200),
+    limit: int = Query(default=24, ge=1, le=100),
+    cursor: Optional[str] = Query(default=None),
+    user=Depends(require_ui_session),
+):
+    """Search gallery videos by title/description/tags."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_gallery import search_gallery
+
+    decoded_cursor = decode_cursor(cursor)
+    result = search_gallery(query=q, cursor=decoded_cursor, limit=limit)
+    videos = [_video_to_gallery_item(v) for v in result["items"]]
+    return GallerySearchOut(
+        videos=videos,
+        cursor=encode_cursor(_sanitize_cursor(result.get("cursor"))),
+    )
+
+
+@router.get("/gallery/categories", response_model=CategoriesOut)
+def list_gallery_categories(
+    user=Depends(require_ui_session),
+):
+    """List available gallery categories."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_gallery import GALLERY_CATEGORIES
+
+    return CategoriesOut(categories=GALLERY_CATEGORIES)
+
+
+@router.post("/{video_id}/gallery/publish", response_model=PublishToGalleryOut)
+def publish_to_gallery_endpoint(
+    video_id: str,
+    body: PublishToGalleryIn,
+    user=Depends(require_ui_session),
+):
+    """Publish a video to the gallery."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_gallery import publish_to_gallery
+
+    user_sub = user["user_sub"]
+    result = publish_to_gallery(
+        video_id=video_id,
+        user_id=user_sub,
+        category=body.category,
+        tags=body.tags,
+        title=body.title,
+        description=body.description,
+    )
+    return PublishToGalleryOut(**result)
+
+
+@router.post("/{video_id}/gallery/unpublish")
+def unpublish_from_gallery_endpoint(
+    video_id: str,
+    user=Depends(require_ui_session),
+):
+    """Unpublish a video from the gallery."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_gallery import unpublish_from_gallery
+
+    user_sub = user["user_sub"]
+    result = unpublish_from_gallery(video_id=video_id, user_id=user_sub)
+    return result
+
+
+@router.post("/{video_id}/view", response_model=ViewRecordOut)
+def record_view_endpoint(
+    video_id: str,
+    user=Depends(require_ui_session),
+):
+    """Record a video view (deduplicated per user per day)."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_gallery import record_view
+
+    user_sub = user["user_sub"]
+    result = record_view(video_id=video_id, user_id=user_sub)
+    return ViewRecordOut(**result)
+
+
+@router.post("/{video_id}/like", response_model=LikeToggleOut)
+def toggle_like_endpoint(
+    video_id: str,
+    user=Depends(require_ui_session),
+):
+    """Toggle like on a video."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_gallery import toggle_like
+
+    user_sub = user["user_sub"]
+    result = toggle_like(video_id=video_id, user_id=user_sub)
+    return LikeToggleOut(**result)
+
+
+@router.get("/{video_id}/like", response_model=LikeCheckOut)
+def check_like_endpoint(
+    video_id: str,
+    user=Depends(require_ui_session),
+):
+    """Check if the current user has liked a video."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_gallery import check_liked
+
+    user_sub = user["user_sub"]
+    liked = check_liked(video_id=video_id, user_id=user_sub)
+    return LikeCheckOut(liked=liked)
+
+
+@router.post("/{video_id}/comments", status_code=201, response_model=VideoCommentOut)
+def add_comment_endpoint(
+    video_id: str,
+    body: VideoCommentIn,
+    user=Depends(require_ui_session),
+):
+    """Add a comment to a video."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_comments import add_comment
+
+    user_sub = user["user_sub"]
+    result = add_comment(video_id=video_id, user_id=user_sub, text=body.text)
+    return VideoCommentOut(**result)
+
+
+@router.get("/{video_id}/comments", response_model=VideoCommentListOut)
+def list_comments_endpoint(
+    video_id: str,
+    limit: int = Query(default=20, ge=1, le=100),
+    cursor: Optional[str] = Query(default=None),
+    user=Depends(require_ui_session),
+):
+    """List comments for a video, newest first."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_comments import list_comments
+
+    result = list_comments(video_id=video_id, cursor=cursor, limit=limit)
+    return VideoCommentListOut(
+        comments=[VideoCommentOut(**c) for c in result["comments"]],
+        cursor=result.get("cursor"),
+    )
+
+
+@router.delete("/{video_id}/comments/{comment_id}", status_code=204)
+def delete_comment_endpoint(
+    video_id: str,
+    comment_id: str,
+    user=Depends(require_ui_session),
+):
+    """Delete a comment (author only)."""
+    if not S.video_gallery_enabled:
+        raise HTTPException(status_code=404, detail="gallery not enabled")
+
+    from app.services.video_comments import delete_comment
+
+    user_sub = user["user_sub"]
+    delete_comment(video_id=video_id, comment_id=comment_id, user_id=user_sub)
+    return None
+
+
+# ─── Video Detail ─────────────────────────────────────────────────────────
+
+
 @router.get("/{video_id}", response_model=VideoDetailOut)
 def get_video_detail(
     video_id: str,
+    request: Request,
     user=Depends(require_ui_session),
 ):
     """Get video detail. Owner sees any status; non-owner only published+public/unlisted."""
@@ -303,6 +666,17 @@ def get_video_detail(
     if not is_owner:
         if video.status != "published" or video.visibility not in ("public", "unlisted"):
             raise HTTPException(status_code=403, detail="access denied")
+        # GEO-001: Check geo-access for non-owners
+        _geo_mode = getattr(video, "geo_mode", None)
+        _geo_countries = getattr(video, "geo_countries", None)
+        # Also read from raw DDB item in case model doesn't have these attrs
+        if _geo_mode is None:
+            raw = T.video_metadata.get_item(Key={"video_id": video_id}).get("Item", {})
+            _geo_mode = raw.get("geo_mode")
+            _geo_countries = raw.get("geo_countries")
+        if _geo_mode:
+            from app.services.geo_check import check_geo_access
+            check_geo_access(request, _geo_mode, _geo_countries)
 
     # MON-005: Comprehensive access check (owner/free/purchased/subscription cascade)
     from app.services.vod_purchase import check_vod_access
@@ -321,6 +695,13 @@ def get_video_detail(
         subscription_available=access.subscription_available,
         purchase_available=access.purchase_available,
         subscription_upsell=access.subscription_upsell,
+        # VOD-018
+        ads_enabled=access.ads_enabled,
+        # VOD-019 fields
+        purchase_type=access.purchase_type,
+        views_remaining=access.views_remaining,
+        expires_at=access.expires_at,
+        download_allowed=access.download_allowed,
     )
 
 
@@ -385,6 +766,13 @@ def download_video_endpoint(
         if not is_public:
             raise HTTPException(status_code=403, detail="forbidden")
 
+        # VOD-019: Check download entitlement for non-owners
+        if S.vod_purchase_tiers_enabled:
+            from app.services.vod_purchase import check_entitlement_purchase_only
+            ent = check_entitlement_purchase_only(user_id=user_sub, video_id=video_id)
+            if not ent.entitled or not ent.download_allowed:
+                raise HTTPException(status_code=403, detail="Download access not included in your purchase")
+
     if not video.allow_download:
         raise HTTPException(status_code=403, detail="downloads not enabled for this video")
 
@@ -404,6 +792,156 @@ def download_video_endpoint(
         logger.warning("Failed to increment download count for %s", video_id)
 
     return result
+
+
+# ─── Video Clipping (VOD-015) ──────────────────────────────────────────────
+
+
+class ClipVideoIn(BaseModel):
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+    title: Optional[str] = Field(default=None, min_length=1, max_length=256)
+
+
+class ClipVideoOut(BaseModel):
+    video_id: str
+    title: str
+    status: str
+    source_video_id: str
+    clip_start_seconds: float
+    clip_end_seconds: float
+    created_via: str
+    clip_job_id: str
+
+
+@router.post("/{video_id}/clip", status_code=201, response_model=ClipVideoOut)
+def clip_video_endpoint(
+    video_id: str,
+    body: ClipVideoIn,
+    user=Depends(require_ui_session),
+):
+    """Create a clipped version of an existing video (VOD-015)."""
+    if not S.video_clipping_enabled:
+        raise HTTPException(status_code=403, detail="video clipping is not enabled")
+
+    user_sub = user["user_sub"]
+    video = get_video(video_id)
+
+    if video.owner_user_id != user_sub:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    if video.status not in ("published", "approved"):
+        raise HTTPException(status_code=400, detail="video must be published or approved")
+
+    if not video.source_s3_key:
+        raise HTTPException(status_code=409, detail="source file not available")
+
+    if video.duration_seconds is None:
+        raise HTTPException(status_code=409, detail="video duration unknown")
+
+    if body.start_seconds >= body.end_seconds:
+        raise HTTPException(status_code=400, detail="start_seconds must be less than end_seconds")
+
+    if body.end_seconds > video.duration_seconds:
+        raise HTTPException(status_code=400, detail="end_seconds exceeds video duration")
+
+    clip_duration = body.end_seconds - body.start_seconds
+    min_duration = S.video_clip_min_duration_seconds
+    if clip_duration < min_duration:
+        raise HTTPException(
+            status_code=400,
+            detail=f"minimum clip length is {min_duration} seconds",
+        )
+
+    # Create new video metadata for the clip
+    from app.services.video_metadata_store import create_video as _create_video, update_clip_fields
+    from app.services.transcode_job_store import create_job as _create_job
+
+    title = body.title or f"{video.title} (clip)"
+    new_video = _create_video(
+        owner_user_id=user_sub,
+        title=title,
+        description=video.description,
+        source_type="upload",
+        visibility=video.visibility,
+    )
+
+    # Set clip provenance fields
+    update_clip_fields(
+        video_id=new_video.id,
+        source_video_id=video_id,
+        clip_start_seconds=body.start_seconds,
+        clip_end_seconds=body.end_seconds,
+        created_via="clip",
+    )
+
+    # Enqueue clip job
+    from decimal import Decimal as _D
+    job = _create_job(
+        video_id=new_video.id,
+        tenant_id=user_sub,
+        rendition_profiles=[],
+        source_uri=video.source_s3_key,
+        job_type="clip",
+        extra_fields={
+            "clip_source_video_id": video_id,
+            "clip_start_seconds": _D(str(body.start_seconds)),
+            "clip_end_seconds": _D(str(body.end_seconds)),
+        },
+    )
+
+    return ClipVideoOut(
+        video_id=new_video.id,
+        title=title,
+        status="created",
+        source_video_id=video_id,
+        clip_start_seconds=body.start_seconds,
+        clip_end_seconds=body.end_seconds,
+        created_via="clip",
+        clip_job_id=job["job_id"],
+    )
+
+
+# ─── Video Concatenation (VOD-016) ───────────────────────────────────────
+
+
+class CombineVideosIn(BaseModel):
+    source_video_ids: List[str] = Field(min_length=2, max_length=10)
+    title: str = Field(min_length=1, max_length=256)
+    description: Optional[str] = Field(default=None, max_length=2000)
+
+
+class CombineVideosOut(BaseModel):
+    video_id: str
+    title: str
+    status: str
+    source_video_ids: List[str]
+    created_via: str
+    estimated_duration_seconds: float
+    concat_method: str
+    concat_job_id: str
+
+
+@router.post("/combine", status_code=201, response_model=CombineVideosOut)
+def combine_videos_endpoint(
+    body: CombineVideosIn,
+    user=Depends(require_ui_session),
+):
+    """Combine 2-10 videos into a single output (VOD-016)."""
+    if not S.video_concat_enabled:
+        raise HTTPException(status_code=403, detail="video concatenation is not enabled")
+
+    user_sub = user["user_sub"]
+
+    from app.services.video_concatenator import create_concat_job
+    result = create_concat_job(
+        owner_user_id=user_sub,
+        source_video_ids=body.source_video_ids,
+        title=body.title,
+        description=body.description,
+    )
+
+    return CombineVideosOut(**result)
 
 
 @router.delete("/{video_id}", status_code=204)
@@ -451,11 +989,23 @@ class VodAccessOut(BaseModel):
     subscription_available: bool = False
     purchase_available: bool = False
     subscription_upsell: bool = False
+    # VOD-018: ad-supported tier
+    ads_enabled: bool = False
+    # VOD-019 fields
+    purchase_type: str = "permanent"
+    views_remaining: int = -1
+    expires_at: Optional[int] = None
+    download_allowed: bool = False
 
 
 class VodPurchaseIn(BaseModel):
     payment_method_id: Optional[str] = None
     idempotency_key: Optional[str] = None
+    # VOD-019: purchase type selection
+    purchase_type: str = Field(
+        default="permanent",
+        pattern=r"^(view_once|rental|permanent|download)$",
+    )
 
 
 class VodPurchaseOut(BaseModel):
@@ -465,6 +1015,11 @@ class VodPurchaseOut(BaseModel):
     grant_type: str
     amount_cents: int
     purchase_id: str = ""
+    # VOD-019 fields
+    purchase_type: str = "permanent"
+    views_remaining: int = -1
+    expires_at: Optional[int] = None
+    download_allowed: bool = False
 
 
 class VodPurchaseListItem(BaseModel):
@@ -473,6 +1028,11 @@ class VodPurchaseListItem(BaseModel):
     grant_type: str
     amount_cents: int
     purchase_id: str = ""
+    # VOD-019 fields
+    purchase_type: str = "permanent"
+    views_remaining: int = -1
+    expires_at: Optional[int] = None
+    download_allowed: bool = False
 
 
 class VodPurchaseListOut(BaseModel):
@@ -481,7 +1041,13 @@ class VodPurchaseListOut(BaseModel):
 
 class VodPricingIn(BaseModel):
     price_cents: Optional[int] = Field(default=None, ge=0)
-    access_mode: Optional[str] = Field(default=None, pattern=r"^(free|ppv|subscriber_only|subscriber_free)$")
+    access_mode: Optional[str] = Field(default=None, pattern=r"^(free|ppv|subscriber_only|subscriber_free|ad_supported)$")
+    # VOD-019: per-type pricing fields
+    available_purchase_types: Optional[List[str]] = None
+    view_once_price_cents: Optional[int] = Field(default=None, ge=0)
+    rental_price_cents: Optional[int] = Field(default=None, ge=0)
+    rental_duration_hours: Optional[int] = Field(default=None, ge=1, le=720)
+    download_price_cents: Optional[int] = Field(default=None, ge=0)
 
 
 @router.get("/{video_id}/access", response_model=VodAccessOut)
@@ -503,7 +1069,26 @@ def check_video_access(
         subscription_available=access.subscription_available,
         purchase_available=access.purchase_available,
         subscription_upsell=access.subscription_upsell,
+        # VOD-018
+        ads_enabled=access.ads_enabled,
+        # VOD-019 fields
+        purchase_type=access.purchase_type,
+        views_remaining=access.views_remaining,
+        expires_at=access.expires_at if access.expires_at > 0 else None,
+        download_allowed=access.download_allowed,
     )
+
+
+def _resolve_price(video: VideoMetadataModel, purchase_type: str) -> Optional[int]:
+    """Resolve the correct price for a purchase type (VOD-019)."""
+    if purchase_type == "view_once":
+        return video.view_once_price_cents
+    elif purchase_type == "rental":
+        return video.rental_price_cents
+    elif purchase_type == "download":
+        return video.download_price_cents
+    else:  # permanent
+        return video.price_cents
 
 
 @router.post("/{video_id}/purchase", response_model=VodPurchaseOut)
@@ -517,9 +1102,6 @@ def purchase_video_endpoint(
 
     if video.owner_user_id == user_sub:
         raise HTTPException(status_code=400, detail="cannot purchase your own video")
-
-    if not video.price_cents or video.price_cents <= 0:
-        raise HTTPException(status_code=400, detail="video is free")
 
     if video.status != "published":
         raise HTTPException(status_code=400, detail="video not available for purchase")
@@ -540,14 +1122,39 @@ def purchase_video_endpoint(
                 detail="You already have access via your subscription",
             )
 
+    # VOD-019: Validate purchase type is available for this video
+    if S.vod_purchase_tiers_enabled and body.purchase_type != "permanent":
+        available_types = video.available_purchase_types or ["permanent"]
+        if body.purchase_type not in available_types:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Purchase type '{body.purchase_type}' not available for this video",
+            )
+    elif not S.vod_purchase_tiers_enabled and body.purchase_type != "permanent":
+        raise HTTPException(
+            status_code=400,
+            detail="Purchase tiers are not enabled",
+        )
+
+    # VOD-019: Resolve price based on purchase type
+    price = _resolve_price(video, body.purchase_type)
+    if price is None or price <= 0:
+        # Fallback: for permanent type, check video.price_cents
+        if body.purchase_type == "permanent" and video.price_cents and video.price_cents > 0:
+            price = video.price_cents
+        else:
+            raise HTTPException(status_code=400, detail="video is free")
+
     from app.services.vod_purchase import purchase_video
     result = purchase_video(
         buyer_id=user_sub,
         video_id=video_id,
-        price_cents=video.price_cents,
+        price_cents=price,
         seller_id=video.owner_user_id,
         payment_method_id=body.payment_method_id,
         idempotency_key=body.idempotency_key,
+        purchase_type=body.purchase_type,
+        rental_duration_hours=video.rental_duration_hours or S.vod_rental_default_duration_hours,
     )
     return VodPurchaseOut(**result)
 
@@ -563,6 +1170,30 @@ def list_purchases_endpoint(
     return VodPurchaseListOut(items=[VodPurchaseListItem(**i) for i in items])
 
 
+# ─── VOD-019: Playback Complete ──────────────────────────────────────────────
+
+
+@router.post("/{video_id}/playback-complete")
+def playback_complete_endpoint(
+    video_id: str,
+    user=Depends(require_ui_session),
+):
+    """Record playback completion (VOD-019).
+
+    For view_once purchases: atomically consumes the view (sets views_remaining=0).
+    For other types: no-op (returned for analytics).
+    Idempotent: calling twice on an already-consumed view is safe.
+    """
+    user_sub = user["user_sub"]
+    from app.services.vod_purchase import record_playback_complete
+    result = record_playback_complete(user_id=user_sub, video_id=video_id)
+
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail="No entitlement found")
+
+    return result
+
+
 @router.patch("/{video_id}/pricing", response_model=VideoDetailOut)
 def set_video_pricing(
     video_id: str,
@@ -574,6 +1205,19 @@ def set_video_pricing(
 
     if video.owner_user_id != user_sub:
         raise HTTPException(status_code=403, detail="not your video")
+
+    # VOD-019: Validate available_purchase_types
+    valid_types = {"view_once", "rental", "permanent", "download"}
+    if body.available_purchase_types is not None:
+        for pt in body.available_purchase_types:
+            if pt not in valid_types:
+                raise HTTPException(status_code=422, detail=f"Invalid purchase type: {pt}")
+
+    # VOD-019: Validate download_price >= permanent price
+    eff_price = body.price_cents if body.price_cents is not None else (video.price_cents or 0)
+    eff_download = body.download_price_cents if body.download_price_cents is not None else video.download_price_cents
+    if eff_download is not None and eff_price is not None and eff_download < eff_price:
+        raise HTTPException(status_code=422, detail="download_price_cents must be >= price_cents")
 
     update_expr_parts = []
     expr_values: dict = {}
@@ -588,6 +1232,27 @@ def set_video_pricing(
         update_expr_parts.append("#am = :am")
         expr_names["#am"] = "access_mode"
         expr_values[":am"] = body.access_mode
+
+    # VOD-019: per-type pricing fields
+    if body.available_purchase_types is not None:
+        update_expr_parts.append("available_purchase_types = :apt")
+        expr_values[":apt"] = body.available_purchase_types
+
+    if body.view_once_price_cents is not None:
+        update_expr_parts.append("view_once_price_cents = :vopc")
+        expr_values[":vopc"] = body.view_once_price_cents
+
+    if body.rental_price_cents is not None:
+        update_expr_parts.append("rental_price_cents = :rpc")
+        expr_values[":rpc"] = body.rental_price_cents
+
+    if body.rental_duration_hours is not None:
+        update_expr_parts.append("rental_duration_hours = :rdh")
+        expr_values[":rdh"] = body.rental_duration_hours
+
+    if body.download_price_cents is not None:
+        update_expr_parts.append("download_price_cents = :dpc")
+        expr_values[":dpc"] = body.download_price_cents
 
     if not update_expr_parts:
         raise HTTPException(status_code=400, detail="no fields to update")
@@ -697,3 +1362,156 @@ def list_creator_videos_with_access(
         viewer_has_subscription=has_sub,
         next_cursor=next_cursor if next_cursor else None,
     )
+
+
+# ─── VOD-018: Ad-Supported Video Tier ──────────────────────────────────────
+
+
+class AdConfigIn(BaseModel):
+    pre_roll: bool = True
+    mid_roll_intervals_seconds: List[int] = Field(default_factory=list)
+    overlay_enabled: bool = False
+    skip_after_seconds: int = Field(default=5, ge=0, le=30)
+    ads_free_for_subscribers: bool = False
+
+
+class AdSlotOut(BaseModel):
+    type: str
+    timestamp_seconds: int
+    duration_seconds: int
+    creative_id: str
+    creative_url: str
+    creative_type: str
+    skip_after_seconds: int
+    slot_index: int
+
+
+class AdPlacementOut(BaseModel):
+    ads_enabled: bool
+    slots: List[AdSlotOut] = Field(default_factory=list)
+    ad_free: bool = True
+
+
+class AdImpressionIn(BaseModel):
+    slot_type: str = Field(pattern=r"^(pre_roll|mid_roll|overlay)$")
+    slot_index: int = Field(ge=0)
+    creative_id: str = ""
+    event_type: str = Field(default="impression", pattern=r"^(impression|complete|skip)$")
+
+
+class AdImpressionOut(BaseModel):
+    ok: bool
+    event_id: str
+
+
+class AdRevenueOut(BaseModel):
+    video_id: str
+    ad_impression_count: int
+    ad_revenue_cents: int
+    estimated_cpm_cents: int
+
+
+@router.get("/{video_id}/ad-config", response_model=AdPlacementOut)
+def get_video_ad_config(
+    video_id: str,
+    user=Depends(require_ui_session),
+):
+    """Get ad placement config for a video (viewer-facing).
+
+    Returns ad slots with creative URLs if ads are enabled for this viewer.
+    Subscribers with ads_free_for_subscribers get empty slots.
+    """
+    if not S.vod_ads_enabled:
+        raise HTTPException(status_code=404, detail="ads not enabled")
+
+    user_sub = user["user_sub"]
+
+    from app.services.ad_placement import get_ad_config as _get_ad_config
+    result = _get_ad_config(video_id, user_sub)
+
+    slots = [AdSlotOut(**s) for s in result.get("slots", [])]
+    return AdPlacementOut(
+        ads_enabled=result.get("ads_enabled", False),
+        slots=slots,
+        ad_free=result.get("ad_free", True),
+    )
+
+
+@router.post("/{video_id}/ad-impression", response_model=AdImpressionOut)
+def record_ad_impression_endpoint(
+    video_id: str,
+    body: AdImpressionIn,
+    user=Depends(require_ui_session),
+):
+    """Record an ad impression event (impression/complete/skip)."""
+    if not S.vod_ads_enabled:
+        raise HTTPException(status_code=404, detail="ads not enabled")
+
+    user_sub = user["user_sub"]
+
+    from app.services.ad_placement import record_ad_impression
+    result = record_ad_impression(
+        video_id=video_id,
+        user_id=user_sub,
+        slot_type=body.slot_type,
+        slot_index=body.slot_index,
+        creative_id=body.creative_id,
+        event_type=body.event_type,
+    )
+    return AdImpressionOut(ok=result["ok"], event_id=result["event_id"])
+
+
+@router.get("/{video_id}/ad-stats", response_model=AdRevenueOut)
+def get_ad_stats_endpoint(
+    video_id: str,
+    user=Depends(require_ui_session),
+):
+    """Get ad impression and revenue stats for a video (owner only)."""
+    if not S.vod_ads_enabled:
+        raise HTTPException(status_code=404, detail="ads not enabled")
+
+    user_sub = user["user_sub"]
+    video = get_video(video_id)
+
+    if video.owner_user_id != user_sub:
+        raise HTTPException(status_code=403, detail="not your video")
+
+    from app.services.ad_placement import get_ad_stats
+    stats = get_ad_stats(video_id)
+    return AdRevenueOut(**stats)
+
+
+@router.patch("/{video_id}/ad-config")
+def set_video_ad_config(
+    video_id: str,
+    body: AdConfigIn,
+    user=Depends(require_ui_session),
+):
+    """Configure ad placement for a video (owner only)."""
+    if not S.vod_ads_enabled:
+        raise HTTPException(status_code=404, detail="ads not enabled")
+
+    user_sub = user["user_sub"]
+    video = get_video(video_id)
+
+    if video.owner_user_id != user_sub:
+        raise HTTPException(status_code=403, detail="not your video")
+
+    from app.services.ad_placement import validate_ad_config
+    duration = video.duration_seconds or 60
+    validated = validate_ad_config(body.model_dump(), duration)
+
+    T.video_metadata.update_item(
+        Key={"video_id": video_id},
+        UpdateExpression="SET ad_config = :ac, ads_free_for_subscribers = :afs, updated_at = :ua",
+        ExpressionAttributeValues={
+            ":ac": validated,
+            ":afs": body.ads_free_for_subscribers,
+            ":ua": now_ts(),
+        },
+    )
+    return {
+        "ok": True,
+        "ad_config": validated,
+        "ads_free_for_subscribers": body.ads_free_for_subscribers,
+    }
