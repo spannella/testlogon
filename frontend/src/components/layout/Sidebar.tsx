@@ -27,6 +27,7 @@ import {
   Video,
   Scale,
   Wrench,
+  Compass,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -62,6 +63,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Contacts", path: "/contacts", icon: <BookUser className="h-5 w-5" /> },
       { label: "Helpdesk", path: "/helpdesk", icon: <Headphones className="h-5 w-5" /> },
       { label: "Feed", path: "/feed", icon: <Rss className="h-5 w-5" /> },
+      { label: "Discover", path: "/discover", icon: <Compass className="h-5 w-5" /> },
     ],
   },
   {
@@ -103,6 +105,8 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Role Management", path: "/root/roles", icon: <UsersRound className="h-5 w-5" /> },
       { label: "Moderation Board", path: "/admin/moderation", icon: <Scale className="h-5 w-5" /> },
       { label: "Payment Incidents", path: "/admin/payment-incidents", icon: <CreditCard className="h-5 w-5" /> },
+      { label: "Video Review", path: "/admin/video-review", icon: <Video className="h-5 w-5" /> },
+      { label: "DMCA Claims", path: "/admin/dmca", icon: <Scale className="h-5 w-5" /> },
     ],
   },
 ];
@@ -166,6 +170,8 @@ export default function Sidebar() {
             if (item.path === "/remote-desktop") return isVncRemoteDesktopEnabled();
             if (item.path === "/admin/moderation") return showModerationBoard;
             if (item.path === "/admin/payment-incidents") return showPaymentIncidents;
+            if (item.path === "/admin/video-review") return showModerationBoard;
+            if (item.path === "/admin/dmca") return showModerationBoard;
             return true;
           });
           if (items.length === 0) return null;

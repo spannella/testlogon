@@ -2129,8 +2129,9 @@ def _notify_author_unlock_limit_reached_once(*, post_id: str, triggered_by_user_
 
 
 def is_following(viewer_id: str, target_id: str) -> bool:
-    it = ddb_get_item({"pk": pk_user(viewer_id), "sk": f"FOLLOWING#{target_id}"})
-    return bool(it and it.get("state") == "following")
+    from app.services.social import get_follow_status
+    status = get_follow_status(viewer_id, target_id)
+    return status["is_following"]
 
 
 def is_hidden(user_id: str, post_id: str) -> bool:
@@ -2658,34 +2659,18 @@ def get_upload_object(s3_key: str = Query(...)):
 # -----------------------------
 @router.post("/social/unfollow")
 def unfollow(req: UnfollowRequest, user_id: UserIdDep):
-    target = req.target_user_id
-    item = {
-        "pk": pk_user(user_id),
-        "sk": f"FOLLOWING#{target}",
-        "Entity": "Following",
-        "user_id": user_id,
-        "target_user_id": target,
-        "state": "unfollowed",
-        "updated_at": now_iso(),
-    }
-    ddb_put_item(item)
-    return {"ok": True}
+    from app.services.social import unfollow_user
+    return unfollow_user(user_id, req.target_user_id)
 
 
 @router.post("/social/refollow")
 def refollow(req: UnfollowRequest, user_id: UserIdDep):
-    target = req.target_user_id
-    item = {
-        "pk": pk_user(user_id),
-        "sk": f"FOLLOWING#{target}",
-        "Entity": "Following",
-        "user_id": user_id,
-        "target_user_id": target,
-        "state": "following",
-        "updated_at": now_iso(),
-    }
-    ddb_put_item(item)
-    return {"ok": True}
+    from app.services.social import follow_user
+    try:
+        return follow_user(user_id, req.target_user_id)
+    except ValueError:
+        # Maintain backward compatibility — old endpoint didn't validate
+        return {"ok": True}
 
 
 # -----------------------------
@@ -3113,8 +3098,25 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         post_item.update(schedule_due_index_values(req.publish_at or 0, post_id))
     ddb_put_item(post_item)
 
+    # SOC-005: maintain post_count on profile
+    if not is_scheduled:
+        try:
+            from app.core.tables import T as _T
+            _T.profile.update_item(
+                Key={"user_sub": user_id},
+                UpdateExpression="ADD post_count :one",
+                ExpressionAttributeValues={":one": 1},
+            )
+        except Exception:
+            logger.warning("Failed to increment post_count for %s", user_id)
+
     if not is_scheduled:
         _write_feed_ref_for_published_post(user_id=user_id, post_id=post_id, created_at=created_at)
+        try:
+            from app.services.newsfeed_fanout import fan_out_post_to_followers
+            fan_out_post_to_followers(author_id=user_id, post_id=post_id, created_at=created_at)
+        except Exception:
+            logger.exception("Fan-out failed for post %s by %s", post_id, user_id)
         _meter_newsfeed_post_publish(user_id=user_id, post_id=post_id)
     else:
         record_newsfeed_schedule_operation(operation="create", outcome="success")
@@ -3603,12 +3605,30 @@ def delete_post(post_id: str, user_id: UserIdDep):
         raise HTTPException(status_code=403, detail="Not your post")
     try:
         tbl.delete_item(Key={"pk": pk_post(post_id), "sk": sk_post()})
-        tbl.delete_item(Key={"pk": pk_post(post_id), "sk": f"FEEDREF#{user_id}"})
+        from app.services.newsfeed_fanout import fan_out_delete_post
+        fan_out_delete_post(post_id=post_id)
     except ClientError as exc:
         raise HTTPException(
             status_code=500,
             detail=f"DynamoDB error: {exc.response['Error'].get('Message', 'unknown')}",
         ) from exc
+
+    # SOC-005: decrement post_count on profile
+    try:
+        from app.core.tables import T as _T
+        from boto3.dynamodb.conditions import Attr as _Attr
+        _T.profile.update_item(
+            Key={"user_sub": user_id},
+            UpdateExpression="ADD post_count :neg_one",
+            ConditionExpression=_Attr("post_count").gt(0),
+            ExpressionAttributeValues={":neg_one": -1},
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            logger.warning("Failed to decrement post_count for %s", user_id)
+    except Exception:
+        logger.warning("Failed to decrement post_count for %s", user_id)
+
     return {"ok": True}
 
 
@@ -3713,26 +3733,20 @@ def tip_post(post_id: str, req: PostTipRequest, user_id: UserIdDep):
         expr_vals={":z": 0, ":amt": req.amount_cents},
     )
 
-    # Write billing ledger debit entry (best-effort)
-    if S.billing_table_name:
-        try:
-            billing_tbl_led = ddb.Table(S.billing_table_name)
-            led_entry_id = uuid.uuid4().hex
-            ts_now = int(time.time())
-            billing_tbl_led.put_item(Item={
-                "pk": f"USER#{user_id}",
-                "sk": f"LEDGER#{ts_now}#{led_entry_id}",
-                "entry_id": led_entry_id,
-                "ts": ts_now,
-                "type": "debit",
-                "amount_cents": req.amount_cents,
-                "currency": "USD",
-                "state": "settled",
-                "reason": "Post tip",
-                "meta": {"post_id": post_id, "payment_method_id": req.payment_method_id},
-            })
-        except Exception:
-            pass
+    # Write billing ledger debit + credit entries (best-effort)
+    post_author = post.get("user_id")
+    if post_author and post_author != user_id:
+        from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
+        write_tip_ledger(TipLedgerEntry(
+            tipper_user_id=user_id,
+            recipient_user_id=post_author,
+            amount_cents=req.amount_cents,
+            currency=req.currency,
+            content_type="post",
+            content_id=post_id,
+            payment_method_id=req.payment_method_id,
+            extra_meta={"post_id": post_id},
+        ))
 
     author = post.get("user_id")
     if author:
@@ -4550,6 +4564,21 @@ def tip_comment(post_id: str, comment_id: str, req: TipRequest, user_id: UserIdD
     )
 
     comment_author = updated.get("user_id")
+
+    # Write billing ledger debit + credit entries for comment tip (best-effort)
+    if comment_author and comment_author != tipper_id:
+        from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
+        write_tip_ledger(TipLedgerEntry(
+            tipper_user_id=tipper_id,
+            recipient_user_id=comment_author,
+            amount_cents=req.amount_cents,
+            currency=req.currency,
+            content_type="comment",
+            content_id=comment_id,
+            payment_method_id=getattr(req, "payment_method_id", None),
+            extra_meta={"post_id": post_id, "comment_id": comment_id},
+        ))
+
     if comment_author and comment_author != tipper_id:
         put_notification(
             recipient_user_id=comment_author,

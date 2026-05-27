@@ -5284,6 +5284,30 @@ def _get_message_or_404(conversation_id: str, message_id: str) -> dict:
     return item
 
 
+def _resolve_tip_recipient(conversation_id: str, sender_id: str) -> Optional[str]:
+    """For DMs, return the other participant. For groups, return None.
+
+    DM conversations have exactly 2 participants. Group conversations have 3+.
+    For DMs, the tip recipient is unambiguous -- it is the other participant.
+    For groups, attached tips are ambiguous (who receives them?) so this
+    function returns None, and the caller should skip the ledger write.
+    Post-send tips on group messages use the message author directly.
+    """
+    try:
+        resp = tbl_parts.query(
+            IndexName="GSI1",
+            KeyConditionExpression=Key("GSI1PK").eq(conversation_id),
+            Limit=10,
+        )
+        participants = resp.get("Items", [])
+    except Exception:
+        return None
+    other_ids = [p.get("user_id") for p in participants if p.get("user_id") != sender_id]
+    if len(other_ids) == 1:
+        return other_ids[0]
+    return None  # Group chat or error
+
+
 def _raise_encrypted_edit_unsupported() -> None:
     raise HTTPException(
         status_code=409,
@@ -7625,24 +7649,20 @@ def send_text_message(
             # Write billing immediately only for messages delivered right now.
             # Scheduled messages defer billing to _deliver_scheduled_message so
             # that cancelling a scheduled tipped message does not charge the sender.
-            try:
-                billing_tbl_tip = ddb.Table(S.billing_table_name)
-                _tip_led_id = uuid.uuid4().hex
-                billing_tbl_tip.put_item(Item={
-                    "pk": f"USER#{user_id}",
-                    "sk": f"LEDGER#{ts}#{_tip_led_id}",
-                    "entry_id": _tip_led_id,
-                    "ts": ts,
-                    "type": "debit",
-                    "amount_cents": tip_amount_cents,
-                    "currency": "USD",
-                    "state": "settled",
-                    "reason": "Tip attached to message",
-                    "meta": {"conversation_id": conversation_id, "message_id": mid, "tip_payment_id": tip_payment_id,
-                             "payment_method_id": inp.tip_payment_method_id},
-                })
-            except Exception:
-                pass  # Best-effort; do not fail the send if billing write fails
+            recipient_id = _resolve_tip_recipient(conversation_id, user_id)
+            if recipient_id:
+                from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
+                write_tip_ledger(TipLedgerEntry(
+                    tipper_user_id=user_id,
+                    recipient_user_id=recipient_id,
+                    amount_cents=tip_amount_cents,
+                    currency="USD",
+                    content_type="message",
+                    content_id=mid,
+                    payment_method_id=inp.tip_payment_method_id,
+                    tip_payment_id=tip_payment_id,
+                    extra_meta={"conversation_id": conversation_id},
+                ))
 
     # Validate: lock_price_cents and tip_amount_cents cannot both be set
     if inp.lock_price_cents and inp.tip_amount_cents:
@@ -7897,24 +7917,20 @@ def create_image_message(
         if not is_scheduled_img:
             # Write billing immediately only for messages delivered right now.
             # Scheduled messages defer billing to _deliver_scheduled_message.
-            try:
-                billing_tbl_tip_img = ddb.Table(S.billing_table_name)
-                _img_tip_led_id = uuid.uuid4().hex
-                billing_tbl_tip_img.put_item(Item={
-                    "pk": f"USER#{user_id}",
-                    "sk": f"LEDGER#{ts}#{_img_tip_led_id}",
-                    "entry_id": _img_tip_led_id,
-                    "ts": ts,
-                    "type": "debit",
-                    "amount_cents": tip_amount_cents,
-                    "currency": "USD",
-                    "state": "settled",
-                    "reason": "Tip attached to message",
-                    "meta": {"conversation_id": conversation_id, "message_id": mid, "tip_payment_id": _img_tip_payment_id,
-                             "payment_method_id": inp.tip_payment_method_id},
-                })
-            except Exception:
-                pass  # Best-effort; do not fail the send if billing write fails
+            recipient_id = _resolve_tip_recipient(conversation_id, user_id)
+            if recipient_id:
+                from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
+                write_tip_ledger(TipLedgerEntry(
+                    tipper_user_id=user_id,
+                    recipient_user_id=recipient_id,
+                    amount_cents=tip_amount_cents,
+                    currency="USD",
+                    content_type="message",
+                    content_id=mid,
+                    payment_method_id=inp.tip_payment_method_id,
+                    tip_payment_id=_img_tip_payment_id,
+                    extra_meta={"conversation_id": conversation_id},
+                ))
 
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
@@ -8122,25 +8138,20 @@ def create_gallery_message(
         if inp.tip_payment_method_id:
             item["tip_payment_method_id"] = inp.tip_payment_method_id
         if not is_scheduled_gal:
-            try:
-                billing_tbl_gal = ddb.Table(S.billing_table_name)
-                _gal_tip_led_id = uuid.uuid4().hex
-                billing_tbl_gal.put_item(Item={
-                    "pk": f"USER#{user_id}",
-                    "sk": f"LEDGER#{ts}#{_gal_tip_led_id}",
-                    "entry_id": _gal_tip_led_id,
-                    "ts": ts,
-                    "type": "debit",
-                    "amount_cents": gal_tip_amount_cents,
-                    "currency": "USD",
-                    "state": "settled",
-                    "reason": "Tip attached to message",
-                    "meta": {"conversation_id": conversation_id, "message_id": mid,
-                             "tip_payment_id": _gal_tip_payment_id,
-                             "payment_method_id": inp.tip_payment_method_id},
-                })
-            except Exception:
-                pass
+            recipient_id = _resolve_tip_recipient(conversation_id, user_id)
+            if recipient_id:
+                from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
+                write_tip_ledger(TipLedgerEntry(
+                    tipper_user_id=user_id,
+                    recipient_user_id=recipient_id,
+                    amount_cents=gal_tip_amount_cents,
+                    currency="USD",
+                    content_type="message",
+                    content_id=mid,
+                    payment_method_id=inp.tip_payment_method_id,
+                    tip_payment_id=_gal_tip_payment_id,
+                    extra_meta={"conversation_id": conversation_id},
+                ))
 
     ttl = _message_retention_ttl(convo, ts)
     if ttl:
@@ -11824,28 +11835,20 @@ def _deliver_scheduled_message(item: dict) -> None:
     # (Billing was intentionally skipped at schedule time so that cancelling
     # a scheduled tipped message does not charge the sender.)
     if item.get("tip_amount_cents"):
-        try:
-            billing_tbl = ddb.Table(S.billing_table_name)
-            _led_id = uuid.uuid4().hex
-            billing_tbl.put_item(Item={
-                "pk": f"USER#{user_id}",
-                "sk": f"LEDGER#{ts}#{_led_id}",
-                "entry_id": _led_id,
-                "ts": ts,
-                "type": "debit",
-                "amount_cents": int(item["tip_amount_cents"]),
-                "currency": item.get("tip_currency", "USD"),
-                "state": "settled",
-                "reason": "Tip attached to message",
-                "meta": {
-                    "conversation_id": conversation_id,
-                    "message_id": message_id,
-                    "tip_payment_id": item.get("tip_payment_id"),
-                    "payment_method_id": item.get("tip_payment_method_id"),
-                },
-            })
-        except Exception:
-            logger.warning("Failed to write tip billing for scheduled message %s", message_id)
+        recipient_id = _resolve_tip_recipient(conversation_id, user_id)
+        if recipient_id:
+            from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
+            write_tip_ledger(TipLedgerEntry(
+                tipper_user_id=user_id,
+                recipient_user_id=recipient_id,
+                amount_cents=int(item["tip_amount_cents"]),
+                currency=item.get("tip_currency", "USD"),
+                content_type="message",
+                content_id=message_id,
+                payment_method_id=item.get("tip_payment_method_id"),
+                tip_payment_id=item.get("tip_payment_id"),
+                extra_meta={"conversation_id": conversation_id},
+            ))
 
     # Fetch participants and bump unread counts
     try:
@@ -12091,29 +12094,21 @@ def send_message_tip(
         ExpressionAttributeValues=expr_values,
     )
 
-    # Write billing ledger debit entry for the tip
-    try:
-        billing_tbl_led = ddb.Table(S.billing_table_name)
-        led_entry_id = uuid.uuid4().hex
-        led_sk = f"LEDGER#{ts}#{led_entry_id}"
-        billing_tbl_led.put_item(Item={
-            "pk": f"USER#{user_id}",
-            "sk": led_sk,
-            "entry_id": led_entry_id,
-            "ts": ts,
-            "type": "debit",
-            "amount_cents": inp.amount_cents,
-            "currency": inp.currency,
-            "state": "settled",
-            "reason": "Tip sent",
-            "meta": {
-                "conversation_id": conversation_id,
-                "message_id": message_id,
-                "tip_payment_id": tip_payment_id,
-            },
-        })
-    except Exception:
-        pass  # Best-effort ledger write; do not fail the tip if billing is unavailable
+    # Write billing ledger debit + credit entries for the tip
+    msg_author = msg.get("sender_id")
+    if msg_author and msg_author != user_id:
+        from app.services.tip_ledger import TipLedgerEntry, write_tip_ledger
+        write_tip_ledger(TipLedgerEntry(
+            tipper_user_id=user_id,
+            recipient_user_id=msg_author,
+            amount_cents=inp.amount_cents,
+            currency=inp.currency,
+            content_type="message",
+            content_id=message_id,
+            payment_method_id=inp.payment_method_id,
+            tip_payment_id=tip_payment_id,
+            extra_meta={"conversation_id": conversation_id},
+        ))
 
     fanout_event_to_conversation(
         conversation_id=conversation_id,

@@ -20,19 +20,22 @@ def write_moderation_audit_event(
 ) -> str:
     now = str(int(time.time()))
     audit_id = f"modaudit_{uuid.uuid4().hex[:24]}"
-    T.moderation_audit_log.put_item(
-        Item={
-            "audit_id": audit_id,
-            "entity_type": "moderation_audit_event",
-            "action": action,
-            "actor_user_id": actor_user_id,
-            "ticket_id": ticket_id,
-            "report_id": report_id,
-            "content_type": content_type,
-            "content_id": content_id,
-            "target_user_id": target_user_id,
-            "created_at": now,
-            "metadata": metadata or {},
-        }
-    )
+    item: dict[str, Any] = {
+        "audit_id": audit_id,
+        "entity_type": "moderation_audit_event",
+        "action": action,
+        "actor_user_id": actor_user_id,
+        "content_type": content_type,
+        "content_id": content_id,
+        "target_user_id": target_user_id,
+        "created_at": now,
+        "metadata": metadata or {},
+    }
+    # Only include GSI key attributes when non-empty to avoid DDB
+    # ValidationException ("empty string value not supported for key attribute").
+    if ticket_id:
+        item["ticket_id"] = ticket_id
+    if report_id:
+        item["report_id"] = report_id
+    T.moderation_audit_log.put_item(Item=item)
     return audit_id

@@ -34,6 +34,7 @@ const SubscriptionsPage = lazy(() => import("@/pages/subscriptions/Subscriptions
 const RootRoleManagementPage = lazy(() => import("@/pages/admin/RootRoleManagementPage"));
 const ModerationBoardPage = lazy(() => import("@/pages/admin/ModerationBoardPage"));
 const PaymentIncidentQueuePage = lazy(() => import("@/pages/admin/PaymentIncidentQueuePage"));
+const VideoReviewQueuePage = lazy(() => import("@/pages/admin/VideoReviewQueuePage"));
 const PublicEventPage = lazy(() => import("@/pages/calendar/PublicEventPage"));
 const ContactsPage = lazy(() => import("@/pages/contacts/ContactsPage"));
 const HelpdeskPage = lazy(() => import("@/pages/helpdesk/HelpdeskPage"));
@@ -46,9 +47,12 @@ const QuestionnaireBuilderPage = lazy(() => import("@/pages/questionnaires/Quest
 const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/QuestionnaireRespondentPage"));
 const PublicUserProfilePage = lazy(() => import("@/pages/profile/PublicUserProfilePage"));
 const VideosPage = lazy(() => import("@/pages/videos/VideosPage"));
+const DiscoverPage = lazy(() => import("@/pages/discover/DiscoverPage"));
 const VideoPlayerPage = lazy(() => import("@/pages/videos/VideoPlayerPage"));
 const BroadcastPage = lazy(() => import("@/pages/broadcast/BroadcastPage"));
 const LivePlayer = lazy(() => import("@/pages/broadcast/LivePlayer"));
+const DmcaClaimForm = lazy(() => import("@/pages/dmca/DmcaClaimForm"));
+const DmcaDashboardPage = lazy(() => import("@/pages/admin/DmcaDashboardPage"));
 
 function PageSpinner() {
   return (
@@ -94,6 +98,7 @@ export default function App() {
           <Route path="cart" element={<CartPage />} />
           <Route path="cart/checkout" element={<Checkout />} />
           <Route path="feed" element={<FeedPage />} />
+          <Route path="discover" element={<DiscoverPage />} />
           <Route path="posts/:postId" element={<PostDetailPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="tickets" element={<TicketsPage />} />
@@ -112,6 +117,9 @@ export default function App() {
           <Route path="root/roles" element={<RootRoleManagementPage />} />
           <Route path="admin/moderation" element={<ModerationBoardPage />} />
           <Route path="admin/payment-incidents" element={<PaymentIncidentQueuePage />} />
+          <Route path="admin/video-review" element={<VideoReviewQueuePage />} />
+          <Route path="dmca/submit" element={<DmcaClaimForm />} />
+          <Route path="admin/dmca" element={<DmcaDashboardPage />} />
           <Route path="*" element={<ErrorPage status={404} />} />
         </Route>
 

@@ -89,6 +89,12 @@ class VideoMetadataModel(BaseModel):
     # Entitlement
     entitlement_sku: Optional[str] = None
 
+    # Pricing / Pay-Per-View (MON-001)
+    price_cents: Optional[int] = None
+    access_mode: Optional[str] = None  # "free", "ppv", "subscriber_only", "subscriber_free"
+    purchase_count: int = 0
+    revenue_cents: int = 0
+
     # Visibility
     visibility: VideoVisibility = "private"
     published_at: Optional[int] = None

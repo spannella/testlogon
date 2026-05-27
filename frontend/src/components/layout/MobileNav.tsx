@@ -21,6 +21,7 @@ import {
   Radio,
   Video,
   Scale,
+  Compass,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -46,6 +47,7 @@ const PRIMARY_TABS = [
 
 const MORE_LINKS = [
   { label: "Feed", path: "/feed", icon: Rss },
+  { label: "Discover", path: "/discover", icon: Compass },
   { label: "Cart", path: "/cart", icon: ShoppingCart },
   { label: "Billing", path: "/billing", icon: CreditCard },
   { label: "Calendar", path: "/calendar", icon: CalendarDays },
@@ -61,6 +63,8 @@ const MORE_LINKS = [
   { label: "Settings", path: "/settings", icon: Settings },
   { label: "Role Mgmt", path: "/root/roles", icon: UsersRound },
   { label: "Moderation Board", path: "/admin/moderation", icon: Scale },
+  { label: "Video Review", path: "/admin/video-review", icon: Video },
+  { label: "DMCA Claims", path: "/admin/dmca", icon: Scale },
 ];
 
 // ─── MobileNav Component ────────────────────────────────────────
@@ -77,6 +81,8 @@ export default function MobileNav() {
     if (item.path === "/root/roles") return showRootRoleManagement;
     if (item.path === "/remote-desktop") return isVncRemoteDesktopEnabled();
     if (item.path === "/admin/moderation") return showModerationBoard;
+    if (item.path === "/admin/video-review") return showModerationBoard;
+    if (item.path === "/admin/dmca") return showModerationBoard;
     return true;
   });
 

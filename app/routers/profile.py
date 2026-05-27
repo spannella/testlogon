@@ -4,14 +4,18 @@ import importlib.util
 import hashlib
 import json
 import logging
+import os
 import re
 import time
+from typing import Any, Dict, List, Literal, Optional
 
-from boto3.dynamodb.conditions import Attr
-from fastapi import APIRouter, Depends, HTTPException, File, Request, UploadFile
+from boto3.dynamodb.conditions import Attr, Key
+from fastapi import APIRouter, Depends, HTTPException, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from app.models import ProfilePatchReq, ProfilePutReq
+from app.core.aws import ddb
+from app.core.cursor import decode_cursor, encode_cursor
 from app.core.tables import T
 from app.services.alerts import audit_event
 from app.services.profile import (
@@ -23,7 +27,10 @@ from app.services.profile import (
     resolve_profile_audience,
     store_profile_photo,
 )
-from app.services.profile_discoverability import get_profile_discoverability_state
+from app.services.profile_discoverability import (
+    get_profile_discoverability_state,
+    DiscoverabilityState,
+)
 from app.services.rate_limit import rate_limit_profile_lookup
 from app.auth.deps import get_authenticated_user
 from app.services.sessions import require_ui_session
@@ -274,6 +281,264 @@ if _MULTIPART_AVAILABLE:
 else:
     router.post("/profile/photos/{kind}/upload")(ui_upload_profile_photo_unavailable)
 
+
+# ---------------------------------------------------------------------------
+# SOC-005: Public profile endpoints
+# ---------------------------------------------------------------------------
+
+_APP_TABLE = os.environ.get("APP_TABLE", "app_single_table")
+_newsfeed_tbl = ddb.Table(_APP_TABLE)
+
+
+@router.get("/profile/public/{identifier}")
+async def get_public_profile(identifier: str, req: Request):
+    """Public profile with social metrics and follow status.
+
+    Auth is optional -- unauthenticated callers get follow fields as False.
+    """
+    requested_identifier = (identifier or "").strip()
+    if (
+        not requested_identifier
+        or len(requested_identifier) > _MAX_PROFILE_IDENTIFIER_LEN
+        or any(ord(ch) < 32 for ch in requested_identifier)
+    ):
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    try:
+        user_sub = _resolve_profile_identifier_to_user_sub(requested_identifier)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    if not user_sub:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    # Check discoverability
+    disc_result = get_profile_discoverability_state(user_sub)
+    disc_status = disc_result.get("discoverability_status", "active")
+    if disc_status in (DiscoverabilityState.DEACTIVATED.value, DiscoverabilityState.DELETED.value):
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    # Fetch profile
+    profile = get_profile(user_sub)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    # Canonical identifier
+    canonical = _resolve_canonical_identifier_for_user_sub(user_sub)
+    canonical_identifier = canonical if canonical != requested_identifier else None
+
+    # Follow status (optional auth)
+    viewer_sub: Optional[str] = None
+    is_following = False
+    is_followed_by = False
+    try:
+        auth_user = await get_authenticated_user(req)
+        ctx = await require_ui_session(req, auth_user=auth_user)
+        viewer_sub = ctx.get("user_sub")
+    except Exception:
+        pass
+
+    if viewer_sub and viewer_sub != user_sub:
+        try:
+            from app.services.social import get_follow_status
+            status = get_follow_status(viewer_sub, user_sub)
+            is_following = status.get("is_following", False)
+            is_followed_by = status.get("is_followed_by", False)
+        except Exception:
+            pass
+
+    # Check subscription plans
+    has_subscription_plans = False
+    try:
+        plans_resp = T.subscriptions.query(
+            KeyConditionExpression=Key("pk").eq(f"CREATOR#{user_sub}"),
+            Select="COUNT",
+            Limit=1,
+        )
+        has_subscription_plans = plans_resp.get("Count", 0) > 0
+    except Exception:
+        pass
+
+    return {
+        "user_id": user_sub,
+        "identifier": requested_identifier,
+        "canonical_identifier": canonical_identifier,
+        "display_name": profile.get("display_name") or "User",
+        "title": profile.get("title"),
+        "description": profile.get("description"),
+        "location": profile.get("location"),
+        "profile_photo_url": profile.get("profile_photo_url"),
+        "cover_photo_url": profile.get("cover_photo_url"),
+        "follower_count": int(profile.get("follower_count", 0)),
+        "following_count": int(profile.get("following_count", 0)),
+        "post_count": int(profile.get("post_count", 0)),
+        "is_following": is_following,
+        "is_followed_by": is_followed_by,
+        "is_mutual": is_following and is_followed_by,
+        "has_subscription_plans": has_subscription_plans,
+        "created_at": profile.get("created_at"),
+        "discoverability": disc_status if disc_status == DiscoverabilityState.HIDDEN.value else None,
+    }
+
+
+@router.get("/profile/public/{identifier}/posts")
+async def get_public_profile_posts(
+    identifier: str,
+    req: Request,
+    limit: int = Query(default=12, ge=1, le=50),
+    cursor: Optional[str] = Query(default=None),
+    filter: Optional[Literal["all", "text", "image", "video", "locked"]] = Query(default="all"),
+):
+    """Paginated posts for a public profile.
+
+    Auth is optional. Authenticated viewers see followers-only posts
+    if they follow the author.
+    """
+    requested_identifier = (identifier or "").strip()
+    if not requested_identifier or len(requested_identifier) > _MAX_PROFILE_IDENTIFIER_LEN:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    try:
+        user_sub = _resolve_profile_identifier_to_user_sub(requested_identifier)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    if not user_sub:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    # Discoverability check
+    disc_result = get_profile_discoverability_state(user_sub)
+    disc_status = disc_result.get("discoverability_status", "active")
+    if disc_status in (DiscoverabilityState.DEACTIVATED.value, DiscoverabilityState.DELETED.value):
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    # Determine viewer follow status
+    viewer_sub: Optional[str] = None
+    viewer_follows_author = False
+    try:
+        auth_user = await get_authenticated_user(req)
+        ctx = await require_ui_session(req, auth_user=auth_user)
+        viewer_sub = ctx.get("user_sub")
+        if viewer_sub and viewer_sub == user_sub:
+            viewer_follows_author = True  # Author sees own posts
+        elif viewer_sub:
+            from app.services.social import is_following as _is_following
+            viewer_follows_author = _is_following(viewer_sub, user_sub)
+    except Exception:
+        pass
+
+    # Query posts via GSI2
+    lek = decode_cursor(cursor) if cursor else None
+    kwargs: Dict[str, Any] = {
+        "IndexName": "GSI2",
+        "KeyConditionExpression": Key("GSI2PK").eq(f"POST_AUTHOR#{user_sub}"),
+        "ScanIndexForward": False,
+        "Limit": limit * 2,  # Over-fetch to account for filtered posts
+    }
+    if lek:
+        kwargs["ExclusiveStartKey"] = lek
+
+    resp = _newsfeed_tbl.query(**kwargs)
+    raw_items = resp.get("Items", [])
+    next_lek = resp.get("LastEvaluatedKey")
+
+    # Filter and transform posts
+    items: List[Dict[str, Any]] = []
+    for item in raw_items:
+        if len(items) >= limit:
+            break
+
+        # Skip non-published posts
+        if str(item.get("status", "published")).strip().lower() != "published":
+            continue
+
+        visibility = item.get("visibility", "public")
+        is_locked = item.get("locked", False)
+
+        # Visibility check
+        if visibility == "followers" and not viewer_follows_author:
+            continue
+
+        # Apply type filter
+        has_image = bool(item.get("image_urls"))
+        has_video = bool(item.get("video_id"))
+        if filter == "image" and not has_image:
+            continue
+        if filter == "video" and not has_video:
+            continue
+        if filter == "text" and (has_image or has_video):
+            continue
+        if filter == "locked" and not is_locked:
+            continue
+
+        # Build post summary
+        body = item.get("body") or ""
+        post_summary: Dict[str, Any] = {
+            "post_id": item.get("post_id") or str(item.get("sk", "")).replace("POST#", ""),
+            "created_at": str(item.get("created_at", "")),
+            "body_preview": body[:200] if not is_locked else None,
+            "image_urls": (item.get("image_urls") or [])[:1] if not is_locked else [],
+            "video_id": item.get("video_id") if not is_locked else None,
+            "has_video": has_video,
+            "locked": is_locked,
+            "unlock_price_cents": int(item.get("unlock_price_cents") or item.get("lock_price_cents") or 0) if is_locked else None,
+            "like_count": int(item.get("like_count", 0)),
+            "comment_count": int(item.get("comment_count", 0)),
+            "tip_total_cents": int(item.get("tip_total_cents", 0)),
+        }
+        items.append(post_summary)
+
+    # Get total from profile
+    profile = get_profile(user_sub)
+    total_count = int(profile.get("post_count", 0)) if profile else 0
+
+    return {
+        "items": items,
+        "next_cursor": encode_cursor(next_lek) if next_lek and len(items) == limit else None,
+        "total_count": total_count,
+    }
+
+
+@router.get("/profile/meta/{identifier}")
+async def profile_meta_tags(identifier: str):
+    """Lightweight meta tag data for SEO. No auth required."""
+    try:
+        user_sub = _resolve_profile_identifier_to_user_sub(identifier)
+    except Exception:
+        return {"title": "Profile", "description": "", "image": ""}
+
+    if not user_sub:
+        return {"title": "Profile", "description": "", "image": ""}
+
+    disc_result = get_profile_discoverability_state(user_sub)
+    disc_status = disc_result.get("discoverability_status", "active")
+    if disc_status in (DiscoverabilityState.DEACTIVATED.value, DiscoverabilityState.DELETED.value):
+        return {"title": "Profile", "description": "", "image": ""}
+
+    profile = get_profile(user_sub)
+    if not profile:
+        return {"title": "Profile", "description": "", "image": ""}
+
+    display_name = profile.get("display_name") or "User"
+    description = (profile.get("description") or profile.get("title") or "")[:160]
+    photo_url = profile.get("profile_photo_url") or ""
+    follower_count = int(profile.get("follower_count", 0))
+
+    return {
+        "title": f"{display_name} - Profile",
+        "description": f"{description} | {follower_count:,} followers",
+        "image": photo_url,
+        "url": f"/u/{identifier}",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
 
 def _profile_lookup_etag(body: dict) -> str:
     canonical = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=True, default=str)

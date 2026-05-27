@@ -895,7 +895,7 @@ test.describe("9. Post tips, reactions, and comment tips", () => {
       type: string;
     }>;
     const tipEntry = ledger.find(
-      (e) => e.reason === "Post tip" && e.type === "debit",
+      (e) => (e.reason === "Tip: post" || e.reason === "Post tip") && e.type === "debit",
     );
     expect(tipEntry).toBeDefined();
     expect(Number(tipEntry!.amount_cents)).toBe(TIP_AMOUNT_CENTS);

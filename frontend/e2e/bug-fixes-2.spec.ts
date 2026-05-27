@@ -471,9 +471,9 @@ test.describe("17. Tip on new message — billing ledger debit entry (send_text_
     await page?.close();
   });
 
-  test("Billing ledger has a 'Tip attached to message' debit entry (send_text_message tip path)", () => {
-    // The tip-on-new-message path writes reason="Tip attached to message",
-    // distinct from the separate POST /messages/{id}/tip path ("Tip sent").
+  test("Billing ledger has a tip debit entry (send_text_message tip path)", () => {
+    // The tip-on-new-message path writes reason="Tip: message" (unified format).
+    // Legacy entries used "Tip attached to message".
     const result = execSync(
       `${PYTHON} -c "
 ${DDB_HELPER_PRELUDE.trim()}
@@ -482,7 +482,7 @@ tbl = ddb.Table('billing')
 pk = 'USER#${aliceSub}'
 resp = tbl.query(
     KeyConditionExpression=Key('pk').eq(pk) & Key('sk').begins_with('LEDGER#'),
-    FilterExpression=Attr('reason').eq('Tip attached to message') & Attr('type').eq('debit'),
+    FilterExpression=Attr('reason').is_in(['Tip attached to message', 'Tip: message']) & Attr('type').eq('debit'),
 )
 print(len(resp['Items']))
 "`,

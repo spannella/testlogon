@@ -144,6 +144,8 @@ const MOBILE_NAV_GROUPS = [
       { label: "Settings", path: "/settings", icon: Settings },
       { label: "Role Mgmt", path: "/root/roles", icon: UsersRound },
       { label: "Moderation Board", path: "/admin/moderation", icon: Scale },
+      { label: "Video Review", path: "/admin/video-review", icon: Video },
+      { label: "DMCA Claims", path: "/admin/dmca", icon: Scale },
     ],
   },
 ];
@@ -178,6 +180,8 @@ function MobileSidebar({ onNavigate }: { onNavigate: () => void }) {
             if (item.path === "/broadcast") return isBroadcastNavigationEnabled();
             if (item.path === "/root/roles") return showRootRoleManagement;
             if (item.path === "/admin/moderation") return showModerationBoard;
+            if (item.path === "/admin/video-review") return showModerationBoard;
+            if (item.path === "/admin/dmca") return showModerationBoard;
             return true;
           });
           if (items.length === 0) return null;

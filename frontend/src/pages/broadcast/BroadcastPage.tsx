@@ -55,6 +55,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ProductShelfManager } from "./ProductShelfManager";
 import {
   listSessions,
   listProfiles,
@@ -791,6 +792,15 @@ function SessionDetailDialog({
                 </div>
               </div>
             </div>
+          )}
+
+          {/* Product Shelf Manager (LCOM-001) */}
+          {["draft", "ready", "live", "stopped"].includes(session.status) && (
+            <ProductShelfManager
+              sessionId={session.id}
+              sessionStatus={session.status}
+              sessionCreatedBy={session.created_by}
+            />
           )}
 
           {/* AWS Resources */}

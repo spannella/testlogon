@@ -55,6 +55,7 @@ from app.services.broadcast_health import (
     get_health_history,
 )
 from app.services.sessions import require_ui_session
+from app.models import BroadcastPriceSetIn, BroadcastPriceOut
 from app.metrics import record_broadcast_output_error
 
 router = APIRouter(prefix="/broadcast", tags=["broadcast"])
@@ -777,12 +778,24 @@ class BroadcastChatSendIn(BaseModel):
     text: str = Field(..., min_length=1, max_length=280)
 
 
+class BroadcastChatProductLinkOut(BaseModel):
+    item_id: str
+    category_id: str
+    name: str
+    description: Optional[str] = None
+    price_cents: int
+    currency: str = "USD"
+    image_url: Optional[str] = None
+
+
 class BroadcastChatMessageOut(BaseModel):
     message_id: str
     session_id: str
     sender_id: str
     sender_display_name: str
     text: str
+    kind: str = "text"
+    product_link: Optional[BroadcastChatProductLinkOut] = None
     created_at: int
     deleted: bool = False
 
@@ -895,6 +908,80 @@ def mute_chat_user_route(session_id: str, body: BroadcastChatMuteIn, ctx: dict =
     return BroadcastChatMuteOut(**result)
 
 
+class BroadcastChatProductLinkIn(BaseModel):
+    item_id: str = Field(..., min_length=1, max_length=128)
+
+
+@router.post(
+    "/sessions/{session_id}/chat/product",
+    response_model=BroadcastChatMessageOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def send_chat_product_link_route(
+    session_id: str,
+    body: BroadcastChatProductLinkIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Share a product link card in broadcast chat (broadcaster only)."""
+    session = get_session(session_id)
+    if session.status != "live":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "BROADCAST_NOT_LIVE", "message": "Chat is only available while the broadcast is live"},
+        )
+
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_SESSION_CREATOR", "message": "Only the broadcaster can share product links"},
+        )
+
+    from app.services.broadcast_product_shelf import get_shelf_product_raw, resolve_effective_price
+    shelf_item_raw = get_shelf_product_raw(session_id, body.item_id)
+    if not shelf_item_raw:
+        raise HTTPException(status_code=404, detail="Product not on shelf. Add it to the shelf first.")
+
+    # Resolve current effective price for the product link snapshot (LCOM-004)
+    pricing = resolve_effective_price(shelf_item_raw, session.status)
+    shelf_item = shelf_item_raw
+
+    user_id = ctx["user_sub"]
+    display_name = user_id
+    try:
+        from app.core.tables import T as _T
+        profile_resp = _T.profile.get_item(Key={"user_sub": user_id})
+        profile_item = profile_resp.get("Item")
+        if profile_item and profile_item.get("display_name"):
+            display_name = profile_item["display_name"]
+    except Exception:
+        pass
+
+    product_link_data = {
+        "item_id": shelf_item["item_id"],
+        "category_id": shelf_item["category_id"],
+        "name": shelf_item["name"],
+        "description": shelf_item.get("description", ""),
+        "price_cents": int(shelf_item.get("price_cents", 0)),
+        "currency": shelf_item.get("currency", "USD"),
+        "image_url": shelf_item.get("image_url", ""),
+        # Broadcast pricing snapshot (LCOM-004)
+        "broadcast_price_cents": int(shelf_item["broadcast_price_cents"]) if shelf_item.get("broadcast_price_cents") is not None else None,
+        "broadcast_price_expires_at": int(shelf_item["broadcast_price_expires_at"]) if shelf_item.get("broadcast_price_expires_at") else None,
+        "effective_price_cents": pricing["effective_price_cents"],
+        "is_broadcast_price": pricing["is_broadcast_price"],
+        "discount_pct": pricing["discount_pct"],
+    }
+
+    from app.services.broadcast_chat_store import send_product_link_message
+    result = send_product_link_message(
+        session_id=session_id,
+        user_id=user_id,
+        display_name=display_name,
+        product_link=product_link_data,
+    )
+    return BroadcastChatMessageOut(**result)
+
+
 @router.get("/sessions/{session_id}/chat/stream")
 async def broadcast_chat_stream_route(
     session_id: str,
@@ -934,11 +1021,258 @@ async def broadcast_chat_stream_route(
                         payload = json.dumps({"message_id": msg["message_id"]}, separators=(",", ":"))
                         yield f"event: chat:delete\ndata: {payload}\n\n"
                     else:
-                        payload = json.dumps(_chat_msg_out(msg), separators=(",", ":"), default=str)
-                        yield f"event: chat:message\ndata: {payload}\n\n"
+                        out = _chat_msg_out(msg)
+                        payload = json.dumps(out, separators=(",", ":"), default=str)
+                        event_type = "chat:product_link" if out.get("kind") == "product_link" else "chat:message"
+                        yield f"event: {event_type}\ndata: {payload}\n\n"
                 last_ping = time.time()
                 continue
 
             await asyncio.sleep(poll_ms / 1000.0)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ─── Product Shelf Endpoints (LCOM-001) ────────────────────────
+
+
+class BroadcastShelfAddIn(BaseModel):
+    """Request body for adding a product to the broadcast shelf."""
+    item_id: str = Field(..., min_length=1, max_length=128)
+    category_id: str = Field(..., min_length=1, max_length=128)
+    display_order: int = Field(default=0, ge=0, le=999)
+
+
+class BroadcastShelfItemOut(BaseModel):
+    """A single product on the broadcast shelf (extended with LCOM-004 pricing)."""
+    session_id: str
+    item_id: str
+    category_id: str
+    name: str
+    description: Optional[str] = None
+    price_cents: int
+    currency: str = "USD"
+    image_url: Optional[str] = None
+    display_order: int = 0
+    added_by: str
+    added_at: int
+    # Broadcast pricing fields (LCOM-004)
+    broadcast_price_cents: Optional[int] = None
+    broadcast_price_expires_at: Optional[int] = None
+    broadcast_price_set_at: Optional[int] = None
+    effective_price_cents: Optional[int] = None
+    is_broadcast_price: bool = False
+    discount_pct: int = 0
+    original_price_cents: Optional[int] = None
+
+
+class BroadcastShelfListOut(BaseModel):
+    """Response for listing all products on a broadcast shelf."""
+    session_id: str
+    items: List[BroadcastShelfItemOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class BroadcastShelfReorderIn(BaseModel):
+    """Request body for reordering the shelf."""
+    item_order: List[str] = Field(..., min_length=1, max_length=50)
+
+
+@router.post(
+    "/sessions/{session_id}/products",
+    response_model=BroadcastShelfItemOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def add_shelf_product_route(
+    session_id: str,
+    body: BroadcastShelfAddIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Add a catalog product to the broadcast product shelf."""
+    session = get_session(session_id)
+
+    # Only the broadcaster (session creator) can manage the shelf
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_SESSION_CREATOR", "message": "Only the broadcaster can manage the product shelf"},
+        )
+
+    # Session must be in an addable state
+    if session.status not in ("draft", "ready", "live"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "SESSION_NOT_ADDABLE", "message": f"Cannot add products when session is {session.status}"},
+        )
+
+    # Look up the catalog item to denormalize its data
+    from app.routers.catalog import cat_pk, item_sk
+    from app.core.tables import T as _T
+    cat_item = _T.catalog.get_item(
+        Key={"PK": cat_pk(body.category_id), "SK": item_sk(body.item_id)}
+    ).get("Item")
+    if not cat_item or cat_item.get("entity") != "item":
+        raise HTTPException(status_code=404, detail="Catalog item not found.")
+
+    from app.services.broadcast_product_shelf import add_product_to_shelf
+    result = add_product_to_shelf(
+        session_id=session_id,
+        item_id=body.item_id,
+        category_id=body.category_id,
+        catalog_item=cat_item,
+        added_by=ctx["user_sub"],
+        display_order=body.display_order,
+        is_live=(session.status == "live"),
+    )
+    return BroadcastShelfItemOut(**result)
+
+
+@router.delete("/sessions/{session_id}/products/{item_id}")
+def remove_shelf_product_route(
+    session_id: str,
+    item_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Remove a product from the broadcast product shelf."""
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_SESSION_CREATOR", "message": "Only the broadcaster can manage the product shelf"},
+        )
+
+    from app.services.broadcast_product_shelf import remove_product_from_shelf
+    removed = remove_product_from_shelf(
+        session_id=session_id,
+        item_id=item_id,
+        is_live=(session.status == "live"),
+    )
+    if not removed:
+        raise HTTPException(status_code=404, detail="Product not on shelf.")
+    return {"ok": True, "item_id": item_id}
+
+
+@router.get(
+    "/sessions/{session_id}/products",
+    response_model=BroadcastShelfListOut,
+)
+def list_shelf_products_route(
+    session_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """List all products on the broadcast product shelf with resolved pricing."""
+    _ = ctx  # any authenticated user can view
+    session = get_session(session_id)  # 404 if session doesn't exist
+
+    from app.services.broadcast_product_shelf import list_shelf_products_with_pricing
+    items = list_shelf_products_with_pricing(session_id, session.status)
+    return BroadcastShelfListOut(
+        session_id=session_id,
+        items=[BroadcastShelfItemOut(**i) for i in items],
+        count=len(items),
+    )
+
+
+@router.patch("/sessions/{session_id}/products/reorder")
+def reorder_shelf_products_route(
+    session_id: str,
+    body: BroadcastShelfReorderIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Reorder products on the broadcast product shelf."""
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_SESSION_CREATOR", "message": "Only the broadcaster can reorder the shelf"},
+        )
+
+    from app.services.broadcast_product_shelf import reorder_shelf
+    reorder_shelf(
+        session_id=session_id,
+        item_order=body.item_order,
+        is_live=(session.status == "live"),
+    )
+    return {"ok": True}
+
+
+# ─── Broadcast-Exclusive Pricing Endpoints (LCOM-004) ──────────
+
+
+@router.patch(
+    "/sessions/{session_id}/products/{item_id}/price",
+    response_model=BroadcastPriceOut,
+)
+def set_broadcast_price_route(
+    session_id: str,
+    item_id: str,
+    body: BroadcastPriceSetIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Set a broadcast-exclusive price on a shelf product.
+
+    Only the session creator (broadcaster) can set prices.
+    The broadcast price must be strictly less than the catalog price.
+    If expires_in_seconds is provided, the price reverts after that duration.
+    When the session is live, a shelf:price_update SSE event is published.
+    """
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the broadcaster can set broadcast prices.",
+        )
+    if session.status in ("stopping", "stopped", "error"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot set price on a session in terminal state.",
+        )
+
+    from app.services.broadcast_product_shelf import set_broadcast_price
+    result = set_broadcast_price(
+        session_id=session_id,
+        item_id=item_id,
+        broadcast_price_cents=body.broadcast_price_cents,
+        set_by=ctx["user_sub"],
+        expires_in_seconds=body.expires_in_seconds,
+        is_live=(session.status == "live"),
+    )
+    return BroadcastPriceOut(
+        session_id=session_id,
+        item_id=item_id,
+        original_price_cents=result["original_price_cents"],
+        broadcast_price_cents=result["broadcast_price_cents"],
+        broadcast_price_expires_at=result.get("broadcast_price_expires_at"),
+        discount_pct=result["discount_pct"],
+        set_by=ctx["user_sub"],
+        set_at=result["broadcast_price_set_at"],
+    )
+
+
+@router.delete("/sessions/{session_id}/products/{item_id}/price")
+def clear_broadcast_price_route(
+    session_id: str,
+    item_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Remove broadcast-exclusive pricing from a shelf product.
+
+    The catalog price is restored as the effective price.
+    If the session is live, publishes shelf:price_update SSE event.
+    """
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the broadcaster can clear broadcast prices.",
+        )
+
+    from app.services.broadcast_product_shelf import clear_broadcast_price
+    cleared = clear_broadcast_price(
+        session_id=session_id,
+        item_id=item_id,
+        is_live=(session.status == "live"),
+    )
+    if not cleared:
+        raise HTTPException(status_code=404, detail="Product not on shelf.")
+    return {"ok": True, "item_id": item_id}

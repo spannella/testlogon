@@ -1,0 +1,185 @@
+import { useState, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { FollowButton } from "@/components/shared/FollowButton";
+import { Compass, Search, TrendingUp, Users } from "lucide-react";
+import {
+  searchDiscoverUsers,
+  getSuggestedUsers,
+  getTrendingCreators,
+  type DiscoveryUser,
+} from "@/api/endpoints/discovery";
+
+function UserCard({ user }: { user: DiscoveryUser }) {
+  const initials = (user.display_name || user.user_id)
+    .split(" ")
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+
+  return (
+    <div className="flex items-center gap-3 rounded-lg border p-3">
+      <Avatar className="h-10 w-10">
+        {user.profile_photo_url && <AvatarImage src={user.profile_photo_url} />}
+        <AvatarFallback>{initials}</AvatarFallback>
+      </Avatar>
+      <div className="flex-1 min-w-0">
+        <p className="font-medium text-sm truncate">{user.display_name}</p>
+        {user.description && (
+          <p className="text-xs text-muted-foreground truncate">{user.description}</p>
+        )}
+        <p className="text-xs text-muted-foreground">
+          {user.follower_count.toLocaleString()} followers
+        </p>
+      </div>
+      <FollowButton
+        targetUserId={user.user_id}
+        isFollowing={user.is_following}
+        size="sm"
+      />
+    </div>
+  );
+}
+
+function useDebounce(value: string, delay: number) {
+  const [debounced, setDebounced] = useState(value);
+  const timeoutRef = useState<ReturnType<typeof setTimeout> | null>(null);
+
+  const update = useCallback(
+    (newValue: string) => {
+      if (timeoutRef[0]) clearTimeout(timeoutRef[0]);
+      timeoutRef[0] = setTimeout(() => setDebounced(newValue), delay);
+    },
+    [delay, timeoutRef],
+  );
+
+  if (value !== debounced && !timeoutRef[0]) {
+    update(value);
+  }
+
+  return debounced;
+}
+
+export default function DiscoverPage() {
+  const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+
+  const handleQueryChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = e.target.value;
+    setQuery(v);
+    if (window.__discoverTimeout) clearTimeout(window.__discoverTimeout);
+    window.__discoverTimeout = setTimeout(() => setDebouncedQuery(v.trim()), 300);
+  }, []);
+
+  const searchEnabled = debouncedQuery.length >= 1;
+
+  const { data: searchResults, isLoading: searchLoading } = useQuery({
+    queryKey: ["discover-search", debouncedQuery],
+    queryFn: () => searchDiscoverUsers(debouncedQuery),
+    enabled: searchEnabled,
+  });
+
+  const { data: suggested } = useQuery({
+    queryKey: ["discover-suggested"],
+    queryFn: () => getSuggestedUsers(12),
+  });
+
+  const { data: trending } = useQuery({
+    queryKey: ["discover-trending"],
+    queryFn: () => getTrendingCreators(20),
+  });
+
+  return (
+    <div className="container max-w-3xl py-6 space-y-6">
+      <div className="flex items-center gap-2">
+        <Compass className="h-6 w-6" />
+        <h1 className="text-2xl font-bold">Discover</h1>
+      </div>
+
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          placeholder="Search users..."
+          value={query}
+          onChange={handleQueryChange}
+          className="pl-10"
+        />
+      </div>
+
+      {searchEnabled ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Search className="h-4 w-4" />
+              Search Results
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {searchLoading ? (
+              <p className="text-sm text-muted-foreground">Searching...</p>
+            ) : searchResults?.items.length ? (
+              <div className="space-y-2">
+                {searchResults.items.map((user) => (
+                  <UserCard key={user.user_id} user={user} />
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">No users found</p>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Users className="h-4 w-4" />
+                Suggested For You
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {suggested?.items.length ? (
+                <div className="space-y-2">
+                  {suggested.items.map((user) => (
+                    <UserCard key={user.user_id} user={user} />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No suggestions yet</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg flex items-center gap-2">
+                <TrendingUp className="h-4 w-4" />
+                Trending Creators
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {trending?.items.length ? (
+                <div className="space-y-2">
+                  {trending.items.map((user) => (
+                    <UserCard key={user.user_id} user={user} />
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">No trending creators yet</p>
+              )}
+            </CardContent>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
+
+declare global {
+  interface Window {
+    __discoverTimeout?: ReturnType<typeof setTimeout>;
+  }
+}

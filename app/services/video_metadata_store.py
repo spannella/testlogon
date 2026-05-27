@@ -54,6 +54,7 @@ def video_to_item(video: VideoMetadataModel) -> Dict[str, Any]:
         "drm_policy_id",
         "drm_key_id",
         "entitlement_sku",
+        "access_mode",
     ]
     for field in _optional_str_fields:
         val = getattr(video, field, None)
@@ -74,6 +75,9 @@ def video_to_item(video: VideoMetadataModel) -> Dict[str, Any]:
         "reviewed_at",
         "published_at",
         "deleted_at",
+        "price_cents",
+        "purchase_count",
+        "revenue_cents",
     ]
     for field in _optional_num_fields:
         val = getattr(video, field, None)
@@ -170,6 +174,10 @@ def video_from_item(item: Dict[str, Any]) -> VideoMetadataModel:
         drm_policy_id=item.get("drm_policy_id"),
         drm_key_id=item.get("drm_key_id"),
         entitlement_sku=item.get("entitlement_sku"),
+        price_cents=_int_or_none(item.get("price_cents")),
+        access_mode=item.get("access_mode"),
+        purchase_count=int(item.get("purchase_count") or 0),
+        revenue_cents=int(item.get("revenue_cents") or 0),
         visibility=item.get("visibility") or "private",
         published_at=_int_or_none(item.get("published_at")),
         deleted_at=_int_or_none(item.get("deleted_at")),

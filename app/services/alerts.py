@@ -50,6 +50,10 @@ ALERT_EVENT_TYPES: List[str] = [
     "device_new","device_location_mismatch","device_trust","device_revoke",
     "calendar_event_created","calendar_event_updated","calendar_event_deleted",
     "ticket_created","ticket_assigned","ticket_replied","ticket_status_changed","ticket_reopened",
+    # Social notifications (SOC-004)
+    "new_follower","post_liked","post_reaction","post_comment",
+    "comment_reply","mention","subscription_started","post_shared",
+    "post_tip","message_tip",
 ]
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.

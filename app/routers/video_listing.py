@@ -18,6 +18,7 @@ from app.auth.policy import require_admin_or_root
 from app.auth.roles import Role
 from app.core.cursor import decode_cursor, encode_cursor
 from app.core.settings import S
+from app.core.tables import T
 from app.core.time import now_ts
 from app.services.sessions import require_ui_session
 from app.services.video_metadata_store import (
@@ -95,6 +96,16 @@ class VideoDetailOut(BaseModel):
     allow_download: bool = False
     download_available: bool = False
     download_mp4_size_bytes: Optional[int] = None
+    # Pay-per-view (MON-001)
+    price_cents: Optional[int] = None
+    access_mode: Optional[str] = None
+    purchase_count: int = 0
+    is_entitled: bool = False
+    # Subscription-gated VOD (MON-005)
+    access_reason: str = "none"
+    subscription_available: bool = False
+    purchase_available: bool = False
+    subscription_upsell: bool = False
 
 
 class VideoUpdateIn(BaseModel):
@@ -140,7 +151,17 @@ def _video_to_list_item(video: VideoMetadataModel) -> VideoListItem:
     )
 
 
-def _video_to_detail(video: VideoMetadataModel, *, playback_token: str | None = None, playback_expires_at: int | None = None) -> VideoDetailOut:
+def _video_to_detail(
+    video: VideoMetadataModel,
+    *,
+    playback_token: str | None = None,
+    playback_expires_at: int | None = None,
+    is_entitled: bool = False,
+    access_reason: str = "none",
+    subscription_available: bool = False,
+    purchase_available: bool = False,
+    subscription_upsell: bool = False,
+) -> VideoDetailOut:
     # Resolve DRM key URI if DRM is enabled for this video
     drm_key_uri: str | None = None
     if video.drm_enabled:
@@ -189,6 +210,14 @@ def _video_to_detail(video: VideoMetadataModel, *, playback_token: str | None = 
         allow_download=video.allow_download,
         download_available=download_available,
         download_mp4_size_bytes=video.download_mp4_size_bytes if video.download_mp4_size_bytes else None,
+        price_cents=video.price_cents,
+        access_mode=video.access_mode,
+        purchase_count=video.purchase_count,
+        is_entitled=is_entitled,
+        access_reason=access_reason,
+        subscription_available=subscription_available,
+        purchase_available=purchase_available,
+        subscription_upsell=subscription_upsell,
     )
 
 
@@ -275,8 +304,24 @@ def get_video_detail(
         if video.status != "published" or video.visibility not in ("public", "unlisted"):
             raise HTTPException(status_code=403, detail="access denied")
 
-    playback_token, playback_expires_at = _try_issue_playback_token(video, user_sub)
-    return _video_to_detail(video, playback_token=playback_token, playback_expires_at=playback_expires_at)
+    # MON-005: Comprehensive access check (owner/free/purchased/subscription cascade)
+    from app.services.vod_purchase import check_vod_access
+    access = check_vod_access(user_id=user_sub, video_id=video_id, video=video)
+
+    playback_token, playback_expires_at = None, None
+    if access.entitled:
+        playback_token, playback_expires_at = _try_issue_playback_token(video, user_sub)
+
+    return _video_to_detail(
+        video,
+        playback_token=playback_token,
+        playback_expires_at=playback_expires_at,
+        is_entitled=access.entitled,
+        access_reason=access.reason,
+        subscription_available=access.subscription_available,
+        purchase_available=access.purchase_available,
+        subscription_upsell=access.subscription_upsell,
+    )
 
 
 @router.patch("/{video_id}", response_model=VideoDetailOut)
@@ -392,3 +437,263 @@ def list_own_videos(
     )
     items = [_video_to_list_item(v) for v in result["items"]]
     return VideoListOut(items=items, cursor=encode_cursor(_sanitize_cursor(result.get("cursor"))))
+
+
+# ─── Pay-Per-View Endpoints (MON-001) ───────────────────────────────────────
+
+
+class VodAccessOut(BaseModel):
+    entitled: bool
+    reason: str
+    price_cents: Optional[int] = None
+    access_mode: Optional[str] = None
+    # MON-005 fields
+    subscription_available: bool = False
+    purchase_available: bool = False
+    subscription_upsell: bool = False
+
+
+class VodPurchaseIn(BaseModel):
+    payment_method_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
+
+class VodPurchaseOut(BaseModel):
+    video_id: str
+    already_owned: bool
+    granted_at: int
+    grant_type: str
+    amount_cents: int
+    purchase_id: str = ""
+
+
+class VodPurchaseListItem(BaseModel):
+    video_id: str
+    granted_at: int
+    grant_type: str
+    amount_cents: int
+    purchase_id: str = ""
+
+
+class VodPurchaseListOut(BaseModel):
+    items: List[VodPurchaseListItem]
+
+
+class VodPricingIn(BaseModel):
+    price_cents: Optional[int] = Field(default=None, ge=0)
+    access_mode: Optional[str] = Field(default=None, pattern=r"^(free|ppv|subscriber_only|subscriber_free)$")
+
+
+@router.get("/{video_id}/access", response_model=VodAccessOut)
+def check_video_access(
+    video_id: str,
+    user=Depends(require_ui_session),
+):
+    user_sub = user["user_sub"]
+    video = get_video(video_id)
+
+    # MON-005: Use comprehensive access check
+    from app.services.vod_purchase import check_vod_access
+    access = check_vod_access(user_id=user_sub, video_id=video_id, video=video)
+    return VodAccessOut(
+        entitled=access.entitled,
+        reason=access.reason,
+        price_cents=access.price_cents if access.price_cents is not None else video.price_cents,
+        access_mode=video.access_mode,
+        subscription_available=access.subscription_available,
+        purchase_available=access.purchase_available,
+        subscription_upsell=access.subscription_upsell,
+    )
+
+
+@router.post("/{video_id}/purchase", response_model=VodPurchaseOut)
+def purchase_video_endpoint(
+    video_id: str,
+    body: VodPurchaseIn,
+    user=Depends(require_ui_session),
+):
+    user_sub = user["user_sub"]
+    video = get_video(video_id)
+
+    if video.owner_user_id == user_sub:
+        raise HTTPException(status_code=400, detail="cannot purchase your own video")
+
+    if not video.price_cents or video.price_cents <= 0:
+        raise HTTPException(status_code=400, detail="video is free")
+
+    if video.status != "published":
+        raise HTTPException(status_code=400, detail="video not available for purchase")
+
+    # MON-005: Block purchase for subscriber_only videos (no individual purchase option)
+    if video.access_mode == "subscriber_only":
+        raise HTTPException(
+            status_code=403,
+            detail="This video is only available to subscribers — individual purchase is not available",
+        )
+
+    # MON-005: Block purchase for subscribers viewing subscriber_free videos
+    if video.access_mode == "subscriber_free":
+        from app.services.subscription_access import has_active_subscription
+        if has_active_subscription(subscriber_id=user_sub, creator_id=video.owner_user_id):
+            raise HTTPException(
+                status_code=400,
+                detail="You already have access via your subscription",
+            )
+
+    from app.services.vod_purchase import purchase_video
+    result = purchase_video(
+        buyer_id=user_sub,
+        video_id=video_id,
+        price_cents=video.price_cents,
+        seller_id=video.owner_user_id,
+        payment_method_id=body.payment_method_id,
+        idempotency_key=body.idempotency_key,
+    )
+    return VodPurchaseOut(**result)
+
+
+@router.get("/purchases/list", response_model=VodPurchaseListOut)
+def list_purchases_endpoint(
+    limit: int = Query(default=50, ge=1, le=200),
+    user=Depends(require_ui_session),
+):
+    user_sub = user["user_sub"]
+    from app.services.vod_purchase import list_purchases
+    items = list_purchases(user_sub, limit=limit)
+    return VodPurchaseListOut(items=[VodPurchaseListItem(**i) for i in items])
+
+
+@router.patch("/{video_id}/pricing", response_model=VideoDetailOut)
+def set_video_pricing(
+    video_id: str,
+    body: VodPricingIn,
+    user=Depends(require_ui_session),
+):
+    user_sub = user["user_sub"]
+    video = get_video(video_id)
+
+    if video.owner_user_id != user_sub:
+        raise HTTPException(status_code=403, detail="not your video")
+
+    update_expr_parts = []
+    expr_values: dict = {}
+    expr_names: dict = {}
+
+    if body.price_cents is not None:
+        update_expr_parts.append("#pc = :pc")
+        expr_names["#pc"] = "price_cents"
+        expr_values[":pc"] = body.price_cents
+
+    if body.access_mode is not None:
+        update_expr_parts.append("#am = :am")
+        expr_names["#am"] = "access_mode"
+        expr_values[":am"] = body.access_mode
+
+    if not update_expr_parts:
+        raise HTTPException(status_code=400, detail="no fields to update")
+
+    update_expr_parts.append("updated_at = :ua")
+    expr_values[":ua"] = now_ts()
+
+    kwargs: dict = {
+        "Key": {"video_id": video_id},
+        "UpdateExpression": "SET " + ", ".join(update_expr_parts),
+        "ExpressionAttributeValues": expr_values,
+    }
+    if expr_names:
+        kwargs["ExpressionAttributeNames"] = expr_names
+    T.video_metadata.update_item(**kwargs)
+
+    updated = get_video(video_id)
+    return _video_to_detail(updated, is_entitled=True, access_reason="owner")
+
+
+# ─── MON-005: Subscription-Aware Creator Video List ──────────────────────────
+
+
+class CreatorVideoListItem(BaseModel):
+    video_id: str
+    title: str
+    description: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    price_cents: Optional[int] = None
+    access_mode: Optional[str] = None
+    entitled: bool
+    access_reason: str  # "owner" | "free" | "purchased" | "subscription" | "none"
+    created_at: int
+
+
+class CreatorVideoListOut(BaseModel):
+    videos: List[CreatorVideoListItem]
+    viewer_has_subscription: bool
+    next_cursor: Optional[str] = None
+
+
+@router.get("/by-creator/{creator_id}", response_model=CreatorVideoListOut)
+def list_creator_videos_with_access(
+    creator_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: Optional[str] = Query(default=None),
+    user=Depends(require_ui_session),
+):
+    """List a creator's published videos with subscription-aware access info (MON-005).
+
+    Checks the viewer's subscription status once for the creator, then batch-checks
+    purchase entitlements for all returned videos. Significantly more efficient
+    than calling check_vod_access() per video.
+    """
+    user_sub = user["user_sub"]
+    decoded_cursor = decode_cursor(cursor)
+    result = list_videos_by_creator_public(creator_id, limit=limit, cursor=decoded_cursor)
+    videos = result["items"]
+
+    # Single subscription check for all videos by this creator
+    from app.services.subscription_access import has_active_subscription
+    has_sub = has_active_subscription(subscriber_id=user_sub, creator_id=creator_id)
+
+    # Batch check purchase entitlements
+    from app.services.vod_purchase import _batch_check_entitlements
+    purchased_ids: set = set()
+    if user_sub != creator_id and videos:
+        purchased_ids = _batch_check_entitlements(
+            user_id=user_sub,
+            video_ids=[v.id for v in videos],
+        )
+
+    items: List[CreatorVideoListItem] = []
+    for v in videos:
+        access_mode = v.access_mode or "free"
+        price = v.price_cents or 0
+        is_free = price == 0 or access_mode == "free"
+        is_purchased = v.id in purchased_ids
+        sub_grants = has_sub and access_mode in ("subscriber_only", "subscriber_free")
+
+        entitled = (user_sub == creator_id) or is_free or is_purchased or sub_grants
+        reason = (
+            "owner" if user_sub == creator_id else
+            "free" if is_free else
+            "purchased" if is_purchased else
+            "subscription" if sub_grants else
+            "none"
+        )
+
+        items.append(CreatorVideoListItem(
+            video_id=v.id,
+            title=v.title,
+            description=v.description,
+            thumbnail_url=v.thumbnail_url,
+            duration_seconds=v.duration_seconds,
+            price_cents=v.price_cents,
+            access_mode=v.access_mode,
+            entitled=entitled,
+            access_reason=reason,
+            created_at=v.created_at,
+        ))
+
+    next_cursor = encode_cursor(_sanitize_cursor(result.get("cursor")))
+    return CreatorVideoListOut(
+        videos=items,
+        viewer_has_subscription=has_sub,
+        next_cursor=next_cursor if next_cursor else None,
+    )

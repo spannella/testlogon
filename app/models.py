@@ -1937,3 +1937,473 @@ class DevtoolsBillingLedgerOut(BaseModel):
     summary: DevtoolsBillingLedgerSummaryOut = Field(default_factory=DevtoolsBillingLedgerSummaryOut)
     next_cursor: Optional[str] = None
     parse_warnings: List[DevtoolsParseWarningOut] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# MOD-002: DMCA Takedown Workflow
+# ---------------------------------------------------------------------------
+
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+class DmcaClaimIn(BaseModel):
+    """DMCA takedown notice submission by rights holder (17 U.S.C. Section 512(c)(3))."""
+
+    claimant_name: str = Field(min_length=2, max_length=256)
+    claimant_email: str = Field(min_length=5, max_length=320)
+    claimant_address: str = Field(min_length=10, max_length=1000)
+    claimant_phone: str = Field(default="", max_length=30)
+    content_url: str = Field(min_length=5, max_length=2000)
+    content_type: Literal["feed_post", "feed_media", "message_media", "video", "other"] = Field(default="other")
+    content_id: str = Field(default="", max_length=256)
+    original_work_description: str = Field(min_length=20, max_length=5000)
+    sworn_statement: bool
+    good_faith_belief: bool
+    signature: str = Field(min_length=2, max_length=256)
+
+    @field_validator("claimant_name", "claimant_address", "original_work_description", "signature")
+    @classmethod
+    def _sanitize_text_fields(cls, v: str) -> str:
+        return _HTML_TAG_RE.sub("", v)
+
+    @field_validator("content_url")
+    @classmethod
+    def _validate_content_url(cls, v: str) -> str:
+        v = v.strip()
+        if v.startswith("javascript:") or v.startswith("data:"):
+            raise ValueError("Invalid content URL scheme")
+        return v
+
+    @model_validator(mode="after")
+    def _validate_sworn_fields(self) -> "DmcaClaimIn":
+        if not self.sworn_statement:
+            raise ValueError("sworn_statement must be True to file a DMCA claim")
+        if not self.good_faith_belief:
+            raise ValueError("good_faith_belief must be True to file a DMCA claim")
+        return self
+
+
+class DmcaClaimOut(BaseModel):
+    claim_id: str
+    status: str
+    claimant_name: str
+    claimant_email: str
+    content_url: str
+    content_type: str
+    content_id: str = ""
+    target_user_id: str = ""
+    original_work_description: str
+    created_at: int
+    updated_at: int
+    content_removed_at: Optional[int] = None
+    counter_notice_filed_at: Optional[int] = None
+    waiting_period_expires_at: Optional[int] = None
+    resolved_at: Optional[int] = None
+    resolution: Optional[str] = None
+    strike_number: int = 0
+
+
+class DmcaClaimCreateOut(BaseModel):
+    ok: bool
+    claim_id: str
+    status: str
+    content_removed: bool
+    strike_number: int
+    created_at: int
+
+
+class DmcaCounterNoticeIn(BaseModel):
+    """Counter-notice filed by content creator under 17 U.S.C. Section 512(g)."""
+
+    counter_notice_text: str = Field(min_length=50, max_length=5000)
+    consent_to_jurisdiction: bool
+    counter_notice_signature: str = Field(min_length=2, max_length=256)
+
+    @field_validator("counter_notice_text", "counter_notice_signature")
+    @classmethod
+    def _sanitize_text(cls, v: str) -> str:
+        return _HTML_TAG_RE.sub("", v)
+
+    @model_validator(mode="after")
+    def _validate_consent(self) -> "DmcaCounterNoticeIn":
+        if not self.consent_to_jurisdiction:
+            raise ValueError("consent_to_jurisdiction must be True to file a counter-notice")
+        return self
+
+
+class DmcaCounterNoticeOut(BaseModel):
+    ok: bool
+    claim_id: str
+    status: str
+    waiting_period_expires_at: int
+    counter_notice_filed_at: int
+
+
+class DmcaClaimListOut(BaseModel):
+    items: List[DmcaClaimOut]
+    next_cursor: Optional[str] = None
+
+
+class DmcaClaimDetailOut(BaseModel):
+    claim: DmcaClaimOut
+    content_snapshot: Dict[str, Any] = Field(default_factory=dict)
+    target_user_profile: Dict[str, Any] = Field(default_factory=dict)
+    claimant_full_details: Dict[str, Any] = Field(default_factory=dict)
+    prior_claims_against_user: int = 0
+    prior_claims_by_claimant: int = 0
+    repeat_infringer_status: str = "clear"
+
+
+class DmcaResolveIn(BaseModel):
+    resolution: Literal["restored", "upheld", "court_order", "withdrawn"]
+    resolution_notes: str = Field(default="", max_length=2000)
+
+    @field_validator("resolution_notes")
+    @classmethod
+    def _sanitize_notes(cls, v: str) -> str:
+        return _HTML_TAG_RE.sub("", v)
+
+
+class DmcaResolveOut(BaseModel):
+    ok: bool
+    claim_id: str
+    status: str
+    resolution: str
+    resolved_at: int
+
+
+class DmcaAgentConfigIn(BaseModel):
+    agent_name: str = Field(min_length=2, max_length=256)
+    agent_email: str = Field(min_length=5, max_length=320)
+    agent_address: str = Field(min_length=10, max_length=1000)
+    agent_phone: str = Field(default="", max_length=30)
+
+
+class DmcaAgentConfigOut(BaseModel):
+    agent_name: str
+    agent_email: str
+    agent_address: str
+    agent_phone: str
+
+
+class RepeatInfringerStatusOut(BaseModel):
+    user_id: str
+    total_claims: int
+    upheld_claims: int
+    strike_count: int
+    threshold: int
+    status: str  # clear | warning | banned
+    claim_history: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+# -- Appeals (MOD-003) --
+
+_APPEAL_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+class AppealCreateIn(BaseModel):
+    enforcement_id: str = Field(min_length=1, max_length=128)
+    appeal_text: str = Field(min_length=5, max_length=5000)
+
+    @field_validator("appeal_text")
+    @classmethod
+    def _sanitize_appeal_text(cls, v: str) -> str:
+        return _APPEAL_HTML_TAG_RE.sub("", v)
+
+    @field_validator("enforcement_id")
+    @classmethod
+    def _validate_enforcement_id(cls, v: str) -> str:
+        if not v.startswith("enf_"):
+            raise ValueError("enforcement_id must start with 'enf_'")
+        return v
+
+
+class AppealOut(BaseModel):
+    appeal_id: str
+    user_id: str
+    enforcement_id: str
+    enforcement_type: str = ""
+    source_ticket_id: str = ""
+    appeal_text: str
+    status: str
+    created_at: int
+    updated_at: int
+    decided_at: Optional[int] = None
+    decision_note: Optional[str] = None
+    modified_enforcement_type: Optional[str] = None
+    modified_duration_days: Optional[int] = None
+
+
+class AppealCreateOut(BaseModel):
+    ok: bool
+    appeal_id: str
+    status: str
+    created_at: int
+
+
+class AppealListOut(BaseModel):
+    items: List[AppealOut]
+    next_cursor: Optional[str] = None
+
+
+class AppealWithdrawOut(BaseModel):
+    ok: bool
+    appeal_id: str
+    status: str
+
+
+class AppealDetailOut(BaseModel):
+    appeal: AppealOut
+    enforcement_record: Dict[str, Any] = Field(default_factory=dict)
+    moderation_ticket: Dict[str, Any] = Field(default_factory=dict)
+    user_enforcement_history: List[Dict[str, Any]] = Field(default_factory=list)
+    user_appeal_history: List[AppealOut] = Field(default_factory=list)
+
+
+class AppealDecisionIn(BaseModel):
+    decision: str = Field(pattern="^(upheld|modified|reversed)$")
+    decision_note: str = Field(default="", max_length=2000)
+    modified_enforcement_type: Optional[str] = None
+    modified_duration_days: Optional[int] = Field(default=None, ge=1, le=3650)
+
+    @field_validator("decision_note")
+    @classmethod
+    def _sanitize_note(cls, v: str) -> str:
+        return _APPEAL_HTML_TAG_RE.sub("", v)
+
+
+class AppealDecisionOut(BaseModel):
+    ok: bool
+    appeal_id: str
+    status: str
+    decision: str
+    decided_at: int
+    enforcement_reversed: bool = False
+    enforcement_modified: bool = False
+
+
+class AppealClaimOut(BaseModel):
+    ok: bool
+    appeal_id: str
+    assigned_admin_user_id: str
+
+
+class AppealQueueStatsOut(BaseModel):
+    total_submitted: int = 0
+    total_under_review: int = 0
+    oldest_submitted_age_minutes: int = 0
+
+
+# -- Creator Earnings (MON-003) --
+
+class EarningsBreakdown(BaseModel):
+    subscriptions: int = 0
+    tips: int = 0
+    unlocks: int = 0
+    vod_purchases: int = 0
+    other: int = 0
+
+
+class EarningsSummaryOut(BaseModel):
+    total_cents: int = 0
+    breakdown: EarningsBreakdown = Field(default_factory=EarningsBreakdown)
+    transaction_count: int = 0
+    currency: str = "USD"
+
+
+class EarningsTransactionOut(BaseModel):
+    entry_id: str
+    ts: int
+    amount_cents: int
+    reason: str = ""
+    category: str = ""
+    currency: str = "USD"
+    meta: Dict[str, Any] = Field(default_factory=dict)
+
+
+class EarningsTransactionsOut(BaseModel):
+    items: List[EarningsTransactionOut]
+    next_cursor: Optional[str] = None
+
+
+# -- Creator Payouts (MON-004) --
+
+class PayoutBalanceOut(BaseModel):
+    available_cents: int = 0
+    pending_cents: int = 0
+    total_earned_cents: int = 0
+    hold_cents: int = 0
+    currency: str = "USD"
+    minimum_payout_cents: int = 1000
+
+
+class PayoutRequestIn(BaseModel):
+    amount_cents: int = Field(ge=100)
+    method: str = "bank_transfer"
+    notes: str = Field(default="", max_length=500)
+
+
+class PayoutOut(BaseModel):
+    payout_id: str
+    user_id: str
+    amount_cents: int
+    method: str = "bank_transfer"
+    status: str
+    created_at: int
+    updated_at: int
+    notes: str = ""
+    reject_reason: str = ""
+    approved_by: str = ""
+    completed_at: Optional[int] = None
+
+
+class PayoutCreateOut(BaseModel):
+    ok: bool
+    payout_id: str
+    amount_cents: int
+    status: str
+
+
+class PayoutListOut(BaseModel):
+    items: List[PayoutOut]
+    next_cursor: Optional[str] = None
+
+
+class PayoutActionOut(BaseModel):
+    ok: bool
+    payout_id: str
+    status: str
+
+
+class PayoutStatsOut(BaseModel):
+    total_requested: int = 0
+    total_requested_amount_cents: int = 0
+    total_approved: int = 0
+    total_processing: int = 0
+
+
+# ─── Broadcast-Exclusive Pricing (LCOM-004) ────────────────────────
+
+
+class BroadcastPriceSetIn(BaseModel):
+    """Request body for setting a broadcast-exclusive price.
+
+    The broadcast_price_cents MUST be strictly less than the catalog price.
+    This is enforced in the service layer against the actual DDB value.
+    """
+    broadcast_price_cents: int = Field(..., gt=0, le=99999999,
+        description="Broadcast-exclusive price in cents. Must be less than catalog price.")
+    expires_in_seconds: Optional[int] = Field(
+        default=None, ge=60, le=86400,
+        description="Optional: price expires N seconds from now (1 min to 24 hours)",
+    )
+
+
+class BroadcastPriceOut(BaseModel):
+    """Response after setting a broadcast price."""
+    session_id: str
+    item_id: str
+    original_price_cents: int
+    broadcast_price_cents: int
+    broadcast_price_expires_at: Optional[int] = None
+    discount_pct: int = Field(..., ge=0, le=100)
+    set_by: str
+    set_at: int
+
+
+# --------------------------------------------------------------------------- #
+#  SOC-004: Social alert type preferences                                       #
+# --------------------------------------------------------------------------- #
+
+class AlertTypePreferenceUpdate(BaseModel):
+    """Request body for POST /alerts/type-preferences."""
+    alert_type: str = Field(..., min_length=1, max_length=64)
+    enabled: Optional[bool] = None
+    email: Optional[bool] = None
+    push: Optional[bool] = None
+    in_app: Optional[bool] = None
+    sms: Optional[bool] = None
+
+
+class AlertTypePreference(BaseModel):
+    """Single type preference entry."""
+    enabled: bool = True
+    email: bool = True
+    push: bool = True
+    in_app: bool = True
+    sms: bool = False
+
+
+class AlertTypePreferencesResponse(BaseModel):
+    """Response for GET /alerts/type-preferences."""
+    type_preferences: Dict[str, AlertTypePreference]
+
+
+class UnreadCountResponse(BaseModel):
+    """Response for GET /alerts/unread-count."""
+    unread_count: int = Field(..., ge=0, le=99)
+
+
+class MarkAllReadResponse(BaseModel):
+    """Response for POST /alerts/mark-all-read."""
+    marked_count: int
+
+
+# ---------------------------------------------------------------------------
+# SOC-005: Public Profile
+# ---------------------------------------------------------------------------
+
+class PublicProfileResponse(BaseModel):
+    user_id: str
+    identifier: str
+    canonical_identifier: Optional[str] = None
+    display_name: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+    profile_photo_url: Optional[str] = None
+    cover_photo_url: Optional[str] = None
+    follower_count: int = 0
+    following_count: int = 0
+    post_count: int = 0
+    is_following: bool = False
+    is_followed_by: bool = False
+    is_mutual: bool = False
+    has_subscription_plans: bool = False
+    created_at: Optional[str] = None
+    discoverability: Optional[str] = None
+
+    @field_validator("follower_count", "following_count", "post_count", mode="before")
+    @classmethod
+    def coerce_to_int(cls, v: Any) -> int:
+        """DDB stores numbers as Decimal; coerce to int."""
+        if v is None:
+            return 0
+        return int(v)
+
+
+class PublicPostSummary(BaseModel):
+    post_id: str
+    created_at: str
+    body_preview: Optional[str] = None
+    image_urls: List[str] = Field(default_factory=list)
+    video_id: Optional[str] = None
+    has_video: bool = False
+    locked: bool = False
+    unlock_price_cents: Optional[int] = None
+    like_count: int = 0
+    comment_count: int = 0
+    tip_total_cents: int = 0
+
+    @field_validator("like_count", "comment_count", "tip_total_cents", mode="before")
+    @classmethod
+    def coerce_counts_to_int(cls, v: Any) -> int:
+        if v is None:
+            return 0
+        return int(v)
+
+
+class PublicPostListResponse(BaseModel):
+    items: List[PublicPostSummary]
+    next_cursor: Optional[str] = None
+    total_count: int = 0

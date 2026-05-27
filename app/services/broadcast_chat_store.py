@@ -19,6 +19,7 @@ from app.services.broadcast_sse import broadcast_sse_publish
 
 _CHAT_RATE_LOCK = threading.Lock()
 _CHAT_RATE_BUCKETS: Dict[str, int] = {}  # "{session_id}#{user_id}" -> last_send_ts_ms
+_PRODUCT_LINK_RATE_BUCKETS: Dict[str, int] = {}  # separate bucket for product links
 
 
 def _enforce_chat_rate_limit(session_id: str, user_id: str) -> None:
@@ -42,10 +43,32 @@ def _enforce_chat_rate_limit(session_id: str, user_id: str) -> None:
         _CHAT_RATE_BUCKETS[key] = now_ms
 
 
+def _enforce_product_link_rate_limit(session_id: str, user_id: str) -> None:
+    """Raise 429 if broadcaster is sharing products faster than 1 per 5 seconds."""
+    key = f"{session_id}#{user_id}"
+    now_ms = int(time.time() * 1000)
+    limit_ms = 5000
+    with _CHAT_RATE_LOCK:
+        last = _PRODUCT_LINK_RATE_BUCKETS.get(key, 0)
+        if now_ms - last < limit_ms:
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=429,
+                detail={
+                    "code": "BROADCAST_PRODUCT_LINK_RATE_LIMITED",
+                    "message": "You can share one product every 5 seconds.",
+                    "retry_after_ms": limit_ms - (now_ms - last),
+                },
+            )
+        _PRODUCT_LINK_RATE_BUCKETS[key] = now_ms
+
+
 def reset_rate_limits() -> None:
     """Clear all rate limit state (for tests)."""
     with _CHAT_RATE_LOCK:
         _CHAT_RATE_BUCKETS.clear()
+        _PRODUCT_LINK_RATE_BUCKETS.clear()
 
 
 # ─── Mute Enforcement ───────────────────────────────────────────
@@ -148,6 +171,42 @@ def send_chat_message(
     return {**out, "sort_key": sort_key}
 
 
+def send_product_link_message(
+    session_id: str,
+    user_id: str,
+    display_name: str,
+    product_link: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Send a product link card into broadcast chat. Enforces separate rate limit."""
+    _enforce_chat_mute(session_id, user_id)
+    _enforce_product_link_rate_limit(session_id, user_id)
+
+    ts = now_ts()
+    ts_ms = int(time.time() * 1000)
+    msg_id = "cm_" + uuid4().hex
+    sort_key = f"{ts_ms:016d}#{msg_id}"
+
+    item: Dict[str, Any] = {
+        "session_id": session_id,
+        "sort_key": sort_key,
+        "message_id": msg_id,
+        "sender_id": user_id,
+        "sender_display_name": display_name,
+        "text": f"shared product: {product_link.get('name', '')}",
+        "kind": "product_link",
+        "product_link": product_link,
+        "created_at": ts,
+        "deleted": False,
+        "ttl": ts + 7 * 24 * 3600,
+    }
+    T.broadcast_chat_messages.put_item(Item=item)
+
+    out = _chat_msg_out(item)
+    broadcast_sse_publish(session_id, {"_type": "chat:product_link", **out})
+
+    return {**out, "sort_key": sort_key}
+
+
 def get_chat_history(
     session_id: str,
     limit: int = 100,
@@ -236,12 +295,16 @@ def _find_sort_key(session_id: str, message_id: str) -> Optional[str]:
 
 def _chat_msg_out(item: Dict[str, Any]) -> Dict[str, Any]:
     """Convert DDB item to output dict."""
-    return {
+    out: Dict[str, Any] = {
         "message_id": item["message_id"],
         "session_id": item["session_id"],
         "sender_id": item["sender_id"],
         "sender_display_name": item.get("sender_display_name", ""),
         "text": item.get("text", ""),
+        "kind": item.get("kind", "text"),
         "created_at": int(item.get("created_at", 0)),
         "deleted": bool(item.get("deleted", False)),
     }
+    if item.get("product_link"):
+        out["product_link"] = item["product_link"]
+    return out

@@ -54,6 +54,7 @@ class Tables:
     moderation_actions: Any
     moderation_audit_log: Any
     user_enforcement_history: Any
+    dmca_claims: Any
     message_legal_holds: Any
     message_archive_chain_heads: Any
     message_compliance_exports: Any
@@ -79,6 +80,10 @@ class Tables:
     broadcast_chat_messages: Any
     broadcast_chat_mutes: Any
     broadcast_recordings: Any
+    broadcast_product_shelf: Any
+    vod_entitlements: Any
+    appeals: Any
+    creator_payouts: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -127,6 +132,7 @@ T = Tables(
     moderation_actions=ddb.Table(S.moderation_actions_table_name),
     moderation_audit_log=ddb.Table(S.moderation_audit_log_table_name),
     user_enforcement_history=ddb.Table(S.user_enforcement_history_table_name),
+    dmca_claims=ddb.Table(S.dmca_claims_table_name),
     message_legal_holds=ddb.Table(S.message_legal_holds_table_name),
     message_archive_chain_heads=ddb.Table(S.message_archive_chain_heads_table_name),
     message_compliance_exports=ddb.Table(S.message_compliance_exports_table_name),
@@ -152,4 +158,8 @@ T = Tables(
     broadcast_chat_messages=ddb.Table(S.broadcast_chat_messages_table_name),
     broadcast_chat_mutes=ddb.Table(S.broadcast_chat_mutes_table_name),
     broadcast_recordings=ddb.Table(S.broadcast_recordings_table_name),
+    broadcast_product_shelf=ddb.Table(S.broadcast_product_shelf_table_name),
+    vod_entitlements=ddb.Table(S.vod_entitlements_table_name),
+    appeals=ddb.Table(S.appeals_table_name),
+    creator_payouts=ddb.Table(S.creator_payouts_table_name),
 )

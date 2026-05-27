@@ -26,6 +26,7 @@ from app.models import (
     AlertSmsRemoveReq,
     AlertToastPrefsReq,
     AlertWebhookPrefsReq,
+    AlertTypePreferenceUpdate,
     MarkReadReq,
 )
 from app.services.alerts import (
@@ -237,6 +238,53 @@ async def set_webhook_prefs(body: AlertWebhookPrefsReq, ctx: Dict[str, str] = De
         enabled=len(prefs.get("webhook_event_types") or []),
     )
     return prefs
+
+
+# --------------------------------------------------------------------------- #
+#  SOC-004: Unread count, mark-all-read, per-type preferences                   #
+# --------------------------------------------------------------------------- #
+
+@router.get("/alerts/unread-count")
+async def get_unread_count(ctx: Dict[str, str] = Depends(require_ui_session)):
+    from app.services.social_alerts import get_unread_alert_count
+    user_sub = ctx["user_sub"]
+    count = get_unread_alert_count(user_sub, cap=99)
+    return {"unread_count": count}
+
+
+@router.post("/alerts/mark-all-read")
+async def mark_all_read(ctx: Dict[str, str] = Depends(require_ui_session)):
+    from app.services.social_alerts import mark_all_alerts_read
+    user_sub = ctx["user_sub"]
+    marked = mark_all_alerts_read(user_sub)
+    return {"marked_count": marked}
+
+
+@router.get("/alerts/type-preferences")
+async def get_type_preferences(ctx: Dict[str, str] = Depends(require_ui_session)):
+    from app.services.social_alerts import get_all_type_preferences
+    user_sub = ctx["user_sub"]
+    prefs = get_all_type_preferences(user_sub)
+    return {"type_preferences": prefs}
+
+
+@router.post("/alerts/type-preferences")
+async def update_type_preferences(
+    body: AlertTypePreferenceUpdate,
+    ctx: Dict[str, str] = Depends(require_ui_session),
+):
+    from app.services.social_alerts import update_type_preference
+    user_sub = ctx["user_sub"]
+    updated = update_type_preference(
+        user_sub,
+        body.alert_type,
+        enabled=body.enabled,
+        email=body.email,
+        push=body.push,
+        in_app=body.in_app,
+        sms=body.sms,
+    )
+    return {"alert_type": body.alert_type, **updated}
 
 
 @router.post("/alerts/mark_toast_delivered")

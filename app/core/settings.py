@@ -541,6 +541,7 @@ class Settings:
         "DDB_USER_ENFORCEMENT_HISTORY",
         "UserEnforcementHistory",
     )
+    dmca_claims_table_name: str = os.environ.get("DDB_DMCA_CLAIMS", "DmcaClaims")
     moderation_dual_approval_permanent_ban_enabled: bool = os.environ.get(
         "MODERATION_DUAL_APPROVAL_PERMANENT_BAN_ENABLED",
         "false",
@@ -1026,6 +1027,7 @@ class Settings:
 
     # Video metadata (VOD-001)
     video_metadata_table_name: str = os.environ.get("DDB_VIDEO_METADATA", "VideoMetadata")
+    vod_entitlements_table_name: str = os.environ.get("DDB_VOD_ENTITLEMENTS", "VodEntitlements")
 
     # Video upload (VOD-002)
     video_upload_bucket: str = os.environ.get("VIDEO_UPLOAD_BUCKET", "local-uploads")
@@ -1100,6 +1102,9 @@ class Settings:
     broadcast_recording_download_ttl_seconds: int = int(os.environ.get("BROADCAST_RECORDING_DOWNLOAD_TTL_SECONDS", "14400"))
     broadcast_recording_mp4_auto_generate: bool = os.environ.get("BROADCAST_RECORDING_MP4_AUTO_GENERATE", "1") not in ("0", "false", "False")
 
+    # Broadcast Product Shelf (LCOM-001)
+    broadcast_product_shelf_table_name: str = os.environ.get("DDB_BROADCAST_PRODUCT_SHELF", "BroadcastProductShelf")
+
     # Newsfeed Video Posts (FEED-001)
     newsfeed_video_posts_enabled: bool = os.environ.get("NEWSFEED_VIDEO_POSTS_ENABLED", "true").lower() in ("1", "true", "yes", "on")
 
@@ -1112,6 +1117,18 @@ class Settings:
     call_recording_s3_prefix: str = os.environ.get("CALL_RECORDING_S3_PREFIX", "call-recordings/")
     call_recordings_table_name: str = os.environ.get("DDB_CALL_RECORDINGS_TABLE", "CallRecordings")
     call_recording_download_ttl_seconds: int = int(os.environ.get("CALL_RECORDING_DOWNLOAD_TTL_SECONDS", "3600"))
+
+    # DMCA (MOD-002)
+    dmca_strike_threshold: int = int(os.environ.get("DMCA_STRIKE_THRESHOLD", "3"))
+    dmca_strike_lookback_days: int = int(os.environ.get("DMCA_STRIKE_LOOKBACK_DAYS", "365"))
+
+    # Appeals (MOD-003)
+    appeals_table_name: str = os.environ.get("DDB_APPEALS", "Appeals")
+
+    # Creator Payouts (MON-004)
+    creator_payouts_table_name: str = os.environ.get("DDB_CREATOR_PAYOUTS", "CreatorPayouts")
+    payout_hold_period_seconds: int = int(os.environ.get("PAYOUT_HOLD_PERIOD_SECONDS", "604800"))
+    payout_minimum_cents: int = int(os.environ.get("PAYOUT_MINIMUM_CENTS", "1000"))
 
 
 S = Settings()

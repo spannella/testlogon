@@ -223,6 +223,7 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "GSI3", "partition_key": "GSI3PK", "sort_key": "GSI3SK"},
                 {"index_name": "GSI_SCHEDULE_DUE", "partition_key": "GSI_SCHEDULE_PK", "sort_key": "GSI_SCHEDULE_SK"},
                 {"index_name": "GSI4", "partition_key": "GSI4PK", "sort_key": "GSI4SK"},
+                {"index_name": "GSI5", "partition_key": "GSI5PK", "sort_key": "GSI5SK"},
             ],
         ),
         TableDef(
@@ -257,6 +258,13 @@ def _table_defs() -> List[TableDef]:
         TableDef(os.getenv("DDB_USER_EVENTS", "UserEvents"), "user_id", "event_id"),
         TableDef(os.getenv("DDB_USERS", "Users"), "user_id"),
         TableDef(os.getenv("DDB_USER_SEARCH", "UserSearch"), "token"),
+        TableDef(
+            os.getenv("DDB_DISCOVERY_INDEX", "DiscoveryIndex"),
+            "pk",
+            "sk",
+            gsi=[{"index_name": "GSI1", "partition_key": "GSI1PK", "sort_key": "GSI1SK"}],
+            attr_types={"GSI1SK": "N"},
+        ),
         TableDef(os.getenv("DDB_MESSAGE_SEARCH", "MessageSearch"), "token", "message_key"),
         TableDef(os.getenv("DDB_PRESENCE", "UserPresence"), "user_id"),
         TableDef(os.getenv("DDB_TYPING", "Typing"), "conversation_id", "user_id"),
@@ -439,6 +447,28 @@ def _table_defs() -> List[TableDef]:
             ],
         ),
         TableDef(
+            _resolve_table_name(S.dmca_claims_table_name, "DmcaClaims"),
+            "claim_id",
+            gsi=[
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "ByTargetUserCreatedAt", "partition_key": "target_user_id", "sort_key": "created_at"},
+                {"index_name": "ByClaimantCreatedAt", "partition_key": "claimant_email", "sort_key": "created_at"},
+                {"index_name": "ByWaitingPeriodExpiry", "partition_key": "status", "sort_key": "waiting_period_expires_at"},
+            ],
+            attr_types={"created_at": "N", "waiting_period_expires_at": "N"},
+        ),
+        TableDef(
+            _resolve_table_name(S.appeals_table_name, "Appeals"),
+            "appeal_id",
+            gsi=[
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
+                {"index_name": "ByUserCreatedAt", "partition_key": "user_id", "sort_key": "created_at"},
+                {"index_name": "ByEnforcementId", "partition_key": "enforcement_id", "sort_key": "created_at"},
+                {"index_name": "ByAssignedAdminCreatedAt", "partition_key": "assigned_admin_user_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        TableDef(
             _resolve_table_name(S.message_archive_chain_heads_table_name, "MessageArchiveChainHeads"),
             "partition_key",
         ),
@@ -508,7 +538,6 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.broadcast_viewers_table_name, "BroadcastViewers"),
             "session_id",
             "viewer_id",
-            attr_types={"joined_at": "N", "last_heartbeat": "N", "expires_at": "N"},
         ),
         TableDef(
             _resolve_table_name(S.broadcast_health_snapshots_table_name, "BroadcastHealthSnapshots"),
@@ -521,7 +550,6 @@ def _table_defs() -> List[TableDef]:
             _resolve_table_name(S.broadcast_chat_messages_table_name, "BroadcastChatMessages"),
             "session_id",
             "sort_key",
-            attr_types={"created_at": "N"},
         ),
         TableDef(
             _resolve_table_name(S.broadcast_chat_mutes_table_name, "BroadcastChatMutes"),
@@ -537,6 +565,22 @@ def _table_defs() -> List[TableDef]:
                 {"index_name": "ByExpiresAt", "partition_key": "scope", "sort_key": "expires_at"},
             ],
             attr_types={"created_at": "N", "expires_at": "N"},
+        ),
+        # Broadcast product shelf (LCOM-001)
+        TableDef(
+            _resolve_table_name(S.broadcast_product_shelf_table_name, "BroadcastProductShelf"),
+            "session_id",
+            "SK",
+        ),
+        # VOD Entitlements (MON-001): tracks video purchases / access grants
+        TableDef(
+            _resolve_table_name(S.vod_entitlements_table_name, "VodEntitlements"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByVideoCreatedAt", "partition_key": "video_id", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
         ),
         # Messaging extended tables (from PR 127 compliance/visibility features)
         # ConversationPins: pk=(conversation_id, message_id), GSI ByConversationActivePinnedAt
@@ -683,6 +727,16 @@ def _table_defs() -> List[TableDef]:
                     "partition_key": "tenant_id",
                     "sort_key": "status_created_at",
                 },
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # Creator Payouts (MON-004)
+        TableDef(
+            _resolve_table_name(S.creator_payouts_table_name, "CreatorPayouts"),
+            "payout_id",
+            gsi=[
+                {"index_name": "ByUserCreatedAt", "partition_key": "user_id", "sort_key": "created_at"},
+                {"index_name": "ByStatusCreatedAt", "partition_key": "status", "sort_key": "created_at"},
             ],
             attr_types={"created_at": "N"},
         ),

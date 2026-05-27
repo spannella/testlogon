@@ -12,6 +12,7 @@ import { mintPlaybackUrl, getSession, type BroadcastSession } from "@/api/endpoi
 import { useAuthStore } from "@/stores/authStore";
 import { BroadcastChat } from "./BroadcastChat";
 import { ChatOverlay } from "./ChatOverlay";
+import { ProductShelf } from "./ProductShelf";
 import { type ChatMessage } from "@/api/endpoints/broadcast-chat";
 
 // ─── Types ──────────────────────────────────────────────────────
@@ -34,6 +35,7 @@ export default function LivePlayer() {
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
   const [expiresAt, setExpiresAt] = useState<number>(0);
   const [showChat, setShowChat] = useState(true);
+  const [showShelf, setShowShelf] = useState(true);
   const [overlayEnabled, setOverlayEnabled] = useState(false);
   const [chatMessages] = useState<ChatMessage[]>([]);
 
@@ -196,12 +198,21 @@ export default function LivePlayer() {
           </div>
         </div>
 
-        {/* Chat panel (right side on desktop, below on mobile) */}
-        {isLive && showChat && sessionId && (
-          <div className="w-full lg:w-80 h-64 lg:h-auto lg:max-h-[calc(100vh-8rem)] shrink-0" data-testid="chat-panel">
-            <BroadcastChat
+        {/* Side panels (right side on desktop, below on mobile) */}
+        {isLive && sessionId && (
+          <div className="flex flex-col gap-2 w-full lg:w-80 shrink-0">
+            {showChat && (
+              <div className="h-64 lg:h-auto lg:max-h-[calc(100vh-16rem)] lg:flex-1" data-testid="chat-panel">
+                <BroadcastChat
+                  sessionId={sessionId}
+                  isBroadcaster={session?.created_by === useAuthStore.getState().userId}
+                />
+              </div>
+            )}
+            <ProductShelf
               sessionId={sessionId}
-              isBroadcaster={session?.created_by === useAuthStore.getState().userId}
+              isVisible={showShelf}
+              onToggle={() => setShowShelf((v) => !v)}
             />
           </div>
         )}
@@ -227,6 +238,15 @@ export default function LivePlayer() {
             data-testid="overlay-toggle"
           >
             {overlayEnabled ? "Overlay On" : "Overlay Off"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="text-gray-400 hover:text-white text-xs"
+            onClick={() => setShowShelf((v) => !v)}
+            data-testid="shelf-visibility-toggle"
+          >
+            {showShelf ? "Hide Products" : "Show Products"}
           </Button>
         </div>
       )}

@@ -1291,7 +1291,7 @@ test.describe("13. Tip — billing ledger has a debit entry after sending a tip"
     await page?.close();
   });
 
-  test("Billing ledger contains a 'Tip sent' debit entry for Alice", () => {
+  test("Billing ledger contains a tip debit entry for Alice", () => {
     const result = execSync(
       `${PYTHON} -c "
 ${DDB_HELPER_PRELUDE}
@@ -1300,7 +1300,7 @@ tbl = ddb.Table('billing')
 pk = 'USER#${aliceSub}'
 resp = tbl.query(
     KeyConditionExpression=Key('pk').eq(pk) & Key('sk').begins_with('LEDGER#'),
-    FilterExpression=Attr('reason').eq('Tip sent') & Attr('type').eq('debit'),
+    FilterExpression=Attr('reason').is_in(['Tip sent', 'Tip: message']) & Attr('type').eq('debit'),
 )
 print(len(resp['Items']))
 "`,

@@ -1,0 +1,200 @@
+"""Social graph router — follow/unfollow, follower/following lists, counts, mutual detection."""
+
+from __future__ import annotations
+
+import logging
+from typing import List, Literal, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+
+from app.services.sessions import require_ui_session
+from app.services import social as social_service
+from app.core.tables import T
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/ui/social", tags=["social"])
+
+
+# ---------------------------------------------------------------------------
+# Pydantic models
+# ---------------------------------------------------------------------------
+
+class FollowRequest(BaseModel):
+    target_user_id: str = Field(..., min_length=1, max_length=128)
+
+
+class FollowResponse(BaseModel):
+    ok: bool
+    status: Literal["followed", "already_following"]
+    follower_count: int = Field(ge=0)
+    following_count: int = Field(ge=0)
+
+
+class UnfollowResponse(BaseModel):
+    ok: bool
+    status: Literal["unfollowed", "not_following"]
+
+
+class FollowUser(BaseModel):
+    user_id: str
+    display_name: Optional[str] = None
+    profile_photo_url: Optional[str] = None
+    is_following: bool = False
+    is_mutual: bool = False
+
+
+class FollowListResponse(BaseModel):
+    items: List[FollowUser]
+    next_cursor: Optional[str] = None
+    total_count: int = Field(ge=0)
+
+
+class FollowCountsResponse(BaseModel):
+    follower_count: int = Field(ge=0)
+    following_count: int = Field(ge=0)
+
+
+class FollowStatusResponse(BaseModel):
+    is_following: bool
+    is_followed_by: bool
+    is_mutual: bool
+
+
+# ---------------------------------------------------------------------------
+# Helper: enrich follow items with profile data + viewer follow status
+# ---------------------------------------------------------------------------
+
+def _enrich_follow_items(
+    items: list,
+    viewer_id: str,
+    key_field: str = "user_id",
+) -> List[FollowUser]:
+    """Enrich raw follow records with profile data and viewer's follow status."""
+    results: List[FollowUser] = []
+    for item in items:
+        uid = item.get(key_field, "")
+        if not uid:
+            continue
+
+        # Fetch profile
+        profile = T.profile.get_item(Key={"user_sub": uid}).get("Item") or {}
+        display_name = profile.get("display_name") or uid
+        photo_url = profile.get("profile_photo_url")
+
+        # Check if viewer follows this person
+        viewer_status = social_service.get_follow_status(viewer_id, uid)
+
+        results.append(FollowUser(
+            user_id=uid,
+            display_name=display_name,
+            profile_photo_url=photo_url,
+            is_following=viewer_status["is_following"],
+            is_mutual=viewer_status["is_mutual"],
+        ))
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+@router.post("/follow", response_model=FollowResponse)
+def follow_user(req: FollowRequest, session=Depends(require_ui_session)):
+    user_id = session["user_sub"]
+    try:
+        result = social_service.follow_user(user_id, req.target_user_id)
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "self_follow":
+            raise HTTPException(status_code=400, detail="You cannot follow yourself")
+        if msg == "blocked":
+            raise HTTPException(status_code=403, detail="Unable to follow this user")
+        if msg == "user_not_found":
+            raise HTTPException(status_code=404, detail="User not found")
+        if msg == "rate_limited":
+            raise HTTPException(status_code=429, detail="Too many follow actions. Try again in a minute.")
+        raise HTTPException(status_code=400, detail=str(exc))
+    return result
+
+
+@router.post("/unfollow", response_model=UnfollowResponse)
+def unfollow_user(req: FollowRequest, session=Depends(require_ui_session)):
+    user_id = session["user_sub"]
+    result = social_service.unfollow_user(user_id, req.target_user_id)
+    return result
+
+
+@router.get("/{user_id}/followers", response_model=FollowListResponse)
+def get_followers(
+    user_id: str,
+    session=Depends(require_ui_session),
+    cursor: Optional[str] = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    viewer_id = session["user_sub"]
+    items, next_cursor = social_service.get_followers(user_id, limit=limit, cursor=cursor)
+    enriched = _enrich_follow_items(items, viewer_id, key_field="user_id")
+    counts = social_service.get_follow_counts(user_id)
+    return FollowListResponse(
+        items=enriched,
+        next_cursor=next_cursor,
+        total_count=counts["follower_count"],
+    )
+
+
+@router.get("/{user_id}/following", response_model=FollowListResponse)
+def get_following(
+    user_id: str,
+    session=Depends(require_ui_session),
+    cursor: Optional[str] = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    viewer_id = session["user_sub"]
+    items, next_cursor = social_service.get_following(user_id, limit=limit, cursor=cursor)
+    enriched = _enrich_follow_items(items, viewer_id, key_field="target_user_id")
+    counts = social_service.get_follow_counts(user_id)
+    return FollowListResponse(
+        items=enriched,
+        next_cursor=next_cursor,
+        total_count=counts["following_count"],
+    )
+
+
+@router.get("/{user_id}/counts", response_model=FollowCountsResponse)
+def get_follow_counts(
+    user_id: str,
+    session=Depends(require_ui_session),
+):
+    counts = social_service.get_follow_counts(user_id)
+    return counts
+
+
+@router.get("/status/{target_user_id}", response_model=FollowStatusResponse)
+def get_follow_status(
+    target_user_id: str,
+    session=Depends(require_ui_session),
+):
+    viewer_id = session["user_sub"]
+    status = social_service.get_follow_status(viewer_id, target_user_id)
+    return status
+
+
+@router.get("/mutual/{target_user_id}", response_model=FollowListResponse)
+def get_mutual_followers(
+    target_user_id: str,
+    session=Depends(require_ui_session),
+    cursor: Optional[str] = Query(default=None),
+    limit: int = Query(default=20, ge=1, le=100),
+):
+    viewer_id = session["user_sub"]
+    items, next_cursor = social_service.get_mutual_followers(
+        viewer_id, target_user_id, limit=limit, cursor=cursor,
+    )
+    enriched = _enrich_follow_items(items, viewer_id)
+    return FollowListResponse(
+        items=enriched,
+        next_cursor=next_cursor,
+        total_count=len(enriched),
+    )
