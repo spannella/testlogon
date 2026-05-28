@@ -70,32 +70,33 @@ function csrfHeader(identity: string): Record<string, string> {
 // ─── DDB Helpers ──────────────────────────────────────────────────────────────
 
 function ddbPut(table: string, item: Record<string, any>): void {
-  const attrMap: Record<string, any> = {};
-  for (const [k, v] of Object.entries(item)) {
-    if (typeof v === "string") attrMap[k] = { S: v };
-    else if (typeof v === "number") attrMap[k] = { N: String(v) };
-    else if (typeof v === "boolean") attrMap[k] = { BOOL: v };
-    else if (Array.isArray(v)) {
-      if (v.length === 0) attrMap[k] = { L: [] };
-      else attrMap[k] = { L: v.map((s) => ({ S: String(s) })) };
-    }
-  }
+  const itemB64 = Buffer.from(JSON.stringify(item)).toString("base64");
   execSync(
-    `aws dynamodb put-item --endpoint-url ${DDB_ENDPOINT} --table-name ${table} --item '${JSON.stringify(attrMap)}'`,
-    { timeout: 10_000, env: { ...process.env, AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test", AWS_DEFAULT_REGION: "us-east-1" } },
+    `python3 -c "
+import boto3, json, base64, sys
+ddb = boto3.resource('dynamodb', endpoint_url='${DDB_ENDPOINT}', region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+tbl = ddb.Table('${table}')
+item = json.loads(base64.b64decode('${itemB64}'))
+tbl.put_item(Item=item)
+print('ok')
+"`,
+    { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
   );
 }
 
 function ddbDelete(table: string, key: Record<string, any>): void {
-  const keyMap: Record<string, any> = {};
-  for (const [k, v] of Object.entries(key)) {
-    if (typeof v === "string") keyMap[k] = { S: v };
-    else if (typeof v === "number") keyMap[k] = { N: String(v) };
-  }
+  const keyB64 = Buffer.from(JSON.stringify(key)).toString("base64");
   try {
     execSync(
-      `aws dynamodb delete-item --endpoint-url ${DDB_ENDPOINT} --table-name ${table} --key '${JSON.stringify(keyMap)}'`,
-      { timeout: 10_000, env: { ...process.env, AWS_ACCESS_KEY_ID: "test", AWS_SECRET_ACCESS_KEY: "test", AWS_DEFAULT_REGION: "us-east-1" } },
+      `python3 -c "
+import boto3, json, base64
+ddb = boto3.resource('dynamodb', endpoint_url='${DDB_ENDPOINT}', region_name='us-east-1', aws_access_key_id='test', aws_secret_access_key='test')
+tbl = ddb.Table('${table}')
+key = json.loads(base64.b64decode('${keyB64}'))
+tbl.delete_item(Key=key)
+print('ok')
+"`,
+      { cwd: "/home/ubuntu/testlogon", timeout: 10_000 },
     );
   } catch { /* ignore */ }
 }
