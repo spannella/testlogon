@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from app.core.settings import S
@@ -79,10 +79,11 @@ def query_events(
     end_date = datetime.fromtimestamp(now, tz=timezone.utc)
 
     dates_to_query = set()
-    current = start_date
-    while current.date() <= end_date.date():
+    current = start_date.date()
+    end = end_date.date()
+    while current <= end:
         dates_to_query.add(current.strftime("%Y-%m-%d"))
-        current = current.replace(day=current.day + 1) if current.day < 28 else end_date
+        current += timedelta(days=1)
         if len(dates_to_query) > 7:
             break
 
