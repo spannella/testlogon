@@ -632,7 +632,7 @@ test.describe("Section 57: TicketsPage UI", () => {
       bobPage.getByRole("button", { name: "Create ticket" }).click(),
     ]);
     expect(postResp.status()).toBe(200);
-    await expect(bobPage.getByText("Ticket created")).toBeVisible({ timeout: 8000 });
+    await expect(bobPage.getByText("Ticket created", { exact: true })).toBeVisible({ timeout: 8000 });
   });
 
   test("57.4 New ticket appears in My tickets list", async () => {
