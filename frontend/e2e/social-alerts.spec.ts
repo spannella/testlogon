@@ -118,6 +118,8 @@ for item in resp.get('Items', []):
             ExpressionAttributeNames={'#r': 'read'},
             ExpressionAttributeValues={':t': True, ':now': 0},
         )
+# Reset the UNREAD_COUNT sentinel
+tbl.put_item(Item={'user_sub': '${userSub}', 'alert_id': 'UNREAD_COUNT', 'count': 0, 'updated_at': 0})
 print('cleared')
 "`,
     { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
@@ -159,6 +161,13 @@ for i in range(${count}):
         'details': {'source': '${prefix}'},
     })
     ids.append(alert_id)
+# Increment the UNREAD_COUNT sentinel
+tbl.update_item(
+    Key={'user_sub': '${userSub}', 'alert_id': 'UNREAD_COUNT'},
+    UpdateExpression='SET #c = if_not_exists(#c, :zero) + :delta, updated_at = :now',
+    ExpressionAttributeNames={'#c': 'count'},
+    ExpressionAttributeValues={':delta': ${count}, ':zero': 0, ':now': ts},
+)
 print(json.dumps(ids))
 "`,
     { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
@@ -206,6 +215,14 @@ tbl.put_item(Item={
     'updated_at': ts,
     'details': {'post_id': 'test_post_${TS}'},
 })
+# Increment the UNREAD_COUNT sentinel
+from boto3.dynamodb.conditions import Key as K
+tbl.update_item(
+    Key={'user_sub': '${userSub}', 'alert_id': 'UNREAD_COUNT'},
+    UpdateExpression='SET #c = if_not_exists(#c, :zero) + :one, updated_at = :now',
+    ExpressionAttributeNames={'#c': 'count'},
+    ExpressionAttributeValues={':one': 1, ':zero': 0, ':now': int(time.time())},
+)
 print('seeded')
 "`,
     { cwd: "/home/ubuntu/testlogon", timeout: 15_000 },
