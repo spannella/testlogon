@@ -244,7 +244,6 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
     },
     onSuccess: (_data, payload, context) => {
       if (context?.isScheduled) {
-        // Show toast for scheduled messages instead of adding to chat
         const scheduledDate = new Date((payload.send_at ?? 0) * 1000);
         toast.success(
           `Message scheduled for ${scheduledDate.toLocaleString(undefined, {
@@ -255,6 +254,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
             timeZoneName: "short",
           })}`,
         );
+        void queryClient.invalidateQueries({ queryKey: ["scheduled-messages", convoId] });
         return;
       }
       queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
@@ -346,6 +346,7 @@ export function ConversationView({ conversation, onBack, onClaimSuccess }: Conve
             timeZoneName: "short",
           })}`,
         );
+        void queryClient.invalidateQueries({ queryKey: ["scheduled-messages", convoId] });
         return;
       }
       queryClient.invalidateQueries({ queryKey: ["messages", convoId] });
