@@ -56,6 +56,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ProductShelfManager } from "./ProductShelfManager";
+import { BroadcastTipButton } from "./BroadcastTipButton";
+import { TipGoalBar } from "./TipGoalBar";
+import { BroadcastTipSummary } from "./BroadcastTipSummary";
+import InputManager from "./InputManager";
+import LayoutSwitcher from "./LayoutSwitcher";
+import GuestInviteDialog from "./GuestInviteDialog";
+import { listTipGoals } from "@/api/endpoints/broadcast-tips";
+import type { BroadcastTipGoal } from "@/api/endpoints/broadcast";
 import {
   listSessions,
   listProfiles,
@@ -76,6 +84,7 @@ import {
   type BroadcastAuditEntry,
   type BroadcastRecordingResponse,
 } from "@/api/endpoints/broadcast";
+import { useAuthStore } from "@/stores/authStore";
 
 // ─── Status Badge Colors ────────────────────────────────���───────
 
@@ -594,6 +603,16 @@ function SessionDetailDialog({
   const [showRecordingPlayer, setShowRecordingPlayer] = useState(false);
   const [downloadLoading, setDownloadLoading] = useState(false);
   const [allowViewerDownload, setAllowViewerDownload] = useState(false);
+  const currentUserId = useAuthStore((s) => s.userId);
+  const isBroadcaster = session?.created_by === currentUserId;
+
+  const tipGoalsQuery = useQuery({
+    queryKey: ["broadcast", "tips", "goals", session?.id],
+    queryFn: () => listTipGoals(session!.id),
+    enabled: !!session && ["live", "ready", "draft", "scheduled"].includes(session.status),
+    refetchInterval: 10_000,
+  });
+  const tipGoals: BroadcastTipGoal[] = tipGoalsQuery.data?.goals ?? [];
 
   const mintMut = useMutation({
     mutationFn: (id: string) => mintPlaybackUrl(id),
@@ -805,6 +824,29 @@ function SessionDetailDialog({
             />
           )}
 
+          {/* Tip Goal Bars (BCAST-013) */}
+          {tipGoals.length > 0 && (
+            <TipGoalBar goals={tipGoals} />
+          )}
+
+          {/* Broadcaster Tip Summary (BCAST-013) */}
+          <BroadcastTipSummary sessionId={session.id} isBroadcaster={isBroadcaster} />
+
+          {/* Multi-Input Manager (BCAST-016) */}
+          {["draft", "ready", "live", "private"].includes(session.status) && (
+            <>
+              <InputManager sessionId={session.id} isBroadcaster={isBroadcaster} />
+              {session.status === "live" && (
+                <LayoutSwitcher sessionId={session.id} isBroadcaster={isBroadcaster} />
+              )}
+              {isBroadcaster && (
+                <div className="flex justify-end">
+                  <GuestInviteDialog sessionId={session.id} />
+                </div>
+              )}
+            </>
+          )}
+
           {/* AWS Resources */}
           {(session.aws_input_arn || session.aws_channel_arn || session.mediapackage_endpoint || session.s3_archive_prefix) && (
             <div className="space-y-2">
@@ -829,6 +871,15 @@ function SessionDetailDialog({
 
         {/* Actions */}
         <DialogFooter className="gap-2 sm:gap-0">
+          {session.status === "live" && (
+            <BroadcastTipButton
+              sessionId={session.id}
+              tipEnabled={session.tip_enabled ?? true}
+              tipMinCents={session.tip_min_cents ?? 100}
+              tipMaxCents={session.tip_max_cents ?? 100000}
+              isBroadcaster={isBroadcaster}
+            />
+          )}
           {(session.status === "draft" || session.status === "ready") && (
             <Button onClick={() => onStart(session.id)}>
               <Play className="h-4 w-4 mr-1" /> Start

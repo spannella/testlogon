@@ -46,6 +46,8 @@ class CallSessionRecord:
     max_duration_seconds: int = 0
     caller_last_heartbeat_ts: Optional[int] = None
     callee_last_heartbeat_ts: Optional[int] = None
+    # CALL-014: voicemail linkage
+    voicemail_message_id: Optional[str] = None
 
 
 def _item_from_record(record: CallSessionRecord) -> dict[str, object]:
@@ -86,6 +88,9 @@ def _item_from_record(record: CallSessionRecord) -> dict[str, object]:
         item["caller_last_heartbeat_ts"] = int(record.caller_last_heartbeat_ts)
     if record.callee_last_heartbeat_ts is not None:
         item["callee_last_heartbeat_ts"] = int(record.callee_last_heartbeat_ts)
+    # CALL-014: voicemail linkage
+    if record.voicemail_message_id:
+        item["voicemail_message_id"] = record.voicemail_message_id
     return item
 
 
@@ -120,6 +125,8 @@ def _record_from_item(item: dict[str, object]) -> CallSessionRecord:
         max_duration_seconds=int(item.get("max_duration_seconds") or 0),
         caller_last_heartbeat_ts=int(item["caller_last_heartbeat_ts"]) if item.get("caller_last_heartbeat_ts") is not None else None,
         callee_last_heartbeat_ts=int(item["callee_last_heartbeat_ts"]) if item.get("callee_last_heartbeat_ts") is not None else None,
+        # CALL-014: voicemail linkage
+        voicemail_message_id=str(item["voicemail_message_id"]) if item.get("voicemail_message_id") else None,
     )
 
 
@@ -214,6 +221,55 @@ def update_call_session_state(
             max_duration_seconds=existing.max_duration_seconds,
             caller_last_heartbeat_ts=existing.caller_last_heartbeat_ts,
             callee_last_heartbeat_ts=existing.callee_last_heartbeat_ts,
+            # CALL-014: preserve voicemail linkage
+            voicemail_message_id=existing.voicemail_message_id,
+        )
+    )
+    _table().put_item(Item=item)
+    return _record_from_item(item)
+
+
+def set_voicemail_message_id(*, call_id: str, voicemail_message_id: str) -> Optional[CallSessionRecord]:
+    """Set the voicemail_message_id on a call session record (CALL-014).
+
+    Uses a full read-modify-write to link a voicemail message to a call.
+    Idempotent: if already linked, returns existing record.
+    """
+    existing = get_call_session(call_id)
+    if not existing:
+        return None
+    if existing.voicemail_message_id:
+        return existing  # already linked, idempotent
+
+    item = _item_from_record(
+        CallSessionRecord(
+            call_id=existing.call_id,
+            conversation_id=existing.conversation_id,
+            caller_user_id=existing.caller_user_id,
+            callee_user_id=existing.callee_user_id,
+            initial_mode=existing.initial_mode,
+            state=existing.state,
+            start_ts=existing.start_ts,
+            connect_ts=existing.connect_ts,
+            end_ts=existing.end_ts,
+            end_reason=existing.end_reason,
+            network_path=existing.network_path,
+            lifecycle_events=existing.lifecycle_events,
+            idempotency_records=existing.idempotency_records,
+            broadcast_session_id=existing.broadcast_session_id,
+            paid=existing.paid,
+            rate_cents_per_min=existing.rate_cents_per_min,
+            billing_status=existing.billing_status,
+            billing_start_ts=existing.billing_start_ts,
+            last_billed_ts=existing.last_billed_ts,
+            total_billed_cents=existing.total_billed_cents,
+            total_billed_seconds=existing.total_billed_seconds,
+            billing_cycle_count=existing.billing_cycle_count,
+            platform_fee_bps=existing.platform_fee_bps,
+            max_duration_seconds=existing.max_duration_seconds,
+            caller_last_heartbeat_ts=existing.caller_last_heartbeat_ts,
+            callee_last_heartbeat_ts=existing.callee_last_heartbeat_ts,
+            voicemail_message_id=voicemail_message_id,
         )
     )
     _table().put_item(Item=item)

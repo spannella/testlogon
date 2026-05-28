@@ -19,6 +19,8 @@ import {
   VideoOff,
   Users,
   MonitorUp,
+  Monitor,
+  MonitorOff,
   Grid3X3,
   LayoutDashboard,
   X,
@@ -238,6 +240,23 @@ function GroupCallOverlay({ callId, userId, conversationId, onClose }: GroupCall
 
   const toggleAudio = () => mediaMut.mutate({ audio: !localMedia.audio });
   const toggleVideo = () => mediaMut.mutate({ video: !localMedia.video });
+  const toggleScreenShare = () => {
+    if (localMedia.screen) {
+      mediaMut.mutate({ screen: false });
+    } else {
+      // Check if someone else is already sharing
+      const sharer = activeParticipants.find((p) => p.media_status.screen && p.user_id !== userId);
+      if (sharer) {
+        toast.error(`${sharer.display_name || sharer.user_id} is already sharing their screen`);
+        return;
+      }
+      mediaMut.mutate({ screen: true });
+    }
+  };
+
+  // Determine if anyone is screen sharing for layout purposes
+  const screenSharer = activeParticipants.find((p) => p.media_status.screen);
+  const effectiveLayout = screenSharer ? "presentation" as const : layout;
 
   // Grid column class based on participant count
   const gridCols =
@@ -269,6 +288,7 @@ function GroupCallOverlay({ callId, userId, conversationId, onClose }: GroupCall
             size="icon"
             className="h-8 w-8 text-white hover:bg-gray-700"
             onClick={() => setLayout(layout === "grid" ? "speaker" : "grid")}
+            disabled={!!screenSharer}
             aria-label={`Switch to ${layout === "grid" ? "speaker" : "grid"} view`}
           >
             {layout === "grid" ? <LayoutDashboard className="h-4 w-4" /> : <Grid3X3 className="h-4 w-4" />}
@@ -278,7 +298,33 @@ function GroupCallOverlay({ callId, userId, conversationId, onClose }: GroupCall
 
       {/* Participant grid */}
       <div className="flex-1 overflow-auto p-4">
-        {layout === "grid" ? (
+        {effectiveLayout === "presentation" && screenSharer ? (
+          <div className="flex h-full gap-3" data-testid="presentation-layout">
+            {/* Screen share area: ~80% width */}
+            <div className="flex-1 min-w-0 relative">
+              <div className="h-full rounded-lg bg-gray-800 flex items-center justify-center">
+                <div className="text-center text-gray-400">
+                  <MonitorUp className="h-16 w-16 mx-auto mb-2" />
+                  <p className="text-sm font-medium">
+                    {screenSharer.user_id === userId
+                      ? "You are presenting"
+                      : `${screenSharer.display_name || screenSharer.user_id} is presenting`}
+                  </p>
+                </div>
+              </div>
+            </div>
+            {/* Participant sidebar: ~20% width */}
+            <div className="w-40 lg:w-48 flex flex-col gap-2 overflow-y-auto">
+              {activeParticipants.map((p) => (
+                <ParticipantTile
+                  key={p.user_id}
+                  participant={p}
+                  isLocal={p.user_id === userId}
+                />
+              ))}
+            </div>
+          </div>
+        ) : effectiveLayout === "grid" || layout === "grid" ? (
           <div className={cn("grid gap-3 h-full", gridCols)}>
             {activeParticipants.map((p) => (
               <ParticipantTile key={p.user_id} participant={p} isLocal={p.user_id === userId} />
@@ -338,6 +384,21 @@ function GroupCallOverlay({ callId, userId, conversationId, onClose }: GroupCall
           data-testid="toggle-video"
         >
           {localMedia.video ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="icon"
+          className={cn(
+            "h-12 w-12 rounded-full",
+            localMedia.screen ? "bg-blue-600 text-white hover:bg-blue-700" : "bg-gray-700 text-white hover:bg-gray-600",
+          )}
+          onClick={toggleScreenShare}
+          disabled={mediaMut.isPending}
+          aria-label={localMedia.screen ? "Stop sharing" : "Share screen"}
+          data-testid="toggle-screen-share"
+        >
+          {localMedia.screen ? <MonitorOff className="h-5 w-5" /> : <Monitor className="h-5 w-5" />}
         </Button>
 
         <Button

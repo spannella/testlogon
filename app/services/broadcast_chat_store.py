@@ -140,8 +140,21 @@ def send_chat_message(
     text: str,
     *,
     skip_rate_limit: bool = False,
+    reply_to_message_id: Optional[str] = None,
+    expires_in_seconds: Optional[int] = None,
+    lock_price_cents: Optional[int] = None,
+    lock_description: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Send a chat message. Enforces rate limit and mute checks."""
+    """Send a chat message. Enforces rate limit and mute checks.
+
+    Extended for BCAST-015:
+      - reply_to_message_id: reply to a parent message (Phase B)
+      - expires_in_seconds: auto-expire after N seconds (Phase C, broadcaster-only)
+      - lock_price_cents: paywall price in cents (Phase D, broadcaster-only)
+      - lock_description: teaser text for locked messages (Phase D)
+    """
+    from fastapi import HTTPException
+
     _enforce_chat_mute(session_id, user_id)
     if not skip_rate_limit:
         _enforce_chat_rate_limit(session_id, user_id)
@@ -151,7 +164,7 @@ def send_chat_message(
     msg_id = "cm_" + uuid4().hex
     sort_key = f"{ts_ms:016d}#{msg_id}"
 
-    item = {
+    item: Dict[str, Any] = {
         "session_id": session_id,
         "sort_key": sort_key,
         "message_id": msg_id,
@@ -162,6 +175,38 @@ def send_chat_message(
         "deleted": False,
         "ttl": ts + 7 * 24 * 3600,
     }
+
+    # Phase B — Reply
+    if reply_to_message_id:
+        parent_sk = _find_sort_key(session_id, reply_to_message_id)
+        if not parent_sk:
+            raise HTTPException(status_code=400, detail="Reply target message not found")
+        parent_item = T.broadcast_chat_messages.get_item(
+            Key={"session_id": session_id, "sort_key": parent_sk}
+        ).get("Item")
+        if not parent_item or parent_item.get("deleted"):
+            raise HTTPException(status_code=400, detail="Reply target message not found")
+        item["reply_to_message_id"] = reply_to_message_id
+        parent_text = parent_item.get("text", "")
+        item["reply_to_preview"] = {
+            "sender_display_name": parent_item.get("sender_display_name", ""),
+            "text": parent_text[:100] if parent_text else "[Hidden content]",
+        }
+
+    # Phase C — Expiry
+    if expires_in_seconds is not None:
+        expires_at = ts + expires_in_seconds
+        item["expires_at"] = expires_at
+        # DDB TTL = min(default_ttl, expires_at + 3600)
+        item["ttl"] = min(item["ttl"], expires_at + 3600)
+
+    # Phase D — Locked messages
+    if lock_price_cents is not None:
+        item["lock_price_cents"] = lock_price_cents
+        if lock_description:
+            item["lock_description"] = lock_description
+        item["unlocked_by"] = {}
+
     T.broadcast_chat_messages.put_item(Item=item)
 
     # Publish via SSE for real-time delivery
@@ -211,6 +256,7 @@ def get_chat_history(
     session_id: str,
     limit: int = 100,
     before_sort_key: Optional[str] = None,
+    viewer_user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Get recent chat history in chronological order (oldest first)."""
     kwargs: Dict[str, Any] = {
@@ -226,10 +272,12 @@ def get_chat_history(
 
     resp = T.broadcast_chat_messages.query(**kwargs)
     items = resp.get("Items", [])
+    # Filter out LOTTERY#/LENTRY# config/entry items (BCAST-014)
+    items = [i for i in items if not (i.get("sort_key", "").startswith("LOTTERY#") or i.get("sort_key", "").startswith("LENTRY#"))]
     # Reverse to chronological order for display
     items.reverse()
 
-    messages = [_chat_msg_out(item) for item in items]
+    messages = [_chat_msg_out(item, viewer_user_id=viewer_user_id) for item in items]
     return {
         "messages": messages,
         "has_more": bool(resp.get("LastEvaluatedKey")),
@@ -293,12 +341,22 @@ def _find_sort_key(session_id: str, message_id: str) -> Optional[str]:
     return None
 
 
-def _chat_msg_out(item: Dict[str, Any]) -> Dict[str, Any]:
-    """Convert DDB item to output dict."""
+def _chat_msg_out(item: Dict[str, Any], viewer_user_id: Optional[str] = None) -> Dict[str, Any]:
+    """Convert DDB item to output dict with rich messaging fields (BCAST-015).
+
+    When viewer_user_id is provided, applies per-viewer visibility rules:
+      - Expired messages: text=None, expired=True
+      - Locked messages (viewer has not unlocked): text=None, is_unlocked=False
+      - Sender always sees their own content.
+    """
+    ts = now_ts()
+    sender_id = item.get("sender_id", "")
+    is_sender = viewer_user_id is not None and viewer_user_id == sender_id
+
     out: Dict[str, Any] = {
         "message_id": item["message_id"],
         "session_id": item["session_id"],
-        "sender_id": item["sender_id"],
+        "sender_id": sender_id,
         "sender_display_name": item.get("sender_display_name", ""),
         "text": item.get("text", ""),
         "kind": item.get("kind", "text"),
@@ -307,4 +365,59 @@ def _chat_msg_out(item: Dict[str, Any]) -> Dict[str, Any]:
     }
     if item.get("product_link"):
         out["product_link"] = item["product_link"]
+    # Tip fields (BCAST-013)
+    if item.get("kind") == "tip":
+        out["tip_amount_cents"] = int(item.get("tip_amount_cents", 0))
+        out["tip_currency"] = item.get("tip_currency", "USD")
+        out["tip_payment_id"] = item.get("tip_payment_id", "")
+
+    # Phase A — Reactions
+    reactions = item.get("reactions") or {}
+    if reactions:
+        counts: Dict[str, int] = {}
+        mine: List[str] = []
+        for emoji, user_set in reactions.items():
+            count = len(user_set) if isinstance(user_set, (set, dict)) else 0
+            if count > 0:
+                counts[emoji] = count
+            if viewer_user_id and viewer_user_id in user_set:
+                mine.append(emoji)
+        if counts:
+            out["reactions_counts"] = counts
+        if mine:
+            out["my_reactions"] = mine
+
+    # Phase B — Replies
+    if item.get("reply_to_message_id"):
+        out["reply_to_message_id"] = item["reply_to_message_id"]
+    if item.get("reply_to_preview"):
+        out["reply_to_preview"] = item["reply_to_preview"]
+
+    # Phase C — Expiry
+    expires_at = item.get("expires_at")
+    if expires_at is not None:
+        out["expires_at"] = int(expires_at)
+        if int(expires_at) < ts and not is_sender:
+            out["text"] = None
+            out["expired"] = True
+
+    # Phase D — Locked messages
+    lock_price = item.get("lock_price_cents")
+    if lock_price is not None:
+        out["lock_price_cents"] = int(lock_price)
+        out["lock_description"] = item.get("lock_description")
+        unlocked_by = item.get("unlocked_by") or {}
+        is_unlocked = is_sender or (viewer_user_id is not None and viewer_user_id in unlocked_by)
+        out["is_unlocked"] = is_unlocked
+        if not is_unlocked:
+            out["text"] = None
+
+    # Phase D — Tip totals on messages
+    if item.get("tip_total_cents"):
+        out["tip_total_cents"] = int(item["tip_total_cents"])
+
+    # Lottery fields (BCAST-014)
+    if item.get("lottery_id"):
+        out["lottery_id"] = item["lottery_id"]
+
     return out

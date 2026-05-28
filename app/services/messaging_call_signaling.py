@@ -25,20 +25,35 @@ ALLOWED_SIGNALING_TYPES = {
     "call.recording_decline",
     "call.recording_started",
     "call.recording_stopped",
+    "webrtc.screen_share_start",
+    "webrtc.screen_share_stop",
+    # CALL-014: voicemail signals
+    "call.voicemail_start",
+    "call.voicemail_complete",
 }
 MAX_SIGNALING_SKEW_SECONDS = int(os.getenv("MESSAGING_WEBRTC_SIGNALING_MAX_SKEW_SECONDS", "120"))
 NONCE_TTL_SECONDS = int(os.getenv("MESSAGING_WEBRTC_SIGNALING_NONCE_TTL_SECONDS", "600"))
 MAX_SIGNALING_PAYLOAD_BYTES = int(os.getenv("MESSAGING_WEBRTC_SIGNALING_MAX_PAYLOAD_BYTES", "8192"))
 TERMINAL_CALL_STATES = {"ended", "missed", "declined", "busy", "failed", "canceled"}
+# CALL-014: voicemail signals allowed in terminal states
+VOICEMAIL_SIGNAL_TYPES = {"call.voicemail_start", "call.voicemail_complete"}
 MAX_IDENTIFIER_LENGTH = 128
 STATE_ALLOWED_SIGNALING_TYPES: dict[str, set[str]] = {
     "invited": {"call.invite", "call.ring", "call.accept", "call.decline", "call.end"},
-    "accepted": {"webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "call.end"},
+    "accepted": {
+        "webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "call.end",
+        "webrtc.screen_share_start", "webrtc.screen_share_stop",
+    },
     "connected": {
         "webrtc.offer", "webrtc.answer", "webrtc.ice_candidate", "call.end",
         "call.recording_request", "call.recording_accept", "call.recording_decline",
         "call.recording_started", "call.recording_stopped",
+        "webrtc.screen_share_start", "webrtc.screen_share_stop",
     },
+    # CALL-014: voicemail signals in terminal states
+    "declined": {"call.voicemail_start", "call.voicemail_complete"},
+    "missed": {"call.voicemail_start", "call.voicemail_complete"},
+    "busy": {"call.voicemail_start", "call.voicemail_complete"},
 }
 
 
@@ -230,7 +245,7 @@ def route_signaling_event(
         emit_metric(outcome="error", reason="forbidden", event_type=event_type)
         raise SignalingValidationError("forbidden", "sender/recipient are not participants of this call")
     call_state = str(getattr(call_session, "state", "") or "").strip().lower()
-    if call_state in TERMINAL_CALL_STATES and event_type != "call.end":
+    if call_state in TERMINAL_CALL_STATES and event_type != "call.end" and event_type not in VOICEMAIL_SIGNAL_TYPES:
         emit_metric(outcome="error", reason="invalid_state", event_type=event_type)
         raise SignalingValidationError("invalid_state", f"cannot route {event_type} when call is {call_state}")
     allowed_events = STATE_ALLOWED_SIGNALING_TYPES.get(call_state)

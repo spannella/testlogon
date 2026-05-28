@@ -1952,6 +1952,26 @@ class CreateVoiceMessageRequest(BaseModel):
     send_at: Optional[int] = None  # Unix timestamp; schedules delivery for the future
 
 
+# ─── Voicemail models (CALL-014) ─────────────────────────────────────────────
+
+class PresignVoicemailRequest(BaseModel):
+    call_id: str = Field(min_length=1, max_length=128)
+    content_type: str = Field(pattern=r"^(audio|video)/(webm|mp4|ogg|wav)")
+    size_bytes: int = Field(ge=1, le=52_428_800)
+    mode: Literal["audio", "video"] = "audio"
+
+
+class CreateVoicemailRequest(BaseModel):
+    message_id: str = Field(pattern=r"^m_[a-f0-9]{32}$")
+    call_id: str = Field(min_length=1, max_length=128)
+    s3_key: str = Field(min_length=1, max_length=500)
+    content_type: str = Field(min_length=1, max_length=100)
+    size_bytes: int = Field(ge=1, le=52_428_800)
+    duration_seconds: float = Field(ge=0.5, le=60)
+    waveform_data: List[float] = Field(min_length=10, max_length=200)
+    mode: Literal["audio", "video"] = "audio"
+
+
 class GalleryImageItemIn(BaseModel):
     bucket: str = Field(min_length=1, max_length=200)
     key: str = Field(min_length=1, max_length=500)
@@ -2307,7 +2327,7 @@ class MessageOut(BaseModel):
     message_id: str
     sender_id: str
     created_at: int
-    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll", "video_share", "voice_message"]
+    kind: Literal["text", "image", "file", "audio", "video", "gallery", "file_share", "calendar_share", "calendar_event", "meeting_poll", "video_share", "voice_message", "voicemail"]
     text: Optional[str] = None
     image: Optional[Dict[str, Any]] = None
     file: Optional[Dict[str, Any]] = None
@@ -2318,6 +2338,7 @@ class MessageOut(BaseModel):
     video_share: Optional[Dict[str, Any]] = None
     lottery: Optional[Dict[str, Any]] = None
     voice_message: Optional[Dict[str, Any]] = None
+    voicemail: Optional[Dict[str, Any]] = None
     preview: Optional[Dict[str, Any]] = None
     # Gallery message fields
     free_images: Optional[List[Dict[str, Any]]] = None
@@ -3945,6 +3966,36 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
             "waveform_data": [float(v) for v in raw_waveform],
         }
 
+    # Voicemail projection (CALL-014)
+    voicemail_out: Optional[Dict[str, Any]] = None
+    if merged_item.get("kind") == "voicemail" and not content_hidden:
+        from urllib.parse import quote as _vml_url_quote
+        _vml_mode = str(merged_item.get("voicemail_mode") or "audio")
+        _vml_media_url = ""
+        if _vml_mode == "video":
+            _vml_s3_key = str(merged_item.get("video_url") or "")
+        else:
+            _vml_s3_key = str(merged_item.get("audio_url") or "")
+        if _vml_s3_key:
+            if S.dev_mode:
+                _vml_media_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_vml_url_quote(_vml_s3_key, safe='/')}"
+            else:
+                _vml_media_url = _vml_s3_key
+        raw_waveform_vm = merged_item.get("waveform_data") or []
+        voicemail_out = {
+            "call_id": str(merged_item.get("call_id") or ""),
+            "mode": _vml_mode,
+            "audio_url": _vml_media_url if _vml_mode == "audio" else None,
+            "video_url": _vml_media_url if _vml_mode == "video" else None,
+            "content_type": merged_item.get("audio_content_type") or merged_item.get("video_content_type"),
+            "size_bytes": int(merged_item.get("audio_size_bytes") or merged_item.get("video_size_bytes") or 0),
+            "duration_seconds": float(merged_item.get("duration_seconds", 0)),
+            "waveform_data": [float(v) for v in raw_waveform_vm],
+            "call_state": str(merged_item.get("call_state") or ""),
+            "caller_user_id": str(merged_item.get("caller_user_id") or ""),
+            "callee_user_id": str(merged_item.get("callee_user_id") or ""),
+        }
+
     thread_id_value = str(merged_item.get(MESSAGE_FIELD_THREAD_ID) or "").strip()
     has_thread = False
     thread_reply_count: Optional[int] = None
@@ -3969,6 +4020,7 @@ def _message_out_from_item(message_item: dict, viewer_user_id: str) -> MessageOu
         meeting_poll=meeting_poll_out,
         video_share=video_share_out,
         voice_message=voice_message_out,
+        voicemail=voicemail_out,
         lottery=lottery_out,
         preview=preview,
         free_images=free_images_out,
@@ -8286,6 +8338,206 @@ def create_voice_message(
         payload={"mutation": "send", "scheduled": is_scheduled, "message": _serialize_message_event_payload(item, user_id)},
     )
     _meter_message_send(user_id=user_id, conversation_id=conversation_id, message_id=mid)
+    return message
+
+
+# ─── Voicemail Endpoints (CALL-014) ──────────────────────────────────────────
+
+VOICEMAIL_ELIGIBLE_STATES = {"declined", "missed", "busy"}
+
+
+@router.post("/conversations/{conversation_id}/voicemail/presign")
+def presign_voicemail(
+    conversation_id: str,
+    body: PresignVoicemailRequest,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Get a presigned S3 upload URL for a voicemail recording."""
+    if not S.voicemail_enabled:
+        raise HTTPException(404, "Voicemail is not enabled")
+    require_participant_active(user_id, conversation_id)
+
+    from app.services.messaging_call_sessions import get_call_session
+    call = get_call_session(body.call_id)
+    if not call:
+        raise HTTPException(404, "Call not found")
+    if call.conversation_id != conversation_id:
+        raise HTTPException(400, "Call does not belong to this conversation")
+    if call.caller_user_id != user_id:
+        raise HTTPException(403, "Only the caller can leave a voicemail")
+    if call.state not in VOICEMAIL_ELIGIBLE_STATES:
+        raise HTTPException(400, f"Call state '{call.state}' is not voicemail-eligible")
+    if call.paid:
+        raise HTTPException(400, "Voicemail is not available for paid calls")
+    if call.voicemail_message_id:
+        raise HTTPException(409, "A voicemail has already been left for this call")
+
+    msg_id = "m_" + uuid.uuid4().hex
+    ext = "webm"
+    if "mp4" in body.content_type:
+        ext = "mp4"
+    elif "ogg" in body.content_type:
+        ext = "ogg"
+    elif "wav" in body.content_type:
+        ext = "wav"
+    s3_key = f"voicemails/{conversation_id}/{msg_id}.{ext}"
+
+    from urllib.parse import quote as _vml_pq
+    if S.dev_mode:
+        upload_url = f"/mock/s3/{S3_BUCKET_IMAGES}/{_vml_pq(s3_key, safe='/')}"
+    else:
+        upload_url = s3.generate_presigned_url(
+            ClientMethod="put_object",
+            Params={"Bucket": S3_BUCKET_IMAGES, "Key": s3_key, "ContentType": body.content_type},
+            ExpiresIn=300,
+        )
+    return {"message_id": msg_id, "upload_url": upload_url, "s3_key": s3_key}
+
+
+@router.post("/conversations/{conversation_id}/voicemail", response_model=MessageOut)
+def create_voicemail(
+    conversation_id: str,
+    body: CreateVoicemailRequest,
+    req: Request = None,
+    user_id: str = Depends(get_messaging_user_id),
+):
+    """Create a voicemail message after uploading the recording to S3."""
+    if not S.voicemail_enabled:
+        raise HTTPException(404, "Voicemail is not enabled")
+    require_participant_active(user_id, conversation_id)
+
+    from app.services.messaging_call_sessions import get_call_session, set_voicemail_message_id
+    call = get_call_session(body.call_id)
+    if not call:
+        raise HTTPException(404, "Call not found")
+    if call.conversation_id != conversation_id:
+        raise HTTPException(400, "Call does not belong to this conversation")
+    if call.caller_user_id != user_id:
+        raise HTTPException(403, "Only the caller can leave a voicemail")
+    if call.state not in VOICEMAIL_ELIGIBLE_STATES:
+        raise HTTPException(400, f"Call state '{call.state}' is not voicemail-eligible")
+    if call.paid:
+        raise HTTPException(400, "Voicemail is not available for paid calls")
+    if call.voicemail_message_id:
+        raise HTTPException(409, "A voicemail has already been left for this call")
+
+    convo = _get_conversation_or_404(conversation_id)
+    ts = now_ts()
+    mid = body.message_id
+
+    max_samples = S.voice_message_waveform_samples
+    waveform = [max(0.0, min(1.0, float(v))) for v in body.waveform_data[:max_samples]]
+    from decimal import Decimal as _DecVML
+    waveform_dec = [_DecVML(str(v)) for v in waveform]
+
+    item: Dict[str, Any] = {
+        "conversation_id": conversation_id,
+        "message_id": mid,
+        "sender_id": user_id,
+        "created_at": ts,
+        "kind": "voicemail",
+        "text": None,
+        "call_id": body.call_id,
+        "voicemail_mode": body.mode,
+        "duration_seconds": _DecVML(str(body.duration_seconds)),
+        "waveform_data": waveform_dec,
+        "call_state": call.state,
+        "caller_user_id": call.caller_user_id,
+        "callee_user_id": call.callee_user_id,
+        "reactions": {},
+    }
+
+    if body.mode == "video":
+        item["video_url"] = body.s3_key
+        item["video_content_type"] = body.content_type
+        item["video_size_bytes"] = body.size_bytes
+    else:
+        item["audio_url"] = body.s3_key
+        item["audio_content_type"] = body.content_type
+        item["audio_size_bytes"] = body.size_bytes
+
+    ttl = _message_retention_ttl(convo, ts)
+    if ttl:
+        item["ttl"] = ttl
+
+    tbl_msgs.put_item(Item=item)
+
+    # Link voicemail to call session
+    set_voicemail_message_id(call_id=body.call_id, voicemail_message_id=mid)
+
+    # Lookup participants for SSE and notification
+    try:
+        resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(conversation_id))
+        participants = resp.get("Items", [])
+    except Exception:
+        participants = []
+
+    _send_single_destination_message(
+        conversation_id=conversation_id,
+        sender_id=user_id,
+        message_id=mid,
+        created_at=ts,
+        message_item=item,
+        participants=participants,
+        is_scheduled=False,
+        preview_text="[Voicemail]",
+    )
+
+    # Dispatch alert to callee (or all group members)
+    try:
+        from app.services.alerts import write_alert
+        for participant in participants:
+            participant_user_id = str(participant.get("user_id") or "")
+            if participant_user_id and participant_user_id != user_id:
+                try:
+                    write_alert(
+                        user_sub=participant_user_id,
+                        event="voicemail_received",
+                        outcome="info",
+                        title="Missed call — voicemail left",
+                        details={
+                            "conversation_id": conversation_id,
+                            "message_id": mid,
+                            "call_id": body.call_id,
+                            "caller_user_id": user_id,
+                            "voicemail_mode": body.mode,
+                            "duration_seconds": body.duration_seconds,
+                        },
+                    )
+                except Exception:
+                    pass  # best-effort delivery
+    except Exception:
+        pass
+
+    # Build response
+    from urllib.parse import quote as _vml_url_quote2
+    _vml_media_url_out = ""
+    if body.s3_key:
+        if S.dev_mode:
+            _vml_media_url_out = f"/mock/s3/{S3_BUCKET_IMAGES}/{_vml_url_quote2(body.s3_key, safe='/')}"
+        else:
+            _vml_media_url_out = body.s3_key
+
+    message = MessageOut(
+        conversation_id=conversation_id,
+        message_id=mid,
+        sender_id=user_id,
+        created_at=ts,
+        kind="voicemail",
+        voicemail={
+            "call_id": body.call_id,
+            "mode": body.mode,
+            "audio_url": _vml_media_url_out if body.mode == "audio" else None,
+            "video_url": _vml_media_url_out if body.mode == "video" else None,
+            "content_type": body.content_type,
+            "size_bytes": body.size_bytes,
+            "duration_seconds": float(body.duration_seconds),
+            "waveform_data": waveform,
+            "call_state": call.state,
+            "caller_user_id": call.caller_user_id,
+            "callee_user_id": call.callee_user_id,
+        },
+    )
     return message
 
 
@@ -12687,6 +12939,7 @@ class CallActionOut(BaseModel):
     from_state: Optional[str] = None
     reason: Optional[str] = None
     event_ts: int
+    voicemail_eligible: bool = False
 
 
 _CALL_ERROR_STATUS_MAP = {
@@ -12805,6 +13058,12 @@ async def decline_call_invite(
             actor_user_id=user_id,
             reason=body.reason,
         )
+        _vm_eligible = (
+            record.state in VOICEMAIL_ELIGIBLE_STATES
+            and not record.paid
+            and not record.voicemail_message_id
+            and S.voicemail_enabled
+        )
         return CallActionOut(
             call_id=record.call_id,
             conversation_id=record.conversation_id,
@@ -12812,6 +13071,7 @@ async def decline_call_invite(
             from_state=event.from_state,
             reason=event.reason,
             event_ts=event.event_ts,
+            voicemail_eligible=_vm_eligible,
         )
     except CallLifecycleError as exc:
         raise _call_error_to_http(exc)
@@ -12864,6 +13124,12 @@ async def timeout_call_endpoint(
             reason=body.reason,
             idempotency_key=body.idempotency_key,
         )
+        _vm_eligible = (
+            record.state in VOICEMAIL_ELIGIBLE_STATES
+            and not record.paid
+            and not record.voicemail_message_id
+            and S.voicemail_enabled
+        )
         return CallActionOut(
             call_id=record.call_id,
             conversation_id=record.conversation_id,
@@ -12871,6 +13137,7 @@ async def timeout_call_endpoint(
             from_state=event.from_state,
             reason=event.reason,
             event_ts=event.event_ts,
+            voicemail_eligible=_vm_eligible,
         )
     except CallLifecycleError as exc:
         raise _call_error_to_http(exc)
@@ -12882,7 +13149,7 @@ async def timeout_call_endpoint(
 
 
 class CallSignalingIn(BaseModel):
-    type: str = Field(..., pattern=r"^(webrtc\.offer|webrtc\.answer|webrtc\.ice_candidate)$")
+    type: str = Field(..., pattern=r"^(webrtc\.offer|webrtc\.answer|webrtc\.ice_candidate|webrtc\.screen_share_start|webrtc\.screen_share_stop)$")
     event_id: str = Field(..., min_length=1, max_length=128)
     conversation_id: str = Field(..., min_length=1, max_length=128)
     recipient_user_id: str = Field(..., min_length=1, max_length=128)

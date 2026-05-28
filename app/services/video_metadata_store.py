@@ -11,6 +11,7 @@ from app.core.tables import T
 from app.core.time import now_ts
 from app.models_video import (
     CreateVideoIn,
+    SubtitleTrack,
     UpdateVideoIn,
     VideoMetadataModel,
     VideoRendition,
@@ -152,6 +153,10 @@ def video_to_item(video: VideoMetadataModel) -> Dict[str, Any]:
     if video.source_broadcast_session_id is not None:
         item["source_broadcast_session_id"] = video.source_broadcast_session_id
 
+    # Subtitles / Closed Captions (VOD-021)
+    if video.subtitle_tracks:
+        item["subtitle_tracks"] = [t.model_dump() for t in video.subtitle_tracks]
+
     # Renditions: store as list of dicts (convert any floats to Decimal)
     if video.renditions:
         rendition_items = []
@@ -266,6 +271,8 @@ def video_from_item(item: Dict[str, Any]) -> VideoMetadataModel:
         rental_price_cents=_int_or_none(item.get("rental_price_cents")),
         rental_duration_hours=_int_or_none(item.get("rental_duration_hours")),
         download_price_cents=_int_or_none(item.get("download_price_cents")),
+        # Subtitles / Closed Captions (VOD-021)
+        subtitle_tracks=[SubtitleTrack(**t) for t in (item.get("subtitle_tracks") or [])],
     )
 
 

@@ -129,6 +129,12 @@ class BroadcastSessionOut(BaseModel):
     thumbnail_url: Optional[str] = None
     cancelled_at: Optional[str] = None
     announcement_post_id: Optional[str] = None
+    # Tipping fields (BCAST-013)
+    tip_total_cents: int = 0
+    tip_count: int = 0
+    tip_enabled: bool = True
+    tip_min_cents: int = 100
+    tip_max_cents: int = 100000
 
 
 class BroadcastScheduleIn(BaseModel):
@@ -1196,6 +1202,13 @@ def resume_broadcast_route(
 
 class BroadcastChatSendIn(BaseModel):
     text: str = Field(..., min_length=1, max_length=280)
+    # Phase B — Replies
+    reply_to_message_id: Optional[str] = Field(default=None, max_length=128)
+    # Phase C — Expiry (broadcaster-only)
+    expires_in_seconds: Optional[int] = Field(default=None, ge=10, le=86400)
+    # Phase D — Locked messages (broadcaster-only)
+    lock_price_cents: Optional[int] = Field(default=None, ge=1, le=100_000)
+    lock_description: Optional[str] = Field(default=None, max_length=200)
 
 
 class BroadcastChatProductLinkOut(BaseModel):
@@ -1208,16 +1221,45 @@ class BroadcastChatProductLinkOut(BaseModel):
     image_url: Optional[str] = None
 
 
+class BroadcastChatReactIn(BaseModel):
+    emoji: str = Field(min_length=1, max_length=32)
+    action: str = Field(default="add", pattern=r"^(add|remove)$")
+
+
+class BroadcastChatUnlockIn(BaseModel):
+    payment_method_id: str = Field(..., min_length=1, max_length=200)
+
+
 class BroadcastChatMessageOut(BaseModel):
     message_id: str
     session_id: str
     sender_id: str
     sender_display_name: str
-    text: str
+    text: Optional[str] = None
     kind: str = "text"
     product_link: Optional[BroadcastChatProductLinkOut] = None
     created_at: int
     deleted: bool = False
+    # Tip fields (BCAST-013)
+    tip_amount_cents: Optional[int] = None
+    tip_currency: Optional[str] = None
+    tip_payment_id: Optional[str] = None
+    # Phase A — Reactions (BCAST-015)
+    reactions_counts: Optional[dict] = None
+    my_reactions: Optional[list] = None
+    # Phase B — Replies (BCAST-015)
+    reply_to_message_id: Optional[str] = None
+    reply_to_preview: Optional[dict] = None
+    # Phase C — Expiry (BCAST-015)
+    expires_at: Optional[int] = None
+    expired: bool = False
+    # Phase D — Locked (BCAST-015)
+    lock_price_cents: Optional[int] = None
+    lock_description: Optional[str] = None
+    is_unlocked: Optional[bool] = None
+    tip_total_cents: Optional[int] = None
+    # Lottery field (BCAST-014)
+    lottery_id: Optional[str] = None
 
 
 class BroadcastChatHistoryOut(BaseModel):
@@ -1252,6 +1294,15 @@ def send_chat_message_route(session_id: str, body: BroadcastChatSendIn, ctx: dic
         )
 
     user_id = ctx["user_sub"]
+
+    # Broadcaster-only features (BCAST-015 Phase C + D)
+    if body.expires_in_seconds is not None or body.lock_price_cents is not None:
+        if user_id != session.created_by:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"code": "NOT_BROADCASTER", "message": "Only the broadcaster can send special messages"},
+            )
+
     # Resolve display name: use profile display_name if available, otherwise user_sub
     display_name = user_id
     try:
@@ -1268,16 +1319,12 @@ def send_chat_message_route(session_id: str, body: BroadcastChatSendIn, ctx: dic
         user_id=user_id,
         display_name=display_name,
         text=body.text,
+        reply_to_message_id=body.reply_to_message_id,
+        expires_in_seconds=body.expires_in_seconds,
+        lock_price_cents=body.lock_price_cents,
+        lock_description=body.lock_description,
     )
-    return BroadcastChatMessageOut(
-        message_id=result["message_id"],
-        session_id=result["session_id"],
-        sender_id=result["sender_id"],
-        sender_display_name=result["sender_display_name"],
-        text=result["text"],
-        created_at=result["created_at"],
-        deleted=result["deleted"],
-    )
+    return BroadcastChatMessageOut(**{k: v for k, v in result.items() if k != "sort_key"})
 
 
 @router.get("/sessions/{session_id}/chat", response_model=BroadcastChatHistoryOut)
@@ -1288,9 +1335,11 @@ def get_chat_history_route(
     ctx: dict = Depends(_ctx),
 ):
     """Load recent chat history for a broadcast session."""
-    _ = ctx
     _ = get_session(session_id)  # 404 if session doesn't exist
-    result = _store_get_history(session_id, limit=limit, before_sort_key=before)
+    result = _store_get_history(
+        session_id, limit=limit, before_sort_key=before,
+        viewer_user_id=ctx["user_sub"],
+    )
     return BroadcastChatHistoryOut(
         messages=[BroadcastChatMessageOut(**m) for m in result["messages"]],
         has_more=result["has_more"],
@@ -1326,6 +1375,49 @@ def mute_chat_user_route(session_id: str, body: BroadcastChatMuteIn, ctx: dict =
         actor=ctx["user_sub"],
     )
     return BroadcastChatMuteOut(**result)
+
+
+# ─── BCAST-015: Rich Chat Endpoints ────────────────────────────────
+
+
+@router.post("/sessions/{session_id}/chat/{message_id}/react")
+def react_to_chat_message_route(
+    session_id: str,
+    message_id: str,
+    body: BroadcastChatReactIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Add or remove a reaction on a broadcast chat message."""
+    _ = get_session(session_id)  # 404 if session doesn't exist
+    from app.services.broadcast_chat_rich import react_to_chat_message
+    result = react_to_chat_message(
+        session_id=session_id,
+        message_id=message_id,
+        user_id=ctx["user_sub"],
+        emoji=body.emoji,
+        action=body.action,
+    )
+    return result
+
+
+@router.post("/sessions/{session_id}/chat/{message_id}/unlock")
+def unlock_chat_message_route(
+    session_id: str,
+    message_id: str,
+    body: BroadcastChatUnlockIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Unlock a locked broadcast chat message by paying the lock price."""
+    session = get_session(session_id)
+    from app.services.broadcast_chat_rich import unlock_chat_message
+    result = unlock_chat_message(
+        session_id=session_id,
+        message_id=message_id,
+        user_id=ctx["user_sub"],
+        payment_method_id=body.payment_method_id,
+        broadcaster_id=session.created_by,
+    )
+    return result
 
 
 class BroadcastChatProductLinkIn(BaseModel):
@@ -1436,14 +1528,25 @@ async def broadcast_chat_stream_route(
             )
             if messages:
                 for msg in messages:
-                    cursor = msg["sort_key"]
+                    sk = msg.get("sort_key", "")
+                    cursor = sk
+                    # Skip LOTTERY#/LENTRY# config/entry items (BCAST-014)
+                    if sk.startswith("LOTTERY#") or sk.startswith("LENTRY#"):
+                        continue
                     if msg.get("deleted"):
                         payload = json.dumps({"message_id": msg["message_id"]}, separators=(",", ":"))
                         yield f"event: chat:delete\ndata: {payload}\n\n"
                     else:
                         out = _chat_msg_out(msg)
                         payload = json.dumps(out, separators=(",", ":"), default=str)
-                        event_type = "chat:product_link" if out.get("kind") == "product_link" else "chat:message"
+                        if out.get("kind") == "product_link":
+                            event_type = "chat:product_link"
+                        elif out.get("kind") == "tip":
+                            event_type = "chat:tip"
+                        elif out.get("kind") == "lottery":
+                            event_type = "chat:lottery"
+                        else:
+                            event_type = "chat:message"
                         yield f"event: {event_type}\ndata: {payload}\n\n"
                 last_ping = time.time()
                 continue
@@ -1451,6 +1554,238 @@ async def broadcast_chat_stream_route(
             await asyncio.sleep(poll_ms / 1000.0)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
+
+
+# ─── Broadcast Tipping Endpoints (BCAST-013) ──────────────────
+
+
+class BroadcastChatTipIn(BaseModel):
+    """Request body for sending a tip in broadcast chat."""
+    amount_cents: int = Field(..., ge=100, le=100000, description="Tip amount in cents.")
+    text: str = Field(default="", max_length=280, description="Optional message text.")
+    payment_method_id: str = Field(..., min_length=1, max_length=200)
+    currency: str = Field(default="USD", pattern=r"^[A-Z]{3}$")
+
+
+class BroadcastTipGoalCreateIn(BaseModel):
+    """Request body for creating a tip goal."""
+    label: str = Field(..., min_length=1, max_length=200)
+    target_cents: int = Field(..., ge=100, le=10000000)
+    sort_order: int = Field(default=0, ge=0, le=4)
+
+
+class BroadcastTipGoalOut(BaseModel):
+    """Response model for a tip goal."""
+    goal_id: str
+    session_id: str
+    label: str
+    target_cents: int
+    current_cents: int = 0
+    reached: bool = False
+    reached_at: Optional[int] = None
+    sort_order: int = 0
+    created_at: int
+
+
+class BroadcastTipGoalsListOut(BaseModel):
+    """Response model for listing all goals for a session."""
+    goals: List[BroadcastTipGoalOut] = Field(default_factory=list)
+    session_id: str
+
+
+class BroadcastTopTipperItem(BaseModel):
+    user_id: str
+    display_name: str
+    total_cents: int
+    tip_count: int
+
+
+class BroadcastRecentTipItem(BaseModel):
+    message_id: str
+    sender_id: str
+    sender_display_name: str
+    amount_cents: int
+    text: str
+    created_at: int
+
+
+class BroadcastTipSummaryOut(BaseModel):
+    """Tip summary for a broadcast session."""
+    session_id: str
+    total_cents: int = 0
+    tip_count: int = 0
+    currency: str = "USD"
+    top_tippers: List[BroadcastTopTipperItem] = Field(default_factory=list)
+    recent_tips: List[BroadcastRecentTipItem] = Field(default_factory=list)
+
+
+class BroadcastTipConfigIn(BaseModel):
+    """Request body for updating tip configuration."""
+    tip_enabled: Optional[bool] = None
+    tip_min_cents: Optional[int] = Field(default=None, ge=100, le=100000)
+    tip_max_cents: Optional[int] = Field(default=None, ge=100, le=100000)
+
+
+@router.post(
+    "/sessions/{session_id}/chat/tip",
+    response_model=BroadcastChatMessageOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def send_tip_message_route(session_id: str, body: BroadcastChatTipIn, ctx: dict = Depends(_ctx)):
+    """Send a tip in broadcast chat."""
+    from app.services.broadcast_tip_store import send_tip_message
+
+    session = get_session(session_id)
+    if session.status != "live":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "BROADCAST_NOT_LIVE", "message": "Tips are only accepted while the broadcast is live."},
+        )
+    if not session.tip_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "TIPPING_DISABLED", "message": "Tipping is disabled for this broadcast."},
+        )
+
+    user_id = ctx["user_sub"]
+
+    # Resolve display name
+    display_name = user_id
+    try:
+        from app.core.tables import T as _T
+        profile_resp = _T.profile.get_item(Key={"user_sub": user_id})
+        profile_item = profile_resp.get("Item")
+        if profile_item and profile_item.get("display_name"):
+            display_name = profile_item["display_name"]
+    except Exception:
+        pass
+
+    result = send_tip_message(
+        session_id=session_id,
+        user_id=user_id,
+        display_name=display_name,
+        amount_cents=body.amount_cents,
+        currency=body.currency,
+        payment_method_id=body.payment_method_id,
+        text=body.text,
+        broadcaster_id=session.created_by,
+    )
+    return BroadcastChatMessageOut(**{k: v for k, v in result.items() if k != "session_tip_total_cents"})
+
+
+@router.get("/sessions/{session_id}/tips/summary", response_model=BroadcastTipSummaryOut)
+def get_tip_summary_route(
+    session_id: str,
+    top_limit: int = Query(default=10, ge=1, le=50),
+    recent_limit: int = Query(default=10, ge=1, le=50),
+    ctx: dict = Depends(_ctx),
+):
+    """Get tip summary for a broadcast session."""
+    from app.services.broadcast_tip_store import get_tip_summary
+
+    _ = ctx
+    _ = get_session(session_id)  # 404 if not found
+    summary = get_tip_summary(session_id, limit=max(top_limit, recent_limit))
+    return BroadcastTipSummaryOut(
+        session_id=summary["session_id"],
+        total_cents=summary["total_cents"],
+        tip_count=summary["tip_count"],
+        currency=summary["currency"],
+        top_tippers=[BroadcastTopTipperItem(**t) for t in summary["top_tippers"][:top_limit]],
+        recent_tips=[BroadcastRecentTipItem(**t) for t in summary["recent_tips"][:recent_limit]],
+    )
+
+
+@router.patch("/sessions/{session_id}/tips/config", response_model=BroadcastSessionOut)
+def update_tip_config_route(session_id: str, body: BroadcastTipConfigIn, ctx: dict = Depends(_ctx)):
+    """Update tipping configuration for a broadcast session (broadcaster only)."""
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_BROADCASTER", "message": "Only the broadcaster can update tip config."},
+        )
+
+    fields = {}
+    if body.tip_enabled is not None:
+        fields["tip_enabled"] = body.tip_enabled
+    if body.tip_min_cents is not None:
+        fields["tip_min_cents"] = body.tip_min_cents
+    if body.tip_max_cents is not None:
+        fields["tip_max_cents"] = body.tip_max_cents
+
+    if not fields:
+        return _to_session_out(session)
+
+    # Validate min <= max
+    new_min = fields.get("tip_min_cents", session.tip_min_cents)
+    new_max = fields.get("tip_max_cents", session.tip_max_cents)
+    if new_min > new_max:
+        raise HTTPException(400, {"code": "INVALID_TIP_RANGE", "message": "tip_min_cents must be <= tip_max_cents."})
+
+    updated = update_session_fields(session_id, fields)
+    return _to_session_out(updated)
+
+
+@router.post(
+    "/sessions/{session_id}/goals",
+    response_model=BroadcastTipGoalOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_tip_goal_route(session_id: str, body: BroadcastTipGoalCreateIn, ctx: dict = Depends(_ctx)):
+    """Create a tip goal for a broadcast session (broadcaster only)."""
+    from app.services.broadcast_tip_goals import create_goal
+
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_BROADCASTER", "message": "Only the broadcaster can create goals."},
+        )
+    if session.status not in ("draft", "scheduled", "ready", "live"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "SESSION_NOT_ACTIVE", "message": "Goals can only be set for active sessions."},
+        )
+
+    result = create_goal(
+        session_id=session_id,
+        label=body.label,
+        target_cents=body.target_cents,
+        sort_order=body.sort_order,
+        actor=ctx["user_sub"],
+    )
+    return BroadcastTipGoalOut(**result)
+
+
+@router.get("/sessions/{session_id}/goals", response_model=BroadcastTipGoalsListOut)
+def list_tip_goals_route(session_id: str, ctx: dict = Depends(_ctx)):
+    """List all tip goals for a broadcast session."""
+    from app.services.broadcast_tip_goals import list_goals
+
+    _ = ctx
+    _ = get_session(session_id)  # 404 if not found
+    goals = list_goals(session_id)
+    return BroadcastTipGoalsListOut(
+        goals=[BroadcastTipGoalOut(**g) for g in goals],
+        session_id=session_id,
+    )
+
+
+@router.delete("/sessions/{session_id}/goals/{goal_id}")
+def delete_tip_goal_route(session_id: str, goal_id: str, ctx: dict = Depends(_ctx)):
+    """Delete a tip goal (broadcaster only)."""
+    from app.services.broadcast_tip_goals import delete_goal
+
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_BROADCASTER", "message": "Only the broadcaster can delete goals."},
+        )
+
+    delete_goal(session_id, goal_id)
+    return {"ok": True, "goal_id": goal_id}
 
 
 # ─── Product Shelf Endpoints (LCOM-001) ────────────────────────
@@ -2528,3 +2863,920 @@ def extend_private_chat_route(
     )
 
     return PrivateChatExtendOut(**result)
+
+
+# ─── Broadcast Lottery Endpoints (BCAST-014) ─────────────────────────
+
+
+class BroadcastLotteryOutcomeIn(BaseModel):
+    """One outcome in a broadcast lottery configuration."""
+    display_label: Optional[str] = Field(default=None, max_length=80)
+    weight_bps: int = Field(ge=1, le=10_000)
+    payload_type: str = Field(default="text", pattern=r"^(text|image|video)$")
+    text_content: Optional[str] = Field(default=None, max_length=4000)
+    media_asset_id: Optional[str] = Field(default=None, min_length=1, max_length=256)
+
+
+class BroadcastLotteryCreateIn(BaseModel):
+    """Request body for creating a lottery in broadcast chat."""
+    title: str = Field(..., min_length=1, max_length=120)
+    outcomes: List[BroadcastLotteryOutcomeIn] = Field(..., min_length=2, max_length=10)
+    max_entries: Optional[int] = Field(default=None, ge=1, le=10_000)
+    entry_fee_cents: int = Field(default=0, ge=0, le=100_000)
+    duration_seconds: Optional[int] = Field(default=None, ge=10, le=3600)
+
+
+class BroadcastLotteryEntryIn(BaseModel):
+    """Request body for entering a broadcast lottery."""
+    payment_method_id: Optional[str] = Field(default=None, max_length=128)
+
+
+class BroadcastLotteryOutcomeOut(BaseModel):
+    outcome_id: str
+    display_label: Optional[str] = None
+    weight_bps: int
+    payload_type: str
+    text_content: Optional[str] = None
+    media_asset_id: Optional[str] = None
+
+
+class BroadcastLotteryConfigOut(BaseModel):
+    lottery_id: str
+    message_id: str
+    title: str
+    status: str
+    outcomes: List[BroadcastLotteryOutcomeOut] = Field(default_factory=list)
+    entry_count: int = 0
+    max_entries: Optional[int] = None
+    entry_fee_cents: int = 0
+    currency: str = "USD"
+    duration_seconds: Optional[int] = None
+    closes_at: Optional[int] = None
+    created_at: int = 0
+    drawn_at: Optional[int] = None
+
+
+class BroadcastLotteryResultEntryOut(BaseModel):
+    user_id: str
+    display_name: str = ""
+    outcome_id: str
+    display_label: Optional[str] = None
+    payload_type: str = "text"
+    text_content: Optional[str] = None
+    media_asset_id: Optional[str] = None
+    rng_roll: int
+
+
+class BroadcastLotteryDrawOut(BaseModel):
+    lottery_id: str
+    status: str = "drawn"
+    results: List[BroadcastLotteryResultEntryOut] = Field(default_factory=list)
+    idempotent: bool = False
+
+
+class BroadcastLotteryEntryOut(BaseModel):
+    lottery_id: str
+    user_id: str
+    entered_at: int
+    already_entered: bool = False
+    entry_fee_cents: int = 0
+
+
+class BroadcastLotteryViewerStatusOut(BaseModel):
+    lottery_id: str
+    title: str
+    status: str
+    entry_count: int = 0
+    max_entries: Optional[int] = None
+    entry_fee_cents: int = 0
+    closes_at: Optional[int] = None
+    created_at: int = 0
+    drawn_at: Optional[int] = None
+    has_entered: bool = False
+    viewer_outcome: Optional[BroadcastLotteryResultEntryOut] = None
+
+
+def _require_broadcast_lottery_enabled() -> None:
+    from app.core.settings import S as _S
+    if not _S.broadcast_lottery_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "BROADCAST_LOTTERY_DISABLED", "message": "Lottery feature is not enabled"},
+        )
+
+
+@router.post(
+    "/sessions/{session_id}/chat/lottery",
+    response_model=BroadcastLotteryConfigOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_lottery_route(
+    session_id: str,
+    body: BroadcastLotteryCreateIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Create a lottery in a live broadcast chat session (broadcaster only)."""
+    _require_broadcast_lottery_enabled()
+
+    session = get_session(session_id)
+    if session.status != "live":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "BROADCAST_NOT_LIVE", "message": "Chat is only available while the broadcast is live"},
+        )
+
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_SESSION_CREATOR", "message": "Only the broadcaster can create lotteries"},
+        )
+
+    user_id = ctx["user_sub"]
+    display_name = user_id
+    try:
+        from app.core.tables import T as _T
+        profile_resp = _T.profile.get_item(Key={"user_sub": user_id})
+        profile_item = profile_resp.get("Item")
+        if profile_item and profile_item.get("display_name"):
+            display_name = profile_item["display_name"]
+    except Exception:
+        pass
+
+    # Convert outcomes with generated outcome_ids
+    outcome_dicts = []
+    for oc in body.outcomes:
+        outcome_dicts.append({
+            "outcome_id": "oc_" + uuid4().hex[:8],
+            "display_label": oc.display_label,
+            "weight_bps": oc.weight_bps,
+            "payload_type": oc.payload_type,
+            "text_content": oc.text_content,
+            "media_asset_id": oc.media_asset_id,
+        })
+
+    from app.services.broadcast_lottery import create_lottery
+    from app.services.messaging_lottery_store import LotteryConfigValidationError
+
+    try:
+        config = create_lottery(
+            session_id=session_id,
+            broadcaster_id=user_id,
+            display_name=display_name,
+            title=body.title,
+            outcomes=outcome_dicts,
+            max_entries=body.max_entries,
+            entry_fee_cents=body.entry_fee_cents,
+            duration_seconds=body.duration_seconds,
+        )
+    except LotteryConfigValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    return BroadcastLotteryConfigOut(
+        lottery_id=config["lottery_id"],
+        message_id=config["message_id"],
+        title=config["title"],
+        status=config["status"],
+        outcomes=[BroadcastLotteryOutcomeOut(**o) for o in config["outcomes"]],
+        entry_count=int(config.get("entry_count", 0)),
+        max_entries=int(config["max_entries"]) if config.get("max_entries") is not None else None,
+        entry_fee_cents=int(config.get("entry_fee_cents", 0)),
+        currency=config.get("currency", "USD"),
+        duration_seconds=int(config["duration_seconds"]) if config.get("duration_seconds") is not None else None,
+        closes_at=int(config["closes_at"]) if config.get("closes_at") is not None else None,
+        created_at=int(config.get("created_at", 0)),
+        drawn_at=int(config["drawn_at"]) if config.get("drawn_at") is not None else None,
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/chat/lottery/{lottery_id}/enter",
+    response_model=BroadcastLotteryEntryOut,
+)
+def enter_lottery_route(
+    session_id: str,
+    lottery_id: str,
+    body: BroadcastLotteryEntryIn,
+    ctx: dict = Depends(_ctx),
+):
+    """Enter a broadcast lottery."""
+    _require_broadcast_lottery_enabled()
+
+    session = get_session(session_id)
+    if session.status != "live":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "BROADCAST_NOT_LIVE", "message": "Chat is only available while the broadcast is live"},
+        )
+
+    user_id = ctx["user_sub"]
+    display_name = user_id
+    try:
+        from app.core.tables import T as _T
+        profile_resp = _T.profile.get_item(Key={"user_sub": user_id})
+        profile_item = profile_resp.get("Item")
+        if profile_item and profile_item.get("display_name"):
+            display_name = profile_item["display_name"]
+    except Exception:
+        pass
+
+    from app.services.broadcast_lottery import enter_lottery
+    result = enter_lottery(
+        session_id=session_id,
+        lottery_id=lottery_id,
+        user_id=user_id,
+        display_name=display_name,
+        payment_method_id=body.payment_method_id,
+    )
+
+    entry = result["entry"]
+    return BroadcastLotteryEntryOut(
+        lottery_id=entry.get("lottery_id", lottery_id),
+        user_id=entry.get("user_id", user_id),
+        entered_at=int(entry.get("entered_at", 0)),
+        already_entered=result["already_entered"],
+        entry_fee_cents=int(entry.get("entry_fee_cents", 0)),
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/chat/lottery/{lottery_id}/close",
+    response_model=BroadcastLotteryConfigOut,
+)
+def close_lottery_route(
+    session_id: str,
+    lottery_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Close entries for a broadcast lottery (broadcaster only)."""
+    _require_broadcast_lottery_enabled()
+
+    _ = get_session(session_id)  # 404 if not found
+
+    from app.services.broadcast_lottery import close_lottery_entries
+    config = close_lottery_entries(
+        session_id=session_id,
+        lottery_id=lottery_id,
+        actor_id=ctx["user_sub"],
+    )
+
+    return BroadcastLotteryConfigOut(
+        lottery_id=config["lottery_id"],
+        message_id=config.get("message_id", ""),
+        title=config["title"],
+        status=config["status"],
+        outcomes=[BroadcastLotteryOutcomeOut(**o) for o in (config.get("outcomes") or [])],
+        entry_count=int(config.get("entry_count", 0)),
+        max_entries=int(config["max_entries"]) if config.get("max_entries") is not None else None,
+        entry_fee_cents=int(config.get("entry_fee_cents", 0)),
+        currency=config.get("currency", "USD"),
+        duration_seconds=int(config["duration_seconds"]) if config.get("duration_seconds") is not None else None,
+        closes_at=int(config["closes_at"]) if config.get("closes_at") is not None else None,
+        created_at=int(config.get("created_at", 0)),
+        drawn_at=int(config["drawn_at"]) if config.get("drawn_at") is not None else None,
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/chat/lottery/{lottery_id}/draw",
+    response_model=BroadcastLotteryDrawOut,
+)
+def draw_lottery_route(
+    session_id: str,
+    lottery_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Execute the lottery draw (broadcaster only)."""
+    _require_broadcast_lottery_enabled()
+
+    _ = get_session(session_id)  # 404 if not found
+
+    from app.services.broadcast_lottery import draw_lottery
+    result = draw_lottery(
+        session_id=session_id,
+        lottery_id=lottery_id,
+        actor_id=ctx["user_sub"],
+    )
+
+    return BroadcastLotteryDrawOut(
+        lottery_id=result["lottery_id"],
+        status=result["status"],
+        results=[BroadcastLotteryResultEntryOut(**r) for r in result["results"]],
+        idempotent=result.get("idempotent", False),
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/chat/lottery/{lottery_id}",
+    response_model=BroadcastLotteryViewerStatusOut,
+)
+def get_lottery_status_route(
+    session_id: str,
+    lottery_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Get lottery state from the requesting viewer's perspective."""
+    _require_broadcast_lottery_enabled()
+
+    _ = get_session(session_id)  # 404 if not found
+
+    from app.services.broadcast_lottery import get_lottery_status_for_viewer
+    result = get_lottery_status_for_viewer(session_id, lottery_id, ctx["user_sub"])
+    if not result:
+        raise HTTPException(status_code=404, detail={"code": "LOTTERY_NOT_FOUND", "message": "Lottery not found"})
+
+    viewer_outcome = None
+    if result.get("viewer_outcome"):
+        vo = result["viewer_outcome"]
+        viewer_outcome = BroadcastLotteryResultEntryOut(
+            user_id=ctx["user_sub"],
+            display_name="",
+            outcome_id=vo["outcome_id"],
+            display_label=vo.get("display_label"),
+            payload_type=vo.get("payload_type", "text"),
+            text_content=vo.get("text_content"),
+            media_asset_id=vo.get("media_asset_id"),
+            rng_roll=int(vo.get("rng_roll", 0)),
+        )
+
+    return BroadcastLotteryViewerStatusOut(
+        lottery_id=result["lottery_id"],
+        title=result["title"],
+        status=result["status"],
+        entry_count=result["entry_count"],
+        max_entries=result.get("max_entries"),
+        entry_fee_cents=result["entry_fee_cents"],
+        closes_at=result.get("closes_at"),
+        created_at=result["created_at"],
+        drawn_at=result.get("drawn_at"),
+        has_entered=result["has_entered"],
+        viewer_outcome=viewer_outcome,
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/chat/lottery/{lottery_id}/results",
+    response_model=BroadcastLotteryDrawOut,
+)
+def get_lottery_results_route(
+    session_id: str,
+    lottery_id: str,
+    ctx: dict = Depends(_ctx),
+):
+    """Get full draw results (broadcaster only)."""
+    _require_broadcast_lottery_enabled()
+
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_SESSION_CREATOR", "message": "Only the broadcaster can view full results"},
+        )
+
+    from app.services.broadcast_lottery import get_lottery_config, _get_draw_results
+    config = get_lottery_config(session_id, lottery_id)
+    if not config:
+        raise HTTPException(status_code=404, detail={"code": "LOTTERY_NOT_FOUND", "message": "Lottery not found"})
+
+    if config["status"] != "drawn":
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "LOTTERY_NOT_DRAWN", "message": "Lottery has not been drawn yet"},
+        )
+
+    results = _get_draw_results(session_id, lottery_id)
+    return BroadcastLotteryDrawOut(
+        lottery_id=lottery_id,
+        status="drawn",
+        results=[BroadcastLotteryResultEntryOut(**r) for r in results],
+        idempotent=True,
+    )
+
+
+# ─── Multi-Input / Co-Streaming Endpoints (BCAST-016) ────────────
+
+
+class BroadcastInputCreateIn(BaseModel):
+    input_type: str = Field(default="guest", pattern=r"^(primary|guest|screen)$")
+    label: str = Field(default="", max_length=100)
+
+
+class BroadcastInputOut(BaseModel):
+    input_id: str
+    session_id: str
+    input_type: str
+    label: str
+    ingest_url: Optional[str] = None
+    stream_key_ref: Optional[str] = None
+    aws_input_arn: Optional[str] = None
+    is_live: bool = False
+    connected_at: Optional[int] = None
+    disconnected_at: Optional[int] = None
+    position: int = 0
+    created_by: str
+    created_at: str
+    updated_at: str
+    relay_mode: Optional[str] = None
+
+
+class BroadcastInputListOut(BaseModel):
+    session_id: str
+    inputs: List[BroadcastInputOut] = Field(default_factory=list)
+    count: int = 0
+    max_inputs: int = 4
+
+
+class BroadcastInputCreateOut(BaseModel):
+    input_id: str
+    session_id: str
+    input_type: str
+    label: str
+    ingest_url: str
+    stream_key: str
+    aws_input_arn: Optional[str] = None
+    position: int
+
+
+class BroadcastLayoutSwitchIn(BaseModel):
+    mode: str = Field(..., pattern=r"^(single|side_by_side|pip|grid)$")
+    primary_input_id: Optional[str] = None
+    input_ids: Optional[List[str]] = None
+
+
+class BroadcastLayoutOut(BaseModel):
+    mode: str
+    positions: List[dict] = Field(default_factory=list)
+    primary_input_id: Optional[str] = None
+    input_ids: List[str] = Field(default_factory=list)
+
+
+class BroadcastGuestInviteCreateIn(BaseModel):
+    join_mode: str = Field(default="browser", pattern=r"^(rtmp|browser)$")
+    label: str = Field(default="Guest", max_length=100)
+    expiry_minutes: int = Field(default=60, ge=5, le=1440)
+
+
+class BroadcastGuestInviteOut(BaseModel):
+    invite_id: str
+    session_id: str
+    input_id: str
+    invite_url: Optional[str] = None
+    ingest_url: Optional[str] = None
+    stream_key: Optional[str] = None
+    join_mode: str
+    status: str
+    guest_user_id: Optional[str] = None
+    guest_display_name: Optional[str] = None
+    expires_at: int
+    accepted_at: Optional[int] = None
+    created_at: str
+
+
+class BroadcastGuestInviteListOut(BaseModel):
+    session_id: str
+    invites: List[BroadcastGuestInviteOut] = Field(default_factory=list)
+    count: int = 0
+
+
+class BroadcastGuestAcceptIn(BaseModel):
+    display_name: str = Field(min_length=1, max_length=100)
+
+
+class BroadcastGuestAcceptOut(BaseModel):
+    invite_id: str
+    input_id: str
+    ingest_url: Optional[str] = None
+    join_mode: str
+    session_id: str
+
+
+class BroadcastWebRTCOfferIn(BaseModel):
+    sdp_offer: str = Field(min_length=1, max_length=65536)
+
+
+class BroadcastWebRTCOfferOut(BaseModel):
+    sdp_answer: str
+    session_id: str
+    input_id: str
+
+
+class BroadcastGuestMuteIn(BaseModel):
+    muted: bool = True
+
+
+def _ensure_multi_input_enabled() -> None:
+    from app.core.settings import S as _S
+    if not _S.broadcast_multi_input_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "MULTI_INPUT_DISABLED", "detail": "Multi-input feature is disabled"},
+        )
+
+
+@router.get("/sessions/{session_id}/inputs", response_model=BroadcastInputListOut)
+def list_inputs_route(session_id: str, ctx: dict = Depends(_ctx)):
+    """List all inputs for a broadcast session."""
+    _ensure_multi_input_enabled()
+    _ = get_session(session_id)  # 404 if not found
+    from app.services.broadcast_input_store import list_inputs as _list_inputs
+    inputs = _list_inputs(session_id)
+    from app.core.settings import S as _S
+    return BroadcastInputListOut(
+        session_id=session_id,
+        inputs=[BroadcastInputOut(**inp.model_dump()) for inp in inputs],
+        count=len(inputs),
+        max_inputs=_S.broadcast_max_inputs_per_session,
+    )
+
+
+@router.post("/sessions/{session_id}/inputs", response_model=BroadcastInputCreateOut, status_code=201)
+def add_input_route(session_id: str, body: BroadcastInputCreateIn, request: Request, ctx: dict = Depends(_ctx)):
+    """Add a new input to a broadcast session."""
+    _ensure_multi_input_enabled()
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the broadcaster can add inputs.")
+    if session.status in ("stopped", "error", "cancelled"):
+        raise HTTPException(status_code=409, detail=f"Cannot add inputs when session is {session.status}.")
+
+    from app.services.broadcast_input_store import count_inputs, create_input
+    from app.core.settings import S as _S
+    current_count = count_inputs(session_id)
+    if current_count >= _S.broadcast_max_inputs_per_session:
+        raise HTTPException(status_code=400, detail=f"Maximum {_S.broadcast_max_inputs_per_session} inputs per session.")
+
+    from app.services.broadcast_multi_input import create_additional_input
+    provision = create_additional_input(
+        session_id=session_id,
+        input_index=current_count,
+        correlation_id=_correlation_id(request),
+    )
+
+    inp = create_input(
+        session_id=session_id,
+        input_type=body.input_type,
+        label=body.label,
+        ingest_url=provision.ingest_url,
+        stream_key_ref=f"ref:{provision.stream_key[:8]}",
+        aws_input_arn=provision.input_arn,
+        aws_input_id=provision.input_id,
+        position=current_count,
+        created_by=ctx["user_sub"],
+    )
+
+    broadcast_sse_publish(session_id, {
+        "_type": "input:added",
+        "input_id": inp.input_id,
+        "input_type": body.input_type,
+        "label": body.label,
+        "position": current_count,
+    })
+
+    return BroadcastInputCreateOut(
+        input_id=inp.input_id,
+        session_id=session_id,
+        input_type=inp.input_type,
+        label=inp.label,
+        ingest_url=provision.ingest_url,
+        stream_key=provision.stream_key,
+        aws_input_arn=provision.input_arn,
+        position=inp.position,
+    )
+
+
+@router.delete("/sessions/{session_id}/inputs/{input_id}")
+def remove_input_route(session_id: str, input_id: str, ctx: dict = Depends(_ctx)):
+    """Remove an input from a broadcast session."""
+    _ensure_multi_input_enabled()
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the broadcaster can remove inputs.")
+
+    from app.services.broadcast_input_store import get_input, delete_input
+    inp = get_input(session_id, input_id)
+
+    delete_input(session_id, input_id)
+
+    broadcast_sse_publish(session_id, {
+        "_type": "input:removed",
+        "input_id": input_id,
+    })
+
+    return {"ok": True, "input_id": input_id}
+
+
+@router.post("/sessions/{session_id}/layout", response_model=BroadcastLayoutOut)
+def switch_layout_route(session_id: str, body: BroadcastLayoutSwitchIn, ctx: dict = Depends(_ctx)):
+    """Switch layout mode for a live broadcast session."""
+    _ensure_multi_input_enabled()
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the broadcaster can switch layout.")
+
+    from app.services.broadcast_layout import switch_layout
+    result = switch_layout(
+        session_id=session_id,
+        mode=body.mode,
+        primary_input_id=body.primary_input_id,
+        input_ids=body.input_ids,
+    )
+
+    broadcast_sse_publish(session_id, {
+        "_type": "layout:switched",
+        "mode": result["mode"],
+        "input_ids": result["input_ids"],
+        "primary_input_id": result.get("primary_input_id"),
+    })
+
+    return BroadcastLayoutOut(**result)
+
+
+@router.get("/sessions/{session_id}/layout", response_model=BroadcastLayoutOut)
+def get_layout_route(session_id: str, ctx: dict = Depends(_ctx)):
+    """Get current layout configuration."""
+    _ensure_multi_input_enabled()
+    _ = get_session(session_id)
+    from app.services.broadcast_input_store import get_layout
+    layout = get_layout(session_id)
+    if not layout:
+        return BroadcastLayoutOut(mode="single", positions=[], input_ids=[])
+    return BroadcastLayoutOut(
+        mode=layout.mode,
+        positions=[p.model_dump() for p in layout.positions],
+        primary_input_id=layout.primary_input_id,
+        input_ids=layout.input_ids,
+    )
+
+
+@router.post("/sessions/{session_id}/inputs/{input_id}/activate")
+def activate_input_route(session_id: str, input_id: str, ctx: dict = Depends(_ctx)):
+    """Bring an input on-screen (mark as live)."""
+    _ensure_multi_input_enabled()
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the broadcaster can activate inputs.")
+
+    from app.services.broadcast_input_store import mark_input_live
+    inp = mark_input_live(session_id, input_id, is_live=True)
+
+    broadcast_sse_publish(session_id, {
+        "_type": "input:connected",
+        "input_id": input_id,
+        "is_live": True,
+    })
+
+    return {"ok": True, "input_id": input_id, "is_live": True}
+
+
+@router.post("/sessions/{session_id}/inputs/{input_id}/deactivate")
+def deactivate_input_route(session_id: str, input_id: str, ctx: dict = Depends(_ctx)):
+    """Remove an input from the layout (mark as not live)."""
+    _ensure_multi_input_enabled()
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the broadcaster can deactivate inputs.")
+
+    from app.services.broadcast_input_store import mark_input_live
+    inp = mark_input_live(session_id, input_id, is_live=False)
+
+    broadcast_sse_publish(session_id, {
+        "_type": "input:disconnected",
+        "input_id": input_id,
+        "is_live": False,
+    })
+
+    return {"ok": True, "input_id": input_id, "is_live": False}
+
+
+@router.post("/sessions/{session_id}/guest-invites", response_model=BroadcastGuestInviteOut, status_code=201)
+def create_guest_invite_route(session_id: str, body: BroadcastGuestInviteCreateIn, request: Request, ctx: dict = Depends(_ctx)):
+    """Create a guest invite link for co-streaming."""
+    _ensure_multi_input_enabled()
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the broadcaster can create guest invites.")
+
+    from app.services.broadcast_input_store import count_inputs, create_input, create_guest_invite
+    from app.services.broadcast_multi_input import create_additional_input
+    from app.core.settings import S as _S
+    from app.core.time import now_ts as _now_ts
+
+    current_count = count_inputs(session_id)
+    if current_count >= _S.broadcast_max_inputs_per_session:
+        raise HTTPException(status_code=400, detail=f"Maximum {_S.broadcast_max_inputs_per_session} inputs per session.")
+
+    # Provision a new input for the guest
+    provision = create_additional_input(
+        session_id=session_id,
+        input_index=current_count,
+        correlation_id=_correlation_id(request),
+    )
+    inp = create_input(
+        session_id=session_id,
+        input_type="guest",
+        label=body.label,
+        ingest_url=provision.ingest_url,
+        stream_key_ref=f"ref:{provision.stream_key[:8]}",
+        aws_input_arn=provision.input_arn,
+        aws_input_id=provision.input_id,
+        position=current_count,
+        created_by=ctx["user_sub"],
+        relay_mode="webrtc_relay" if body.join_mode == "browser" else "rtmp",
+    )
+
+    expires_at = _now_ts() + body.expiry_minutes * 60
+    invite = create_guest_invite(
+        session_id=session_id,
+        input_id=inp.input_id,
+        created_by=ctx["user_sub"],
+        join_mode=body.join_mode,
+        ingest_url=provision.ingest_url,
+        stream_key_ref=f"ref:{provision.stream_key[:8]}",
+        expires_at=expires_at,
+    )
+
+    broadcast_sse_publish(session_id, {
+        "_type": "guest:invited",
+        "invite_id": invite.invite_id,
+        "input_id": inp.input_id,
+        "join_mode": body.join_mode,
+    })
+
+    return BroadcastGuestInviteOut(
+        invite_id=invite.invite_id,
+        session_id=session_id,
+        input_id=inp.input_id,
+        invite_url=f"/broadcast/guest/{session_id}/{invite.invite_id}",
+        ingest_url=provision.ingest_url,
+        stream_key=provision.stream_key,
+        join_mode=body.join_mode,
+        status="pending",
+        expires_at=expires_at,
+        created_at=invite.created_at,
+    )
+
+
+@router.get("/sessions/{session_id}/guest-invites", response_model=BroadcastGuestInviteListOut)
+def list_guest_invites_route(session_id: str, ctx: dict = Depends(_ctx)):
+    """List guest invites for a broadcast session."""
+    _ensure_multi_input_enabled()
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the broadcaster can list guest invites.")
+
+    from app.services.broadcast_input_store import list_guest_invites
+    invites = list_guest_invites(session_id)
+    return BroadcastGuestInviteListOut(
+        session_id=session_id,
+        invites=[BroadcastGuestInviteOut(
+            invite_id=inv.invite_id,
+            session_id=inv.session_id,
+            input_id=inv.input_id,
+            invite_url=f"/broadcast/guest/{session_id}/{inv.invite_id}",
+            ingest_url=inv.ingest_url,
+            join_mode=inv.join_mode,
+            status=inv.status,
+            guest_user_id=inv.guest_user_id,
+            guest_display_name=inv.guest_display_name,
+            expires_at=inv.expires_at,
+            accepted_at=inv.accepted_at,
+            created_at=inv.created_at,
+        ) for inv in invites],
+        count=len(invites),
+    )
+
+
+@router.post("/sessions/{session_id}/guest-invites/{invite_id}/accept", response_model=BroadcastGuestAcceptOut)
+def accept_guest_invite_route(session_id: str, invite_id: str, body: BroadcastGuestAcceptIn, ctx: dict = Depends(_ctx)):
+    """Guest accepts an invite to co-stream."""
+    _ensure_multi_input_enabled()
+    _ = get_session(session_id)
+
+    from app.services.broadcast_input_store import accept_guest_invite, get_guest_invite
+    invite = accept_guest_invite(
+        session_id,
+        invite_id,
+        guest_user_id=ctx["user_sub"],
+        guest_display_name=body.display_name,
+    )
+
+    broadcast_sse_publish(session_id, {
+        "_type": "guest:accepted",
+        "invite_id": invite_id,
+        "input_id": invite.input_id,
+        "guest_user_id": ctx["user_sub"],
+        "guest_display_name": body.display_name,
+    })
+
+    return BroadcastGuestAcceptOut(
+        invite_id=invite_id,
+        input_id=invite.input_id,
+        ingest_url=invite.ingest_url,
+        join_mode=invite.join_mode,
+        session_id=session_id,
+    )
+
+
+@router.post("/sessions/{session_id}/guest-invites/{invite_id}/revoke")
+def revoke_guest_invite_route(session_id: str, invite_id: str, ctx: dict = Depends(_ctx)):
+    """Revoke a guest invite."""
+    _ensure_multi_input_enabled()
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the broadcaster can revoke invites.")
+
+    from app.services.broadcast_input_store import revoke_guest_invite
+    invite = revoke_guest_invite(session_id, invite_id)
+
+    broadcast_sse_publish(session_id, {
+        "_type": "guest:revoked",
+        "invite_id": invite_id,
+    })
+
+    return {"ok": True, "invite_id": invite_id, "status": "revoked"}
+
+
+@router.post("/sessions/{session_id}/guests/{input_id}/remove")
+def remove_guest_route(session_id: str, input_id: str, ctx: dict = Depends(_ctx)):
+    """Remove a guest from the broadcast."""
+    _ensure_multi_input_enabled()
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the broadcaster can remove guests.")
+
+    from app.services.broadcast_input_store import mark_input_live
+    mark_input_live(session_id, input_id, is_live=False)
+
+    from app.services.broadcast_webrtc_relay import stop_relay
+    stop_relay(session_id, input_id)
+
+    broadcast_sse_publish(session_id, {
+        "_type": "guest:removed",
+        "input_id": input_id,
+    })
+
+    return {"ok": True, "input_id": input_id}
+
+
+@router.post("/sessions/{session_id}/guests/{input_id}/mute")
+def mute_guest_route(session_id: str, input_id: str, body: BroadcastGuestMuteIn, ctx: dict = Depends(_ctx)):
+    """Mute or unmute a guest."""
+    _ensure_multi_input_enabled()
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the broadcaster can mute guests.")
+
+    from app.services.broadcast_input_store import get_input
+    _ = get_input(session_id, input_id)  # 404 if not found
+
+    broadcast_sse_publish(session_id, {
+        "_type": "guest:muted",
+        "input_id": input_id,
+        "muted": body.muted,
+    })
+
+    return {"ok": True, "input_id": input_id, "muted": body.muted}
+
+
+@router.post("/sessions/{session_id}/guests/{input_id}/promote")
+def promote_guest_route(session_id: str, input_id: str, ctx: dict = Depends(_ctx)):
+    """Promote a guest to primary input."""
+    _ensure_multi_input_enabled()
+    session = get_session(session_id)
+    if ctx["user_sub"] != session.created_by:
+        raise HTTPException(status_code=403, detail="Only the broadcaster can promote guests.")
+
+    from app.services.broadcast_input_store import get_input
+    _ = get_input(session_id, input_id)  # 404 if not found
+
+    update_session_fields(session_id, {"primary_input_id": input_id})
+
+    broadcast_sse_publish(session_id, {
+        "_type": "guest:promoted",
+        "input_id": input_id,
+    })
+
+    return {"ok": True, "input_id": input_id, "promoted": True}
+
+
+@router.post("/sessions/{session_id}/inputs/{input_id}/webrtc-offer", response_model=BroadcastWebRTCOfferOut)
+def webrtc_offer_route(session_id: str, input_id: str, body: BroadcastWebRTCOfferIn, ctx: dict = Depends(_ctx)):
+    """Submit a WebRTC SDP offer for browser-based guest streaming."""
+    _ensure_multi_input_enabled()
+    _ = get_session(session_id)
+
+    from app.services.broadcast_input_store import get_input
+    inp = get_input(session_id, input_id)
+
+    from app.services.broadcast_webrtc_relay import start_relay
+    result = start_relay(
+        session_id=session_id,
+        input_id=input_id,
+        rtmp_target_url=inp.ingest_url or "",
+        sdp_offer=body.sdp_offer,
+    )
+
+    return BroadcastWebRTCOfferOut(
+        sdp_answer=result.get("sdp_answer", ""),
+        session_id=session_id,
+        input_id=input_id,
+    )

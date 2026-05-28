@@ -140,6 +140,18 @@ def session_to_item(session: BroadcastSessionModel) -> Dict[str, Any]:
         "private_chat_tiers": session.private_chat_tiers,
         "private_chat_voyeur_enabled": session.private_chat_voyeur_enabled,
         "private_chat_voyeur_price_cents": session.private_chat_voyeur_price_cents,
+        # Tipping (BCAST-013)
+        "tip_total_cents": session.tip_total_cents,
+        "tip_count": session.tip_count,
+        "tip_enabled": session.tip_enabled,
+        "tip_min_cents": session.tip_min_cents,
+        "tip_max_cents": session.tip_max_cents,
+        # Multi-input / Co-streaming (BCAST-016)
+        "max_inputs": session.max_inputs,
+        "active_layout": session.active_layout,
+        "active_input_ids": session.active_input_ids,
+        "primary_input_id": session.primary_input_id,
+        "guest_invite_enabled": session.guest_invite_enabled,
     }
     # Remove None values to avoid DynamoDB issues with GSI sort keys
     return {k: v for k, v in item.items() if v is not None}
@@ -176,6 +188,18 @@ def session_from_item(item: Dict[str, Any]) -> BroadcastSessionModel:
         private_chat_tiers=item.get("private_chat_tiers"),
         private_chat_voyeur_enabled=bool(item.get("private_chat_voyeur_enabled", False)),
         private_chat_voyeur_price_cents=int(item["private_chat_voyeur_price_cents"]) if item.get("private_chat_voyeur_price_cents") is not None else None,
+        # Tipping (BCAST-013)
+        tip_total_cents=int(item.get("tip_total_cents", 0) or 0),
+        tip_count=int(item.get("tip_count", 0) or 0),
+        tip_enabled=bool(item.get("tip_enabled", True)),
+        tip_min_cents=int(item.get("tip_min_cents", 100) or 100),
+        tip_max_cents=int(item.get("tip_max_cents", 100000) or 100000),
+        # Multi-input / Co-streaming (BCAST-016)
+        max_inputs=int(item.get("max_inputs", 4) or 4),
+        active_layout=item.get("active_layout"),
+        active_input_ids=item.get("active_input_ids"),
+        primary_input_id=item.get("primary_input_id"),
+        guest_invite_enabled=bool(item.get("guest_invite_enabled", False)),
     )
 
 

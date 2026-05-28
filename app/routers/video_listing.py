@@ -130,6 +130,8 @@ class VideoDetailOut(BaseModel):
     created_via: Optional[str] = None
     # Concatenation provenance (VOD-016)
     source_video_ids: Optional[List[str]] = None
+    # Subtitles / Closed Captions (VOD-021)
+    subtitle_tracks: list = Field(default_factory=list)
 
 
 class VideoUpdateIn(BaseModel):
@@ -261,6 +263,8 @@ def _video_to_detail(
         created_via=video.created_via,
         # Concatenation provenance (VOD-016)
         source_video_ids=video.source_video_ids,
+        # Subtitles / Closed Captions (VOD-021)
+        subtitle_tracks=[t.model_dump() for t in video.subtitle_tracks] if video.subtitle_tracks else [],
         # Purchase Tiers (VOD-019)
         available_purchase_types=video.available_purchase_types or [],
         view_once_price_cents=video.view_once_price_cents,

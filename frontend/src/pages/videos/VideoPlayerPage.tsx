@@ -5,9 +5,8 @@
  * metadata display, share functionality, and comprehensive error states.
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
   AlertCircle,
@@ -19,15 +18,23 @@ import {
   Download,
   Scissors,
   Video,
+  Trash2,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { MediaPlayer, type MediaError } from "@/components/shared/MediaPlayer";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { MediaPlayer, type MediaError, type SubtitleTrackInfo } from "@/components/shared/MediaPlayer";
 import { getVideoDetail, getVideoDownload, type VideoDetail } from "@/api/endpoints/videos";
+import { listSubtitles, uploadSubtitle, deleteSubtitle } from "@/api/endpoints/subtitles";
 import ClipDialog from "@/components/shared/ClipDialog";
 import WatermarkedDownloadButton from "./WatermarkedDownloadButton";
 import { useAuthStore } from "@/stores/authStore";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import type { SubtitleTrack } from "@/api/types";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -128,6 +135,12 @@ export default function VideoPlayerPage() {
   const [clipDialogOpen, setClipDialogOpen] = useState(false);
   const currentUserId = useAuthStore((s) => s.userId);
 
+  const queryClient = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [subtitleLang, setSubtitleLang] = useState("en");
+  const [subtitleLabel, setSubtitleLabel] = useState("English");
+  const [subtitleDefault, setSubtitleDefault] = useState(false);
+
   const {
     data: video,
     isLoading,
@@ -139,6 +152,46 @@ export default function VideoPlayerPage() {
     enabled: !!videoId,
     retry: false,
   });
+
+  const { data: subtitleData } = useQuery({
+    queryKey: ["subtitles", videoId],
+    queryFn: () => listSubtitles(videoId!),
+    enabled: !!videoId,
+  });
+
+  const subtitleTracksForPlayer: SubtitleTrackInfo[] = (subtitleData?.tracks || []).map((t: SubtitleTrack) => ({
+    track_id: t.track_id,
+    language: t.language,
+    label: t.label,
+    vtt_url: t.vtt_url,
+    is_default: t.is_default,
+  }));
+
+  const uploadMut = useMutation({
+    mutationFn: (fd: FormData) => uploadSubtitle(videoId!, fd),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["subtitles", videoId] });
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    },
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (trackId: string) => deleteSubtitle(videoId!, trackId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["subtitles", videoId] });
+    },
+  });
+
+  const handleSubtitleUpload = useCallback(() => {
+    const file = fileInputRef.current?.files?.[0];
+    if (!file) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("language", subtitleLang);
+    fd.append("label", subtitleLabel);
+    fd.append("is_default", String(subtitleDefault));
+    uploadMut.mutate(fd);
+  }, [subtitleLang, subtitleLabel, subtitleDefault, uploadMut]);
 
   // Derive fetch-level error (404, 403) — these hide everything
   const fetchLevelError: PlayerError | null = (() => {
@@ -273,6 +326,7 @@ export default function VideoPlayerPage() {
               poster={video.thumbnail_url ?? undefined}
               title={video.title}
               onError={handleMediaError}
+              subtitleTracks={subtitleTracksForPlayer.length > 0 ? subtitleTracksForPlayer : undefined}
             />
           )}
 
@@ -419,6 +473,93 @@ export default function VideoPlayerPage() {
                     )
                   )}
                 </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Subtitle Manager (VOD-021) — owner only */}
+      {video && !fetchLevelError && video.owner_user_id === currentUserId && (
+        <Card data-testid="subtitle-manager">
+          <CardHeader>
+            <CardTitle className="text-lg">Subtitles &amp; Captions</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {/* Upload form */}
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="subtitle-file">File (.vtt, .srt)</Label>
+                <Input
+                  id="subtitle-file"
+                  type="file"
+                  accept=".vtt,.srt"
+                  ref={fileInputRef}
+                  data-testid="subtitle-file-input"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="subtitle-lang">Language</Label>
+                <Input
+                  id="subtitle-lang"
+                  value={subtitleLang}
+                  onChange={(e) => setSubtitleLang(e.target.value)}
+                  placeholder="en"
+                  className="w-20"
+                  data-testid="subtitle-lang-input"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="subtitle-label">Label</Label>
+                <Input
+                  id="subtitle-label"
+                  value={subtitleLabel}
+                  onChange={(e) => setSubtitleLabel(e.target.value)}
+                  placeholder="English"
+                  className="w-32"
+                  data-testid="subtitle-label-input"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  id="subtitle-default"
+                  checked={subtitleDefault}
+                  onCheckedChange={(v) => setSubtitleDefault(!!v)}
+                  data-testid="subtitle-default-checkbox"
+                />
+                <Label htmlFor="subtitle-default" className="text-sm">Default</Label>
+              </div>
+              <Button
+                size="sm"
+                className="gap-1"
+                onClick={handleSubtitleUpload}
+                disabled={uploadMut.isPending}
+                data-testid="subtitle-upload-button"
+              >
+                <Upload className="h-3 w-3" />
+                Upload
+              </Button>
+            </div>
+
+            {/* Track list */}
+            {(subtitleData?.tracks?.length ?? 0) > 0 && (
+              <div className="space-y-2" data-testid="subtitle-track-list">
+                {subtitleData!.tracks.map((t: SubtitleTrack) => (
+                  <div key={t.track_id} className="flex items-center gap-3 text-sm border rounded px-3 py-2">
+                    <Badge variant="secondary">{t.language}</Badge>
+                    <span className="flex-1">{t.label}</span>
+                    {t.is_default && <Badge>Default</Badge>}
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-destructive"
+                      onClick={() => deleteMut.mutate(t.track_id)}
+                      data-testid={`subtitle-delete-${t.track_id}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
               </div>
             )}
           </CardContent>

@@ -143,6 +143,25 @@ class VideoMetadataModel(BaseModel):
     rental_duration_hours: Optional[int] = None
     download_price_cents: Optional[int] = None
 
+    # Subtitles / Closed Captions (VOD-021)
+    subtitle_tracks: List["SubtitleTrack"] = Field(default_factory=list)
+
+
+class SubtitleTrack(BaseModel):
+    """A single subtitle/caption track attached to a video."""
+    track_id: str = Field(min_length=1, max_length=64)
+    language: str = Field(min_length=2, max_length=10)
+    label: str = Field(min_length=1, max_length=100)
+    format: str = "vtt"
+    s3_key: str = Field(min_length=1)
+    is_default: bool = False
+    is_auto_generated: bool = False
+    created_at: int = 0
+
+
+# Rebuild forward ref so VideoMetadataModel resolves SubtitleTrack
+VideoMetadataModel.model_rebuild()
+
 
 class CreateVideoIn(BaseModel):
     title: str = Field(min_length=1, max_length=256)
@@ -205,3 +224,6 @@ class VideoOut(BaseModel):
     download_mp4_size_bytes: Optional[int] = None
     # Watermarked Downloads (VOD-020)
     watermark_downloads: bool = False
+
+    # Subtitles / Closed Captions (VOD-021)
+    subtitle_tracks: list = Field(default_factory=list)

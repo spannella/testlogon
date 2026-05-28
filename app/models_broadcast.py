@@ -68,6 +68,20 @@ class BroadcastSessionModel(BaseModel):
     private_chat_voyeur_enabled: bool = False
     private_chat_voyeur_price_cents: Optional[int] = None
 
+    # Live Tipping (BCAST-013)
+    tip_total_cents: int = 0
+    tip_count: int = 0
+    tip_enabled: bool = True
+    tip_min_cents: int = 100
+    tip_max_cents: int = 100000
+
+    # Multi-input / Co-streaming (BCAST-016)
+    max_inputs: int = Field(default=4, ge=1, le=8)
+    active_layout: Optional[str] = None       # "single" | "side_by_side" | "pip" | "grid"
+    active_input_ids: Optional[list] = None   # List of input_ids currently on-screen
+    primary_input_id: Optional[str] = None    # Main input in PiP mode
+    guest_invite_enabled: bool = False
+
 
 class BroadcastOutputModel(BaseModel):
     session_id: str = Field(min_length=1)
@@ -112,3 +126,64 @@ class BroadcastActionAuditEventModel(BaseModel):
     resource_id: str = Field(min_length=1)
     created_at: str
     metadata: dict = Field(default_factory=dict)
+
+
+# ─── Multi-Input / Co-streaming Models (BCAST-016) ────────────────────
+
+class BroadcastInputModel(BaseModel):
+    """A single video input attached to a broadcast session."""
+    input_id: str = Field(min_length=1, max_length=64)
+    session_id: str = Field(min_length=1, max_length=64)
+    input_type: Literal["primary", "guest", "screen"] = "primary"
+    label: str = Field(default="", max_length=100)
+    ingest_url: Optional[str] = Field(default=None, max_length=1024)
+    stream_key_ref: Optional[str] = Field(default=None, max_length=2048)
+    aws_input_arn: Optional[str] = Field(default=None, max_length=512)
+    aws_input_id: Optional[str] = Field(default=None, max_length=64)
+    is_live: bool = False
+    connected_at: Optional[int] = None
+    disconnected_at: Optional[int] = None
+    position: int = Field(default=0, ge=0, le=7)
+    created_by: str = Field(min_length=1)
+    created_at: str = ""
+    updated_at: str = ""
+    relay_mode: Optional[Literal["rtmp", "webrtc_relay"]] = None
+    relay_process_id: Optional[str] = None
+
+
+class BroadcastGuestInvite(BaseModel):
+    """Guest co-streamer invite."""
+    invite_id: str = Field(min_length=1, max_length=64)
+    session_id: str = Field(min_length=1, max_length=64)
+    input_id: str = Field(min_length=1, max_length=64)
+    created_by: str = Field(min_length=1)
+    status: Literal["pending", "accepted", "expired", "revoked"] = "pending"
+    guest_user_id: Optional[str] = None
+    guest_display_name: Optional[str] = Field(default=None, max_length=100)
+    join_mode: Literal["rtmp", "browser"] = "browser"
+    ingest_url: Optional[str] = Field(default=None, max_length=1024)
+    stream_key: Optional[str] = None
+    stream_key_ref: Optional[str] = Field(default=None, max_length=2048)
+    expires_at: int = 0
+    accepted_at: Optional[int] = None
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class LayoutPosition(BaseModel):
+    """Position of a single input in the composed output."""
+    input_id: str = Field(min_length=1, max_length=64)
+    x: float = Field(ge=0.0, le=1.0)
+    y: float = Field(ge=0.0, le=1.0)
+    width: float = Field(gt=0.0, le=1.0)
+    height: float = Field(gt=0.0, le=1.0)
+    z_index: int = Field(default=0, ge=0, le=10)
+
+
+class BroadcastLayoutConfig(BaseModel):
+    """Full layout configuration for a broadcast session."""
+    mode: Literal["single", "side_by_side", "pip", "grid"]
+    positions: list[LayoutPosition] = Field(default_factory=list)
+    primary_input_id: Optional[str] = None
+    input_ids: list[str] = Field(default_factory=list)
+    updated_at: str = ""

@@ -503,6 +503,18 @@ class Settings:
     broadcast_aws_start_timeout_seconds: int = int(os.environ.get("BROADCAST_AWS_START_TIMEOUT_SECONDS", "120"))
     broadcast_aws_stop_timeout_seconds: int = int(os.environ.get("BROADCAST_AWS_STOP_TIMEOUT_SECONDS", "120"))
     broadcast_aws_poll_interval_seconds: int = int(os.environ.get("BROADCAST_AWS_POLL_INTERVAL_SECONDS", "5"))
+    # Broadcast tipping (BCAST-013)
+    broadcast_tipping_enabled: bool = os.environ.get("BROADCAST_TIPPING_ENABLED", "1") not in ("0", "false", "False")
+    broadcast_tip_min_cents: int = int(os.environ.get("BROADCAST_TIP_MIN_CENTS", "100"))
+    broadcast_tip_max_cents: int = int(os.environ.get("BROADCAST_TIP_MAX_CENTS", "100000"))
+    broadcast_tip_rate_limit_ms: int = int(os.environ.get("BROADCAST_TIP_RATE_LIMIT_MS", "3000"))
+    broadcast_tip_goals_table_name: str = os.environ.get("DDB_BROADCAST_TIP_GOALS", "BroadcastTipGoals")
+    broadcast_max_goals_per_session: int = int(os.environ.get("BROADCAST_TIP_GOALS_MAX", "5"))
+    # Broadcast lottery (BCAST-014)
+    broadcast_lottery_enabled: bool = os.environ.get("BROADCAST_LOTTERY_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+    broadcast_lottery_max_outcomes: int = int(os.environ.get("BROADCAST_LOTTERY_MAX_OUTCOMES", "10"))
+    broadcast_lottery_max_entry_fee_cents: int = int(os.environ.get("BROADCAST_LOTTERY_MAX_ENTRY_FEE_CENTS", "10000"))
+    broadcast_lottery_max_duration_seconds: int = int(os.environ.get("BROADCAST_LOTTERY_MAX_DURATION_SECONDS", "3600"))
 
     message_visibility_overrides_table_name: str = os.environ.get(
         "DDB_MESSAGE_VISIBILITY_OVERRIDES",
@@ -1029,6 +1041,7 @@ class Settings:
     messaging_webrtc_turn_secret: str = os.environ.get("MESSAGING_WEBRTC_TURN_SECRET", "")
     messaging_webrtc_turn_ttl_seconds: int = int(os.environ.get("MESSAGING_WEBRTC_TURN_TTL_SECONDS", "600"))
     messaging_webrtc_call_ringing_timeout_seconds: int = int(os.environ.get("MESSAGING_WEBRTC_CALL_RINGING_TIMEOUT_SECONDS", "30"))
+    messaging_screen_share_enabled: bool = os.environ.get("MESSAGING_SCREEN_SHARE_ENABLED", "true").lower() in ("1", "true", "yes", "on")
     # Subscriptions
     subscriptions_table_name: str = os.environ.get("SUBSCRIPTIONS_TABLE_NAME", "subscriptions")
     questionnaire_table_name: str = os.environ.get("QUESTIONNAIRE_TABLE_NAME", "questionnaires")
@@ -1188,6 +1201,14 @@ class Settings:
     broadcast_private_chat_max_duration_minutes: int = int(os.environ.get("BROADCAST_PRIVATE_CHAT_MAX_DURATION", "60"))
     broadcast_private_chat_voyeur_enabled: bool = os.environ.get("BROADCAST_PRIVATE_CHAT_VOYEUR_ENABLED", "1") not in ("0", "false", "False")
 
+    # Multi-input / Co-streaming (BCAST-016)
+    broadcast_inputs_table_name: str = os.environ.get("DDB_BROADCAST_INPUTS", "BroadcastInputs")
+    broadcast_max_inputs_per_session: int = int(os.environ.get("BROADCAST_MAX_INPUTS_PER_SESSION", "4"))
+    broadcast_guest_invite_expiry_seconds: int = int(os.environ.get("BROADCAST_GUEST_INVITE_EXPIRY_SECONDS", "3600"))
+    broadcast_webrtc_relay_enabled: bool = os.environ.get("BROADCAST_WEBRTC_RELAY_ENABLED", "false").lower() in ("1", "true")
+    broadcast_multi_input_enabled: bool = os.environ.get("BROADCAST_MULTI_INPUT_ENABLED", "1") not in ("0", "false", "False")
+    broadcast_layout_switch_cooldown_seconds: int = int(os.environ.get("BROADCAST_LAYOUT_SWITCH_COOLDOWN_SECONDS", "2"))
+
     # Video Clipping (VOD-015)
     video_clipping_enabled: bool = os.environ.get("VIDEO_CLIPPING_ENABLED", "1") not in ("0", "false", "False")
     video_clip_min_duration_seconds: float = float(os.environ.get("VIDEO_CLIP_MIN_DURATION_SECONDS", "1.0"))
@@ -1253,6 +1274,11 @@ class Settings:
     voice_message_max_size_bytes: int = int(os.environ.get("VOICE_MESSAGE_MAX_SIZE_BYTES", "52428800"))
     voice_message_waveform_samples: int = int(os.environ.get("VOICE_MESSAGE_WAVEFORM_SAMPLES", "100"))
 
+    # Voicemail (CALL-014)
+    voicemail_enabled: bool = os.environ.get("VOICEMAIL_ENABLED", "1") not in ("0", "false", "False")
+    voicemail_max_duration_seconds: int = int(os.environ.get("VOICEMAIL_MAX_DURATION_SECONDS", "60"))
+    voicemail_max_size_bytes: int = int(os.environ.get("VOICEMAIL_MAX_SIZE_BYTES", "52428800"))
+
     # Rate limiting (PLATFORM-001)
     rate_limits_table_name: str = os.environ.get("RATE_LIMITS_TABLE_NAME", "rate_limits")
     rate_limit_events_table_name: str = os.environ.get("RATE_LIMIT_EVENTS_TABLE_NAME", "rate_limit_events")
@@ -1308,6 +1334,13 @@ class Settings:
     watermark_timeout_seconds: int = int(os.environ.get("WATERMARK_TIMEOUT_SECONDS", "600"))
     watermark_cache_ttl_seconds: int = int(os.environ.get("WATERMARK_CACHE_TTL_SECONDS", "86400"))
     watermark_max_concurrent_jobs: int = int(os.environ.get("WATERMARK_MAX_CONCURRENT_JOBS", "5"))
+
+    # Subtitles / Closed Captions (VOD-021)
+    video_subtitle_enabled: bool = os.environ.get("VIDEO_SUBTITLE_ENABLED", "1") not in ("0", "false", "False")
+    video_subtitle_max_tracks: int = int(os.environ.get("VIDEO_SUBTITLE_MAX_TRACKS", "20"))
+    video_subtitle_max_file_size_kb: int = int(os.environ.get("VIDEO_SUBTITLE_MAX_FILE_SIZE_KB", "512"))
+    video_subtitle_allowed_formats: str = os.environ.get("VIDEO_SUBTITLE_ALLOWED_FORMATS", "vtt,srt")
+    video_subtitle_url_ttl_seconds: int = int(os.environ.get("VIDEO_SUBTITLE_URL_TTL_SECONDS", "3600"))
 
     # Promo Codes & Coupons (PROMO-001)
     promo_codes_table_name: str = os.environ.get("DDB_PROMO_CODES", "PromoCodes")

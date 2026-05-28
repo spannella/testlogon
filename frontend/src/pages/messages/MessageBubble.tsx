@@ -59,6 +59,7 @@ import type { GalleryImageItem, Message, MeetingPollAttachment, PaymentMethod } 
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import { FileMessageCard } from "./FileMessageCard";
 import { WaveformPlayer } from "./WaveformPlayer";
+import { VoicemailBubble } from "./VoicemailBubble";
 import { VideoShareCard } from "./VideoShareCard";
 import { ReadReceipts, ViewTracker } from "./ReadReceipts";
 import { DeliveryStatus } from "./DeliveryStatus";
@@ -160,6 +161,7 @@ function replyPreviewText(msg: Message): string {
   if (msg.kind === "video") return "[Video]";
   if (msg.kind === "audio") return "[Audio]";
   if (msg.kind === "voice_message") return "[Voice message]";
+  if (msg.kind === "voicemail") return "[Voicemail]";
   if (msg.kind === "file") return msg.file?.name ? `[File: ${msg.file.name}]` : "[File]";
   if (msg.is_encrypted) return "[Encrypted message]";
   return (msg.text ?? "").slice(0, 80) || "[Message]";
@@ -1492,6 +1494,11 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
                 consumed={message.consumption_state === "consumed"}
               />
             </div>
+          )}
+
+          {/* ── Voicemail (CALL-014) ── */}
+          {message.kind === "voicemail" && message.voicemail && (
+            <VoicemailBubble message={message} />
           )}
 
           {/* ── Calendar share card ── */}

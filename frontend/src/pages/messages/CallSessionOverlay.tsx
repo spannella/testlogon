@@ -1,5 +1,6 @@
 import * as React from "react";
-import { Phone, PhoneCall, PhoneIncoming, PhoneOff, Video, Mic, MicOff, VideoOff, ShieldAlert, Signal, Circle } from "lucide-react";
+import { Phone, PhoneCall, PhoneIncoming, PhoneOff, Video, Mic, MicOff, VideoOff, ShieldAlert, Signal, Circle, Monitor, MonitorOff } from "lucide-react";
+import { VoicemailRecorder } from "./VoicemailRecorder";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -40,6 +41,8 @@ export interface CallSessionUi {
 
 interface Props {
   session: CallSessionUi;
+  conversationId?: string;
+  voicemailEligible?: boolean;
   isBusy?: boolean;
   localStream?: MediaStream | null;
   remoteStream?: MediaStream | null;
@@ -60,6 +63,10 @@ interface Props {
   showRecordingConsent?: boolean;
   recordingConsentFrom?: string | null;
   onConsentRecording?: (accept: boolean) => void;
+  isScreenSharing?: boolean;
+  onToggleScreenShare?: () => void;
+  screenShareSupported?: boolean;
+  peerIsScreenSharing?: boolean;
 }
 
 const outcomeCopy: Record<Extract<CallUiState, "declined" | "busy" | "timeout" | "ended" | "failure">, string> = {
@@ -152,9 +159,12 @@ interface CallControlsProps {
   onRequestRecording?: () => void;
   onStopRecording?: () => void;
   recordingEnabled?: boolean;
+  isScreenSharing?: boolean;
+  onToggleScreenShare?: () => void;
+  screenShareSupported?: boolean;
 }
 
-function CallControls({ mode, isMuted, isCameraOff, onToggleMute, onToggleCamera, onEnd, isBusy, isRecording, onRequestRecording, onStopRecording, recordingEnabled }: CallControlsProps) {
+function CallControls({ mode, isMuted, isCameraOff, onToggleMute, onToggleCamera, onEnd, isBusy, isRecording, onRequestRecording, onStopRecording, recordingEnabled, isScreenSharing, onToggleScreenShare, screenShareSupported }: CallControlsProps) {
   return (
     <div className="flex items-center justify-center gap-3">
       <Button
@@ -177,6 +187,24 @@ function CallControls({ mode, isMuted, isCameraOff, onToggleMute, onToggleCamera
         >
           {isCameraOff ? <VideoOff className="h-4 w-4" /> : <Video className="h-4 w-4" />}
         </Button>
+      )}
+
+      {mode === "video" && screenShareSupported && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant={isScreenSharing ? "default" : "outline"}
+              size="icon"
+              className="h-10 w-10 rounded-full"
+              onClick={onToggleScreenShare}
+              aria-label={isScreenSharing ? "Stop sharing" : "Share screen"}
+              data-testid="toggle-screen-share"
+            >
+              {isScreenSharing ? <MonitorOff className="h-4 w-4" /> : <Monitor className="h-4 w-4" />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{isScreenSharing ? "Stop Sharing" : "Share Screen"}</TooltipContent>
+        </Tooltip>
       )}
 
       <Button
@@ -267,6 +295,8 @@ function isPermissionDeniedFailure(session: CallSessionUi): boolean {
 
 export function CallSessionOverlay({
   session,
+  conversationId,
+  voicemailEligible = false,
   isBusy = false,
   localStream,
   remoteStream,
@@ -287,12 +317,18 @@ export function CallSessionOverlay({
   showRecordingConsent,
   recordingConsentFrom,
   onConsentRecording,
+  isScreenSharing,
+  onToggleScreenShare,
+  screenShareSupported,
+  peerIsScreenSharing,
 }: Props) {
   const isIncoming = session.state === "incoming_ringing";
   const isOutgoing = ["outgoing_inviting", "outgoing_ringing", "outgoing_connecting", "reconnecting"].includes(session.state);
   const isConnected = session.state === "connected";
   const isOutcome = ["declined", "busy", "timeout", "ended", "failure"].includes(session.state);
   const isPermissionDenied = isPermissionDeniedFailure(session);
+  const isVoicemailEligibleOutcome = voicemailEligible && ["declined", "busy", "timeout"].includes(session.state) && session.direction === "outgoing";
+  const [showVoicemailRecorder, setShowVoicemailRecorder] = React.useState(false);
 
   // Connection quality monitoring
   const connectionQuality = useConnectionQuality(peerConnection, isConnected);
@@ -393,6 +429,20 @@ export function CallSessionOverlay({
             </div>
           )}
 
+          {/* Screen sharing indicator */}
+          {isScreenSharing && (
+            <div className="absolute top-4 right-20 flex items-center gap-2 bg-blue-600/90 text-white px-3 py-1 rounded-full text-sm font-medium" data-testid="screen-sharing-indicator">
+              <Monitor className="h-3 w-3" />
+              You are sharing
+            </div>
+          )}
+          {peerIsScreenSharing && !isScreenSharing && (
+            <div className="absolute top-4 right-20 flex items-center gap-2 bg-blue-600/90 text-white px-3 py-1 rounded-full text-sm font-medium" data-testid="peer-screen-sharing-indicator">
+              <Monitor className="h-3 w-3" />
+              {session.peerName} is sharing
+            </div>
+          )}
+
           {/* Controls bar */}
           <div className="flex items-center justify-center px-4 py-4 bg-background">
             <CallControls
@@ -407,6 +457,9 @@ export function CallSessionOverlay({
               onRequestRecording={onRequestRecording}
               onStopRecording={onStopRecording}
               recordingEnabled={recordingEnabled}
+              isScreenSharing={isScreenSharing}
+              onToggleScreenShare={onToggleScreenShare}
+              screenShareSupported={screenShareSupported}
             />
           </div>
 
@@ -585,10 +638,31 @@ export function CallSessionOverlay({
               Cancel
             </Button>
           )}
-          {isOutcome && (
+          {isOutcome && !showVoicemailRecorder && !isVoicemailEligibleOutcome && (
             <Button onClick={onDismiss} aria-label="Dismiss call status">
               Dismiss
             </Button>
+          )}
+          {isOutcome && isVoicemailEligibleOutcome && !showVoicemailRecorder && (
+            <div className="flex flex-col gap-2 w-full" data-testid="voicemail-prompt">
+              <p className="text-sm font-medium">Leave a voicemail?</p>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" onClick={() => setShowVoicemailRecorder(true)} aria-label="Record voicemail">
+                  <Mic className="mr-1 h-4 w-4" /> Record
+                </Button>
+                <Button size="sm" variant="ghost" onClick={onDismiss} aria-label="Skip voicemail">
+                  Skip
+                </Button>
+              </div>
+            </div>
+          )}
+          {showVoicemailRecorder && conversationId && session.callId && (
+            <VoicemailRecorder
+              conversationId={conversationId}
+              callId={session.callId}
+              onSent={onDismiss}
+              onSkip={onDismiss}
+            />
           )}
         </DialogFooter>
       </DialogContent>

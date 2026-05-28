@@ -354,6 +354,23 @@ def get_participant(call_id: str, user_id: str) -> Optional[dict]:
     ).get("Item")
 
 
+def _check_screen_share_conflict(call_id: str, requesting_user_id: str) -> str | None:
+    """Check if another active participant is already screen sharing.
+
+    Returns the conflicting user_id, or None if no conflict.
+    """
+    participants = list_participants(call_id)
+    for p in participants:
+        if p.get("state") != "active":
+            continue
+        if p.get("user_id") == requesting_user_id:
+            continue
+        media = p.get("media_status") or {}
+        if media.get("screen"):
+            return str(p.get("user_id") or p.get("sk", "").replace("PART#", ""))
+    return None
+
+
 def update_media_state(
     call_id: str,
     user_id: str,
@@ -366,6 +383,12 @@ def update_media_state(
     part = get_participant(call_id, user_id)
     if not part or part.get("state") != "active":
         raise GroupCallError(400, "Not an active participant in this call")
+
+    # Prevent simultaneous screen shares
+    if screen is True:
+        conflict = _check_screen_share_conflict(call_id, user_id)
+        if conflict:
+            raise GroupCallError(409, f"Another participant ({conflict}) is already sharing their screen")
 
     media = dict(part.get("media_status") or {"audio": True, "video": True, "screen": False})
     if audio is not None:

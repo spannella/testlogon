@@ -25,6 +25,7 @@ import {
   Volume2,
   VolumeX,
   Settings,
+  Subtitles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +42,14 @@ import { cn } from "@/lib/utils";
 export interface MediaError {
   code: string;
   message: string;
+}
+
+export interface SubtitleTrackInfo {
+  track_id: string;
+  language: string;
+  label: string;
+  vtt_url: string;
+  is_default: boolean;
 }
 
 export interface MediaPlayerProps {
@@ -68,6 +77,8 @@ export interface MediaPlayerProps {
   controls?: boolean;
   /** Key server URL for AES-128 HLS encryption */
   drmKeyUrl?: string;
+  /** Subtitle tracks to render as <track> elements */
+  subtitleTracks?: SubtitleTrackInfo[];
 }
 
 interface QualityLevel {
@@ -178,6 +189,7 @@ export function MediaPlayer({
   className,
   controls,
   drmKeyUrl,
+  subtitleTracks,
 }: MediaPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -195,10 +207,69 @@ export function MediaPlayer({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [ccEnabled, setCcEnabled] = useState(() => {
+    try { return localStorage.getItem("media-player-cc-enabled") === "true"; } catch { return false; }
+  });
+  const [ccLanguage, setCcLanguage] = useState<string | null>(() => {
+    try { return localStorage.getItem("media-player-cc-language"); } catch { return null; }
+  });
 
   // Determine whether to show native controls or custom overlay
   const showNativeControls = controls ?? (mode === "vod");
   const showCustomControls = !showNativeControls;
+
+  const hasSubtitles = (subtitleTracks?.length ?? 0) > 0;
+
+  // ─── Subtitle track activation ──────────────────────────────────────────
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !hasSubtitles) return;
+
+    const tracks = video.textTracks;
+    for (let i = 0; i < tracks.length; i++) {
+      const tt = tracks[i]!;
+      const stInfo = subtitleTracks?.[i];
+      if (!ccEnabled) {
+        tt.mode = "hidden";
+      } else if (ccLanguage && tt.language === ccLanguage) {
+        tt.mode = "showing";
+      } else if (!ccLanguage && stInfo?.is_default) {
+        tt.mode = "showing";
+      } else {
+        tt.mode = "hidden";
+      }
+    }
+  }, [ccEnabled, ccLanguage, hasSubtitles, subtitleTracks]);
+
+  const toggleCc = useCallback(() => {
+    setCcEnabled((prev) => {
+      const next = !prev;
+      try { localStorage.setItem("media-player-cc-enabled", String(next)); } catch {}
+      if (next && !ccLanguage && subtitleTracks?.length) {
+        const defTrack = subtitleTracks.find((t) => t.is_default) ?? subtitleTracks[0];
+        if (defTrack) {
+          setCcLanguage(defTrack.language);
+          try { localStorage.setItem("media-player-cc-language", defTrack.language); } catch {}
+        }
+      }
+      return next;
+    });
+  }, [ccLanguage, subtitleTracks]);
+
+  const selectCcLanguage = useCallback((lang: string | null) => {
+    if (lang === null) {
+      setCcEnabled(false);
+      try { localStorage.setItem("media-player-cc-enabled", "false"); } catch {}
+    } else {
+      setCcEnabled(true);
+      setCcLanguage(lang);
+      try {
+        localStorage.setItem("media-player-cc-enabled", "true");
+        localStorage.setItem("media-player-cc-language", lang);
+      } catch {}
+    }
+  }, []);
 
   // ─── HLS.js Setup ───────────────────────────────────────────────────────
 
@@ -547,6 +618,7 @@ export function MediaPlayer({
       {/* Video element */}
       <video
         ref={videoRef}
+        crossOrigin="anonymous"
         className="absolute inset-0 w-full h-full object-contain"
         controls={showNativeControls}
         playsInline
@@ -554,7 +626,18 @@ export function MediaPlayer({
         poster={poster}
         onClick={showCustomControls ? togglePlay : undefined}
         data-testid="media-player-video"
-      />
+      >
+        {subtitleTracks?.map((t) => (
+          <track
+            key={t.track_id}
+            kind="subtitles"
+            src={t.vtt_url}
+            srcLang={t.language}
+            label={t.label}
+            default={t.is_default && ccEnabled}
+          />
+        ))}
+      </video>
 
       {/* Title overlay */}
       {title && showControls && playerState !== "error" && (
@@ -702,6 +785,49 @@ export function MediaPlayer({
                   data-testid="media-player-volume"
                 />
               </div>
+
+              {/* Subtitle / CC selector */}
+              {hasSubtitles && (subtitleTracks?.length ?? 0) > 1 ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className={cn("h-8 w-8 text-white hover:bg-white/20", ccEnabled && "bg-white/30")}
+                      data-testid="media-player-cc"
+                    >
+                      <Subtitles className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-[120px]">
+                    <DropdownMenuItem
+                      onClick={() => selectCcLanguage(null)}
+                      className={cn(!ccEnabled && "font-bold")}
+                    >
+                      Off
+                    </DropdownMenuItem>
+                    {subtitleTracks?.map((t) => (
+                      <DropdownMenuItem
+                        key={t.track_id}
+                        onClick={() => selectCcLanguage(t.language)}
+                        className={cn(ccEnabled && ccLanguage === t.language && "font-bold")}
+                      >
+                        {t.label}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : hasSubtitles ? (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className={cn("h-8 w-8 text-white hover:bg-white/20", ccEnabled && "bg-white/30")}
+                  onClick={toggleCc}
+                  data-testid="media-player-cc"
+                >
+                  <Subtitles className="h-4 w-4" />
+                </Button>
+              ) : null}
 
               {/* Quality selector */}
               {qualityLevels.length > 0 && (

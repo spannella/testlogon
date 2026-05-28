@@ -778,6 +778,23 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"remind_at": "N"},
         ),
+        # Broadcast Inputs (BCAST-016)
+        TableDef(
+            _resolve_table_name(S.broadcast_inputs_table_name, "BroadcastInputs"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByCreator", "partition_key": "created_by", "sort_key": "created_at"},
+                {"index_name": "ByStatus", "partition_key": "invite_status", "sort_key": "expires_at"},
+            ],
+            attr_types={"expires_at": "N"},
+        ),
+        # Broadcast Tip Goals (BCAST-013)
+        TableDef(
+            _resolve_table_name(S.broadcast_tip_goals_table_name, "BroadcastTipGoals"),
+            "session_id",
+            "goal_id",
+        ),
         # Broadcast Private Sessions (BCAST-011/012)
         TableDef(
             os.environ.get("DDB_BROADCAST_PRIVATE_SESSIONS", "BroadcastPrivateSessions"),

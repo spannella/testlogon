@@ -96,6 +96,7 @@ from app.routers.admin_appeals import router as admin_appeals_router
 from app.routers.vod import router as vod_router
 from app.routers.vod_drm import router as vod_drm_router
 from app.routers.video_listing import router as video_listing_router
+from app.routers.video_subtitles import router as video_subtitles_router
 from app.routers.transcode_jobs import router as transcode_jobs_router, video_router as transcode_video_router
 from app.routers.call_recording import router as call_recording_router
 from app.routers.call_billing import router as call_billing_router
@@ -400,6 +401,7 @@ def create_app() -> FastAPI:
     # /my-downloads matches before /{video_id} (VOD-020)
     app.include_router(watermark_router)
     app.include_router(video_listing_router)
+    app.include_router(video_subtitles_router)
     app.include_router(vod_router)
     app.include_router(vod_drm_router)
     app.include_router(transcode_jobs_router)

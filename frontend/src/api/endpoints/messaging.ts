@@ -1054,3 +1054,84 @@ export async function sendVoiceMessage(
     send_at: meta.send_at ?? null,
   });
 }
+
+
+// ─── Voicemail API (CALL-014) ──────────────────────────────────────────────
+
+export interface PresignVoicemailReq {
+  call_id: string;
+  content_type: string;
+  size_bytes: number;
+  mode: "audio" | "video";
+}
+
+export interface CreateVoicemailReq {
+  message_id: string;
+  call_id: string;
+  s3_key: string;
+  content_type: string;
+  size_bytes: number;
+  duration_seconds: number;
+  waveform_data: number[];
+  mode: "audio" | "video";
+}
+
+export async function presignVoicemail(
+  conversationId: string,
+  body: PresignVoicemailReq,
+): Promise<{ message_id: string; upload_url: string; s3_key: string }> {
+  return api.post<{ message_id: string; upload_url: string; s3_key: string }>(
+    `/messaging/conversations/${conversationId}/voicemail/presign`,
+    body,
+  );
+}
+
+export async function createVoicemail(
+  conversationId: string,
+  body: CreateVoicemailReq,
+): Promise<Message> {
+  return api.post<Message>(
+    `/messaging/conversations/${conversationId}/voicemail`,
+    body,
+  );
+}
+
+export async function sendVoicemail(
+  conversationId: string,
+  blob: Blob,
+  meta: {
+    callId: string;
+    durationSeconds: number;
+    waveform: number[];
+    contentType: string;
+    mode: "audio" | "video";
+  },
+): Promise<Message> {
+  // 1. Get presigned URL
+  const presign = await presignVoicemail(conversationId, {
+    call_id: meta.callId,
+    content_type: meta.contentType,
+    size_bytes: blob.size,
+    mode: meta.mode,
+  });
+
+  // 2. Upload blob to S3
+  const uploadResp = await fetch(presign.upload_url, {
+    method: "PUT",
+    body: blob,
+    headers: { "Content-Type": meta.contentType },
+  });
+  if (!uploadResp.ok) throw new Error("Failed to upload voicemail recording");
+
+  // 3. Create voicemail message record
+  return createVoicemail(conversationId, {
+    message_id: presign.message_id,
+    call_id: meta.callId,
+    s3_key: presign.s3_key,
+    content_type: meta.contentType,
+    size_bytes: blob.size,
+    duration_seconds: meta.durationSeconds,
+    waveform_data: meta.waveform,
+    mode: meta.mode,
+  });
+}

@@ -883,7 +883,7 @@ export interface Message {
   message_id: string;
   conversation_id: string;
   sender_id: string;
-  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message";
+  kind: "text" | "image" | "file" | "audio" | "video" | "gallery" | "file_share" | "calendar_share" | "calendar_event" | "meeting_poll" | "video_share" | "voice_message" | "voicemail";
   created_at: number;
   text?: string;
   image?: MessageImage;
@@ -916,6 +916,19 @@ export interface Message {
     audio_size_bytes: number;
     duration_seconds: number;
     waveform_data: number[];
+  };
+  voicemail?: {
+    call_id: string;
+    mode: "audio" | "video";
+    audio_url?: string | null;
+    video_url?: string | null;
+    content_type: string;
+    size_bytes: number;
+    duration_seconds: number;
+    waveform_data: number[];
+    call_state: string;
+    caller_user_id: string;
+    callee_user_id: string;
   };
   lottery?: {
     message_type: "lottery_dm";
@@ -3566,4 +3579,203 @@ export interface EarningsTransaction {
 export interface EarningsTransactionsResp {
   items: EarningsTransaction[];
   next_cursor: string | null;
+}
+
+// ─── Video Subtitles (VOD-021) ─────────────────────────────────────
+
+export interface SubtitleTrack {
+  track_id: string;
+  language: string;
+  label: string;
+  format: string;
+  vtt_url: string;
+  is_default: boolean;
+  is_auto_generated: boolean;
+  created_at: number;
+}
+
+export interface SubtitleListOut {
+  video_id: string;
+  tracks: SubtitleTrack[];
+}
+
+export interface SubtitleDeleteOut {
+  ok: boolean;
+  track_id: string;
+  video_id: string;
+}
+
+// --- Broadcast Lottery (BCAST-014) ------------------------------------------
+
+export interface BroadcastLotteryOutcomeIn {
+  display_label?: string;
+  weight_bps: number;
+  payload_type: "text" | "image" | "video";
+  text_content?: string;
+  media_asset_id?: string;
+}
+
+export interface BroadcastLotteryCreateIn {
+  title: string;
+  outcomes: BroadcastLotteryOutcomeIn[];
+  max_entries?: number | null;
+  entry_fee_cents?: number;
+  duration_seconds?: number | null;
+}
+
+export interface BroadcastLotteryEntryIn {
+  payment_method_id?: string;
+}
+
+export interface BroadcastLotteryOutcomeOut {
+  outcome_id: string;
+  display_label?: string;
+  weight_bps: number;
+  payload_type: "text" | "image" | "video";
+  text_content?: string;
+  media_asset_id?: string;
+}
+
+export interface BroadcastLotteryConfigOut {
+  lottery_id: string;
+  message_id: string;
+  title: string;
+  status: "open" | "entries_closed" | "drawn";
+  outcomes: BroadcastLotteryOutcomeOut[];
+  entry_count: number;
+  max_entries?: number | null;
+  entry_fee_cents: number;
+  currency: string;
+  duration_seconds?: number | null;
+  closes_at?: number | null;
+  created_at: number;
+  drawn_at?: number | null;
+}
+
+export interface BroadcastLotteryResultEntry {
+  user_id: string;
+  display_name: string;
+  outcome_id: string;
+  display_label?: string;
+  payload_type: "text" | "image" | "video";
+  text_content?: string;
+  media_asset_id?: string;
+  rng_roll: number;
+}
+
+export interface BroadcastLotteryDrawOut {
+  lottery_id: string;
+  status: "drawn";
+  results: BroadcastLotteryResultEntry[];
+  idempotent: boolean;
+}
+
+export interface BroadcastLotteryEntryOut {
+  lottery_id: string;
+  user_id: string;
+  entered_at: number;
+  already_entered: boolean;
+  entry_fee_cents: number;
+}
+
+export interface BroadcastLotteryViewerStatus {
+  lottery_id: string;
+  title: string;
+  status: "open" | "entries_closed" | "drawn";
+  entry_count: number;
+  max_entries?: number | null;
+  entry_fee_cents: number;
+  closes_at?: number | null;
+  created_at: number;
+  drawn_at?: number | null;
+  has_entered: boolean;
+  viewer_outcome?: BroadcastLotteryResultEntry | null;
+}
+
+// ─── Broadcast Multi-Input / Co-Streaming (BCAST-016) ────────────
+
+export interface BroadcastInput {
+  input_id: string;
+  session_id: string;
+  input_type: "primary" | "guest" | "screen";
+  label: string;
+  ingest_url: string | null;
+  stream_key_ref: string | null;
+  aws_input_arn: string | null;
+  is_live: boolean;
+  connected_at: number | null;
+  disconnected_at: number | null;
+  position: number;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  relay_mode: string | null;
+}
+
+export interface BroadcastInputList {
+  session_id: string;
+  inputs: BroadcastInput[];
+  count: number;
+  max_inputs: number;
+}
+
+export interface BroadcastInputCreated {
+  input_id: string;
+  session_id: string;
+  input_type: string;
+  label: string;
+  ingest_url: string;
+  stream_key: string;
+  aws_input_arn: string | null;
+  position: number;
+}
+
+export interface BroadcastLayout {
+  mode: "single" | "side_by_side" | "pip" | "grid";
+  positions: Array<{
+    input_id: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    z_index: number;
+  }>;
+  primary_input_id: string | null;
+  input_ids: string[];
+}
+
+export interface BroadcastGuestInvite {
+  invite_id: string;
+  session_id: string;
+  input_id: string;
+  invite_url: string | null;
+  ingest_url: string | null;
+  stream_key: string | null;
+  join_mode: "rtmp" | "browser";
+  status: "pending" | "accepted" | "expired" | "revoked";
+  guest_user_id: string | null;
+  guest_display_name: string | null;
+  expires_at: number;
+  accepted_at: number | null;
+  created_at: string;
+}
+
+export interface BroadcastGuestInviteList {
+  session_id: string;
+  invites: BroadcastGuestInvite[];
+  count: number;
+}
+
+export interface BroadcastGuestAcceptResult {
+  invite_id: string;
+  input_id: string;
+  ingest_url: string | null;
+  join_mode: string;
+  session_id: string;
+}
+
+export interface BroadcastWebRTCAnswer {
+  sdp_answer: string;
+  session_id: string;
+  input_id: string;
 }

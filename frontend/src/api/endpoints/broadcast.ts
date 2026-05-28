@@ -54,6 +54,51 @@ export interface BroadcastSession {
   description?: string | null;
   thumbnail_url?: string | null;
   cancelled_at?: string | null;
+  // Tipping fields (BCAST-013)
+  tip_total_cents?: number;
+  tip_count?: number;
+  tip_enabled?: boolean;
+  tip_min_cents?: number;
+  tip_max_cents?: number;
+}
+
+export interface BroadcastTipGoal {
+  goal_id: string;
+  session_id: string;
+  label: string;
+  target_cents: number;
+  current_cents: number;
+  reached: boolean;
+  reached_at: number | null;
+  sort_order: number;
+  created_at: number;
+}
+
+export interface BroadcastTipSummary {
+  session_id: string;
+  total_cents: number;
+  tip_count: number;
+  currency: string;
+  top_tippers: Array<{
+    user_id: string;
+    display_name: string;
+    total_cents: number;
+    tip_count: number;
+  }>;
+  recent_tips: Array<{
+    message_id: string;
+    sender_id: string;
+    sender_display_name: string;
+    amount_cents: number;
+    text: string;
+    created_at: number;
+  }>;
+}
+
+export interface BroadcastTipConfigIn {
+  tip_enabled?: boolean;
+  tip_min_cents?: number;
+  tip_max_cents?: number;
 }
 
 export interface BroadcastPlaybackUrl {
