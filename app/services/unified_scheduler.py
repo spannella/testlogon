@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time as _time
 
 from app.core.settings import S
 from app.core.time import now_ts
 from app.services import schedule_executors
+from app.services.job_registry import register_task, report_error, report_poll
 from app.services.scheduled_actions import (
     claim_action,
     mark_action_completed,
@@ -32,20 +34,32 @@ _EXECUTORS = {
 
 async def run_unified_scheduler_loop() -> None:
     if not S.unified_scheduler_enabled:
+        register_task("unified_scheduler", S.unified_scheduler_poll_interval_seconds,
+                       enabled=False, description="Processes scheduled posts, file shares, and catalog sales")
         logger.info("Unified scheduler disabled")
         return
 
     poll_interval = S.unified_scheduler_poll_interval_seconds
+    register_task("unified_scheduler", poll_interval, enabled=True,
+                   description="Processes scheduled posts, file shares, and catalog sales")
     logger.info("Unified scheduler started (poll_interval=%ds)", poll_interval)
 
     while True:
+        _poll_start = _time.perf_counter()
+        _processed = 0
+        _failed = 0
         try:
             now = now_ts()
 
             # 1. Process due actions
             due_actions = query_due_actions(now=now, limit=MAX_BATCH_SIZE)
             for action in due_actions:
-                await _process_action(action, now)
+                try:
+                    await _process_action(action, now)
+                    _processed += 1
+                except Exception:
+                    _failed += 1
+                    logger.exception("Action processing failed: %s", action.get("action_id", "?"))
 
             # 2. Send pre-execution reminders
             try:
@@ -59,7 +73,12 @@ async def run_unified_scheduler_loop() -> None:
             except Exception:
                 logger.exception("Error processing reminders")
 
-        except Exception:
+            _duration_ms = (_time.perf_counter() - _poll_start) * 1000
+            report_poll("unified_scheduler", items_processed=_processed,
+                        items_failed=_failed, duration_ms=_duration_ms)
+
+        except Exception as exc:
+            report_error("unified_scheduler", str(exc))
             logger.exception("Unified scheduler loop error")
 
         await asyncio.sleep(poll_interval)

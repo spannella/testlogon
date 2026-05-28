@@ -31,11 +31,26 @@ class CallSessionRecord:
     updated_at: Optional[int] = None
     lifecycle_events: Optional[list[dict[str, object]]] = None
     idempotency_records: Optional[dict[str, dict[str, object]]] = None
+    # BCAST-011: broadcast linkage
+    broadcast_session_id: str = ""
+    # CALL-011 pay-per-minute billing fields
+    paid: bool = False
+    rate_cents_per_min: int = 0
+    billing_status: str = ""
+    billing_start_ts: Optional[int] = None
+    last_billed_ts: Optional[int] = None
+    total_billed_cents: int = 0
+    total_billed_seconds: int = 0
+    billing_cycle_count: int = 0
+    platform_fee_bps: int = 0
+    max_duration_seconds: int = 0
+    caller_last_heartbeat_ts: Optional[int] = None
+    callee_last_heartbeat_ts: Optional[int] = None
 
 
 def _item_from_record(record: CallSessionRecord) -> dict[str, object]:
     ts = int(record.updated_at if record.updated_at is not None else now_ts())
-    return {
+    item: dict[str, object] = {
         "call_id": record.call_id,
         "conversation_id": record.conversation_id,
         "caller_user_id": record.caller_user_id,
@@ -51,7 +66,27 @@ def _item_from_record(record: CallSessionRecord) -> dict[str, object]:
         "updated_at": ts,
         "lifecycle_events": list(record.lifecycle_events or []),
         "idempotency_records": dict(record.idempotency_records or {}),
+        # BCAST-011: broadcast linkage
+        "broadcast_session_id": record.broadcast_session_id or "",
+        # CALL-011 billing fields
+        "paid": record.paid,
+        "rate_cents_per_min": int(record.rate_cents_per_min),
+        "billing_status": record.billing_status or "",
+        "total_billed_cents": int(record.total_billed_cents),
+        "total_billed_seconds": int(record.total_billed_seconds),
+        "billing_cycle_count": int(record.billing_cycle_count),
+        "platform_fee_bps": int(record.platform_fee_bps),
+        "max_duration_seconds": int(record.max_duration_seconds),
     }
+    if record.billing_start_ts is not None:
+        item["billing_start_ts"] = int(record.billing_start_ts)
+    if record.last_billed_ts is not None:
+        item["last_billed_ts"] = int(record.last_billed_ts)
+    if record.caller_last_heartbeat_ts is not None:
+        item["caller_last_heartbeat_ts"] = int(record.caller_last_heartbeat_ts)
+    if record.callee_last_heartbeat_ts is not None:
+        item["callee_last_heartbeat_ts"] = int(record.callee_last_heartbeat_ts)
+    return item
 
 
 def _record_from_item(item: dict[str, object]) -> CallSessionRecord:
@@ -70,6 +105,21 @@ def _record_from_item(item: dict[str, object]) -> CallSessionRecord:
         updated_at=int(item.get("updated_at") or 0),
         lifecycle_events=list(item.get("lifecycle_events") or []),
         idempotency_records=dict(item.get("idempotency_records") or {}),
+        # BCAST-011: broadcast linkage
+        broadcast_session_id=str(item.get("broadcast_session_id") or ""),
+        # CALL-011 billing fields
+        paid=bool(item.get("paid", False)),
+        rate_cents_per_min=int(item.get("rate_cents_per_min") or 0),
+        billing_status=str(item.get("billing_status") or ""),
+        billing_start_ts=int(item["billing_start_ts"]) if item.get("billing_start_ts") is not None else None,
+        last_billed_ts=int(item["last_billed_ts"]) if item.get("last_billed_ts") is not None else None,
+        total_billed_cents=int(item.get("total_billed_cents") or 0),
+        total_billed_seconds=int(item.get("total_billed_seconds") or 0),
+        billing_cycle_count=int(item.get("billing_cycle_count") or 0),
+        platform_fee_bps=int(item.get("platform_fee_bps") or 0),
+        max_duration_seconds=int(item.get("max_duration_seconds") or 0),
+        caller_last_heartbeat_ts=int(item["caller_last_heartbeat_ts"]) if item.get("caller_last_heartbeat_ts") is not None else None,
+        callee_last_heartbeat_ts=int(item["callee_last_heartbeat_ts"]) if item.get("callee_last_heartbeat_ts") is not None else None,
     )
 
 
@@ -82,6 +132,10 @@ def create_call_session(
     initial_mode: CallMode,
     state: CallState = "invited",
     start_ts: Optional[int] = None,
+    paid: bool = False,
+    rate_cents_per_min: int = 0,
+    max_duration_seconds: int = 0,
+    broadcast_session_id: str = "",
 ) -> CallSessionRecord:
     record = CallSessionRecord(
         call_id=call_id,
@@ -91,6 +145,10 @@ def create_call_session(
         initial_mode=initial_mode,
         state=state,
         start_ts=int(start_ts if start_ts is not None else now_ts()),
+        paid=paid,
+        rate_cents_per_min=rate_cents_per_min,
+        max_duration_seconds=max_duration_seconds,
+        broadcast_session_id=broadcast_session_id,
     )
     item = _item_from_record(record)
     _table().put_item(Item=item)
@@ -141,6 +199,21 @@ def update_call_session_state(
             network_path=network_path if network_path is not None else existing.network_path,
             lifecycle_events=event_log,
             idempotency_records=idempotency_records,
+            # BCAST-011: preserve broadcast linkage
+            broadcast_session_id=existing.broadcast_session_id,
+            # CALL-011: preserve billing fields
+            paid=existing.paid,
+            rate_cents_per_min=existing.rate_cents_per_min,
+            billing_status=existing.billing_status,
+            billing_start_ts=existing.billing_start_ts,
+            last_billed_ts=existing.last_billed_ts,
+            total_billed_cents=existing.total_billed_cents,
+            total_billed_seconds=existing.total_billed_seconds,
+            billing_cycle_count=existing.billing_cycle_count,
+            platform_fee_bps=existing.platform_fee_bps,
+            max_duration_seconds=existing.max_duration_seconds,
+            caller_last_heartbeat_ts=existing.caller_last_heartbeat_ts,
+            callee_last_heartbeat_ts=existing.callee_last_heartbeat_ts,
         )
     )
     _table().put_item(Item=item)

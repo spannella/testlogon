@@ -117,3 +117,10 @@ export const deleteVideo = (videoId: string) =>
 
 export const getVideoDownload = (videoId: string) =>
   api.get<VideoDownloadResponse>(`/ui/videos/${videoId}/download`);
+
+export const listCreatorVideos = (creatorId: string, params?: { limit?: number; cursor?: string }) => {
+  const p: Record<string, string> = {};
+  if (params?.limit) p.limit = String(params.limit);
+  if (params?.cursor) p.cursor = params.cursor;
+  return api.get<VideoListResponse>(`/ui/videos/creator/${encodeURIComponent(creatorId)}`, p);
+};

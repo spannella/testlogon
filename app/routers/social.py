@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.services.sessions import require_ui_session
 from app.services import social as social_service
+from app.services import blocking as blocking_service
 from app.core.tables import T
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,41 @@ class FollowStatusResponse(BaseModel):
     is_following: bool
     is_followed_by: bool
     is_mutual: bool
+    is_blocked_by_me: bool = False
+    is_blocking_me: bool = False
+
+
+class BlockRequest(BaseModel):
+    target_user_id: str = Field(..., min_length=1, max_length=256)
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
+class UnblockRequest(BaseModel):
+    target_user_id: str = Field(..., min_length=1, max_length=256)
+
+
+class BlockActionResponse(BaseModel):
+    ok: bool = True
+    status: str
+    target_user_id: str
+
+
+class BlockedUserItem(BaseModel):
+    user_id: str
+    display_name: Optional[str] = None
+    profile_photo_url: Optional[str] = None
+    blocked_at: str
+
+
+class BlockedUsersListResponse(BaseModel):
+    blocked_users: List[BlockedUserItem]
+    next_cursor: Optional[str] = None
+    total_count: int
+
+
+class BlockStatusResponse(BaseModel):
+    is_blocked_by_me: bool
+    is_blocking_me: bool
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +214,8 @@ def get_follow_status(
 ):
     viewer_id = session["user_sub"]
     status = social_service.get_follow_status(viewer_id, target_user_id)
-    return status
+    block_status = blocking_service.get_block_status(viewer_id, target_user_id)
+    return {**status, **block_status}
 
 
 @router.get("/mutual/{target_user_id}", response_model=FollowListResponse)
@@ -198,3 +235,58 @@ def get_mutual_followers(
         next_cursor=next_cursor,
         total_count=len(enriched),
     )
+
+
+# ---------------------------------------------------------------------------
+# Block / Unblock endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.post("/block", response_model=BlockActionResponse)
+def block_user(req: BlockRequest, session=Depends(require_ui_session)):
+    user_id = session["user_sub"]
+    try:
+        result = blocking_service.block_user(user_id, req.target_user_id, reason=req.reason)
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "self_block":
+            raise HTTPException(status_code=400, detail="Cannot block yourself")
+        if msg == "already_blocked":
+            raise HTTPException(status_code=409, detail="Already blocked")
+        raise HTTPException(status_code=400, detail=str(exc))
+    return result
+
+
+@router.post("/unblock", response_model=BlockActionResponse)
+def unblock_user(req: UnblockRequest, session=Depends(require_ui_session)):
+    user_id = session["user_sub"]
+    result = blocking_service.unblock_user(user_id, req.target_user_id)
+    return result
+
+
+@router.get("/blocked", response_model=BlockedUsersListResponse)
+def get_blocked_users(
+    session=Depends(require_ui_session),
+    limit: int = Query(default=20, ge=1, le=100),
+    cursor: Optional[str] = Query(default=None),
+):
+    user_id = session["user_sub"]
+    # Decode cursor from string to DDB key if provided
+    from app.core.cursor import decode_cursor, encode_cursor
+    eks = decode_cursor(cursor)
+    items, last_key, count = blocking_service.get_blocked_users(user_id, limit=limit, cursor=eks)
+    return BlockedUsersListResponse(
+        blocked_users=[BlockedUserItem(**it) for it in items],
+        next_cursor=encode_cursor(last_key),
+        total_count=count,
+    )
+
+
+@router.get("/block-status/{target_user_id}", response_model=BlockStatusResponse)
+def get_block_status(
+    target_user_id: str,
+    session=Depends(require_ui_session),
+):
+    user_id = session["user_sub"]
+    status = blocking_service.get_block_status(user_id, target_user_id)
+    return status

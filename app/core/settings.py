@@ -190,6 +190,16 @@ class Settings:
     alerts_sms_enabled: bool = os.environ.get("ALERTS_SMS_ENABLED", "0") not in ("0","false","False")
     alerts_sms_max_per_window: int = int(os.environ.get("ALERTS_SMS_MAX_PER_WINDOW", "10"))
     alerts_sms_window_seconds: int = int(os.environ.get("ALERTS_SMS_WINDOW_SECONDS", "3600"))
+
+    # SMS Delivery Tracking (PLATFORM-007)
+    sms_delivery_table_name: str = os.environ.get("SMS_DELIVERY_TABLE_NAME", "sms_delivery")
+    sms_message_type: str = os.environ.get("SMS_MESSAGE_TYPE", "Transactional")
+    sms_sender_id: str = os.environ.get("SMS_SENDER_ID", "")
+    sms_origination_number: str = os.environ.get("SMS_ORIGINATION_NUMBER", "")
+    sms_daily_limit_per_number: int = int(os.environ.get("SMS_DAILY_LIMIT_PER_NUMBER", "10"))
+    sms_suppression_enabled: bool = os.environ.get("SMS_SUPPRESSION_ENABLED", "1") not in ("0", "false", "False")
+    sms_cost_per_segment_usd: float = float(os.environ.get("SMS_COST_PER_SEGMENT_USD", "0.00645"))
+
     alerts_webhook_url: str = os.environ.get("ALERTS_WEBHOOK_URL", "")
     alerts_webhook_secret: str = os.environ.get("ALERTS_WEBHOOK_SECRET", "")
     alerts_webhook_timeout_seconds: int = int(os.environ.get("ALERTS_WEBHOOK_TIMEOUT_SECONDS", "5"))
@@ -197,6 +207,11 @@ class Settings:
     alerts_webhook_enabled: bool = os.environ.get("ALERTS_WEBHOOK_ENABLED", "0") not in ("0","false","False")
     alerts_webhook_max_per_window: int = int(os.environ.get("ALERTS_WEBHOOK_MAX_PER_WINDOW", "30"))
     alerts_webhook_window_seconds: int = int(os.environ.get("ALERTS_WEBHOOK_WINDOW_SECONDS", "3600"))
+
+    # Email Delivery Tracking (PLATFORM-006)
+    email_delivery_table_name: str = os.environ.get("EMAIL_DELIVERY_TABLE_NAME", "email_delivery")
+    email_suppression_enabled: bool = os.environ.get("EMAIL_SUPPRESSION_ENABLED", "1") not in ("0", "false", "False")
+
     siem_webhook_enabled: bool = os.environ.get("SIEM_WEBHOOK_ENABLED", "0") not in ("0", "false", "False")
     siem_webhook_url: str = os.environ.get("SIEM_WEBHOOK_URL", "")
     siem_webhook_secret: str = os.environ.get("SIEM_WEBHOOK_SECRET", "")
@@ -708,6 +723,13 @@ class Settings:
     )
     # Shopping cart
     shopping_cart_table_name: str = os.environ.get("SHOPPING_CART_TABLE_NAME", "shopping_cart")
+    # Cart Abandonment (SHOP-003)
+    cart_abandonment_enabled: bool = os.environ.get("CART_ABANDONMENT_ENABLED", "1") not in ("0", "false", "False")
+    cart_abandonment_threshold_hours: int = int(os.environ.get("CART_ABANDONMENT_THRESHOLD_HOURS", "24"))
+    cart_abandonment_scan_interval_sec: int = int(os.environ.get("CART_ABANDONMENT_SCAN_INTERVAL_SEC", "300"))
+    cart_abandonment_max_reminders: int = int(os.environ.get("CART_ABANDONMENT_MAX_REMINDERS", "2"))
+    cart_abandonment_reminder_cooldown_hours: int = int(os.environ.get("CART_ABANDONMENT_REMINDER_COOLDOWN_HOURS", "48"))
+    cart_ttl_days: int = int(os.environ.get("CART_TTL_DAYS", "30"))
     # Catalog
     catalog_table_name: str = os.environ.get("CATALOG_TABLE_NAME", "shopping_catalog")
 
@@ -967,6 +989,9 @@ class Settings:
     newsfeed_unlock_throttle_window_seconds: int = int(os.environ.get("NEWSFEED_UNLOCK_THROTTLE_WINDOW_SECONDS", "10"))
     newsfeed_unlock_throttle_max_attempts: int = int(os.environ.get("NEWSFEED_UNLOCK_THROTTLE_MAX_ATTEMPTS", "6"))
     newsfeed_tip_lottery_enabled: bool = os.environ.get("NEWSFEED_TIP_LOTTERY_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+
+    # Image optimization (PLATFORM-004)
+    image_optimization_enabled: bool = os.environ.get("IMAGE_OPTIMIZATION_ENABLED", "1") not in ("0", "false", "False")
 
     # VOD File Bridge (VOD-014)
     vod_file_bridge_enabled: bool = os.environ.get("VOD_FILE_BRIDGE_ENABLED", "1") not in ("0", "false", "False")
@@ -1319,6 +1344,8 @@ class Settings:
     toast_low_duration_ms: int = int(os.environ.get("TOAST_LOW_DURATION_MS", "3000"))
     vapid_public_key: str = os.environ.get("VAPID_PUBLIC_KEY", "")
     vapid_private_key: str = os.environ.get("VAPID_PRIVATE_KEY", "")
+    vapid_subject: str = os.environ.get("VAPID_SUBJECT", "mailto:admin@testlogon.local")
+    web_push_enabled: bool = os.environ.get("WEB_PUSH_ENABLED", "1") not in ("0", "false", "False")
 
     # Internationalization (PLATFORM-003)
     translations_table_name: str = os.environ.get("TRANSLATIONS_TABLE_NAME", "translations")

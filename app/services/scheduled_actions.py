@@ -453,6 +453,136 @@ def mark_reminder_sent(action: Dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Admin query functions (PLATFORM-008)
+# ---------------------------------------------------------------------------
+
+
+def query_failed_actions(
+    limit: int = 50, action_type: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Query failed actions across all users (admin endpoint).
+
+    Uses a table scan with FilterExpression. This is acceptable because:
+    - Failed actions are rare (< 1% of total)
+    - The scan is admin-only and infrequent
+    - Items expire via TTL after scheduled_actions_ttl_days
+    """
+    filter_expr = Attr("status").eq("failed")
+    if action_type:
+        filter_expr = filter_expr & Attr("action_type").eq(action_type)
+
+    try:
+        resp = T.scheduled_actions.scan(
+            FilterExpression=filter_expr,
+            Limit=limit,
+        )
+        items = resp.get("Items", [])
+        result = []
+        for item in items:
+            out = _action_out(item)
+            out["user_sub"] = item.get("user_sub", "")
+            result.append(out)
+        return result
+    except Exception:
+        logger.exception("Failed to query failed actions")
+        return []
+
+
+def count_pending_actions() -> int:
+    """Count pending actions in the due queue.
+
+    Queries the ByDue GSI with a far-future cutoff to get all pending items.
+    Uses SELECT COUNT to minimize read capacity.
+    """
+    try:
+        far_future = now_ts() + 365 * 86400  # 1 year ahead
+        resp = T.scheduled_actions.query(
+            IndexName="ByDue",
+            KeyConditionExpression=Key("GSI_DUE_PK").eq("DUE") & Key("GSI_DUE_SK").lte(far_future),
+            FilterExpression=Attr("status").eq("pending"),
+            Select="COUNT",
+        )
+        count = resp.get("Count", 0)
+        # Handle pagination
+        while resp.get("LastEvaluatedKey"):
+            resp = T.scheduled_actions.query(
+                IndexName="ByDue",
+                KeyConditionExpression=Key("GSI_DUE_PK").eq("DUE") & Key("GSI_DUE_SK").lte(far_future),
+                FilterExpression=Attr("status").eq("pending"),
+                Select="COUNT",
+                ExclusiveStartKey=resp["LastEvaluatedKey"],
+            )
+            count += resp.get("Count", 0)
+        return count
+    except Exception:
+        return -1
+
+
+def count_failed_actions() -> int:
+    """Count permanently failed actions."""
+    try:
+        resp = T.scheduled_actions.scan(
+            FilterExpression=Attr("status").eq("failed"),
+            Select="COUNT",
+        )
+        count = resp.get("Count", 0)
+        while resp.get("LastEvaluatedKey"):
+            resp = T.scheduled_actions.scan(
+                FilterExpression=Attr("status").eq("failed"),
+                Select="COUNT",
+                ExclusiveStartKey=resp["LastEvaluatedKey"],
+            )
+            count += resp.get("Count", 0)
+        return count
+    except Exception:
+        return -1
+
+
+def reschedule_failed_action(user_sub: str, action_id: str) -> bool:
+    """Reschedule a permanently failed action (admin retry).
+
+    Finds the action by scanning the user's items (since we don't
+    know the SK without the scheduled_at). Resets status to pending,
+    retry_count to 0, and sets a new due time (now + 5s).
+    """
+    try:
+        resp = T.scheduled_actions.query(
+            KeyConditionExpression=Key("pk").eq(_pk(user_sub)),
+            FilterExpression=Attr("action_id").eq(action_id) & Attr("status").eq("failed"),
+            Limit=1,
+        )
+        items = resp.get("Items", [])
+        if not items:
+            return False
+
+        action = items[0]
+        now = now_ts()
+
+        T.scheduled_actions.update_item(
+            Key={"pk": action["pk"], "sk": action["sk"]},
+            UpdateExpression=(
+                "SET #status = :pending, retry_count = :z, "
+                "GSI_DUE_PK = :duekey, GSI_DUE_SK = :dueat, "
+                "updated_at = :now "
+                "REMOVE #error, completed_at"
+            ),
+            ExpressionAttributeNames={"#status": "status", "#error": "error"},
+            ExpressionAttributeValues={
+                ":pending": "pending",
+                ":z": 0,
+                ":duekey": "DUE",
+                ":dueat": now + 5,  # Due in 5 seconds
+                ":now": now,
+            },
+        )
+        logger.info("Admin rescheduled failed action: user=%s, action=%s", user_sub, action_id)
+        return True
+    except Exception:
+        logger.exception("Failed to reschedule action: user=%s, action=%s", user_sub, action_id)
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 

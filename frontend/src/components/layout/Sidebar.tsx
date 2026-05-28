@@ -28,6 +28,7 @@ import {
   Scale,
   Wrench,
   Compass,
+  Bookmark,
   PlaySquare,
   BarChart3,
   ShieldCheck,
@@ -36,6 +37,9 @@ import {
   Webhook,
   Globe,
   CalendarClock,
+  Ban,
+  Wallet,
+  Layers,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -76,6 +80,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Helpdesk", i18nKey: "nav.helpdesk", path: "/helpdesk", icon: <Headphones className="h-5 w-5" /> },
       { label: "Feed", i18nKey: "nav.feed", path: "/feed", icon: <Rss className="h-5 w-5" /> },
       { label: "Discover", i18nKey: "nav.discover", path: "/discover", icon: <Compass className="h-5 w-5" /> },
+      { label: "Saved", i18nKey: "nav.saved", path: "/saved", icon: <Bookmark className="h-5 w-5" /> },
     ],
   },
   {
@@ -87,7 +92,9 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Billing", i18nKey: "nav.billing", path: "/billing", icon: <CreditCard className="h-5 w-5" /> },
       { label: "Orders", i18nKey: "nav.orders", path: "/purchases", icon: <ClipboardList className="h-5 w-5" /> },
       { label: "Subscriptions", i18nKey: "nav.subscriptions", path: "/subscriptions", icon: <Repeat className="h-5 w-5" /> },
+      { label: "Tier Manager", i18nKey: "nav.tierManager", path: "/subscriptions/manage", icon: <Layers className="h-5 w-5" /> },
       { label: "Analytics", i18nKey: "nav.analytics", path: "/analytics", icon: <BarChart3 className="h-5 w-5" /> },
+      { label: "Payouts", i18nKey: "nav.payouts", path: "/payouts", icon: <Wallet className="h-5 w-5" /> },
       { label: "Referrals", i18nKey: "nav.referrals", path: "/referrals", icon: <Share2 className="h-5 w-5" /> },
       { label: "Promo Codes", i18nKey: "nav.promoCodes", path: "/promo", icon: <Tag className="h-5 w-5" /> },
     ],
@@ -124,6 +131,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: "Remote Desktop", i18nKey: "nav.remoteDesktop", path: "/remote-desktop", icon: <MonitorSmartphone className="h-5 w-5" /> },
       { label: "Settings", i18nKey: "nav.settings", path: "/settings", icon: <Settings className="h-5 w-5" /> },
       { label: "Privacy", i18nKey: "nav.privacy", path: "/settings/privacy", icon: <ShieldCheck className="h-5 w-5" /> },
+      { label: "Blocked Users", i18nKey: "nav.blockedUsers", path: "/settings/blocked", icon: <Ban className="h-5 w-5" /> },
       { label: "Webhooks", i18nKey: "nav.webhooks", path: "/settings/webhooks", icon: <Webhook className="h-5 w-5" /> },
       { label: "Geo Rules", i18nKey: "nav.geoRules", path: "/settings/geo", icon: <Globe className="h-5 w-5" /> },
       { label: "Role Management", i18nKey: "nav.roleManagement", path: "/root/roles", icon: <UsersRound className="h-5 w-5" /> },

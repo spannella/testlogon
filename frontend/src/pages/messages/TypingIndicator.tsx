@@ -1,11 +1,13 @@
-import { useEffect, useCallback, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useCallback, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getTyping, sendTyping } from "@/api/endpoints/messaging";
 import { useAuthStore } from "@/stores/authStore";
 import { cn } from "@/lib/utils";
 
-const TYPING_POLL_MS = 3_000;
+const TYPING_FALLBACK_POLL_MS = 30_000;
 const TYPING_DEBOUNCE_MS = 2_000;
+const TYPING_CLIENT_TTL_MS = 5_000;
+const TYPING_CLEANUP_INTERVAL_MS = 2_000;
 
 // ─── Typing Dots Animation ─────────────────────────────────────
 
@@ -32,14 +34,37 @@ interface TypingIndicatorProps {
 
 export function TypingIndicator({ conversationId, className }: TypingIndicatorProps) {
   const userId = useAuthStore((s) => s.userId);
+  const queryClient = useQueryClient();
+  const [, setTick] = useState(0);
 
   const { data: typers } = useQuery({
     queryKey: ["typing", conversationId],
     queryFn: () => getTyping(conversationId),
-    refetchInterval: TYPING_POLL_MS,
-    staleTime: TYPING_POLL_MS,
+    refetchInterval: TYPING_FALLBACK_POLL_MS,
+    staleTime: TYPING_FALLBACK_POLL_MS,
     enabled: !!conversationId,
   });
+
+  // Client-side TTL cleanup: expire stale typing entries every 2s
+  useEffect(() => {
+    const id = setInterval(() => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      queryClient.setQueryData<Array<{ user_id: string; updated_at: number }>>(
+        ["typing", conversationId],
+        (prev) => {
+          if (!prev) return prev;
+          const filtered = prev.filter(
+            (t) => nowSec - t.updated_at < TYPING_CLIENT_TTL_MS / 1000,
+          );
+          if (filtered.length !== prev.length) {
+            setTick((t) => t + 1);
+          }
+          return filtered;
+        },
+      );
+    }, TYPING_CLEANUP_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [conversationId, queryClient]);
 
   // Filter out self
   const others = (typers ?? []).filter((t) => t.user_id !== userId);

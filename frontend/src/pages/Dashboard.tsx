@@ -14,6 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { PageMeta } from "@/components/shared/PageMeta";
 import { cn } from "@/lib/utils";
 import { OnboardingChecklist } from "@/components/shared/OnboardingChecklist";
 
@@ -133,6 +134,7 @@ export default function Dashboard() {
 
   return (
     <div className="p-4 md:p-6 lg:p-8 space-y-6">
+      <PageMeta title="Dashboard" />
       <PageHeader
         title="Dashboard"
         description="Overview of your account activity"

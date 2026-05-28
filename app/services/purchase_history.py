@@ -11,6 +11,7 @@ from app.core.tables import T
 from app.core.time import now_ts
 from app.services.profile import get_profile
 from app.services.billing_shared import new_ledger_entry, ddb_put, user_pk
+from app.services.carrier_tracking import build_tracking_url, detect_carrier
 
 
 def _safe_profile(user_sub: str) -> Dict[str, Any]:
@@ -384,7 +385,14 @@ def get_transaction_info(user_sub: str, txn_id: str) -> Dict[str, Any]:
     item = _fetch_txn(user_sub, txn_id)
     if not item:
         raise HTTPException(404, "Transaction not found")
-    return _item_to_info(item)
+    info = _item_to_info(item)
+    # Enrich shipping with tracking URL (computed, not stored)
+    if info.get("shipping"):
+        carrier = info["shipping"].get("carrier")
+        tracking_number = info["shipping"].get("tracking_number")
+        if carrier and tracking_number:
+            info["shipping"]["tracking_url"] = build_tracking_url(carrier, tracking_number)
+    return info
 
 
 def update_shipping(user_sub: str, txn_id: str, shipping: Dict[str, Any]) -> Dict[str, Any]:
@@ -395,12 +403,26 @@ def update_shipping(user_sub: str, txn_id: str, shipping: Dict[str, Any]) -> Dic
         raise HTTPException(409, "Cannot update shipping for cancelled transactions")
     updated_at = now_ts()
     shipping = {k: v for k, v in shipping.items() if v is not None}
+
+    # Auto-detect carrier if tracking_number provided but carrier is not
+    if shipping.get("tracking_number") and not shipping.get("carrier"):
+        detected = detect_carrier(shipping["tracking_number"])
+        if detected:
+            shipping["carrier"] = detected
+
+    # Store tracking_number at top level for GSI (TrackingIndex) lookup
+    update_expr = "SET shipping = :s, updated_at = :u, version = version + :one"
+    expr_values: Dict[str, Any] = {":s": shipping, ":u": updated_at, ":one": 1, ":v": int(item.get("version", 0))}
+    if shipping.get("tracking_number"):
+        update_expr += ", tracking_number = :tn"
+        expr_values[":tn"] = shipping["tracking_number"]
+
     try:
         T.purchase_transactions.update_item(
             Key={"user_sub": item["user_sub"], "sk": item["sk"]},
-            UpdateExpression="SET shipping = :s, updated_at = :u, version = version + :one",
+            UpdateExpression=update_expr,
             ConditionExpression="version = :v",
-            ExpressionAttributeValues={":s": shipping, ":u": updated_at, ":one": 1, ":v": int(item.get("version", 0))},
+            ExpressionAttributeValues=expr_values,
         )
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
@@ -568,3 +590,23 @@ def list_events(user_sub: str, txn_id: str, limit: int) -> List[Dict[str, Any]]:
         Limit=limit,
     )
     return resp.get("Items", [])
+
+
+def find_transaction_by_tracking(tracking_number: str) -> Optional[Dict[str, Any]]:
+    """Look up a transaction by its tracking number.
+
+    Uses a scan with FilterExpression on the tracking_number attribute.
+    For production, a GSI (TrackingIndex) would be more efficient.
+    """
+    if not tracking_number or tracking_number == "unknown":
+        return None
+
+    resp = T.purchase_transactions.scan(
+        FilterExpression="tracking_number = :tn",
+        ExpressionAttributeValues={":tn": tracking_number},
+        Limit=1,
+    )
+    items = resp.get("Items", [])
+    if not items:
+        return None
+    return items[0]

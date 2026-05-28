@@ -1,14 +1,17 @@
 import { useState, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { FollowButton } from "@/components/shared/FollowButton";
-import { Compass, Search, TrendingUp, Users } from "lucide-react";
+import { Compass, Hash, Search, TrendingUp, Users } from "lucide-react";
 import {
   searchDiscoverUsers,
   getSuggestedUsers,
   getTrendingCreators,
+  getTrendingTags,
   type DiscoveryUser,
 } from "@/api/endpoints/discovery";
 
@@ -92,6 +95,12 @@ export default function DiscoverPage() {
     queryFn: () => getTrendingCreators(20),
   });
 
+  const { data: trendingTags } = useQuery({
+    queryKey: ["discover", "trending-tags"],
+    queryFn: () => getTrendingTags(20),
+    staleTime: 300_000,
+  });
+
   return (
     <div className="container max-w-3xl py-6 space-y-6">
       <div className="flex items-center gap-2">
@@ -133,6 +142,28 @@ export default function DiscoverPage() {
         </Card>
       ) : (
         <>
+          {(trendingTags?.tags ?? []).length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Hash className="h-4 w-4" />
+                  Trending Tags
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-wrap gap-2">
+                  {(trendingTags?.tags ?? []).map((t) => (
+                    <Link key={t.tag} to={`/discover/tags/${t.tag}`}>
+                      <Badge variant="outline" className="cursor-pointer hover:bg-accent">
+                        #{t.tag} ({t.count})
+                      </Badge>
+                    </Link>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">

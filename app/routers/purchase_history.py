@@ -25,6 +25,7 @@ from app.services.purchase_history import (
     respond_cancel,
     update_shipping,
 )
+from app.services.carrier_tracking import build_tracking_url
 from app.services.receipts import get_or_create_receipt
 from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
 from app.services.sessions import require_ui_session
@@ -112,6 +113,34 @@ async def ui_respond_cancel(
     ctx=Depends(require_ui_session),
 ):
     return respond_cancel(ctx["user_sub"], txn_id, body.decision, body.note)
+
+
+@router.get("/transactions/{txn_id}/tracking")
+async def ui_get_tracking(txn_id: str, ctx=Depends(require_ui_session)):
+    info = get_transaction_info(ctx["user_sub"], txn_id)
+    shipping = info.get("shipping") or {}
+    carrier = shipping.get("carrier")
+    tracking_number = shipping.get("tracking_number")
+    if not carrier or not tracking_number:
+        return {
+            "txn_id": txn_id,
+            "tracking_url": None,
+            "carrier": None,
+            "tracking_number": None,
+            "status": None,
+            "carrier_events": None,
+        }
+    tracking_url = build_tracking_url(carrier, tracking_number)
+    return {
+        "txn_id": txn_id,
+        "tracking_url": tracking_url,
+        "carrier": carrier,
+        "tracking_number": tracking_number,
+        "status": shipping.get("status"),
+        "carrier_events": shipping.get("carrier_events"),
+        "estimated_delivery": shipping.get("estimated_delivery"),
+        "delivered_at": shipping.get("delivered_at"),
+    }
 
 
 @router.get("/transactions/{txn_id}/events")

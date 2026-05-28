@@ -49,11 +49,16 @@ def _validate_turn_urls(*, urls: list[str]) -> None:
 
 
 def _load_conversation_participants(conversation_id: str) -> set[str]:
+    import os
     from app.core.aws import ddb
+    from boto3.dynamodb.conditions import Key as DDBKey
 
-    row = ddb.Table(getattr(S, "ddb_conversations", "Conversations")).get_item(Key={"conversation_id": conversation_id}).get("Item") or {}
-    participant_ids = row.get("participant_ids") or []
-    return {str(participant_id).strip() for participant_id in participant_ids if str(participant_id).strip()}
+    table_name = os.getenv("DDB_PARTICIPANTS", "Participants")
+    items = ddb.Table(table_name).query(
+        IndexName="GSI1",
+        KeyConditionExpression=DDBKey("GSI1PK").eq(conversation_id),
+    ).get("Items", [])
+    return {str(item["user_id"]).strip() for item in items if item.get("user_id")}
 
 
 def _record_issue(*, outcome: str, reason: str) -> None:

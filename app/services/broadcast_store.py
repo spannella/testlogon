@@ -109,7 +109,7 @@ def get_profile(profile_id: str) -> BroadcastProfileModel:
 
 
 def session_to_item(session: BroadcastSessionModel) -> Dict[str, Any]:
-    return {
+    item: Dict[str, Any] = {
         "session_id": session.id,
         "profile_id": session.profile_id,
         "status": session.status,
@@ -123,7 +123,26 @@ def session_to_item(session: BroadcastSessionModel) -> Dict[str, Any]:
         "created_at": session.created_at,
         "updated_at": session.updated_at,
         "pk": _session_pk(session.id),
+        # Scheduling (BCAST-009)
+        "scheduled_at": session.scheduled_at,
+        "schedule_status": session.schedule_status,
+        "name": session.name,
+        "description": session.description,
+        "thumbnail_url": session.thumbnail_url,
+        "cancelled_at": session.cancelled_at,
+        "announcement_post_id": session.announcement_post_id,
+        # Go-Private (BCAST-011)
+        "private_session_id": session.private_session_id,
+        "private_behavior": session.private_behavior,
+        "private_min_rate_cents": session.private_min_rate_cents,
+        # Private Chat (BCAST-012)
+        "private_chat_enabled": session.private_chat_enabled,
+        "private_chat_tiers": session.private_chat_tiers,
+        "private_chat_voyeur_enabled": session.private_chat_voyeur_enabled,
+        "private_chat_voyeur_price_cents": session.private_chat_voyeur_price_cents,
     }
+    # Remove None values to avoid DynamoDB issues with GSI sort keys
+    return {k: v for k, v in item.items() if v is not None}
 
 
 def session_from_item(item: Dict[str, Any]) -> BroadcastSessionModel:
@@ -140,6 +159,23 @@ def session_from_item(item: Dict[str, Any]) -> BroadcastSessionModel:
         created_by=item["created_by"],
         created_at=item.get("created_at") or "",
         updated_at=item.get("updated_at") or "",
+        # Scheduling (BCAST-009)
+        scheduled_at=int(item["scheduled_at"]) if item.get("scheduled_at") is not None else None,
+        schedule_status=item.get("schedule_status"),
+        name=item.get("name"),
+        description=item.get("description"),
+        thumbnail_url=item.get("thumbnail_url"),
+        cancelled_at=item.get("cancelled_at"),
+        announcement_post_id=item.get("announcement_post_id"),
+        # Go-Private (BCAST-011)
+        private_session_id=item.get("private_session_id"),
+        private_behavior=item.get("private_behavior"),
+        private_min_rate_cents=int(item["private_min_rate_cents"]) if item.get("private_min_rate_cents") is not None else None,
+        # Private Chat (BCAST-012)
+        private_chat_enabled=bool(item.get("private_chat_enabled", False)),
+        private_chat_tiers=item.get("private_chat_tiers"),
+        private_chat_voyeur_enabled=bool(item.get("private_chat_voyeur_enabled", False)),
+        private_chat_voyeur_price_cents=int(item["private_chat_voyeur_price_cents"]) if item.get("private_chat_voyeur_price_cents") is not None else None,
     )
 
 
@@ -263,7 +299,14 @@ def get_output(session_id: str) -> BroadcastOutputModel | None:
     return output_from_item(item)
 
 
-def transition_session_status(*, session_id: str, to_status: str, reason: str, actor: str) -> BroadcastSessionModel:
+def transition_session_status(
+    *,
+    session_id: str,
+    to_status: str,
+    reason: str,
+    actor: str,
+    extra_fields: Optional[Dict[str, Any]] = None,
+) -> BroadcastSessionModel:
     current = get_session(session_id)
     validation = validate_transition(current.status, to_status)  # type: ignore[arg-type]
     if not validation.legal:
@@ -276,20 +319,14 @@ def transition_session_status(*, session_id: str, to_status: str, reason: str, a
             },
         )
 
-    updated = BroadcastSessionModel(
-        id=current.id,
-        profile_id=current.profile_id,
-        status=to_status,  # type: ignore[arg-type]
-        ingest_url=current.ingest_url,
-        stream_key_ref=current.stream_key_ref,
-        stream_key_last_rotated_at=current.stream_key_last_rotated_at,
-        stream_key_rotation_interval_seconds=current.stream_key_rotation_interval_seconds,
-        started_at=current.started_at,
-        stopped_at=current.stopped_at,
-        created_by=current.created_by,
-        created_at=current.created_at,
-        updated_at=now_iso(),
-    )
+    # Build updated model preserving all existing fields
+    update_data = current.model_dump()
+    update_data["status"] = to_status
+    update_data["updated_at"] = now_iso()
+    # Apply any extra scheduling/cancel fields
+    if extra_fields:
+        update_data.update(extra_fields)
+    updated = BroadcastSessionModel(**update_data)
     T.broadcast_sessions.put_item(Item=session_to_item(updated))
     audit = build_transition_audit(
         transition_id=str(uuid4()),
@@ -358,3 +395,52 @@ def list_sessions_by_creator(created_by: str, *, limit: int = 50, cursor: Option
     resp = T.broadcast_sessions.query(**kwargs)
     items = [session_from_item(i) for i in resp.get("Items", [])]
     return {"items": items, "cursor": resp.get("LastEvaluatedKey")}
+
+
+# ─── Scheduling queries (BCAST-009) ─────────────────────────────
+
+
+def list_due_scheduled_sessions(*, now: int, limit: int = 10) -> List[BroadcastSessionModel]:
+    """Get scheduled sessions that are past their scheduled_at time.
+
+    Queries ByScheduledAt GSI: schedule_status='scheduled', scheduled_at <= now.
+    Returns oldest-first so the most overdue sessions are processed first.
+    """
+    resp = T.broadcast_sessions.query(
+        IndexName="ByScheduledAt",
+        KeyConditionExpression=Key("schedule_status").eq("scheduled") & Key("scheduled_at").lte(now),
+        ScanIndexForward=True,
+        Limit=limit,
+    )
+    return [session_from_item(i) for i in resp.get("Items", [])]
+
+
+def list_scheduled_sessions_by_creator(created_by: str, *, limit: int = 50) -> List[BroadcastSessionModel]:
+    """List sessions with schedule_status='scheduled' for a specific creator.
+
+    Uses ByCreatorCreatedAt GSI filtered by schedule_status.
+    """
+    from boto3.dynamodb.conditions import Attr
+    kwargs: Dict[str, Any] = {
+        "IndexName": "ByCreatorCreatedAt",
+        "KeyConditionExpression": Key("created_by").eq(created_by),
+        "FilterExpression": Attr("schedule_status").eq("scheduled"),
+        "Limit": limit,
+        "ScanIndexForward": False,
+    }
+    resp = T.broadcast_sessions.query(**kwargs)
+    return [session_from_item(i) for i in resp.get("Items", [])]
+
+
+def update_session_fields(session_id: str, fields: Dict[str, Any]) -> BroadcastSessionModel:
+    """Update arbitrary fields on a session by doing a get-modify-put cycle.
+
+    This preserves all existing fields while applying the updates.
+    """
+    current = get_session(session_id)
+    data = current.model_dump()
+    data.update(fields)
+    data["updated_at"] = now_iso()
+    updated = BroadcastSessionModel(**data)
+    T.broadcast_sessions.put_item(Item=session_to_item(updated))
+    return updated

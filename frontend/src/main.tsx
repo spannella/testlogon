@@ -15,6 +15,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { HelmetProvider } from "react-helmet-async";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
@@ -24,6 +25,12 @@ import "./globals.css";
 // Initialize i18n before rendering
 import "./i18n";
 import { RTLProvider } from "@/components/layout/RTLProvider";
+import { registerServiceWorker } from "@/lib/pushSetup";
+
+// Register service worker for push notifications (PLATFORM-010)
+if ("serviceWorker" in navigator) {
+  registerServiceWorker();
+}
 
 // ── Referral attribution cookie (AFFILIATE-001) ────────────────
 // If the URL contains ?ref=CODE, store it in a 30-day cookie so the
@@ -52,17 +59,19 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <TooltipProvider delayDuration={300}>
-          <RTLProvider>
-            <BrowserRouter>
-              <App />
-            </BrowserRouter>
-            <Toaster richColors position="top-right" />
-          </RTLProvider>
-        </TooltipProvider>
-      </ThemeProvider>
-    </QueryClientProvider>
+    <HelmetProvider>
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider>
+          <TooltipProvider delayDuration={300}>
+            <RTLProvider>
+              <BrowserRouter>
+                <App />
+              </BrowserRouter>
+              <Toaster richColors position="top-right" />
+            </RTLProvider>
+          </TooltipProvider>
+        </ThemeProvider>
+      </QueryClientProvider>
+    </HelmetProvider>
   </StrictMode>,
 );

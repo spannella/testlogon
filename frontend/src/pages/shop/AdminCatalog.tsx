@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { arrayMove } from "@dnd-kit/sortable";
 import {
   FolderPlus,
+  GripVertical,
   Loader2,
   Package,
   Pencil,
@@ -12,7 +14,9 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -22,13 +26,18 @@ import {
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { BulkActionBar } from "@/components/shared/BulkActionBar";
 import {
   getCategories,
   getCategoryItems,
   createCategory,
   deleteCategory,
   deleteCatalogItem,
+  reorderCatalogItems,
+  bulkDeleteCatalogItems,
 } from "@/api/endpoints/cart";
+import { useMultiSelect } from "@/hooks/useMultiSelect";
+import SortableList from "@/components/shared/SortableList";
 import { ItemEditor } from "./ItemEditor";
 import type { CatalogCategory, CatalogItem } from "@/api/types";
 
@@ -101,6 +110,14 @@ export function AdminCatalog() {
       setDeleteItemTarget(null);
     },
     onError: () => toast.error("Failed to delete item"),
+  });
+
+  const reorderMutation = useMutation({
+    mutationFn: (itemIds: string[]) => reorderCatalogItems(itemIds),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["catalog", "admin-items", selectedCat] });
+    },
+    onError: () => toast.error("Failed to reorder items"),
   });
 
   const categories = categoriesQuery.data?.items ?? [];
@@ -190,21 +207,54 @@ export function AdminCatalog() {
               className="py-8"
             />
           ) : (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {items.map((item) => (
-                <Card key={item.item_id}>
+            <SortableList
+              items={items}
+              getItemId={(item) => item.item_id}
+              className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
+              disabled={reorderMutation.isPending}
+              onReorder={(oldIndex, newIndex) => {
+                const newItems = arrayMove(items, oldIndex, newIndex);
+                reorderMutation.mutate(newItems.map((i) => i.item_id));
+              }}
+              renderItem={(item, _idx, dragHandleProps) => (
+                <Card>
                   <CardContent className="p-3">
                     <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">{item.name}</p>
-                        <p className="text-sm font-semibold text-primary">
-                          {formatPrice(item.price_cents, item.currency)}
-                        </p>
-                        {item.description && (
-                          <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
-                            {item.description}
+                      <div className="flex items-start gap-2 min-w-0 flex-1">
+                        <span {...dragHandleProps} data-testid={`drag-handle-${item.item_id}`}>
+                          <GripVertical className="h-4 w-4 mt-0.5 text-muted-foreground" />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium">{item.name}</p>
+                          <p className="text-sm font-semibold text-primary">
+                            {formatPrice(item.price_cents, item.currency)}
                           </p>
-                        )}
+                          {item.stock_status === "in_stock" && (
+                            <Badge variant="outline" className="mt-1 border-green-500 text-green-600" data-testid="stock-badge">
+                              In Stock ({item.stock_count})
+                            </Badge>
+                          )}
+                          {item.stock_status === "low_stock" && (
+                            <Badge variant="outline" className="mt-1 border-orange-500 text-orange-600" data-testid="stock-badge">
+                              Low Stock ({item.stock_count})
+                            </Badge>
+                          )}
+                          {item.stock_status === "out_of_stock" && (
+                            <Badge variant="destructive" className="mt-1" data-testid="stock-badge">
+                              Out of Stock
+                            </Badge>
+                          )}
+                          {item.stock_status === "unlimited" && (
+                            <Badge variant="secondary" className="mt-1" data-testid="stock-badge">
+                              Unlimited
+                            </Badge>
+                          )}
+                          {item.description && (
+                            <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
+                              {item.description}
+                            </p>
+                          )}
+                        </div>
                       </div>
                       <div className="flex shrink-0 gap-1">
                         <Button
@@ -237,8 +287,8 @@ export function AdminCatalog() {
                     )}
                   </CardContent>
                 </Card>
-              ))}
-            </div>
+              )}
+            />
           )}
         </div>
       )}

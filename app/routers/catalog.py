@@ -14,6 +14,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 
 from app.core.tables import T
 from app.core.settings import S
@@ -25,9 +26,12 @@ from app.models import (
     CatalogItemListOut,
     CatalogItemOut,
     CatalogItemPatchIn,
+    CatalogReorderReq,
     CatalogReviewCreateIn,
     CatalogReviewListOut,
     CatalogReviewOut,
+    CatalogStockAdjustIn,
+    CatalogStockOut,
 )
 from app.services.filemanager import download_file, upload_catalog_image
 from app.services.api_key_policy_enforcement import maybe_enforce_api_key_route_policy
@@ -86,7 +90,22 @@ def _catalog_matches(query_tokens: list[str], item: dict) -> bool:
     return all(token in haystack for token in query_tokens)
 
 
+def _compute_stock_status(item: dict) -> str:
+    sc = item.get("stock_count")
+    if sc is None:
+        return "unlimited"
+    sc = int(sc)
+    if sc <= 0:
+        return "out_of_stock"
+    threshold = int(item.get("low_stock_threshold", 5) or 5)
+    if sc <= threshold:
+        return "low_stock"
+    return "in_stock"
+
+
 def _catalog_item_out(item: dict) -> CatalogItemOut:
+    sc = item.get("stock_count")
+    pos = item.get("position")
     return CatalogItemOut(
         category_id=item["category_id"],
         item_id=item["item_id"],
@@ -96,8 +115,14 @@ def _catalog_item_out(item: dict) -> CatalogItemOut:
         currency=item.get("currency", "USD"),
         image_urls=item.get("image_urls", []),
         attributes=item.get("attributes", {}),
+        creator_id=item.get("creator_id"),
         created_at=item["created_at"],
         updated_at=item["updated_at"],
+        stock_count=int(sc) if sc is not None else None,
+        stock_status=_compute_stock_status(item),
+        low_stock_threshold=int(item.get("low_stock_threshold", 5) or 5),
+        stock_updated_at=item.get("stock_updated_at"),
+        position=int(pos) if pos is not None else None,
     )
 
 
@@ -313,7 +338,7 @@ async def create_item(
     category = _require_category_owner(category_id, ctx["user_sub"])
     item_id = body.item_id or ulid_like()
     now = now_iso()
-    item = {
+    item: Dict[str, Any] = {
         "PK": cat_pk(category_id),
         "SK": item_sk(item_id),
         "entity": "item",
@@ -329,6 +354,11 @@ async def create_item(
         "created_at": now,
         "updated_at": now,
     }
+    if body.stock_count is not None:
+        item["stock_count"] = body.stock_count
+        item["stock_updated_at"] = now
+    if body.low_stock_threshold is not None:
+        item["low_stock_threshold"] = body.low_stock_threshold
     try:
         T.catalog.put_item(
             Item=item,
@@ -338,7 +368,7 @@ async def create_item(
         if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
             raise HTTPException(status_code=409, detail="Item already exists.") from exc
         raise HTTPException(status_code=500, detail="Catalog storage error.") from exc
-    return CatalogItemOut(**item)
+    return _catalog_item_out(item)
 
 
 @router.get("/categories/{category_id}/items", response_model=CatalogItemListOut)
@@ -358,22 +388,54 @@ async def list_items(
     for item in items:
         if item.get("entity") != "item":
             continue
-        out.append(
-            CatalogItemOut(
-                category_id=item["category_id"],
-                item_id=item["item_id"],
-                name=item["name"],
-                description=item.get("description"),
-                price_cents=ddb_to_int(item["price_cents"]),
-                currency=item.get("currency", "USD"),
-                image_urls=item.get("image_urls", []),
-                attributes=item.get("attributes", {}),
-                creator_id=item.get("creator_id"),
-                created_at=item["created_at"],
-                updated_at=item["updated_at"],
-            )
-        )
+        out.append(_catalog_item_out(item))
+    # Sort by position (items without position sorted to end)
+    out.sort(key=lambda x: (x.position is None, x.position if x.position is not None else 0))
     return CatalogItemListOut(items=out, next_token=encode_next_token(lek))
+
+
+@router.patch("/items/reorder")
+async def reorder_catalog_items(
+    body: CatalogReorderReq,
+    ctx=Depends(require_ui_session),
+):
+    """Set display order for catalog items.
+
+    Accepts an ordered list of item IDs. Each item's `position` field
+    is set to its index in the list (0-based). Items not in the list
+    retain their current position.
+
+    Only items owned by the authenticated user are updated.
+    Non-owned items are silently skipped.
+    """
+    user_sub = ctx["user_sub"]
+    results = []
+    for idx, item_id in enumerate(body.item_ids):
+        try:
+            item = _find_item_by_id(item_id)
+            if not item:
+                results.append({"item_id": item_id, "ok": False, "error": "not_found"})
+                continue
+            # Verify ownership via category
+            category_id = item.get("category_id")
+            if category_id:
+                cat_meta = T.catalog.get_item(Key={"PK": cat_pk(category_id), "SK": "META"}).get("Item")
+                creator_id = cat_meta.get("creator_id") if cat_meta else None
+                if creator_id and creator_id != user_sub:
+                    results.append({"item_id": item_id, "ok": False, "error": "not_owner"})
+                    continue
+
+            T.catalog.update_item(
+                Key={"PK": item["PK"], "SK": item["SK"]},
+                UpdateExpression="SET #pos = :pos",
+                ExpressionAttributeNames={"#pos": "position"},
+                ExpressionAttributeValues={":pos": idx},
+            )
+            results.append({"item_id": item_id, "ok": True})
+        except Exception as e:
+            results.append({"item_id": item_id, "ok": False, "error": str(e)})
+
+    return {"ok": True, "results": results}
 
 
 @router.get("/items/search", response_model=CatalogItemListOut)
@@ -463,6 +525,17 @@ async def update_item(
         names["#attributes"] = "attributes"
         values[":attributes"] = body.attributes
         updates.append("#attributes = :attributes")
+    if body.stock_count is not None:
+        names["#stock_count"] = "stock_count"
+        values[":stock_count"] = body.stock_count
+        updates.append("#stock_count = :stock_count")
+        names["#stock_updated_at"] = "stock_updated_at"
+        values[":stock_updated_at"] = now_iso()
+        updates.append("#stock_updated_at = :stock_updated_at")
+    if body.low_stock_threshold is not None:
+        names["#low_stock_threshold"] = "low_stock_threshold"
+        values[":low_stock_threshold"] = body.low_stock_threshold
+        updates.append("#low_stock_threshold = :low_stock_threshold")
 
     if len(updates) == 1:
         raise HTTPException(status_code=400, detail="No fields to update.")
@@ -484,19 +557,7 @@ async def update_item(
     item = resp.get("Attributes")
     if not item:
         raise HTTPException(status_code=404, detail="Item not found.")
-    return CatalogItemOut(
-        category_id=item["category_id"],
-        item_id=item["item_id"],
-        name=item["name"],
-        description=item.get("description"),
-        price_cents=ddb_to_int(item["price_cents"]),
-        currency=item.get("currency", "USD"),
-        image_urls=item.get("image_urls", []),
-        attributes=item.get("attributes", {}),
-        creator_id=item.get("creator_id"),
-        created_at=item["created_at"],
-        updated_at=item["updated_at"],
-    )
+    return _catalog_item_out(item)
 
 
 async def _catalog_upload_unavailable(ctx=Depends(require_ui_session)):
@@ -542,21 +603,140 @@ if _MULTIPART_AVAILABLE:
         item = resp.get("Attributes")
         if not item:
             raise HTTPException(status_code=404, detail="Item not found.")
-        return CatalogItemOut(
-            category_id=item["category_id"],
-            item_id=item["item_id"],
-            name=item["name"],
-            description=item.get("description"),
-            price_cents=ddb_to_int(item["price_cents"]),
-            currency=item.get("currency", "USD"),
-            image_urls=item.get("image_urls", []),
-            attributes=item.get("attributes", {}),
-            creator_id=item.get("creator_id"),
-            created_at=item["created_at"],
-            updated_at=item["updated_at"],
-        )
+        return _catalog_item_out(item)
 else:
     router.post("/categories/{category_id}/items/{item_id}/images/upload")(_catalog_upload_unavailable)
+
+
+def _check_low_stock_alert(item: dict, new_stock: int) -> None:
+    threshold = int(item.get("low_stock_threshold", 5) or 5)
+    if new_stock <= threshold and new_stock >= 0:
+        try:
+            from app.services.alerts import write_alert
+        except Exception:
+            return
+        creator_id = item.get("creator_id")
+        if creator_id:
+            try:
+                write_alert(
+                    creator_id,
+                    event="catalog.low_stock",
+                    outcome="warning",
+                    title=f"Low stock: {item.get('name', 'Unknown item')} ({new_stock} remaining)",
+                    details={
+                        "item_id": item.get("item_id"),
+                        "item_name": item.get("name"),
+                        "stock_count": new_stock,
+                        "threshold": threshold,
+                    },
+                )
+            except Exception:
+                pass
+
+
+def _find_item_by_id(item_id: str) -> Optional[Dict[str, Any]]:
+    """Scan catalog table for an item by item_id (paginated scan)."""
+    kwargs: Dict[str, Any] = {
+        "FilterExpression": "item_id = :iid AND entity = :ent",
+        "ExpressionAttributeValues": {":iid": item_id, ":ent": "item"},
+    }
+    while True:
+        resp = T.catalog.scan(**kwargs)
+        items = resp.get("Items", [])
+        if items:
+            return items[0]
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            return None
+        kwargs["ExclusiveStartKey"] = lek
+
+
+@router.patch("/items/{item_id}/stock", response_model=CatalogStockOut)
+async def adjust_stock(
+    item_id: str,
+    body: CatalogStockAdjustIn,
+    ctx=Depends(require_ui_session),
+):
+    item = _find_item_by_id(item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found.")
+    category_id = item["category_id"]
+    _require_category_owner(category_id, ctx["user_sub"])
+
+    now = now_iso()
+    key = {"PK": item["PK"], "SK": item["SK"]}
+
+    if body.absolute is not None:
+        try:
+            resp = T.catalog.update_item(
+                Key=key,
+                UpdateExpression="SET stock_count = :val, stock_updated_at = :now",
+                ConditionExpression="attribute_exists(PK)",
+                ExpressionAttributeValues={":val": body.absolute, ":now": now},
+                ReturnValues="ALL_NEW",
+            )
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                raise HTTPException(status_code=404, detail="Item not found.") from exc
+            raise HTTPException(status_code=500, detail="Stock update error.") from exc
+        updated = resp.get("Attributes", {})
+        new_stock = int(updated.get("stock_count", 0))
+        _check_low_stock_alert(updated, new_stock)
+    else:
+        delta = body.delta
+        if delta < 0:
+            try:
+                resp = T.catalog.update_item(
+                    Key=key,
+                    UpdateExpression="SET stock_count = stock_count + :delta, stock_updated_at = :now",
+                    ConditionExpression="attribute_exists(PK) AND stock_count >= :abs_delta",
+                    ExpressionAttributeValues={
+                        ":delta": delta,
+                        ":abs_delta": abs(delta),
+                        ":now": now,
+                    },
+                    ReturnValues="ALL_NEW",
+                )
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                    current = item.get("stock_count")
+                    current_val = int(current) if current is not None else 0
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Insufficient stock: current={current_val}, requested_delta={delta}",
+                    ) from exc
+                raise HTTPException(status_code=500, detail="Stock update error.") from exc
+            updated = resp.get("Attributes", {})
+            new_stock = int(updated.get("stock_count", 0))
+            _check_low_stock_alert(updated, new_stock)
+        else:
+            try:
+                resp = T.catalog.update_item(
+                    Key=key,
+                    UpdateExpression="SET stock_count = if_not_exists(stock_count, :zero) + :delta, stock_updated_at = :now",
+                    ConditionExpression="attribute_exists(PK)",
+                    ExpressionAttributeValues={
+                        ":delta": delta,
+                        ":zero": 0,
+                        ":now": now,
+                    },
+                    ReturnValues="ALL_NEW",
+                )
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+                    raise HTTPException(status_code=404, detail="Item not found.") from exc
+                raise HTTPException(status_code=500, detail="Stock update error.") from exc
+            updated = resp.get("Attributes", {})
+            new_stock = int(updated.get("stock_count", 0))
+
+    sc = updated.get("stock_count")
+    return CatalogStockOut(
+        item_id=item_id,
+        stock_count=int(sc) if sc is not None else None,
+        stock_status=_compute_stock_status(updated),
+        low_stock_threshold=int(updated.get("low_stock_threshold", 5) or 5),
+        stock_updated_at=updated.get("stock_updated_at"),
+    )
 
 
 @router.delete("/categories/{category_id}/items/{item_id}")
@@ -662,3 +842,92 @@ async def delete_review(
 ):
     T.catalog.delete_item(Key={"PK": item_pk(item_id), "SK": review_sk(review_id)})
     return {"ok": True}
+
+
+# ─── Bulk Operations (UX-004) ────────────────────────────────────────────────
+
+
+class CatalogBulkDeleteReq(BaseModel):
+    item_ids: List[str] = Field(..., min_length=1, max_length=50)
+
+
+class CatalogBulkUpdateReq(BaseModel):
+    item_ids: List[str] = Field(..., min_length=1, max_length=50)
+    updates: Dict[str, Any] = Field(..., min_length=1)
+
+
+@router.post("/items/bulk-delete")
+async def bulk_delete_items(
+    body: CatalogBulkDeleteReq,
+    ctx=Depends(require_ui_session),
+):
+    """Bulk-delete catalog items. Only items owned by the authenticated user are processed."""
+    user_sub = ctx["user_sub"]
+    results = []
+    for item_id in body.item_ids:
+        try:
+            item = _find_item_by_id(item_id)
+            if not item:
+                results.append({"item_id": item_id, "ok": False, "error": "not_found"})
+                continue
+            creator_id = item.get("creator_id")
+            if creator_id and creator_id != user_sub:
+                results.append({"item_id": item_id, "ok": False, "error": "not_owner"})
+                continue
+            T.catalog.delete_item(Key={"PK": item["PK"], "SK": item["SK"]})
+            results.append({"item_id": item_id, "ok": True})
+        except Exception as e:
+            results.append({"item_id": item_id, "ok": False, "error": str(e)})
+
+    succeeded = sum(1 for r in results if r["ok"])
+    failed = sum(1 for r in results if not r["ok"])
+    return {"results": results, "succeeded": succeeded, "failed": failed}
+
+
+@router.post("/items/bulk-update")
+async def bulk_update_items(
+    body: CatalogBulkUpdateReq,
+    ctx=Depends(require_ui_session),
+):
+    """Bulk-update catalog items. Applies the same updates dict to all specified items."""
+    user_sub = ctx["user_sub"]
+    allowed_fields = {"visibility", "category", "description", "name"}
+    update_fields = {k: v for k, v in body.updates.items() if k in allowed_fields}
+    if not update_fields:
+        raise HTTPException(status_code=422, detail="No valid update fields provided")
+
+    results = []
+    for item_id in body.item_ids:
+        try:
+            item = _find_item_by_id(item_id)
+            if not item:
+                results.append({"item_id": item_id, "ok": False, "error": "not_found"})
+                continue
+            creator_id = item.get("creator_id")
+            if creator_id and creator_id != user_sub:
+                results.append({"item_id": item_id, "ok": False, "error": "not_owner"})
+                continue
+
+            updates: List[str] = ["#updated_at = :updated_at"]
+            values: Dict[str, Any] = {":updated_at": now_iso()}
+            names: Dict[str, str] = {"#updated_at": "updated_at"}
+            for field_name, value in update_fields.items():
+                attr_name = f"#{field_name}"
+                attr_val = f":{field_name}"
+                names[attr_name] = field_name
+                values[attr_val] = value
+                updates.append(f"{attr_name} = {attr_val}")
+
+            T.catalog.update_item(
+                Key={"PK": item["PK"], "SK": item["SK"]},
+                UpdateExpression="SET " + ", ".join(updates),
+                ExpressionAttributeNames=names,
+                ExpressionAttributeValues=values,
+            )
+            results.append({"item_id": item_id, "ok": True})
+        except Exception as e:
+            results.append({"item_id": item_id, "ok": False, "error": str(e)})
+
+    succeeded = sum(1 for r in results if r["ok"])
+    failed = sum(1 for r in results if not r["ok"])
+    return {"results": results, "succeeded": succeeded, "failed": failed}

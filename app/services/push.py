@@ -4,6 +4,7 @@ import base64
 import hashlib
 import importlib.util
 import json
+import logging
 import time
 from typing import Any, Dict, List, Optional
 
@@ -14,6 +15,8 @@ from app.core.tables import T
 from app.core.time import now_ts
 from app.services.rate_limit import can_send_alert_channel
 from app.services.ttl import with_ttl
+
+logger = logging.getLogger(__name__)
 
 
 def _b64url(data: bytes) -> str:
@@ -133,7 +136,134 @@ def revoke_push_device(user_sub: str, device_id: str) -> None:
         pass
 
 
+# ── Web Push delivery (PLATFORM-010) ────────────────────────────────────────
+
+
+def web_push_send(
+    subscription_json: str,
+    title: str,
+    body: str,
+    url: str = "/",
+    tag: str = "default",
+    alert_id: str = "",
+    alert_type: str = "",
+) -> bool:
+    """Send push via Web Push protocol (RFC 8030 + RFC 8291).
+
+    Uses the pywebpush library for encryption and VAPID signing.
+
+    In dev mode, logs the push payload instead of delivering (push
+    services won't work with localhost).
+
+    Returns True if push was accepted (or logged in dev mode), False otherwise.
+    """
+    if not (S.vapid_private_key and S.vapid_public_key):
+        logger.debug("Web push skipped: VAPID keys not configured")
+        return False
+
+    # Parse subscription JSON
+    try:
+        subscription = json.loads(subscription_json)
+        endpoint = subscription.get("endpoint", "")
+        keys = subscription.get("keys", {})
+        p256dh = keys.get("p256dh", "")
+        auth = keys.get("auth", "")
+
+        if not (endpoint and p256dh and auth):
+            logger.warning("Web push: invalid subscription (missing fields)")
+            return False
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        logger.warning("Web push: invalid subscription JSON")
+        return False
+
+    # Build payload
+    payload = json.dumps({
+        "title": title[:60],
+        "body": body[:180],
+        "url": url,
+        "tag": tag,
+        "alert_id": alert_id,
+        "alert_type": alert_type,
+        "timestamp": now_ts(),
+    })
+
+    # In dev mode, log the payload instead of delivering
+    # (push service endpoints won't work with localhost)
+    if S.dev_mode:
+        logger.info(
+            "Web push (dev mode, not delivered): endpoint=%s, payload=%s",
+            endpoint[:80],
+            payload,
+        )
+        return True
+
+    # Send using pywebpush
+    try:
+        from pywebpush import webpush, WebPushException  # noqa: F401
+
+        vapid_claims = {
+            "sub": S.vapid_subject or "mailto:admin@testlogon.local",
+        }
+        vapid_private_key = S.vapid_private_key.replace("\\n", "\n")
+
+        response = webpush(
+            subscription_info=subscription,
+            data=payload,
+            vapid_private_key=vapid_private_key,
+            vapid_claims=vapid_claims,
+            timeout=10,
+        )
+        status = response.status_code if hasattr(response, "status_code") else 201
+        if status in (200, 201, 202):
+            logger.info("Web push sent: endpoint=%s", endpoint[:80])
+            return True
+        else:
+            logger.warning("Web push failed: status=%s, endpoint=%s", status, endpoint[:80])
+            return False
+
+    except Exception as exc:
+        exc_str = str(exc)
+        # 410 Gone = subscription expired
+        if "410" in exc_str or "Gone" in exc_str:
+            logger.info("Web push subscription expired (410): endpoint=%s", endpoint[:80])
+            return False  # Caller should revoke device
+        # 404 Not Found = subscription invalid
+        if "404" in exc_str:
+            logger.info("Web push subscription not found (404): endpoint=%s", endpoint[:80])
+            return False
+        logger.exception("Web push send error: endpoint=%s", endpoint[:80])
+        return False
+
+
+def _alert_url(alert_type: str, alert_id: str) -> str:
+    """Map alert type to a specific app URL for notification click."""
+    type_urls = {
+        "new_message": "/messages",
+        "messaging.new_message": "/messages",
+        "post_tip": "/billing",
+        "message_tip": "/messages",
+        "billing.tip_received": "/billing",
+        "payment_received": "/billing",
+        "subscription_started": "/billing",
+        "refund_processed": "/billing",
+        "security_event": "/alerts",
+        "login_failure": "/alerts",
+        "mfa_failure": "/alerts",
+        "access_denied": "/alerts",
+        "device_new": "/alerts",
+        "device_location_mismatch": "/alerts",
+        "rate_limited": "/alerts",
+    }
+    return type_urls.get(alert_type, "/alerts")
+
+
 def send_push_for_alert(user_sub: str, alert_type: str, title: str, body: str, alert_id: str) -> None:
+    """Send push notification for an alert to all user's devices.
+
+    Dispatches to web_push_send() for web devices and fcm_send() for
+    native mobile devices. Stale web subscriptions (410 Gone) are
+    auto-revoked.
+    """
     if not S.push_enabled:
         return
     from app.services.alerts import get_alert_prefs
@@ -143,13 +273,49 @@ def send_push_for_alert(user_sub: str, alert_type: str, title: str, body: str, a
         return
     if not can_send_alert_channel(user_sub, "push"):
         return
+
+    # Build type-specific URL for notification click target
+    url = _alert_url(alert_type, alert_id)
+
     try:
         r = T.push_devices.query(KeyConditionExpression=Key("user_sub").eq(user_sub), Limit=200)
         items = r.get("Items", [])
+
         for it in items[:25]:
-            tok = it.get("token")
+            tok = it.get("token", "")
+            device_id = it.get("device_id", "")
+            platform = it.get("platform", "")
+
             if not tok:
                 continue
-            fcm_send(tok, title, body, data={"alert_id": alert_id, "alert_type": alert_type})
+
+            if platform == "web" and S.web_push_enabled:
+                success = web_push_send(
+                    tok, title, body,
+                    url=url,
+                    tag=alert_type,
+                    alert_id=alert_id,
+                    alert_type=alert_type,
+                )
+                if not success and not S.dev_mode:
+                    # Check if subscription is likely expired -- attempt revoke
+                    try:
+                        sub = json.loads(tok)
+                        if "endpoint" in sub:
+                            revoke_push_device(user_sub, device_id)
+                            logger.info(
+                                "Auto-revoked stale push device: user=%s, device=%s",
+                                user_sub, device_id,
+                            )
+                    except (json.JSONDecodeError, TypeError):
+                        # Placeholder token -- ignore
+                        pass
+
+            elif platform != "web" and S.fcm_enabled:
+                fcm_send(
+                    tok, title, body,
+                    data={"alert_id": alert_id, "alert_type": alert_type},
+                )
+
     except Exception:
-        pass
+        logger.exception("Push delivery error: user=%s, alert_type=%s", user_sub, alert_type)

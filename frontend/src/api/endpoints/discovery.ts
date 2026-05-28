@@ -48,3 +48,30 @@ export const getDiscoveryProfile = (userId: string) =>
 
 export const reindexSelf = () =>
   api.post("/ui/discover/reindex");
+
+// ─── SOCIAL-006: Hashtag/Tag Discovery ──────────────────────────────────
+
+export interface TrendingTag {
+  tag: string;
+  count: number;
+  last_used_at: string;
+}
+
+export interface TrendingTagsResponse {
+  tags: TrendingTag[];
+}
+
+export interface TagDiscoverResponse {
+  tag: string;
+  posts: import("@/api/types").FeedPost[];
+  next_cursor?: string;
+}
+
+export const getTrendingTags = (limit = 20) =>
+  api.get<TrendingTagsResponse>("/ui/discover/trending-tags", { limit: String(limit) });
+
+export const getPostsByTag = (tag: string, limit = 20, cursor?: string) => {
+  const params: Record<string, string> = { limit: String(limit) };
+  if (cursor) params.cursor = cursor;
+  return api.get<TagDiscoverResponse>(`/ui/discover/tags/${encodeURIComponent(tag)}`, params);
+};

@@ -4307,20 +4307,36 @@ def purge_deleted_nodes_global(*, limit: Optional[int] = None) -> Dict[str, Any]
 
 
 async def filemgr_purge_loop() -> None:
+    import time as _time
+    from app.services.job_registry import register_task, report_error, report_poll
+
     interval = max(60, int(S.filemgr_purge_interval_seconds))
+    register_task("filemgr_purge", interval, enabled=True,
+                   description="Permanently removes soft-deleted files after retention period")
+
     while True:
+        _start = _time.perf_counter()
         try:
             purge_deleted_nodes_global()
-        except Exception:
+            _dur = (_time.perf_counter() - _start) * 1000
+            report_poll("filemgr_purge", duration_ms=_dur)
+        except Exception as exc:
+            report_error("filemgr_purge", str(exc))
             logger.exception("File manager purge loop failed")
         await asyncio.sleep(interval)
 
 
 def start_filemgr_purge_task() -> None:
+    from app.services.job_registry import register_task
+
     if not S.filemgr_purge_enabled:
+        register_task("filemgr_purge", 60, enabled=False,
+                       description="Permanently removes soft-deleted files after retention period")
         logger.info("File manager purge disabled")
         return
     if not S.filemgr_table_name:
+        register_task("filemgr_purge", 60, enabled=False,
+                       description="Permanently removes soft-deleted files after retention period")
         logger.info("File manager purge skipped: FILEMGR_TABLE not configured")
         return
     asyncio.create_task(filemgr_purge_loop())

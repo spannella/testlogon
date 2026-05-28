@@ -5,6 +5,7 @@ import { Search, Package } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -176,7 +177,19 @@ export function Catalog() {
                     <p className="mt-1 text-base font-semibold text-primary">
                       {formatPrice(item.price_cents, item.currency)}
                     </p>
-                    <p className="mt-1 text-[10px] text-muted-foreground">No reviews yet</p>
+                    {item.stock_status === "low_stock" && (
+                      <Badge variant="outline" className="mt-1 border-orange-500 text-orange-600 text-[10px]" data-testid="stock-badge">
+                        Only {item.stock_count} left
+                      </Badge>
+                    )}
+                    {item.stock_status === "out_of_stock" && (
+                      <Badge variant="destructive" className="mt-1 text-[10px]" data-testid="stock-badge">
+                        Out of Stock
+                      </Badge>
+                    )}
+                    {item.stock_status !== "low_stock" && item.stock_status !== "out_of_stock" && (
+                      <p className="mt-1 text-[10px] text-muted-foreground">No reviews yet</p>
+                    )}
                   </div>
                 </CardContent>
               </Card>

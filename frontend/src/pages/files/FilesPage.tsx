@@ -12,6 +12,7 @@ import {
   Lock,
   ShieldCheck,
   Cloud,
+  HardDrive,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";

@@ -37,8 +37,9 @@ def follow_user(follower_id: str, followed_id: str) -> Dict[str, Any]:
     if follower_id == followed_id:
         raise ValueError("self_follow")
 
-    # Check block relationship
-    if _is_blocked(followed_id, follower_id):
+    # Check block relationship (bidirectional)
+    from app.services.blocking import is_any_block
+    if is_any_block(follower_id, followed_id):
         raise ValueError("blocked")
 
     # Check target user exists

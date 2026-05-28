@@ -237,8 +237,15 @@ def reconcile_tracked_files_batch(
 
 
 async def projects_reconcile_loop() -> None:
+    import time as _time
+    from app.services.job_registry import register_task, report_error, report_poll
+
     interval = max(30, int(S.projects_reconcile_interval_seconds))
+    register_task("projects_reconcile", interval, enabled=True,
+                   description="Syncs tracked file metadata with external providers")
+
     while True:
+        _start = _time.perf_counter()
         cursor: Optional[Dict[str, Any]] = None
         try:
             while True:
@@ -246,13 +253,20 @@ async def projects_reconcile_loop() -> None:
                 cursor = result.get("cursor")
                 if not cursor:
                     break
-        except Exception:  # noqa: BLE001
+            _dur = (_time.perf_counter() - _start) * 1000
+            report_poll("projects_reconcile", duration_ms=_dur)
+        except Exception as exc:  # noqa: BLE001
+            report_error("projects_reconcile", str(exc))
             logger.exception("Projects reconciliation loop failed")
         await asyncio.sleep(interval)
 
 
 def start_projects_reconcile_task() -> None:
+    from app.services.job_registry import register_task
+
     if not S.projects_reconcile_enabled:
+        register_task("projects_reconcile", 30, enabled=False,
+                       description="Syncs tracked file metadata with external providers")
         logger.info("Projects reconciliation disabled")
         return
     asyncio.create_task(projects_reconcile_loop())

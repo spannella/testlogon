@@ -219,21 +219,35 @@ def reconcile_mount_metadata_batch(
 
 
 async def filemgr_mount_reconcile_loop() -> None:
+    import time as _time
+    from app.services.job_registry import register_task, report_error, report_poll
+
     interval = max(30, int(S.filemgr_mount_reconcile_interval_seconds))
+    register_task("filemgr_mount_reconcile", interval, enabled=True,
+                   description="Syncs file manager mount points with remote storage")
+
     cursor: Optional[Dict[str, Any]] = None
     while True:
+        _start = _time.perf_counter()
         try:
             result = reconcile_mount_metadata_batch(mount_cursor=cursor)
             cursor = result.get("cursor")
             if not cursor:
                 cursor = None
-        except Exception:
+            _dur = (_time.perf_counter() - _start) * 1000
+            report_poll("filemgr_mount_reconcile", duration_ms=_dur)
+        except Exception as exc:
+            report_error("filemgr_mount_reconcile", str(exc))
             logger.exception("file manager mount reconcile loop failed")
         await asyncio.sleep(interval)
 
 
 def start_filemgr_mount_reconcile_task() -> None:
+    from app.services.job_registry import register_task
+
     if not S.filemgr_mount_reconcile_enabled:
+        register_task("filemgr_mount_reconcile", 30, enabled=False,
+                       description="Syncs file manager mount points with remote storage")
         logger.info("File manager mount reconcile disabled")
         return
     asyncio.create_task(filemgr_mount_reconcile_loop())

@@ -9,12 +9,15 @@ from app.models_broadcast import BroadcastSessionStatus, BroadcastSessionTransit
 INVALID_TRANSITION_ERROR_CODE = "BROADCAST_INVALID_STATE_TRANSITION"
 
 _ALLOWED_TRANSITIONS: Dict[BroadcastSessionStatus, Set[BroadcastSessionStatus]] = {
-    "draft": {"provisioning", "error"},
+    "draft": {"provisioning", "scheduled", "error"},
+    "scheduled": {"provisioning", "cancelled", "error"},
     "provisioning": {"ready", "error"},
     "ready": {"live", "stopping", "error"},
-    "live": {"stopping", "error"},
+    "live": {"stopping", "private", "error"},
+    "private": {"live", "stopping", "error"},
     "stopping": {"stopped", "error"},
     "stopped": set(),
+    "cancelled": set(),
     "error": {"provisioning", "stopped"},
 }
 

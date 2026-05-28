@@ -7,6 +7,7 @@ and returns structured metrics for the creator dashboard endpoints.
 from __future__ import annotations
 
 import logging
+import os
 from collections import defaultdict
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -14,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from boto3.dynamodb.conditions import Key
 
+from app.core.aws import ddb
+from app.core.settings import S
 from app.core.tables import T
 from app.core.time import now_ts
 
@@ -351,6 +354,73 @@ def get_subscribers(
     }
 
 
+def _resolve_content_details(content_ids: list) -> Dict[str, Dict[str, Any]]:
+    """Batch-resolve title and engagement metrics for content IDs.
+
+    Performs lookups to video_metadata and newsfeed (app_single_table) tables.
+    Returns a dict keyed by content_id with title, views, likes, comments.
+    """
+    if not content_ids:
+        return {}
+
+    result: Dict[str, Dict[str, Any]] = {}
+    video_ids = [cid for cid in content_ids if cid.startswith("vid_")]
+    post_ids = [cid for cid in content_ids if not cid.startswith("vid_")]
+
+    # Batch get video metadata
+    if video_ids:
+        try:
+            table_name = S.video_metadata_table_name
+            resp = ddb.batch_get_item(
+                RequestItems={
+                    table_name: {
+                        "Keys": [{"video_id": vid} for vid in video_ids[:100]],
+                        "ProjectionExpression": "video_id, title, view_count, like_count, comment_count",
+                    }
+                }
+            )
+            for item in resp.get("Responses", {}).get(table_name, []):
+                vid = item["video_id"]
+                result[vid] = {
+                    "title": item.get("title") or vid,
+                    "views": _to_int(item.get("view_count", 0)),
+                    "likes": _to_int(item.get("like_count", 0)),
+                    "comments": _to_int(item.get("comment_count", 0)),
+                }
+        except Exception:
+            logger.warning("batch_get video_metadata failed", exc_info=True)
+
+    # Fill in defaults for missing videos
+    for vid in video_ids:
+        if vid not in result:
+            result[vid] = {"title": vid, "views": 0, "likes": 0, "comments": 0}
+
+    # Get post metadata from newsfeed table (app_single_table)
+    app_table_name = os.environ.get("APP_TABLE", "app_single_table")
+    app_table = ddb.Table(app_table_name)
+    for pid in post_ids:
+        try:
+            resp = app_table.get_item(
+                Key={"pk": f"POST#{pid}", "sk": "META"},
+            )
+            item = resp.get("Item", {})
+            if item:
+                body = item.get("body_plain", item.get("body", "")) or ""
+                title = (body[:60] + "...") if len(body) > 60 else (body or pid)
+                result[pid] = {
+                    "title": title,
+                    "views": _to_int(item.get("view_count", 0)),
+                    "likes": _to_int(item.get("like_count", 0)),
+                    "comments": _to_int(item.get("comment_count", 0)),
+                }
+            else:
+                result[pid] = {"title": pid, "views": 0, "likes": 0, "comments": 0}
+        except Exception:
+            result[pid] = {"title": pid, "views": 0, "likes": 0, "comments": 0}
+
+    return result
+
+
 def get_top_content(
     user_id: str,
     from_date: str,
@@ -378,17 +448,25 @@ def get_top_content(
     total_items = len(sorted_content)
     sorted_content = sorted_content[:limit]
 
+    # Resolve titles and engagement metrics from content metadata tables
+    details = _resolve_content_details([cid for cid, _ in sorted_content])
+
     result_items = []
     for cid, scores in sorted_content:
         content_type = "vod" if cid.startswith("vid_") else "post"
-        total_views = scores["views"]
+        d = details.get(cid, {})
+        views = d.get("views") if d.get("views") is not None else scores["views"]
+        likes = d.get("likes", 0)
+        comments = d.get("comments", 0)
+        engagement = (likes + comments) / views if views > 0 else 0.0
+
         result_items.append({
             "content_id": cid,
             "content_type": content_type,
-            "title": cid,
-            "views": total_views,
+            "title": d.get("title", cid),
+            "views": views,
             "revenue_cents": scores["revenue_cents"],
-            "engagement_rate": 0.0,
+            "engagement_rate": round(engagement, 4),
         })
 
     return {
@@ -479,3 +557,200 @@ def upsert_summary_sentinel(user_id: str, data: Dict[str, Any]) -> None:
         T.analytics_rollups.put_item(Item=item)
     except Exception:
         logger.exception("Failed to write analytics summary for %s", user_id)
+
+
+# ── Per-content detail functions (ANALYTICS-002) ──────────────
+
+
+def get_content_detail(
+    user_id: str,
+    content_id: str,
+    from_date: str,
+    to_date: str,
+    granularity: str = "day",
+) -> Optional[Dict[str, Any]]:
+    """Get per-content analytics: view time series, revenue breakdown, engagement.
+
+    Returns None if content does not exist.
+    Returns {"error": "forbidden"} if user is not the content owner.
+    """
+    is_video = content_id.startswith("vid_")
+
+    # Step 1: Look up content metadata
+    if is_video:
+        resp = T.video_metadata.get_item(Key={"video_id": content_id})
+        item = resp.get("Item")
+        if not item:
+            return None
+        if item.get("owner_user_id") != user_id and item.get("owner_id") != user_id:
+            return {"error": "forbidden"}
+        title = item.get("title") or content_id
+        thumbnail_url = item.get("thumbnail_url")
+        published_at = _to_int(item.get("created_at", 0))
+        total_views = _to_int(item.get("view_count", 0))
+        like_count = _to_int(item.get("like_count", 0))
+        comment_count = _to_int(item.get("comment_count", 0))
+    else:
+        app_table_name = os.environ.get("APP_TABLE", "app_single_table")
+        app_table = ddb.Table(app_table_name)
+        resp = app_table.get_item(Key={"pk": f"POST#{content_id}", "sk": "META"})
+        item = resp.get("Item")
+        if not item:
+            return None
+        if item.get("user_id") != user_id and item.get("author_id") != user_id:
+            return {"error": "forbidden"}
+        body = item.get("body_plain", item.get("body", "")) or ""
+        title = (body[:60] + "...") if len(body) > 60 else (body or content_id)
+        thumbnail_url = (item.get("image_urls") or [None])[0]
+        published_at = _to_int(item.get("created_at", 0))
+        total_views = _to_int(item.get("view_count", 0))
+        like_count = _to_int(item.get("like_count", 0))
+        comment_count = _to_int(item.get("comment_count", 0))
+
+    engagement_rate = round(
+        (like_count + comment_count) / total_views if total_views > 0 else 0.0,
+        4,
+    )
+
+    # Step 2: View time series
+    view_time_series = _get_content_view_time_series(
+        content_id, is_video, from_date, to_date, granularity
+    )
+
+    # Step 3: Revenue breakdown
+    revenue_breakdown = _get_content_revenue_breakdown(user_id, content_id)
+    total_revenue_cents = sum(revenue_breakdown.values())
+
+    return {
+        "content_id": content_id,
+        "content_type": "vod" if is_video else "post",
+        "title": title,
+        "thumbnail_url": thumbnail_url,
+        "published_at": published_at,
+        "total_views": total_views,
+        "total_revenue_cents": total_revenue_cents,
+        "engagement_rate": engagement_rate,
+        "like_count": like_count,
+        "comment_count": comment_count,
+        "view_time_series": view_time_series,
+        "revenue_breakdown": revenue_breakdown,
+        "currency": "USD",
+    }
+
+
+def _get_content_view_time_series(
+    content_id: str,
+    is_video: bool,
+    from_date: str,
+    to_date: str,
+    granularity: str,
+) -> List[Dict[str, Any]]:
+    """Build a view time series for a specific content item."""
+    if is_video:
+        try:
+            from_ts = int(datetime.strptime(from_date, "%Y-%m-%d").timestamp())
+            to_ts = int(datetime.strptime(to_date, "%Y-%m-%d").timestamp()) + 86400
+            resp = T.video_views.query(
+                IndexName="ByVideoViewedAt",
+                KeyConditionExpression=(
+                    Key("video_id").eq(content_id)
+                    & Key("viewed_at").between(from_ts, to_ts)
+                ),
+                Select="ALL_ATTRIBUTES",
+            )
+            view_items = resp.get("Items", [])
+            # Group by date
+            day_counts: Dict[str, int] = defaultdict(int)
+            day_unique: Dict[str, set] = defaultdict(set)
+            for vi in view_items:
+                vat = _to_int(vi.get("viewed_at", 0))
+                if vat > 0:
+                    d = datetime.utcfromtimestamp(vat).strftime("%Y-%m-%d")
+                    day_counts[d] += 1
+                    viewer = vi.get("viewer_id", vi.get("user_id", ""))
+                    if viewer:
+                        day_unique[d].add(viewer)
+
+            # Fill dates
+            series = []
+            current = datetime.strptime(from_date, "%Y-%m-%d")
+            end = datetime.strptime(to_date, "%Y-%m-%d")
+            while current <= end:
+                ds = current.strftime("%Y-%m-%d")
+                series.append({
+                    "date": ds,
+                    "views": day_counts.get(ds, 0),
+                    "unique_viewers": len(day_unique.get(ds, set())),
+                })
+                if granularity == "week":
+                    current += timedelta(days=7)
+                elif granularity == "month":
+                    current += timedelta(days=30)
+                else:
+                    current += timedelta(days=1)
+            return series
+        except Exception:
+            logger.warning("Video views query failed for %s", content_id, exc_info=True)
+
+    # Fallback: generate empty time series for the date range
+    series = []
+    current = datetime.strptime(from_date, "%Y-%m-%d")
+    end = datetime.strptime(to_date, "%Y-%m-%d")
+    while current <= end:
+        series.append({
+            "date": current.strftime("%Y-%m-%d"),
+            "views": 0,
+            "unique_viewers": 0,
+        })
+        if granularity == "week":
+            current += timedelta(days=7)
+        elif granularity == "month":
+            current += timedelta(days=30)
+        else:
+            current += timedelta(days=1)
+    return series
+
+
+def _get_content_revenue_breakdown(user_id: str, content_id: str) -> Dict[str, int]:
+    """Scan billing ledger for revenue entries attributed to a specific content item."""
+    breakdown: Dict[str, int] = {"tips": 0, "unlocks": 0, "vod": 0}
+    lek = None
+    pages = 0
+
+    while pages < 4:
+        kwargs: Dict[str, Any] = {
+            "KeyConditionExpression": Key("pk").eq(f"USER#{user_id}") & Key("sk").begins_with("LEDGER#"),
+            "Limit": 500,
+        }
+        if lek:
+            kwargs["ExclusiveStartKey"] = lek
+
+        try:
+            resp = T.billing.query(**kwargs)
+        except Exception:
+            logger.warning("Billing query failed for content revenue", exc_info=True)
+            break
+
+        for item in resp.get("Items", []):
+            meta = item.get("meta") or {}
+            if isinstance(meta, str):
+                continue
+            if meta.get("content_id") != content_id and meta.get("video_id") != content_id:
+                continue
+            amount = _to_int(item.get("amount_cents", 0))
+            reason = (item.get("reason") or "").lower()
+            if "tip" in reason:
+                breakdown["tips"] += amount
+            elif "unlock" in reason:
+                breakdown["unlocks"] += amount
+            elif "vod" in reason or "purchase" in reason:
+                breakdown["vod"] += amount
+            else:
+                breakdown["tips"] += amount
+
+        lek = resp.get("LastEvaluatedKey")
+        if not lek:
+            break
+        pages += 1
+
+    return breakdown

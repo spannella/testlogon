@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { arrayMove } from "@dnd-kit/sortable";
 import { toast } from "sonner";
 import {
   Plus,
   Trash2,
   ArrowUp,
   ArrowDown,
+  GripVertical,
   Package,
   Loader2,
   ShoppingBag,
@@ -21,6 +23,7 @@ import {
   type ShelfItem,
 } from "@/api/endpoints/broadcast-shelf";
 import type { CatalogItem } from "@/api/types";
+import SortableList from "@/components/shared/SortableList";
 import { CatalogPickerDialog } from "./CatalogPickerDialog";
 
 // ─── Helpers ──────────────────────────────────────────────────────
@@ -180,13 +183,31 @@ export function ProductShelfManager({
               )}
             </div>
           ) : (
-            <div className="space-y-2" data-testid="shelf-manager-list">
-              {items.map((item, idx) => (
+            <SortableList
+              items={items}
+              getItemId={(i) => i.item_id}
+              className="space-y-2"
+              disabled={!canManage || reorderMut.isPending}
+              onReorder={(oldIndex, newIndex) => {
+                const newOrder = arrayMove(
+                  items.map((i) => i.item_id),
+                  oldIndex,
+                  newIndex,
+                );
+                reorderMut.mutate(newOrder);
+              }}
+              renderItem={(item, idx, dragHandleProps) => (
                 <div
-                  key={item.item_id}
                   className="flex items-center gap-2 rounded-md border p-2"
                   data-testid={`shelf-manager-item-${item.item_id}`}
                 >
+                  {/* Drag handle */}
+                  {canManage && (
+                    <span {...dragHandleProps} data-testid={`shelf-drag-handle-${item.item_id}`}>
+                      <GripVertical className="h-4 w-4 text-muted-foreground" />
+                    </span>
+                  )}
+
                   {/* Thumbnail */}
                   <div className="w-10 h-10 rounded bg-muted flex items-center justify-center shrink-0 overflow-hidden">
                     {item.image_url ? (
@@ -245,8 +266,8 @@ export function ProductShelfManager({
                     </div>
                   )}
                 </div>
-              ))}
-            </div>
+              )}
+            />
           )}
         </CardContent>
       </Card>

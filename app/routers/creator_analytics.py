@@ -29,9 +29,13 @@ from app.models import (
     AnalyticsTopContentOut,
     AnalyticsViewsOut,
     AnalyticsViewsTimeSeriesItem,
+    ContentAnalyticsOut,
+    ContentAnalyticsRevenueBreakdown,
+    ContentAnalyticsViewsItem,
 )
 from app.services.creator_analytics import (
     get_audience,
+    get_content_detail,
     get_overview,
     get_revenue,
     get_subscribers,
@@ -234,6 +238,50 @@ def analytics_audience(
         countries=countries,
         devices=devices,
         total_unique_viewers=result["total_unique_viewers"],
+    )
+
+
+@router.get("/content/{content_id}", response_model=ContentAnalyticsOut)
+def analytics_content_detail(
+    content_id: str,
+    from_date: Optional[str] = Query(default=None),
+    to_date: Optional[str] = Query(default=None),
+    granularity: str = Query(default="day"),
+    session=Depends(require_ui_session),
+):
+    """Get detailed analytics for a specific content item."""
+    user_id = session["user_sub"]
+    fd = _validate_date(from_date) if from_date else _days_ago(30)
+    td = _validate_date(to_date) if to_date else _today()
+    _validate_date_range(fd, td)
+
+    if granularity not in ("day", "week", "month"):
+        raise HTTPException(status_code=400, detail="granularity must be 'day', 'week', or 'month'")
+
+    result = get_content_detail(user_id, content_id, fd, td, granularity)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Content not found")
+    if result.get("error") == "forbidden":
+        raise HTTPException(status_code=403, detail="Not your content")
+
+    # Convert nested dicts to models
+    view_series = [ContentAnalyticsViewsItem(**vs) for vs in result.get("view_time_series", [])]
+    rev_breakdown = ContentAnalyticsRevenueBreakdown(**result.get("revenue_breakdown", {}))
+
+    return ContentAnalyticsOut(
+        content_id=result["content_id"],
+        content_type=result["content_type"],
+        title=result["title"],
+        thumbnail_url=result.get("thumbnail_url"),
+        published_at=result.get("published_at"),
+        total_views=result.get("total_views", 0),
+        total_revenue_cents=result.get("total_revenue_cents", 0),
+        engagement_rate=result.get("engagement_rate", 0.0),
+        like_count=result.get("like_count", 0),
+        comment_count=result.get("comment_count", 0),
+        view_time_series=view_series,
+        revenue_breakdown=rev_breakdown,
+        currency=result.get("currency", "USD"),
     )
 
 

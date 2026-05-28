@@ -6,6 +6,9 @@ import type {
   OkResp,
 } from "@/api/types";
 
+export const getVapidKey = () =>
+  api.get<{ vapid_public_key: string }>("/ui/push/vapid-key");
+
 export const listPushDevices = () =>
   api.get<{ devices: PushDevice[] }>("/ui/push/devices");
 

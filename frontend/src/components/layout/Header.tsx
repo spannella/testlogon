@@ -13,6 +13,9 @@ import {
   Menu,
   CheckCheck,
   Check,
+  MessageSquare,
+  PenLine,
+  Keyboard,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -32,7 +35,10 @@ import {
   CommandEmpty,
   CommandGroup,
   CommandItem,
+  CommandShortcut,
 } from "@/components/ui/command";
+import ShortcutHelpDialog from "@/components/shared/ShortcutHelpDialog";
+import { useGlobalShortcuts, type Shortcut } from "@/hooks/useGlobalShortcuts";
 import {
   Popover,
   PopoverContent,
@@ -46,6 +52,7 @@ import { logout as apiLogout } from "@/api/endpoints/auth";
 import { getAlerts, markAllAlertRead } from "@/api/endpoints/alerts";
 import { getProfile } from "@/api/endpoints/profile";
 import { useAlertStream } from "@/hooks/useAlertStream";
+import { globalSearch } from "@/api/endpoints/search";
 import type { Profile } from "@/api/types";
 
 function getInitials(profile: Profile | undefined, userId: string | null): string {
@@ -80,10 +87,27 @@ const SEARCH_PAGES = [
   { label: "Subscriptions", path: "/subscriptions", group: "Pages" },
   { label: "Files", path: "/files", group: "Pages" },
   { label: "Calendar", path: "/calendar", group: "Pages" },
+  { label: "Search", path: "/search", group: "Pages" },
   { label: "Profile", path: "/profile", group: "Account" },
   { label: "Security", path: "/security", group: "Account" },
   { label: "Alerts", path: "/alerts", group: "Account" },
   { label: "Settings", path: "/settings", group: "Account" },
+];
+
+// ─── Action commands for the palette ───────────────────────────
+
+interface ActionCommand {
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  shortcut?: string;
+}
+
+const SEARCH_ACTIONS: ActionCommand[] = [
+  { label: "Toggle Dark Mode", icon: Moon, shortcut: "Ctrl+Shift+D" },
+  { label: "New Message", icon: MessageSquare, shortcut: "Ctrl+Shift+N" },
+  { label: "New Post", icon: PenLine, shortcut: "Ctrl+Shift+P" },
+  { label: "Keyboard Shortcuts", icon: Keyboard, shortcut: "?" },
+  { label: "Log Out", icon: LogOut },
 ];
 
 // ─── Header Component ───────────────────────────────────────────
@@ -102,8 +126,38 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
     staleTime: 5 * 60 * 1000,
   });
 
+  const recentCommands = useUiStore((s) => s.recentCommands);
+  const trackRecentCommand = useUiStore((s) => s.trackRecentCommand);
+
   const [searchOpen, setSearchOpen] = React.useState(false);
+  const [searchQuery, setSearchQuery] = React.useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = React.useState("");
   const [alertsOpen, setAlertsOpen] = React.useState(false);
+  const [shortcutHelpOpen, setShortcutHelpOpen] = React.useState(false);
+
+  // Debounce the search query for content search
+  React.useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearchQuery(searchQuery), 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Reset search query when dialog closes
+  React.useEffect(() => {
+    if (!searchOpen) {
+      setSearchQuery("");
+      setDebouncedSearchQuery("");
+    }
+  }, [searchOpen]);
+
+  // Content search query
+  const contentSearchQuery = useQuery({
+    queryKey: ["header-search", debouncedSearchQuery],
+    queryFn: () => globalSearch(debouncedSearchQuery, undefined, 3),
+    enabled: debouncedSearchQuery.length >= 2,
+    staleTime: 60_000,
+  });
+
+  const searchResults = contentSearchQuery.data;
 
   // Real-time alert stream
   const { unreadCount, resetUnread } = useAlertStream(true);
@@ -135,17 +189,49 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
     },
   });
 
-  // Cmd+K / Ctrl+K to open search
-  React.useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        setSearchOpen(true);
-      }
-    };
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  // ─── Global keyboard shortcuts ────────────────────────────────
+  const shortcuts = React.useMemo<Shortcut[]>(() => [
+    {
+      key: "ctrl+k",
+      label: "Open command palette",
+      group: "General",
+      action: () => setSearchOpen(true),
+      activeInInput: true,
+    },
+    {
+      key: "shift+?",
+      label: "Show keyboard shortcuts",
+      group: "General",
+      action: () => setShortcutHelpOpen(true),
+    },
+    {
+      key: "ctrl+shift+d",
+      label: "Toggle dark mode",
+      group: "Actions",
+      action: () => setTheme(theme === "dark" ? "light" : "dark"),
+    },
+    {
+      key: "ctrl+shift+n",
+      label: "New message",
+      group: "Actions",
+      action: () => navigate("/messages?new=1"),
+    },
+    {
+      key: "ctrl+shift+p",
+      label: "New post",
+      group: "Actions",
+      action: () => navigate("/feed?compose=1"),
+    },
+    {
+      key: "ctrl+enter",
+      label: "Send message",
+      group: "Messaging",
+      action: () => { /* handled locally in ComposeBar */ },
+      activeInInput: true,
+    },
+  ], [navigate, setTheme, theme]);
+
+  useGlobalShortcuts(shortcuts);
 
   const handleLogout = async () => {
     try {
@@ -363,9 +449,42 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
 
       {/* Command palette / search dialog */}
       <CommandDialog open={searchOpen} onOpenChange={setSearchOpen}>
-        <CommandInput placeholder="Search pages..." />
+        <CommandInput
+          placeholder="Search content and pages..."
+          value={searchQuery}
+          onValueChange={setSearchQuery}
+        />
         <CommandList>
           <CommandEmpty>No results found.</CommandEmpty>
+
+          {/* Recently Used */}
+          {recentCommands.length > 0 && (
+            <CommandGroup heading="Recently Used">
+              {recentCommands.map((label) => {
+                const page = SEARCH_PAGES.find((p) => p.label === label);
+                const action = SEARCH_ACTIONS.find((a) => a.label === label);
+                return (
+                  <CommandItem
+                    key={`recent-${label}`}
+                    value={`recent-${label}`}
+                    onSelect={() => {
+                      if (page) {
+                        navigate(page.path);
+                      } else if (action) {
+                        executeAction(action.label);
+                      }
+                      trackRecentCommand(label);
+                      setSearchOpen(false);
+                    }}
+                  >
+                    {action?.icon && <action.icon className="mr-2 h-4 w-4" />}
+                    {label}
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          )}
+
           {["Pages", "Account"].map((group) => (
             <CommandGroup key={group} heading={group}>
               {SEARCH_PAGES.filter((p) => p.group === group).map((page) => (
@@ -374,6 +493,7 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
                   value={page.label}
                   onSelect={() => {
                     navigate(page.path);
+                    trackRecentCommand(page.label);
                     setSearchOpen(false);
                   }}
                 >
@@ -382,10 +502,128 @@ export default function Header({ onMobileMenuToggle }: HeaderProps) {
               ))}
             </CommandGroup>
           ))}
+
+          {/* Actions */}
+          <CommandGroup heading="Actions">
+            {SEARCH_ACTIONS.map((action) => (
+              <CommandItem
+                key={action.label}
+                value={action.label}
+                onSelect={() => {
+                  executeAction(action.label);
+                  trackRecentCommand(action.label);
+                  setSearchOpen(false);
+                }}
+              >
+                <action.icon className="mr-2 h-4 w-4" />
+                {action.label}
+                {action.shortcut && (
+                  <CommandShortcut>{action.shortcut}</CommandShortcut>
+                )}
+              </CommandItem>
+            ))}
+          </CommandGroup>
+
+          {/* Content search results */}
+          {(searchResults?.results?.users?.items?.length ?? 0) > 0 && (
+            <CommandGroup heading="Users">
+              {searchResults!.results.users.items.map((item) => (
+                <CommandItem
+                  key={`user-${item.id}`}
+                  value={`user-${item.id}-${item.title}`}
+                  onSelect={() => {
+                    navigate(item.url);
+                    setSearchOpen(false);
+                  }}
+                >
+                  <User className="mr-2 h-4 w-4" />
+                  {item.title}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+
+          {(searchResults?.results?.posts?.items?.length ?? 0) > 0 && (
+            <CommandGroup heading="Posts">
+              {searchResults!.results.posts.items.map((item) => (
+                <CommandItem
+                  key={`post-${item.id}`}
+                  value={`post-${item.id}-${item.snippet}`}
+                  onSelect={() => {
+                    navigate(item.url);
+                    setSearchOpen(false);
+                  }}
+                >
+                  {item.snippet}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+
+          {(searchResults?.results?.catalog?.items?.length ?? 0) > 0 && (
+            <CommandGroup heading="Catalog">
+              {searchResults!.results.catalog.items.map((item) => (
+                <CommandItem
+                  key={`catalog-${item.id}`}
+                  value={`catalog-${item.id}-${item.title}`}
+                  onSelect={() => {
+                    navigate(item.url);
+                    setSearchOpen(false);
+                  }}
+                >
+                  {item.title}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          )}
+
+          {/* View all results link */}
+          {searchQuery.length >= 2 && (
+            <CommandGroup>
+              <CommandItem
+                value={`view-all-results-${searchQuery}`}
+                onSelect={() => {
+                  navigate(`/search?q=${encodeURIComponent(searchQuery)}`);
+                  setSearchOpen(false);
+                }}
+              >
+                <Search className="mr-2 h-4 w-4" />
+                View all results for &quot;{searchQuery}&quot;
+              </CommandItem>
+            </CommandGroup>
+          )}
         </CommandList>
       </CommandDialog>
+
+      {/* Keyboard shortcuts help overlay */}
+      <ShortcutHelpDialog
+        open={shortcutHelpOpen}
+        onOpenChange={setShortcutHelpOpen}
+        shortcuts={shortcuts}
+      />
     </>
   );
+
+  /** Execute an action command by label */
+  function executeAction(label: string) {
+    switch (label) {
+      case "Toggle Dark Mode":
+        setTheme(theme === "dark" ? "light" : "dark");
+        break;
+      case "New Message":
+        navigate("/messages?new=1");
+        break;
+      case "New Post":
+        navigate("/feed?compose=1");
+        break;
+      case "Keyboard Shortcuts":
+        setShortcutHelpOpen(true);
+        break;
+      case "Log Out":
+        void handleLogout();
+        break;
+    }
+  }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────

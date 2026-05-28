@@ -421,11 +421,22 @@ class PurchaseMoneyIn(BaseModel):
     currency: str = Field(..., min_length=3, max_length=10)
 
 
+class CarrierEventOut(BaseModel):
+    timestamp: Optional[str] = None
+    description: Optional[str] = None
+    location: Optional[str] = None
+
+
 class PurchaseShippingIn(BaseModel):
     carrier: Optional[str] = None
     tracking_number: Optional[str] = None
+    tracking_url: Optional[str] = None
+    status: Optional[str] = None
     shipped_at: Optional[int] = None
     delivered_at: Optional[int] = None
+    estimated_delivery: Optional[str] = None
+    carrier_events: Optional[List[Dict[str, Any]]] = None
+    last_carrier_check: Optional[int] = None
     address: Optional[Dict[str, Any]] = None
 
 
@@ -524,6 +535,8 @@ class CatalogItemCreateIn(BaseModel):
     currency: str = "USD"
     image_urls: List[str] = Field(default_factory=list)
     attributes: Dict[str, Any] = Field(default_factory=dict)
+    stock_count: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    low_stock_threshold: Optional[int] = Field(default=None, ge=0, le=10_000_000)
 
 
 class CatalogItemPatchIn(BaseModel):
@@ -533,6 +546,28 @@ class CatalogItemPatchIn(BaseModel):
     currency: Optional[str] = None
     image_urls: Optional[List[str]] = None
     attributes: Optional[Dict[str, Any]] = None
+    stock_count: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    low_stock_threshold: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+
+
+class CatalogStockAdjustIn(BaseModel):
+    delta: Optional[int] = Field(default=None, ge=-1_000_000, le=1_000_000)
+    absolute: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    reason: Optional[str] = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def exactly_one_mode(self):
+        if (self.delta is None) == (self.absolute is None):
+            raise ValueError("Provide exactly one of 'delta' or 'absolute'")
+        return self
+
+
+class CatalogStockOut(BaseModel):
+    item_id: str
+    stock_count: Optional[int] = None
+    stock_status: str = "unlimited"
+    low_stock_threshold: int = 5
+    stock_updated_at: Optional[str] = None
 
 
 class CatalogItemOut(BaseModel):
@@ -547,10 +582,20 @@ class CatalogItemOut(BaseModel):
     creator_id: Optional[str] = None
     created_at: str
     updated_at: str
+    stock_count: Optional[int] = None
+    stock_status: str = "unlimited"
+    low_stock_threshold: int = 5
+    stock_updated_at: Optional[str] = None
+    position: Optional[int] = None
 
 
 class CatalogItemListOut(CatalogPageOut):
     items: List[CatalogItemOut]
+
+
+class CatalogReorderReq(BaseModel):
+    """Request body for catalog item reorder."""
+    item_ids: List[str] = Field(..., min_length=1, max_length=100)
 
 
 class CatalogReviewCreateIn(BaseModel):
@@ -759,6 +804,10 @@ class ShoppingCartSummary(BaseModel):
     purchased_at: Optional[str] = None
     purchased_total_cents: Optional[int] = None
     currency: str = "USD"
+    # SHOP-003: Abandonment tracking
+    last_activity_at: Optional[int] = 0
+    abandoned_at: Optional[int] = 0
+    reminder_count: Optional[int] = 0
 
 
 class ShoppingCartItemIn(BaseModel):
@@ -814,6 +863,11 @@ class ShoppingCartTotalOut(BaseModel):
     currency: str = "USD"
 
 
+class CartPurchaseIn(BaseModel):
+    promo_code: Optional[str] = None
+    promo_code_id: Optional[str] = None
+
+
 class ShoppingCartPurchaseOut(BaseModel):
     cart_id: str
     order_id: str
@@ -822,6 +876,10 @@ class ShoppingCartPurchaseOut(BaseModel):
     currency: str = "USD"
     buyer: Optional[ShoppingCartBuyer] = None
     purchase_txn_id: Optional[str] = None
+    original_total_cents: Optional[int] = None
+    discount_cents: Optional[int] = None
+    promo_code_id: Optional[str] = None
+    promo_discount_type: Optional[str] = None
 
 
 class WorkingHoursWindow(BaseModel):
@@ -1318,6 +1376,16 @@ class ProfilePatchReq(ProfileBase):
 
 class ProfilePutReq(ProfileBase):
     pass
+
+
+class PreferencesPatchReq(BaseModel):
+    """Partial update for user UI preferences.
+
+    All fields are optional -- only provided fields are merged into the
+    existing preferences map.
+    """
+    theme: Optional[Literal["system", "light", "dark"]] = None
+    sidebar_collapsed: Optional[bool] = None
 
 
 class PayBalanceIn(BaseModel):
@@ -2315,6 +2383,28 @@ class PayoutStatsOut(BaseModel):
     total_processing: int = 0
 
 
+# ─── Tip Leaderboards (SOCIAL-005) ──────────────────────────────────
+
+
+class TopSupporterItem(BaseModel):
+    rank: int
+    user_id: str
+    display_name: str = ""
+    avatar_url: Optional[str] = None
+    total_cents: int = 0
+    tip_count: int = 0
+    last_tip_at: int = 0
+
+
+class TopSupportersOut(BaseModel):
+    creator_id: str
+    period: str
+    supporters: List[TopSupporterItem] = Field(default_factory=list)
+    total_tip_cents: int = 0
+    total_supporters: int = 0
+    computed_at: int = 0
+
+
 # ─── Broadcast-Exclusive Pricing (LCOM-004) ────────────────────────
 
 
@@ -2559,6 +2649,41 @@ class AnalyticsRefreshOut(BaseModel):
     ok: bool = True
     message: str = ""
     days_refreshed: int = 0
+
+
+# -- Creator Analytics Content Detail (ANALYTICS-002) --
+
+class ContentAnalyticsViewsItem(BaseModel):
+    """A single data point in the per-content view time series."""
+    date: str
+    views: int = 0
+    unique_viewers: int = 0
+
+
+class ContentAnalyticsRevenueBreakdown(BaseModel):
+    """Revenue breakdown by source for a single content item."""
+    tips: int = 0
+    unlocks: int = 0
+    vod: int = 0
+
+
+class ContentAnalyticsOut(BaseModel):
+    """Full per-content analytics response."""
+    content_id: str
+    content_type: str  # "vod" | "post"
+    title: str
+    thumbnail_url: Optional[str] = None
+    published_at: Optional[int] = None
+    total_views: int = 0
+    total_revenue_cents: int = 0
+    engagement_rate: float = 0.0
+    like_count: int = 0
+    comment_count: int = 0
+    view_time_series: List[ContentAnalyticsViewsItem] = Field(default_factory=list)
+    revenue_breakdown: ContentAnalyticsRevenueBreakdown = Field(
+        default_factory=ContentAnalyticsRevenueBreakdown
+    )
+    currency: str = "USD"
 
 
 # -- Privacy / GDPR (PRIVACY-001) --

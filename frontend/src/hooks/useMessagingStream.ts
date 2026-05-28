@@ -66,6 +66,58 @@ export function useMessagingStream(enabled = true) {
           }
         }
 
+        // Typing indicator — write directly to cache for instant update
+        if (eventType === "typing:update" && conversationId) {
+          const userId = typeof data.user_id === "string" ? data.user_id : undefined;
+          const isTyping = !!data.is_typing;
+          const updatedAt = typeof data.updated_at === "number" ? data.updated_at : Math.floor(Date.now() / 1000);
+          if (userId) {
+            queryClient.setQueryData<Array<{ user_id: string; updated_at: number }>>(
+              ["typing", conversationId],
+              (prev) => {
+                const existing = (prev ?? []).filter((t) => t.user_id !== userId);
+                if (isTyping) {
+                  existing.push({ user_id: userId, updated_at: updatedAt });
+                }
+                return existing;
+              },
+            );
+          }
+        }
+
+        // Presence — write directly to cache for instant update
+        if (eventType === "presence:update") {
+          const userId = typeof data.user_id === "string" ? data.user_id : undefined;
+          const online = !!data.online;
+          const lastSeenAt = typeof data.last_seen_at === "number" ? data.last_seen_at : 0;
+          if (userId) {
+            queryClient.setQueryData(
+              ["presence", userId],
+              [{ user_id: userId, online, last_seen_at: lastSeenAt }],
+            );
+            // Also update any batch presence queries that include this user
+            queryClient.setQueriesData<Array<{ user_id: string; online: boolean; last_seen_at: number }>>(
+              { queryKey: ["presence", "batch"] },
+              (prev) => {
+                if (!prev) return prev;
+                return prev.map((entry) =>
+                  entry.user_id === userId ? { ...entry, online, last_seen_at: lastSeenAt } : entry,
+                );
+              },
+            );
+          }
+        }
+
+        // Read receipts — update message delivery status in cache
+        if (eventType === "message:viewed" && conversationId) {
+          const messageId = typeof data.message_id === "string" ? data.message_id : undefined;
+          const viewerId = typeof data.viewer_id === "string" ? data.viewer_id : undefined;
+          if (messageId && viewerId) {
+            queryClient.invalidateQueries({ queryKey: ["message-views", conversationId, messageId] });
+            queryClient.invalidateQueries({ queryKey: ["messages", conversationId] });
+          }
+        }
+
         if (eventType.startsWith("call.")) {
           window.dispatchEvent(
             new CustomEvent("messaging:call-event", {
@@ -101,9 +153,12 @@ export function useMessagingStream(enabled = true) {
       "message:locked",
       "message:unlocked",
       "message:expired",
+      "message:viewed",
       "once_media_consumed",
       "once_media_state_changed",
       "conversation_updated",
+      "typing:update",
+      "presence:update",
       "poll:vote",
       "poll:confirmed",
       "helpdesk.conversation.alerted",

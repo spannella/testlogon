@@ -6,6 +6,7 @@ import type { Conversation } from "@/api/types";
 import { ConversationList } from "./ConversationList";
 import { ConversationView } from "./ConversationView";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { PageMeta } from "@/components/shared/PageMeta";
 import { useMessagingStream } from "@/hooks/useMessagingStream";
 import { useHeartbeat } from "@/hooks/usePresence";
 
@@ -35,6 +36,7 @@ export default function MessagesPage() {
 
   return (
     <div className="flex h-full">
+      <PageMeta title="Messages" />
       {/* Conversation list panel */}
       <div
         className={cn(

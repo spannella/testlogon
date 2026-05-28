@@ -242,17 +242,31 @@ def reconcile_pending_payments() -> Dict[str, int]:
 
 
 async def billing_reconcile_loop() -> None:
+    import time as _time
+    from app.services.job_registry import register_task, report_error, report_poll
+
     interval = max(60, int(S.billing_reconcile_interval_seconds))
+    register_task("billing_reconcile", interval, enabled=True,
+                   description="Reconciles pending Stripe/PayPal/CCBill payment statuses")
+
     while True:
+        _start = _time.perf_counter()
         try:
             reconcile_pending_payments()
-        except Exception:
+            _dur = (_time.perf_counter() - _start) * 1000
+            report_poll("billing_reconcile", duration_ms=_dur)
+        except Exception as exc:
+            report_error("billing_reconcile", str(exc))
             logger.exception("Billing reconciliation loop failed")
         await asyncio.sleep(interval)
 
 
 def start_billing_reconcile_task() -> None:
+    from app.services.job_registry import register_task
+
     if not S.billing_reconcile_enabled:
+        register_task("billing_reconcile", 60, enabled=False,
+                       description="Reconciles pending Stripe/PayPal/CCBill payment statuses")
         logger.info("Billing reconciliation disabled")
         return
     asyncio.create_task(billing_reconcile_loop())

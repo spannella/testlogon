@@ -1,5 +1,6 @@
 import { useParams, Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { Helmet } from "react-helmet-async";
 import { CalendarCheck, Download, Plus, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
@@ -102,6 +103,17 @@ export default function PublicEventPage() {
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center p-8">
+      <Helmet>
+        <title>{evt.name} | Control Panel</title>
+        <meta name="description" content={`${evt.name} - ${dateStr}`} />
+        <meta property="og:title" content={evt.name} />
+        <meta property="og:description" content={evt.description || dateStr} />
+        <meta property="og:type" content="event" />
+        <meta property="og:url" content={window.location.href} />
+        <meta name="twitter:card" content="summary" />
+        <meta name="twitter:title" content={evt.name} />
+        <meta name="twitter:description" content={evt.description || dateStr} />
+      </Helmet>
       <div className="w-full max-w-md space-y-6">
         <div className="flex items-center gap-3">
           <CalendarCheck className="h-8 w-8 text-primary shrink-0" />

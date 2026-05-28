@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 
+from app.auth.deps import AuthenticatedUser, get_authenticated_user
+from app.auth.policy import require_admin_or_root
+from app.core.settings import S
 from app.models import (
+    CartPurchaseIn,
     CatalogCartItemIn,
     ShoppingCartItemIn,
     ShoppingCartItemOut,
@@ -21,13 +28,18 @@ from app.services.shoppingcart import (
     cart_total_cents,
     decrement_item,
     delete_cart,
+    get_abandonment_stats,
     list_carts,
     list_items,
     purchase_cart,
+    scan_abandoned_carts,
     search_items,
+    send_cart_reminder,
     set_item_quantity,
     start_cart,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ui/shoppingcart", tags=["shoppingcart"], dependencies=[Depends(maybe_enforce_api_key_route_policy)])
 
@@ -157,6 +169,7 @@ async def ui_cart_total(cart_id: str, ctx=Depends(require_ui_session)):
 @router.post("/carts/{cart_id}/purchase", response_model=ShoppingCartPurchaseOut)
 async def ui_purchase_cart(
     cart_id: str,
+    body: CartPurchaseIn = CartPurchaseIn(),
     req: Request = None,
     x_idempotency_key: str = Header(default="", alias="X-Idempotency-Key"),
     ctx=Depends(require_ui_session),
@@ -164,7 +177,13 @@ async def ui_purchase_cart(
     idem = (x_idempotency_key or "").strip()
     if not idem:
         raise HTTPException(status_code=400, detail={"code": "idempotency_key_required", "message": "X-Idempotency-Key header required"})
-    purchase = purchase_cart(ctx["user_sub"], cart_id, idempotency_key=idem)
+    purchase = purchase_cart(
+        ctx["user_sub"],
+        cart_id,
+        idempotency_key=idem,
+        promo_code=body.promo_code,
+        promo_code_id=body.promo_code_id,
+    )
     audit_event(
         "cart_purchased",
         ctx["user_sub"],
@@ -177,3 +196,59 @@ async def ui_purchase_cart(
         purchase_txn_id=purchase.get("purchase_txn_id"),
     )
     return purchase
+
+
+# ─── SHOP-003: Admin Cart Abandonment Stats ────────────────────────────────────
+
+
+@router.get("/admin/cart-abandonment/stats")
+async def ui_cart_abandonment_stats(user: AuthenticatedUser = Depends(require_admin_or_root)):
+    return get_abandonment_stats()
+
+
+@router.post("/admin/cart-abandonment/scan")
+async def ui_cart_abandonment_scan(user: AuthenticatedUser = Depends(require_admin_or_root)):
+    """Dev/admin endpoint to trigger cart abandonment scan manually."""
+    threshold = S.cart_abandonment_threshold_hours
+    carts = scan_abandoned_carts(threshold_hours=threshold)
+    reminded = 0
+    for cart in carts:
+        try:
+            send_cart_reminder(cart)
+            reminded += 1
+        except Exception:
+            pass
+    return {"scanned": len(carts), "reminded": reminded, "threshold_hours": threshold}
+
+
+# ─── SHOP-003: Background Cart Abandonment Loop ───────────────────────────────
+
+
+async def _cart_abandonment_loop() -> None:
+    """Periodic background task to detect and remind about abandoned carts."""
+    await asyncio.sleep(10)  # Initial delay to let other services start
+    while True:
+        if S.cart_abandonment_enabled:
+            try:
+                carts = scan_abandoned_carts(
+                    threshold_hours=S.cart_abandonment_threshold_hours,
+                )
+                for cart in carts:
+                    try:
+                        send_cart_reminder(cart)
+                    except Exception:
+                        logger.warning(
+                            "cart_reminder_failed",
+                            extra={"cart_id": cart.get("cart_id")},
+                        )
+            except Exception:
+                logger.exception("Cart abandonment check failed")
+        await asyncio.sleep(S.cart_abandonment_scan_interval_sec)
+
+
+def start_cart_abandonment_task() -> None:
+    """Register the cart abandonment background loop as an async task."""
+    if not S.cart_abandonment_enabled:
+        logger.info("Cart abandonment detection disabled")
+        return
+    asyncio.create_task(_cart_abandonment_loop())

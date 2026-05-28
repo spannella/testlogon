@@ -36,6 +36,8 @@ def create_job(
     watermark_policy: Optional[Dict[str, Any]] = None,
     drm_policy: Optional[Dict[str, Any]] = None,
     priority: int = 0,
+    job_type: str = "transcode",
+    extra_fields: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Create a new transcode job in queued status. Returns the full job dict."""
     job_id = f"tj_{uuid4().hex}"
@@ -53,6 +55,7 @@ def create_job(
         "attempt": 0,
         "max_attempts": max_attempts,
         "priority": priority,
+        "job_type": job_type,
         "source_uri": source_uri,
         "renditions": rendition_profiles,
         "watermark": watermark_policy or {},
@@ -60,6 +63,10 @@ def create_job(
         "progress_pct": 0,
         "renditions_completed": [],
     }
+
+    # Merge any extra fields (e.g., clip-specific metadata)
+    if extra_fields:
+        item.update(extra_fields)
 
     T.transcode_jobs.put_item(Item=item)
     return item

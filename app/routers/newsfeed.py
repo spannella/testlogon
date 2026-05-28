@@ -283,6 +283,59 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
+# ─── Hashtag extraction (SOCIAL-006) ────────────────────────────────────────
+_HASHTAG_RE = re.compile(r"#([a-zA-Z][a-zA-Z0-9_]{0,49})\b")
+_TAG_VALID_RE = re.compile(r"^[a-z][a-z0-9_]{0,49}$")
+_MAX_TAGS_PER_POST = 20
+
+
+def _extract_hashtags(text: str) -> List[str]:
+    """Extract unique hashtags from text, lowercased, preserving order."""
+    seen: Set[str] = set()
+    tags: List[str] = []
+    for match in _HASHTAG_RE.finditer(text):
+        tag = match.group(1).lower()
+        if tag not in seen:
+            seen.add(tag)
+            tags.append(tag)
+    return tags[:_MAX_TAGS_PER_POST]
+
+
+def _normalize_tags(raw_tags: List[str]) -> List[str]:
+    """Normalize and validate explicit tags: lowercase, strip #, filter invalid."""
+    out: List[str] = []
+    for raw in raw_tags:
+        tag = raw.lower().lstrip("#").strip()
+        if _TAG_VALID_RE.match(tag):
+            out.append(tag)
+    return out
+
+
+def _write_tag_index(post_id: str, user_id: str, created_at: str, tags: List[str]) -> None:
+    """Write TAG#{tag} index items and update TAG_STATS for each tag."""
+    if not tags:
+        return
+    with tbl.batch_writer() as batch:
+        for tag in tags:
+            batch.put_item(Item={
+                "pk": f"TAG#{tag}",
+                "sk": f"{created_at}#POST#{post_id}",
+                "post_id": post_id,
+                "author_id": user_id,
+                "created_at": created_at,
+            })
+    for tag in tags:
+        try:
+            tbl.update_item(
+                Key={"pk": "TAG_STATS", "sk": f"TAG#{tag}"},
+                UpdateExpression="SET #n = if_not_exists(#n, :z) + :one, last_used_at = :now",
+                ExpressionAttributeNames={"#n": "count"},
+                ExpressionAttributeValues={":one": 1, ":z": 0, ":now": created_at},
+            )
+        except Exception:
+            logger.warning("Failed to update TAG_STATS for tag %s", tag)
+
+
 def decode_cursor_or_400(cursor: Optional[str]) -> Optional[Dict[str, Any]]:
     if not cursor:
         return None
@@ -1203,6 +1256,8 @@ def _content_from_payload(req: ContentFieldsMixin) -> Dict[str, Any]:
 
 class CreatePostRequest(ContentFieldsMixin):
     image_urls: List[str] = Field(default_factory=list)
+    image_variants: Optional[List[Dict[str, Any]]] = Field(default=None)
+    tags: List[str] = Field(default_factory=list)
     video_id: Optional[str] = Field(default=None, max_length=64, pattern=r"^v_[a-f0-9]{32}$")
     visibility: Literal["followers", "public"] = "followers"
     lock_type: Optional[Literal["fixed_price", "tip_lottery"]] = None
@@ -1289,6 +1344,7 @@ class PostResponse(BaseModel):
     body_format: BodyFormat = "plain"
     body_version: int = 1
     image_urls: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
     visibility: str
     locked: bool
     lock_expired: bool = False
@@ -1789,6 +1845,22 @@ def _normalized_post_lock_type(post: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _check_reposted_by_me(viewer_id: Optional[str], post_id: str) -> bool:
+    """Check if the viewer has reposted a given post. O(1) point read."""
+    if not viewer_id:
+        return False
+    try:
+        item = tbl.get_item(Key={"pk": pk_repost(viewer_id), "sk": f"POST#{post_id}"}).get("Item")
+        return bool(item)
+    except Exception:
+        return False
+
+
+def pk_repost_lookup(user_id: str) -> str:
+    """Key builder for repost entities."""
+    return f"REPOST#{user_id}"
+
+
 def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: bool = False, unlocked: bool = False, viewer_id: Optional[str] = None) -> Dict[str, Any]:
     """Map a raw DDB post item to the FeedPost shape expected by the frontend."""
     body, body_plain, body_markdown, body_markdown_html, body_rich, body_format, body_version = _resolve_read_body_fields(post)
@@ -1868,6 +1940,7 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         "body_format": body_format,
         "body_version": body_version,
         "image_urls": image_urls,
+        "image_variants": list(post.get("image_variants") or []),
         "video": video_embed,
         "file_attachments": file_attachments,
         "visibility": post.get("visibility", "followers"),
@@ -1896,6 +1969,11 @@ def _post_to_dict(post: Dict[str, Any], locked_body: bool = False, liked_by_me: 
         # BCAST-010: broadcast post type and metadata
         "post_type": post.get("post_type", "standard"),
         "broadcast_meta": post.get("broadcast_meta"),
+        # SOCIAL-002: repost count
+        "repost_count": int(post.get("repost_count", 0)),
+        "reposted_by_me": _check_reposted_by_me(viewer_id, post_id) if viewer_id else False,
+        # SOCIAL-006: hashtags/topics
+        "tags": list(post.get("tags") or []),
     }
 
 
@@ -2630,14 +2708,38 @@ async def upload_image(
         raise HTTPException(status_code=400, detail="Image must be under 10 MB")
     attachment_id = new_id("att")
     safe_name = (file.filename or "upload.bin").replace("/", "_").replace("\\", "_")
-    s3_key = f"uploads/{user_id}/{attachment_id}/{safe_name}"
+    base_key = f"uploads/{user_id}/{attachment_id}"
+    s3_key = f"{base_key}/{safe_name}"
     try:
         s3.put_object(Bucket=UPLOAD_BUCKET, Key=s3_key, Body=content, ContentType=file.content_type or "application/octet-stream")
     except ClientError as exc:
         raise HTTPException(status_code=500, detail=f"S3 error: {exc.response['Error'].get('Message','unknown')}") from exc
     encoded_key = quote(s3_key, safe="")
     url = f"/uploads/object?s3_key={encoded_key}"
-    return {"url": url, "s3_key": s3_key}
+
+    # PLATFORM-004: Generate and upload image variants
+    variants: Dict[str, Any] = {}
+    if S.image_optimization_enabled:
+        try:
+            from app.services.image_optimization import generate_variants
+            variant_map = generate_variants(content, file.content_type or "image/jpeg")
+            for vname, vdata in variant_map.items():
+                vkey = f"{base_key}/{vname}.webp"
+                s3.put_object(
+                    Bucket=UPLOAD_BUCKET, Key=vkey,
+                    Body=vdata["bytes"],
+                    ContentType=vdata["content_type"],
+                )
+                variants[vname] = {
+                    "url": f"/uploads/object?s3_key={quote(vkey, safe='')}",
+                    "width": vdata["width"],
+                    "height": vdata["height"],
+                    "size_bytes": vdata["size_bytes"],
+                }
+        except Exception:
+            logger.exception("Variant upload failed; serving original only")
+
+    return {"url": url, "s3_key": s3_key, "variants": variants}
 
 
 @router.get("/uploads/object")
@@ -2654,7 +2756,14 @@ def get_upload_object(s3_key: str = Query(...)):
             if chunk:
                 yield chunk
 
-    return StreamingResponse(_iter(), media_type=content_type, headers={"Cache-Control": "private, max-age=300"})
+    # PLATFORM-004: Variants are immutable (keyed by attachment_id + size name)
+    is_variant = any(s3_key.endswith(f"/{v}.webp") for v in ("sm", "md", "lg"))
+    cache_control = (
+        "public, max-age=31536000, immutable"
+        if is_variant
+        else "private, max-age=300"
+    )
+    return StreamingResponse(_iter(), media_type=content_type, headers={"Cache-Control": cache_control})
 
 
 # -----------------------------
@@ -3058,6 +3167,12 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         lock_type=lock_type or "none",
     )
 
+    # SOCIAL-006: Extract and merge hashtags
+    explicit_tags = _normalize_tags(req.tags or [])
+    body_plain_text = content.get("body_plain") or content.get("body") or ""
+    body_tags = _extract_hashtags(body_plain_text)
+    all_tags = list(dict.fromkeys(explicit_tags + body_tags))[:_MAX_TAGS_PER_POST]
+
     # Validate and collect file attachment metadata (max 5)
     file_attachments = _build_file_attachments_for_post(user_id=user_id, file_paths=req.file_paths)
 
@@ -3077,6 +3192,7 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "GSI2SK": f"{created_at}#POST#{post_id}",
         **content,
         "image_urls": req.image_urls,
+        "image_variants": list(getattr(req, "image_variants", None) or []),
         "video_id": video_id,
         "visibility": req.visibility,
         "locked": locked,
@@ -3093,6 +3209,8 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         "like_count": 0,
         "comment_count": 0,
         "file_attachments": file_attachments,
+        "tags": all_tags,
+        "body_plain_lc": (content.get("body_plain") or content.get("body") or "").lower(),
     }
     if unlock_limit is not None:
         post_item["unlock_limit"] = unlock_limit
@@ -3100,6 +3218,13 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
     if is_scheduled:
         post_item.update(schedule_due_index_values(req.publish_at or 0, post_id))
     ddb_put_item(post_item)
+
+    # SOCIAL-006: Write tag index items
+    if all_tags and not is_scheduled:
+        try:
+            _write_tag_index(post_id=post_id, user_id=user_id, created_at=created_at, tags=all_tags)
+        except Exception:
+            logger.warning("Failed to write tag index for post %s", post_id)
 
     # SOC-005: maintain post_count on profile
     if not is_scheduled:
@@ -3149,6 +3274,7 @@ def create_post(req: CreatePostRequest, user_id: UserIdDep):
         body_format=content["body_format"],
         body_version=content["body_version"],
         image_urls=req.image_urls,
+        tags=all_tags,
         video=None,
         visibility=req.visibility,
         locked=locked,
@@ -4019,6 +4145,10 @@ def view_feed(
         filter_params = FeedFilterParams(author_id=author_filter, q=normalized_q, from_dt=from_dt, to_dt=to_dt, has_media=has_media)
         next_eks = eks
 
+        # Load blocked set once for feed filtering
+        from app.services.blocking import get_blocked_set, get_blocked_by_set
+        _feed_blocked_set = get_blocked_set(user_id) | get_blocked_by_set(user_id)
+
         while len(ordered) < limit:
             elapsed_ms = (time.perf_counter() - started) * 1000.0
             if page_depth >= max_scanned_pages:
@@ -4042,6 +4172,7 @@ def view_feed(
                     },
                 )
             page_depth += 1
+            _repost_meta_by_post: Dict[str, Dict[str, Any]] = {}
             if author_filter:
                 resp = ddb_query(
                     IndexName="GSI2",
@@ -4053,6 +4184,7 @@ def view_feed(
                 )
                 posts = [it for it in (resp.get("Items") or []) if it.get("post_id")]
                 post_ids = [str(it.get("post_id")) for it in posts if it.get("post_id")]
+                unique_post_ids = list(dict.fromkeys(post_ids))
                 post_by_id = {str(post.get("post_id")): post for post in posts if post.get("post_id")}
             else:
                 resp = ddb_query(
@@ -4064,11 +4196,23 @@ def view_feed(
                     ExclusiveStartKey=next_eks if next_eks else None,
                 )
                 refs = resp.get("Items", [])
+                # SOCIAL-002: Build repost metadata map from feed refs
+                for ref in refs:
+                    if ref.get("ref_type") == "repost" and ref.get("post_id"):
+                        pid = ref["post_id"]
+                        if pid not in _repost_meta_by_post:
+                            _repost_meta_by_post[pid] = {
+                                "reposter_id": ref.get("reposter_id", ""),
+                                "repost_quote": ref.get("quote"),
+                                "repost_id": ref.get("repost_id"),
+                            }
                 post_ids = [ref.get("post_id") for ref in refs if ref.get("post_id")]
+                # Deduplicate post_ids for batch_get_item (repost refs may duplicate the same post_id)
+                unique_post_ids = list(dict.fromkeys(post_ids))
                 posts = []
-                if post_ids:
+                if unique_post_ids:
                     try:
-                        raw = ddb.batch_get_item(RequestItems={APP_TABLE: {"Keys": [{"pk": pk_post(pid), "sk": sk_post()} for pid in post_ids]}})
+                        raw = ddb.batch_get_item(RequestItems={APP_TABLE: {"Keys": [{"pk": pk_post(pid), "sk": sk_post()} for pid in unique_post_ids]}})
                         posts = raw.get("Responses", {}).get(APP_TABLE, [])
                     except ClientError as exc:
                         raise HTTPException(
@@ -4086,14 +4230,14 @@ def view_feed(
             liked_post_ids: set = set()
             try:
                 like_raw = ddb.batch_get_item(
-                    RequestItems={APP_TABLE: {"Keys": [{"pk": pk_like(user_id), "sk": f"POST#{pid}"} for pid in post_ids]}}
+                    RequestItems={APP_TABLE: {"Keys": [{"pk": pk_like(user_id), "sk": f"POST#{pid}"} for pid in unique_post_ids]}}
                 )
                 liked_post_ids = {item.get("post_id", "") for item in like_raw.get("Responses", {}).get(APP_TABLE, [])}
             except ClientError:
                 pass
 
             candidates: List[Dict[str, Any]] = []
-            for post_id in post_ids:
+            for post_id in unique_post_ids:
                 post = post_by_id.get(post_id)
                 if not post:
                     continue
@@ -4111,21 +4255,37 @@ def view_feed(
             for post in sort_posts_deterministically(candidates):
                 author = post.get("user_id")
                 post_id = str(post.get("post_id") or "")
+                # Filter out posts from blocked users
+                if author and author in _feed_blocked_set:
+                    continue
                 if author and author != user_id and not can_view_post(user_id, post):
                     continue
 
                 locked = bool(post.get("locked"))
                 is_locked_for_viewer = locked and author != user_id and not has_unlocked(user_id, post_id)
                 viewer_unlocked = locked and not is_locked_for_viewer
-                ordered.append(
-                    _post_to_dict(
-                        post,
-                        locked_body=is_locked_for_viewer,
-                        liked_by_me=post_id in liked_post_ids,
-                        unlocked=viewer_unlocked,
-                        viewer_id=user_id,
-                    )
+                post_dict = _post_to_dict(
+                    post,
+                    locked_body=is_locked_for_viewer,
+                    liked_by_me=post_id in liked_post_ids,
+                    unlocked=viewer_unlocked,
+                    viewer_id=user_id,
                 )
+                # SOCIAL-002: Attach repost attribution if this feed item came from a repost
+                repost_meta = _repost_meta_by_post.get(post_id) if not author_filter else None
+                if repost_meta:
+                    reposter_id = repost_meta["reposter_id"]
+                    reposter_display = reposter_id
+                    try:
+                        rp_profile = T.profile.get_item(Key={"user_sub": reposter_id}).get("Item")
+                        if rp_profile:
+                            reposter_display = rp_profile.get("display_name") or rp_profile.get("name") or reposter_id
+                    except Exception:
+                        pass
+                    post_dict["reposted_by"] = {"user_id": reposter_id, "display_name": reposter_display}
+                    if repost_meta.get("repost_quote"):
+                        post_dict["repost_quote"] = repost_meta["repost_quote"]
+                ordered.append(post_dict)
                 if len(ordered) >= limit:
                     break
 
@@ -4981,6 +5141,623 @@ def draft_lifecycle_telemetry(req: DraftLifecycleTelemetryRequest, user_id: User
         surface=req.surface,
     )
     return {"ok": True}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Reposts (SOCIAL-002)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+def pk_repost(user_id: str) -> str:
+    return f"REPOST#{user_id}"
+
+
+class RepostRequest(BaseModel):
+    quote: Optional[str] = Field(default=None, max_length=500)
+
+
+@router.post("/posts/{post_id}/repost", status_code=201)
+def create_repost(post_id: str, req: RepostRequest, user_id: UserIdDep):
+    """Create a repost (share post to own feed and fans out to followers)."""
+    # 1. Verify post exists and is published
+    post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+    if not post:
+        raise HTTPException(status_code=404, detail={"code": "post_not_found", "message": "Post not found"})
+    status_val, _, _, _, _ = _resolve_post_lifecycle_fields(post)
+    if status_val != "published":
+        raise HTTPException(status_code=404, detail={"code": "post_not_found", "message": "Post not found"})
+
+    # 2. Cannot repost own post
+    author_id = post.get("user_id", "")
+    if author_id == user_id:
+        raise HTTPException(status_code=400, detail={"code": "self_repost", "message": "Cannot repost your own post"})
+
+    # 3. Cannot repost locked posts
+    if post.get("locked") and int(post.get("unlock_price_cents", 0) or 0) > 0:
+        raise HTTPException(status_code=403, detail={"code": "post_locked", "message": "Cannot repost locked content"})
+
+    # 4. Check block relationship
+    try:
+        from app.services.blocking import is_any_block
+        if is_any_block(user_id, author_id):
+            raise HTTPException(status_code=403, detail={"code": "blocked", "message": "Blocked"})
+    except ImportError:
+        pass
+
+    # 5. Check not already reposted
+    existing = ddb_get_item({"pk": pk_repost(user_id), "sk": f"POST#{post_id}"})
+    if existing:
+        raise HTTPException(status_code=409, detail={"code": "already_reposted", "message": "Already reposted"})
+
+    # 6. Validate quote length
+    quote_text = (req.quote or "").strip() if req.quote else None
+    if quote_text and len(quote_text) > 500:
+        raise HTTPException(status_code=400, detail={"code": "quote_too_long", "message": "Quote exceeds 500 characters"})
+    # Strip HTML from quote
+    if quote_text:
+        quote_text = re.sub(r"<[^>]+>", "", quote_text).strip()
+
+    created_at = now_iso()
+    repost_id = new_id("rp")
+
+    # 7. Write repost entity
+    repost_item = {
+        "pk": pk_repost(user_id),
+        "sk": f"POST#{post_id}",
+        "Entity": "Repost",
+        "repost_id": repost_id,
+        "user_id": user_id,
+        "post_id": post_id,
+        "original_author_id": author_id,
+        "created_at": created_at,
+        "GSI1PK": f"REPOSTS#{post_id}",
+        "GSI1SK": f"{created_at}#{user_id}",
+    }
+    if quote_text:
+        repost_item["quote"] = quote_text
+    ddb_put_item(repost_item)
+
+    # 8. Atomically increment repost_count on the post
+    updated = ddb_update_item(
+        key={"pk": pk_post(post_id), "sk": sk_post()},
+        update_expr="SET repost_count = if_not_exists(repost_count, :z) + :one",
+        expr_vals={":one": 1, ":z": 0},
+        return_values="ALL_NEW",
+    )
+    new_count = int(updated.get("repost_count", 1))
+
+    # 9. Write FEEDREF for the reposter's own feed
+    reposter_feed_ref = {
+        "pk": f"POST#{post_id}",
+        "sk": f"FEEDREF#{user_id}#REPOST#{repost_id}",
+        "Entity": "FeedRef",
+        "ref_type": "repost",
+        "repost_id": repost_id,
+        "post_id": post_id,
+        "reposter_id": user_id,
+        "owner_user_id": user_id,
+        "created_at": created_at,
+        "fanout": False,
+        "GSI1PK": f"FEED#{user_id}",
+        "GSI1SK": f"{created_at}#REPOST#{repost_id}",
+    }
+    if quote_text:
+        reposter_feed_ref["quote"] = quote_text
+    ddb_put_item(reposter_feed_ref)
+
+    # 10. Fan-out to followers
+    try:
+        from app.services.newsfeed_fanout import _get_all_follower_ids
+        follower_ids = _get_all_follower_ids(user_id)
+        for fid in follower_ids:
+            try:
+                tbl.put_item(Item={
+                    "pk": f"POST#{post_id}",
+                    "sk": f"FEEDREF#{fid}#REPOST#{repost_id}",
+                    "Entity": "FeedRef",
+                    "ref_type": "repost",
+                    "repost_id": repost_id,
+                    "post_id": post_id,
+                    "reposter_id": user_id,
+                    "owner_user_id": user_id,
+                    "created_at": created_at,
+                    "fanout": True,
+                    "GSI1PK": f"FEED#{fid}",
+                    "GSI1SK": f"{created_at}#REPOST#{repost_id}",
+                    **({"quote": quote_text} if quote_text else {}),
+                })
+            except Exception:
+                logger.exception("Failed to fan-out repost %s to follower %s", repost_id, fid)
+    except Exception:
+        logger.exception("Repost fan-out failed for %s", repost_id)
+
+    return {"ok": True, "repost_id": repost_id, "repost_count": new_count}
+
+
+@router.delete("/posts/{post_id}/repost")
+def undo_repost(post_id: str, user_id: UserIdDep):
+    """Undo a repost — removes the repost entity, decrements count, cleans up fan-out."""
+    existing = ddb_get_item({"pk": pk_repost(user_id), "sk": f"POST#{post_id}"})
+    if not existing:
+        raise HTTPException(status_code=404, detail={"code": "repost_not_found", "message": "Repost not found"})
+
+    repost_id = existing.get("repost_id", "")
+
+    # 1. Delete the repost entity
+    ddb_delete_item({"pk": pk_repost(user_id), "sk": f"POST#{post_id}"})
+
+    # 2. Decrement repost_count (clamped at 0)
+    new_count = 0
+    try:
+        updated = ddb_update_item(
+            key={"pk": pk_post(post_id), "sk": sk_post()},
+            update_expr="SET repost_count = repost_count - :one",
+            expr_vals={":one": 1, ":z": 0},
+            condition_expr="repost_count > :z",
+            return_values="ALL_NEW",
+        )
+        new_count = int(updated.get("repost_count", 0))
+    except HTTPException as ex:
+        if ex.status_code != 409:
+            raise
+        # Count already at 0
+
+    # 3. Clean up fan-out feed references for this repost
+    try:
+        # Query all FEEDREF items for this post that match this repost
+        kwargs = {
+            "KeyConditionExpression": "pk = :pk",
+            "FilterExpression": "repost_id = :rid",
+            "ExpressionAttributeValues": {
+                ":pk": f"POST#{post_id}",
+                ":rid": repost_id,
+            },
+            "Limit": 1000,
+        }
+        while True:
+            resp = tbl.query(**kwargs)
+            items = resp.get("Items", [])
+            for item in items:
+                try:
+                    tbl.delete_item(Key={"pk": item["pk"], "sk": item["sk"]})
+                except Exception:
+                    logger.exception("Failed to delete repost feed ref pk=%s sk=%s", item["pk"], item["sk"])
+            lek = resp.get("LastEvaluatedKey")
+            if not lek:
+                break
+            kwargs["ExclusiveStartKey"] = lek
+    except Exception:
+        logger.exception("Repost fan-out cleanup failed for repost %s", repost_id)
+
+    return {"ok": True, "repost_count": new_count}
+
+
+@router.get("/posts/{post_id}/reposts")
+def list_reposts(
+    post_id: str,
+    user_id: UserIdDep,
+    limit: int = Query(default=20, ge=1, le=50),
+    cursor: Optional[str] = Query(default=None),
+):
+    """List users who reposted a given post."""
+    eks = decode_cursor_or_400(cursor)
+    query_kwargs: Dict[str, Any] = {
+        "IndexName": "GSI1",
+        "KeyConditionExpression": "GSI1PK = :pk",
+        "ExpressionAttributeValues": {":pk": f"REPOSTS#{post_id}"},
+        "ScanIndexForward": False,
+        "Limit": limit,
+    }
+    if eks:
+        query_kwargs["ExclusiveStartKey"] = eks
+    resp = ddb_query(**query_kwargs)
+    items = resp.get("Items", [])
+    next_cursor = encode_cursor(resp.get("LastEvaluatedKey"))
+
+    reposts = []
+    for item in items:
+        uid = item.get("user_id", "")
+        # Try to get display name from profile
+        display_name = uid
+        try:
+            profile = T.profile.get_item(Key={"user_sub": uid}).get("Item")
+            if profile:
+                display_name = profile.get("display_name") or profile.get("name") or uid
+        except Exception:
+            pass
+        reposts.append({
+            "repost_id": item.get("repost_id"),
+            "user_id": uid,
+            "display_name": display_name,
+            "quote": item.get("quote"),
+            "created_at": item.get("created_at", ""),
+        })
+
+    return {
+        "reposts": reposts,
+        "next_cursor": next_cursor,
+        "total_count": len(reposts),
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Bookmarks (SOCIAL-001)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def pk_bookmark(user_id: str) -> str:
+    return f"BOOKMARK#{user_id}"
+
+
+def pk_bookmark_lookup(user_id: str) -> str:
+    return f"BOOKMARK_LOOKUP#{user_id}"
+
+
+class CreateBookmarkRequest(BaseModel):
+    content_type: Literal["post", "video"] = "post"
+    content_id: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_]+$")
+    collection_id: Optional[str] = Field(default="default", max_length=64, pattern=r"^[a-zA-Z0-9_]+$")
+
+
+class CreateCollectionRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
+
+class RenameCollectionRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+
+
+@router.post("/ui/bookmarks", status_code=201)
+def create_bookmark(req: CreateBookmarkRequest, user_id: UserIdDep):
+    content_type = req.content_type
+    content_id = req.content_id
+    collection_id = req.collection_id or "default"
+
+    # Verify content exists
+    if content_type == "post":
+        post = ddb_get_item({"pk": pk_post(content_id), "sk": sk_post()})
+        if not post:
+            raise HTTPException(status_code=404, detail={"code": "content_not_found", "message": "Post not found"})
+
+    # Check for duplicate
+    existing = ddb_get_item({"pk": pk_bookmark_lookup(user_id), "sk": f"{content_type}#{content_id}"})
+    if existing:
+        raise HTTPException(status_code=409, detail={"code": "already_bookmarked", "message": "Already bookmarked"})
+
+    created_at = now_iso()
+    # Write main bookmark item (chronological listing via GSI1)
+    bookmark_item = {
+        "pk": pk_bookmark(user_id),
+        "sk": f"{content_type}#{content_id}",
+        "Entity": "Bookmark",
+        "user_id": user_id,
+        "content_type": content_type,
+        "content_id": content_id,
+        "collection_id": collection_id,
+        "created_at": created_at,
+        "GSI1PK": pk_bookmark(user_id),
+        "GSI1SK": f"{created_at}#{content_type}#{content_id}",
+    }
+    ddb_put_item(bookmark_item)
+
+    # Write lookup item (fast "is bookmarked?" check)
+    lookup_item = {
+        "pk": pk_bookmark_lookup(user_id),
+        "sk": f"{content_type}#{content_id}",
+        "Entity": "BookmarkLookup",
+        "user_id": user_id,
+        "content_type": content_type,
+        "content_id": content_id,
+        "collection_id": collection_id,
+        "created_at": created_at,
+    }
+    ddb_put_item(lookup_item)
+
+    return {
+        "ok": True,
+        "content_type": content_type,
+        "content_id": content_id,
+        "collection_id": collection_id,
+        "created_at": created_at,
+    }
+
+
+@router.delete("/ui/bookmarks/{content_type}/{content_id}")
+def delete_bookmark(content_type: str, content_id: str, user_id: UserIdDep):
+    # Check existence via lookup
+    existing = ddb_get_item({"pk": pk_bookmark_lookup(user_id), "sk": f"{content_type}#{content_id}"})
+    if not existing:
+        raise HTTPException(status_code=404, detail={"code": "bookmark_not_found", "message": "Bookmark not found"})
+
+    # Delete main bookmark item
+    ddb_delete_item({"pk": pk_bookmark(user_id), "sk": f"{content_type}#{content_id}"})
+    # Delete lookup item
+    ddb_delete_item({"pk": pk_bookmark_lookup(user_id), "sk": f"{content_type}#{content_id}"})
+
+    return {"ok": True}
+
+
+@router.get("/ui/bookmarks")
+def list_bookmarks(
+    user_id: UserIdDep,
+    limit: int = Query(default=24, ge=1, le=100),
+    cursor: Optional[str] = Query(default=None),
+    content_type: Optional[str] = Query(default=None),
+    collection_id: Optional[str] = Query(default=None),
+):
+    eks = decode_cursor_or_400(cursor)
+
+    query_kwargs: Dict[str, Any] = {
+        "IndexName": "GSI1",
+        "KeyConditionExpression": "GSI1PK = :pk",
+        "ExpressionAttributeValues": {":pk": pk_bookmark(user_id)},
+        "ScanIndexForward": False,
+        "Limit": limit,
+    }
+
+    filter_parts: List[str] = []
+    if content_type:
+        query_kwargs["ExpressionAttributeValues"][":ct"] = content_type
+        filter_parts.append("content_type = :ct")
+    if collection_id:
+        query_kwargs["ExpressionAttributeValues"][":col"] = collection_id
+        filter_parts.append("collection_id = :col")
+    if filter_parts:
+        query_kwargs["FilterExpression"] = " AND ".join(filter_parts)
+
+    if eks:
+        query_kwargs["ExclusiveStartKey"] = eks
+
+    resp = ddb_query(**query_kwargs)
+    items = resp.get("Items", [])
+
+    # Enrich bookmarks with content previews
+    bookmarks = []
+    for item in items:
+        ct = item.get("content_type", "post")
+        cid = item.get("content_id", "")
+        preview: Dict[str, Any] = {}
+
+        if ct == "post":
+            post = ddb_get_item({"pk": pk_post(cid), "sk": sk_post()})
+            if post:
+                post_dict = _post_to_dict(post, viewer_id=user_id)
+                preview = {
+                    "author_id": post_dict.get("author_id", ""),
+                    "author_display_name": post_dict.get("author_id", ""),
+                    "body_snippet": (post_dict.get("body", "") or "")[:200],
+                    "image_url": (post_dict.get("image_urls") or [None])[0],
+                    "like_count": post_dict.get("like_count", 0),
+                }
+            else:
+                preview = {"author_id": "", "body_snippet": "[Post removed]"}
+
+        bookmarks.append({
+            "content_type": ct,
+            "content_id": cid,
+            "collection_id": item.get("collection_id", "default"),
+            "created_at": item.get("created_at", ""),
+            "content_preview": preview,
+        })
+
+    next_cursor = encode_cursor(resp.get("LastEvaluatedKey"))
+    return {
+        "bookmarks": bookmarks,
+        "next_cursor": next_cursor,
+        "total_count": len(bookmarks),
+    }
+
+
+@router.get("/ui/bookmarks/status")
+def bookmark_status(
+    user_id: UserIdDep,
+    ids: str = Query(default=""),
+):
+    if not ids.strip():
+        return {"statuses": {}}
+
+    parsed = []
+    for raw in ids.split(","):
+        raw = raw.strip()
+        if ":" not in raw:
+            continue
+        ctype, cid = raw.split(":", 1)
+        parsed.append((ctype, cid))
+
+    if len(parsed) > 25:
+        raise HTTPException(status_code=400, detail="Max 25 items per request")
+
+    statuses: Dict[str, bool] = {}
+    for ctype, cid in parsed:
+        key = f"{ctype}:{cid}"
+        existing = ddb_get_item({"pk": pk_bookmark_lookup(user_id), "sk": f"{ctype}#{cid}"})
+        statuses[key] = existing is not None
+
+    return {"statuses": statuses}
+
+
+# ── Bookmark Collections ─────────────────────────────────────────
+
+def pk_bmcol(user_id: str) -> str:
+    return f"BMCOL#{user_id}"
+
+
+@router.post("/ui/bookmark-collections", status_code=201)
+def create_collection(req: CreateCollectionRequest, user_id: UserIdDep):
+    # Check collection limit
+    resp = ddb_query(
+        KeyConditionExpression="pk = :pk AND begins_with(sk, :prefix)",
+        ExpressionAttributeValues={":pk": pk_bmcol(user_id), ":prefix": "COL#"},
+        Select="COUNT",
+    )
+    count = resp.get("Count", 0)
+    max_collections = int(getattr(S, "bookmarks_max_collections", 50) or 50)
+    if count >= max_collections:
+        raise HTTPException(status_code=400, detail={"code": "max_collections_reached", "message": f"Max {max_collections} collections"})
+
+    collection_id = f"col_{uuid.uuid4().hex[:12]}"
+    created_at = now_iso()
+    item = {
+        "pk": pk_bmcol(user_id),
+        "sk": f"COL#{collection_id}",
+        "Entity": "BookmarkCollection",
+        "user_id": user_id,
+        "collection_id": collection_id,
+        "name": req.name.strip()[:100],
+        "item_count": 0,
+        "created_at": created_at,
+        "updated_at": created_at,
+    }
+    ddb_put_item(item)
+
+    return {
+        "ok": True,
+        "collection_id": collection_id,
+        "name": req.name.strip()[:100],
+        "item_count": 0,
+        "created_at": created_at,
+    }
+
+
+@router.get("/ui/bookmark-collections")
+def list_collections(user_id: UserIdDep):
+    resp = ddb_query(
+        KeyConditionExpression="pk = :pk AND begins_with(sk, :prefix)",
+        ExpressionAttributeValues={":pk": pk_bmcol(user_id), ":prefix": "COL#"},
+    )
+    collections = []
+    for item in resp.get("Items", []):
+        collections.append({
+            "collection_id": item.get("collection_id", ""),
+            "name": item.get("name", ""),
+            "item_count": int(item.get("item_count", 0)),
+            "created_at": item.get("created_at", ""),
+        })
+    return {"collections": collections}
+
+
+@router.patch("/ui/bookmark-collections/{collection_id}")
+def rename_collection(collection_id: str, req: RenameCollectionRequest, user_id: UserIdDep):
+    key = {"pk": pk_bmcol(user_id), "sk": f"COL#{collection_id}"}
+    existing = ddb_get_item(key)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    updated_at = now_iso()
+    ddb_update_item(
+        key=key,
+        update_expr="SET #n = :name, updated_at = :ua",
+        expr_vals={":name": req.name.strip()[:100], ":ua": updated_at},
+        expr_names={"#n": "name"},
+    )
+    return {"ok": True, "collection_id": collection_id, "name": req.name.strip()[:100]}
+
+
+@router.delete("/ui/bookmark-collections/{collection_id}")
+def delete_collection(collection_id: str, user_id: UserIdDep):
+    key = {"pk": pk_bmcol(user_id), "sk": f"COL#{collection_id}"}
+    existing = ddb_get_item(key)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    # Move bookmarks in this collection to "default"
+    moved_count = 0
+    resp = ddb_query(
+        IndexName="GSI1",
+        KeyConditionExpression="GSI1PK = :pk",
+        ExpressionAttributeValues={":pk": pk_bookmark(user_id)},
+        ScanIndexForward=False,
+    )
+    for item in resp.get("Items", []):
+        if item.get("collection_id") == collection_id:
+            bm_key = {"pk": pk_bookmark(user_id), "sk": item["sk"]}
+            ddb_update_item(
+                key=bm_key,
+                update_expr="SET collection_id = :col",
+                expr_vals={":col": "default"},
+            )
+            # Also update lookup item
+            lookup_key = {"pk": pk_bookmark_lookup(user_id), "sk": item["sk"]}
+            try:
+                ddb_update_item(
+                    key=lookup_key,
+                    update_expr="SET collection_id = :col",
+                    expr_vals={":col": "default"},
+                )
+            except Exception:
+                pass
+            moved_count += 1
+
+    # Delete the collection
+    ddb_delete_item(key)
+
+    return {"ok": True, "moved_count": moved_count}
+
+
+# ─── Bulk Operations (UX-004) ────────────────────────────────────────────────
+
+
+class PostBulkDeleteReq(BaseModel):
+    post_ids: List[str] = Field(..., min_length=1, max_length=50)
+
+
+class PostBulkArchiveReq(BaseModel):
+    post_ids: List[str] = Field(..., min_length=1, max_length=50)
+
+
+@router.post("/posts/bulk-delete")
+def bulk_delete_posts(body: PostBulkDeleteReq, user_id: UserIdDep):
+    """Bulk-delete posts. Deletes posts permanently. Only posts owned by the authenticated user."""
+    results = []
+    for post_id in body.post_ids:
+        try:
+            post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+            if not post:
+                results.append({"post_id": post_id, "ok": False, "error": "not_found"})
+                continue
+            if post.get("user_id") != user_id:
+                results.append({"post_id": post_id, "ok": False, "error": "not_owner"})
+                continue
+            tbl.delete_item(Key={"pk": pk_post(post_id), "sk": sk_post()})
+            try:
+                from app.services.newsfeed_fanout import fan_out_delete_post
+                fan_out_delete_post(post_id=post_id)
+            except Exception:
+                pass
+            results.append({"post_id": post_id, "ok": True})
+        except Exception as e:
+            results.append({"post_id": post_id, "ok": False, "error": str(e)})
+
+    succeeded = sum(1 for r in results if r["ok"])
+    failed = sum(1 for r in results if not r["ok"])
+    return {"results": results, "succeeded": succeeded, "failed": failed}
+
+
+@router.post("/posts/bulk-archive")
+def bulk_archive_posts(body: PostBulkArchiveReq, user_id: UserIdDep):
+    """Bulk-archive posts. Sets status='archived' on each post. Only posts owned by the authenticated user."""
+    results = []
+    for post_id in body.post_ids:
+        try:
+            post = ddb_get_item({"pk": pk_post(post_id), "sk": sk_post()})
+            if not post:
+                results.append({"post_id": post_id, "ok": False, "error": "not_found"})
+                continue
+            if post.get("user_id") != user_id:
+                results.append({"post_id": post_id, "ok": False, "error": "not_owner"})
+                continue
+            ddb_update_item(
+                key={"pk": pk_post(post_id), "sk": sk_post()},
+                update_expr="SET #status = :archived, archived_at = :ts",
+                expr_names={"#status": "status"},
+                expr_vals={":archived": "archived", ":ts": now_iso()},
+            )
+            results.append({"post_id": post_id, "ok": True})
+        except Exception as e:
+            results.append({"post_id": post_id, "ok": False, "error": str(e)})
+
+    succeeded = sum(1 for r in results if r["ok"])
+    failed = sum(1 for r in results if not r["ok"])
+    return {"results": results, "succeeded": succeeded, "failed": failed}
 
 
 # -----------------------------

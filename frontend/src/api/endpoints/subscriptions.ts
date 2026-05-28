@@ -5,6 +5,10 @@ import type {
   SubscriptionOut,
   SubscriptionSummary,
   SubscriptionInvoice,
+  PlanCreateReq,
+  PlanUpdateReq,
+  DiscountCodeCreateReq,
+  DiscountCode,
 } from "@/api/types";
 
 // ─── Auth helper ────────────────────────────────────────────────
@@ -76,3 +80,36 @@ export const updateRenewal = (
   subId: string,
   body: { auto_renew: boolean; effective?: string; renewal_policy?: string; reason?: string },
 ) => subPost<SubscriptionOut>(`/api/subscriptions/${subId}/renewal`, body);
+
+// ─── Plan CRUD (Creator) ──────────────────────────────────────────
+
+function subPatch<T>(path: string, body?: unknown) {
+  return api<T>(path, {
+    method: "PATCH",
+    headers: { ...userIdHeader(), "Content-Type": "application/json" },
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+}
+
+export const createPlan = (creatorId: string, body: PlanCreateReq) =>
+  subPost<SubscriptionPlan>(`/api/creators/${creatorId}/plans`, body);
+
+export const updatePlan = (planId: string, body: PlanUpdateReq) =>
+  subPatch<SubscriptionPlan>(`/api/plans/${planId}`, body);
+
+export const archivePlan = (planId: string) =>
+  subPost<SubscriptionPlan>(`/api/plans/${planId}/archive`, {});
+
+// ─── Discount Codes ───────────────────────────────────────────────
+
+export const createDiscount = (creatorId: string, body: DiscountCodeCreateReq) =>
+  subPost<DiscountCode>(`/api/creators/${creatorId}/discounts`, body);
+
+export const listDiscounts = (creatorId: string) =>
+  subGet<DiscountCode[]>(`/api/creators/${creatorId}/discounts`);
+
+export const disableDiscount = (creatorId: string, code: string) =>
+  subPost<DiscountCode>(
+    `/api/creators/${creatorId}/discounts/${encodeURIComponent(code)}/disable`,
+    {},
+  );

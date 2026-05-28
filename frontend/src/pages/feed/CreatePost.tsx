@@ -1,8 +1,9 @@
 import { useState, useRef, useMemo, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useOfflineStore } from "@/stores/offlineStore";
-import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip, Clock, Globe, Video } from "lucide-react";
+import { Send, ImagePlus, X, Loader2, FolderOpen, Lock, Paperclip, Clock, Globe, Video, Hash } from "lucide-react";
 import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -140,6 +141,8 @@ export function CreatePost() {
   const [unlockLimitError, setUnlockLimitError] = useState<string | null>(null);
   const [pendingVideo, setPendingVideo] = useState<VideoListItem | null>(null);
   const [videoPickerOpen, setVideoPickerOpen] = useState(false);
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState("");
   const { data: capabilities } = useQuery({
     queryKey: ["feed", "capabilities"],
     queryFn: getFeedCapabilities,
@@ -289,6 +292,8 @@ export function CreatePost() {
     setUnlockLimitEnabled(false);
     setUnlockLimit("");
     setUnlockLimitError(null);
+    setTags([]);
+    setTagInput("");
   };
 
   const draftsQuery = useQuery({
@@ -318,6 +323,7 @@ export function CreatePost() {
           : {}),
         ...(parsedUnlockLimit ? { unlock_limit: parsedUnlockLimit } : {}),
         ...(pendingVideo ? { video_id: pendingVideo.video_id } : {}),
+        ...(tags.length > 0 ? { tags } : {}),
       });
     },
     onSuccess: async (resp, target) => {
@@ -769,6 +775,43 @@ export function CreatePost() {
             placeholder="What's on your mind?"
             rows={3}
           />
+
+          {/* SOCIAL-006: Tag input */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {tags.map((tag) => (
+              <Badge key={tag} variant="secondary" className="gap-1 text-xs">
+                #{tag}
+                <button
+                  type="button"
+                  onClick={() => setTags((t) => t.filter((x) => x !== tag))}
+                  className="ml-0.5 hover:text-destructive"
+                  aria-label={`Remove tag ${tag}`}
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </Badge>
+            ))}
+            <div className="flex items-center gap-1">
+              <Hash className="h-3.5 w-3.5 text-muted-foreground" />
+              <input
+                type="text"
+                placeholder="Add tag..."
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value.replace(/[^a-zA-Z0-9_]/g, ""))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && tagInput.trim()) {
+                    e.preventDefault();
+                    const normalized = tagInput.trim().toLowerCase();
+                    if (normalized.length > 0 && normalized.match(/^[a-z][a-z0-9_]{0,49}$/)) {
+                      setTags((t) => [...new Set([...t, normalized])].slice(0, 20));
+                    }
+                    setTagInput("");
+                  }
+                }}
+                className="h-7 w-28 rounded border border-input bg-background px-2 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </div>
+          </div>
 
           {schedulingUiEnabled && (
             <div className="rounded-md border border-border/60 bg-muted/20 p-2.5">

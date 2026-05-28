@@ -5,7 +5,8 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { listPushDevices, registerPush, revokePush, testPush } from "@/api/endpoints/push";
+import { listPushDevices, registerPush, revokePush, testPush, getVapidKey } from "@/api/endpoints/push";
+import { registerServiceWorker, subscribeToPush, unsubscribeFromPush } from "@/lib/pushSetup";
 import type { PushDevice } from "@/api/types";
 
 function platformIcon(platform: string) {
@@ -28,7 +29,11 @@ export function PushDevices() {
   });
 
   const revokeMutation = useMutation({
-    mutationFn: (deviceId: string) => revokePush({ device_id: deviceId }),
+    mutationFn: async (deviceId: string) => {
+      // Unsubscribe from push in the browser as well
+      await unsubscribeFromPush();
+      return revokePush({ device_id: deviceId });
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["push", "devices"] });
       toast.success("Device removed");
@@ -44,13 +49,14 @@ export function PushDevices() {
   });
 
   const handleEnable = async () => {
-    if (!("Notification" in window)) {
+    if (!("Notification" in window) || !("serviceWorker" in navigator)) {
       toast.error("Push notifications are not supported in this browser");
       return;
     }
 
     setEnabling(true);
     try {
+      // 1. Request notification permission
       let permission = Notification.permission;
       if (permission === "default") {
         permission = await Notification.requestPermission();
@@ -61,12 +67,27 @@ export function PushDevices() {
         return;
       }
 
-      // Register with a browser-generated token placeholder
-      const token = `web-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      await registerPush({ token, platform: "web" });
+      // 2. Fetch VAPID public key from server
+      const vapidResp = await getVapidKey();
+      const vapidPublicKey = vapidResp.data?.vapid_public_key ?? (vapidResp as any).vapid_public_key;
+      if (!vapidPublicKey) {
+        toast.error("Push not configured on server");
+        return;
+      }
+
+      // 3. Register service worker (may already be registered)
+      await registerServiceWorker();
+
+      // 4. Subscribe to push using VAPID key
+      const subscriptionJson = await subscribeToPush(vapidPublicKey);
+
+      // 5. Send subscription to backend
+      await registerPush({ token: subscriptionJson, platform: "web" });
+
       qc.invalidateQueries({ queryKey: ["push", "devices"] });
       toast.success("Push notifications enabled");
-    } catch {
+    } catch (err) {
+      console.error("Push enable failed:", err);
       toast.error("Failed to enable push notifications");
     } finally {
       setEnabling(false);

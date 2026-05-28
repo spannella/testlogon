@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import {
   BarChart3,
   DollarSign,
@@ -48,6 +48,8 @@ import {
   getAnalyticsAudience,
   refreshAnalytics,
 } from "@/api/endpoints/analytics";
+import { useAuthStore } from "@/stores/authStore";
+import TopSupportersCard from "./TopSupportersCard";
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -87,6 +89,8 @@ const STALE_TIME = 5 * 60 * 1000; // 5 minutes
 export default function AnalyticsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const userId = useAuthStore((s) => s.userId);
 
   // URL-driven state
   const fromDate = searchParams.get("from_date") || daysAgo(30);
@@ -394,12 +398,17 @@ export default function AnalyticsPage() {
                     <th className="pb-2 pr-4">Title</th>
                     <th className="pb-2 pr-4">Type</th>
                     <th className="pb-2 pr-4 text-right">Views</th>
-                    <th className="pb-2 text-right">Revenue</th>
+                    <th className="pb-2 pr-4 text-right">Revenue</th>
+                    <th className="pb-2 text-right">Engagement</th>
                   </tr>
                 </thead>
                 <tbody>
                   {topContent?.items.map((item, i) => (
-                    <tr key={item.content_id} className="border-b last:border-0">
+                    <tr
+                      key={item.content_id}
+                      className="border-b last:border-0 cursor-pointer hover:bg-muted/50 transition-colors"
+                      onClick={() => navigate(`/analytics/content/${item.content_id}`)}
+                    >
                       <td className="py-2 pr-4 text-muted-foreground">{i + 1}</td>
                       <td className="py-2 pr-4 font-medium">{item.title}</td>
                       <td className="py-2 pr-4">
@@ -408,7 +417,8 @@ export default function AnalyticsPage() {
                         </span>
                       </td>
                       <td className="py-2 pr-4 text-right">{formatNumber(item.views)}</td>
-                      <td className="py-2 text-right">{formatCents(item.revenue_cents)}</td>
+                      <td className="py-2 pr-4 text-right">{formatCents(item.revenue_cents)}</td>
+                      <td className="py-2 text-right">{(item.engagement_rate * 100).toFixed(1)}%</td>
                     </tr>
                   ))}
                 </tbody>
@@ -417,6 +427,9 @@ export default function AnalyticsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Top Supporters (SOCIAL-005) */}
+      {userId && <TopSupportersCard creatorId={userId} />}
 
       {/* Audience Demographics */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

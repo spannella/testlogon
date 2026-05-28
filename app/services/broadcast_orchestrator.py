@@ -26,7 +26,7 @@ def start_session_with_provider(
     current = get_session(session_id)
     profile = get_profile(current.profile_id)
 
-    if current.status == "draft":
+    if current.status in ("draft", "scheduled"):
         transition_session_status(session_id=session_id, to_status="provisioning", reason="start-requested", actor=actor)
         t0 = time.monotonic()
         try:
@@ -80,6 +80,25 @@ def start_session_with_provider(
             )
             raise
         current = transition_session_status(session_id=session_id, to_status="live", reason=reason, actor=actor)
+
+        # BCAST-010: Create or update live post in newsfeed
+        try:
+            from app.services.broadcast_newsfeed import create_live_post
+            live_post_id = create_live_post(
+                session_id=session_id,
+                creator_id=current.created_by,
+                announcement_post_id=current.announcement_post_id,
+                session_name=current.name,
+                session_description=current.description,
+                thumbnail_url=current.thumbnail_url,
+            )
+            if live_post_id and live_post_id != current.announcement_post_id:
+                from app.services.broadcast_store import update_session_fields as _usf
+                _usf(session_id, {"announcement_post_id": live_post_id})
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Live post creation failed for session %s (non-fatal)", session_id)
+
         existing = get_output(current.id)
         if provider.name == "aws" and existing and existing.mediapackage_endpoint:
             signed = mint_cloudfront_signed_playback_url(origin_url=existing.mediapackage_endpoint)

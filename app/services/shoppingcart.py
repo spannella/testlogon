@@ -10,6 +10,7 @@ from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
+from app.core.settings import S
 from app.core.tables import T
 from app.services.catalog_commercialization import _validate_product_version
 from app.services.commerce_entitlement_orchestrator import CommerceEntitlementOrchestrator
@@ -56,7 +57,23 @@ def _cart_from_item(item: Dict[str, Any]) -> Dict[str, Any]:
         "purchased_at": item.get("purchased_at"),
         "purchased_total_cents": _ddb_int(item["purchased_total_cents"]) if item.get("purchased_total_cents") is not None else None,
         "currency": item.get("currency", "USD"),
+        # SHOP-003: Abandonment tracking fields
+        "last_activity_at": _ddb_int(item.get("last_activity_at", 0)),
+        "abandoned_at": _ddb_int(item.get("abandoned_at", 0)),
+        "reminder_count": _ddb_int(item.get("reminder_count", 0)),
     }
+
+
+def _touch_cart_activity(user_sub: str, cart_id: str) -> None:
+    """Update last_activity_at and TTL on the parent cart record (SHOP-003)."""
+    ts = int(datetime.now(timezone.utc).timestamp())
+    ttl_epoch = ts + (S.cart_ttl_days * 86400)
+    T.shopping_cart.update_item(
+        Key={"PK": _user_pk(user_sub), "SK": _cart_sk(cart_id)},
+        UpdateExpression="SET last_activity_at = :ts, #ttl = :ttl",
+        ExpressionAttributeNames={"#ttl": "ttl"},
+        ExpressionAttributeValues={":ts": ts, ":ttl": ttl_epoch},
+    )
 
 
 def _item_from_item(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -237,6 +254,8 @@ def list_carts(user_sub: str) -> List[Dict[str, Any]]:
 def start_cart(user_sub: str) -> Dict[str, Any]:
     cart_id = uuid.uuid4().hex
     now = _now_iso()
+    ts = int(datetime.now(timezone.utc).timestamp())
+    ttl_epoch = ts + (S.cart_ttl_days * 86400)
     item = {
         "PK": _user_pk(user_sub),
         "SK": _cart_sk(cart_id),
@@ -244,7 +263,10 @@ def start_cart(user_sub: str) -> Dict[str, Any]:
         "cart_id": cart_id,
         "status": "OPEN",
         "created_at": now,
+        "last_activity_at": ts,
+        "reminder_count": 0,
         "currency": "USD",
+        "ttl": ttl_epoch,
     }
     T.shopping_cart.put_item(Item=item)
     return _cart_from_item(item)
@@ -309,6 +331,7 @@ def add_item(user_sub: str, cart_id: str, payload: Dict[str, Any]) -> Dict[str, 
             **updated,
         }
         T.shopping_cart.put_item(Item=updated)
+        _touch_cart_activity(user_sub, cart_id)
         return _item_from_item(updated)
 
     item = _validate_commercial_item_payload(
@@ -336,6 +359,7 @@ def add_item(user_sub: str, cart_id: str, payload: Dict[str, Any]) -> Dict[str, 
     if payload.get("item_id"):
         item["item_id"] = payload["item_id"]
     T.shopping_cart.put_item(Item=item)
+    _touch_cart_activity(user_sub, cart_id)
     return _item_from_item(item)
 
 
@@ -379,6 +403,7 @@ def set_item_quantity(user_sub: str, cart_id: str, sku: str, quantity: int) -> O
 
     if quantity <= 0:
         T.shopping_cart.delete_item(Key=key)
+        _touch_cart_activity(user_sub, cart_id)
         return None
 
     updated = {
@@ -387,6 +412,7 @@ def set_item_quantity(user_sub: str, cart_id: str, sku: str, quantity: int) -> O
         "updated_at": _now_iso(),
     }
     T.shopping_cart.put_item(Item=updated)
+    _touch_cart_activity(user_sub, cart_id)
     return _item_from_item(updated)
 
 
@@ -402,6 +428,7 @@ def decrement_item(user_sub: str, cart_id: str, sku: str, amount: int) -> None:
     new_qty = _ddb_int(existing.get("quantity", 0)) - amount
     if new_qty <= 0:
         T.shopping_cart.delete_item(Key=key)
+        _touch_cart_activity(user_sub, cart_id)
         return
 
     updated = {
@@ -410,6 +437,7 @@ def decrement_item(user_sub: str, cart_id: str, sku: str, amount: int) -> None:
         "updated_at": _now_iso(),
     }
     T.shopping_cart.put_item(Item=updated)
+    _touch_cart_activity(user_sub, cart_id)
 
 
 def delete_cart(user_sub: str, cart_id: str) -> None:
@@ -425,7 +453,27 @@ def delete_cart(user_sub: str, cart_id: str) -> None:
         batch.delete_item(Key={"PK": cart["PK"], "SK": cart["SK"]})
 
 
-def purchase_cart(user_sub: str, cart_id: str, *, idempotency_key: str | None = None) -> Dict[str, Any]:
+def _resolve_cart_creator(items: List[Dict[str, Any]]) -> Optional[str]:
+    """Return the single creator_user_id if all items are from the same creator.
+    Returns None if mixed or no creator info."""
+    creators = set()
+    for item in items:
+        cid = item.get("creator_user_id") or item.get("seller_id")
+        if cid:
+            creators.add(cid)
+    if len(creators) == 1:
+        return creators.pop()
+    return None
+
+
+def purchase_cart(
+    user_sub: str,
+    cart_id: str,
+    *,
+    idempotency_key: str | None = None,
+    promo_code: str | None = None,
+    promo_code_id: str | None = None,
+) -> Dict[str, Any]:
     cart = get_cart(user_sub, cart_id)
     if cart.get("status") == "PURCHASED":
         return {
@@ -441,10 +489,88 @@ def purchase_cart(user_sub: str, cart_id: str, *, idempotency_key: str | None = 
 
     items = list_items(user_sub, cart_id)
     total_cents = sum(item.get("line_total_cents", 0) for item in items)
+
+    # ── SHOP-001: Stock validation + atomic decrement ──
+    decremented_stock: List[Dict[str, Any]] = []
+    for cart_item in items:
+        cat_id = cart_item.get("category_id")
+        ci_item_id = cart_item.get("item_id")
+        if not cat_id or not ci_item_id:
+            continue
+        catalog_key = _catalog_item_key(cat_id, ci_item_id)
+        catalog_resp = T.catalog.get_item(Key=catalog_key)
+        catalog_item = catalog_resp.get("Item")
+        if not catalog_item:
+            continue
+        sc = catalog_item.get("stock_count")
+        if sc is None:
+            continue  # unlimited stock — skip
+        qty = int(cart_item.get("quantity", 1))
+        try:
+            T.catalog.update_item(
+                Key=catalog_key,
+                UpdateExpression="SET stock_count = stock_count - :qty, stock_updated_at = :now",
+                ConditionExpression="stock_count >= :qty",
+                ExpressionAttributeValues={":qty": qty, ":now": _now_iso()},
+            )
+            decremented_stock.append({"cat_id": cat_id, "item_id": ci_item_id, "qty": qty})
+        except ClientError as exc:
+            if exc.response["Error"].get("Code") == "ConditionalCheckFailedException":
+                for prev in decremented_stock:
+                    try:
+                        T.catalog.update_item(
+                            Key=_catalog_item_key(prev["cat_id"], prev["item_id"]),
+                            UpdateExpression="SET stock_count = stock_count + :qty",
+                            ExpressionAttributeValues={":qty": prev["qty"]},
+                        )
+                    except Exception:
+                        pass
+                item_name = cart_item.get("name", ci_item_id)
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Item '{item_name}' is out of stock",
+                ) from exc
+            raise
+
     now = _now_iso()
     buyer = _buyer_snapshot(get_profile(user_sub))
     canonical_idempotency_key = _cart_purchase_idempotency_key(user_sub, cart_id)
     request_idempotency_key = str(idempotency_key or "").strip()
+
+    # ── SHOP-002: Promo code validation and discount ──
+    discount_cents = 0
+    resolved_promo: Optional[Dict[str, Any]] = None
+    original_total_cents = total_cents
+
+    if promo_code or promo_code_id:
+        from app.services.promo_codes import validate_promo_code, get_promo_code
+
+        # Resolve creator from cart items
+        creator_id = _resolve_cart_creator(items)
+        if not creator_id:
+            # If items have no creator info, use the buyer's own id as fallback
+            # (for self-created catalog items)
+            creator_id = user_sub
+
+        code_str = promo_code
+        if not code_str and promo_code_id:
+            promo_item = get_promo_code(promo_code_id)
+            code_str = promo_item.get("code") if promo_item else None
+
+        if code_str:
+            result = validate_promo_code(
+                code=code_str,
+                user_id=user_sub,
+                checkout_type="shop",
+                item_price_cents=total_cents,
+                creator_user_id=creator_id,
+            )
+            if not result["valid"]:
+                raise HTTPException(422, result["message"] or "Invalid promo code")
+            discount_cents = result["discount_cents"]
+            resolved_promo = result
+
+    final_total = max(0, total_cents - discount_cents)
 
     line_items = _commercial_line_items_from_cart_items(items, cart_id)
     order = commerce_order_service.create_order_from_line_items(
@@ -452,7 +578,14 @@ def purchase_cart(user_sub: str, cart_id: str, *, idempotency_key: str | None = 
         source_system="shopping_cart",
         correlation_id=canonical_idempotency_key,
         line_items=line_items,
-        metadata={"cart_id": cart_id, "idempotency_key": canonical_idempotency_key, "request_idempotency_key": request_idempotency_key},
+        metadata={
+            "cart_id": cart_id,
+            "idempotency_key": canonical_idempotency_key,
+            "request_idempotency_key": request_idempotency_key,
+            "promo_code_id": resolved_promo["code_id"] if resolved_promo else None,
+            "discount_cents": discount_cents,
+            "original_total_cents": original_total_cents,
+        },
     )
     order_id = str(order.get("order_id") or "")
 
@@ -466,7 +599,7 @@ def purchase_cart(user_sub: str, cart_id: str, *, idempotency_key: str | None = 
         expr_values = {
             ":status": "PURCHASED",
             ":purchased_at": now,
-            ":total": total_cents,
+            ":total": final_total,
             ":order_id": order_id,
             ":idempotency_key": canonical_idempotency_key,
             ":request_idempotency_key": request_idempotency_key,
@@ -475,6 +608,11 @@ def purchase_cart(user_sub: str, cart_id: str, *, idempotency_key: str | None = 
         if buyer:
             update_expr = f"{update_expr}, buyer_profile = :buyer"
             expr_values[":buyer"] = buyer
+        if resolved_promo:
+            update_expr += ", promo_code_id = :promo_id, discount_cents = :discount, original_total_cents = :orig_total"
+            expr_values[":promo_id"] = resolved_promo["code_id"]
+            expr_values[":discount"] = discount_cents
+            expr_values[":orig_total"] = original_total_cents
         T.shopping_cart.update_item(
             Key={"PK": cart["PK"], "SK": cart["SK"]},
             UpdateExpression=update_expr,
@@ -507,11 +645,26 @@ def purchase_cart(user_sub: str, cart_id: str, *, idempotency_key: str | None = 
     except Exception:
         pass
 
+    # ── SHOP-002: Redeem promo code on successful purchase ──
+    if resolved_promo and resolved_promo.get("code_id"):
+        try:
+            from app.services.promo_codes import redeem_promo_code
+            redeem_promo_code(
+                code_id=resolved_promo["code_id"],
+                user_id=user_sub,
+                original_price_cents=original_total_cents,
+                final_price_cents=final_total,
+                checkout_type="shop",
+                checkout_item_id=cart_id,
+            )
+        except Exception:
+            pass  # best-effort redemption
+
     txn_id = record_cart_purchase(
         user_sub=user_sub,
         cart_id=cart_id,
         order_id=order_id,
-        total_cents=total_cents,
+        total_cents=final_total,
         currency=cart.get("currency", "USD"),
         items=items,
         buyer=buyer,
@@ -525,12 +678,158 @@ def purchase_cart(user_sub: str, cart_id: str, *, idempotency_key: str | None = 
     except Exception:
         pass
 
+    # SHOP-003: Remove TTL from purchased carts (permanent records)
+    try:
+        T.shopping_cart.update_item(
+            Key={"PK": cart["PK"], "SK": cart["SK"]},
+            UpdateExpression="REMOVE #ttl",
+            ExpressionAttributeNames={"#ttl": "ttl"},
+        )
+    except Exception:
+        pass  # Non-critical: TTL removal is best-effort
+
     return {
         "cart_id": cart_id,
         "order_id": order_id,
         "purchased_at": now,
-        "purchased_total_cents": total_cents,
+        "purchased_total_cents": final_total,
+        "original_total_cents": original_total_cents if resolved_promo else None,
+        "discount_cents": discount_cents if resolved_promo else None,
+        "promo_code_id": resolved_promo["code_id"] if resolved_promo else None,
+        "promo_discount_type": resolved_promo["discount_type"] if resolved_promo else None,
         "currency": cart.get("currency", "USD"),
         "buyer": buyer,
         "purchase_txn_id": txn_id,
+    }
+
+
+# ─── SHOP-003: Cart Abandonment Detection & Reminders ──────────────────────────
+
+
+def scan_abandoned_carts(*, threshold_hours: int = 24) -> List[Dict[str, Any]]:
+    """Find OPEN carts with no activity in the last threshold_hours.
+
+    Uses ByStatusActivity GSI: status="OPEN" AND last_activity_at < cutoff.
+    Filters out recently reminded carts and carts at max reminders.
+    """
+    cutoff = int(datetime.now(timezone.utc).timestamp()) - (threshold_hours * 3600)
+    now = int(datetime.now(timezone.utc).timestamp())
+    cooldown = S.cart_abandonment_reminder_cooldown_hours * 3600
+    max_reminders = S.cart_abandonment_max_reminders
+
+    resp = T.shopping_cart.query(
+        IndexName="ByStatusActivity",
+        KeyConditionExpression=Key("status").eq("OPEN") & Key("last_activity_at").lt(cutoff),
+        Limit=200,
+    )
+    items = resp.get("Items", [])
+
+    # Filter in-memory: skip recently reminded or maxed-out carts
+    eligible: List[Dict[str, Any]] = []
+    for item in items:
+        last_reminder = int(item.get("last_reminder_at", 0) or 0)
+        count = int(item.get("reminder_count", 0) or 0)
+        if count >= max_reminders:
+            continue
+        if last_reminder and (last_reminder + cooldown) > now:
+            continue
+        eligible.append(item)
+
+    return eligible
+
+
+def send_cart_reminder(cart: Dict[str, Any]) -> None:
+    """Send an abandonment reminder for a single cart.
+
+    Writes in-app alert, sends email, updates cart reminder tracking.
+    """
+    from app.services.alerts import write_alert, send_alert_email
+
+    user_sub = cart["PK"].replace("USER#", "")
+    cart_id = cart.get("cart_id", "")
+    ts = int(datetime.now(timezone.utc).timestamp())
+
+    # Count items in this cart
+    prefix = f"CART#{cart_id}#ITEM#"
+    items_resp = T.shopping_cart.query(
+        KeyConditionExpression=Key("PK").eq(cart["PK"]) & Key("SK").begins_with(prefix),
+        Select="COUNT",
+    )
+    items_count = items_resp.get("Count", 0)
+    if items_count == 0:
+        return  # Don't remind for empty carts
+
+    # Write in-app alert
+    write_alert(
+        user_sub,
+        event="cart.abandoned",
+        outcome="reminder",
+        title="You left items in your cart",
+        details={
+            "cart_id": cart_id,
+            "alert_type": "cart.abandoned",
+            "link": f"/cart?cartId={cart_id}",
+            "items_count": str(items_count),
+        },
+    )
+
+    # Send email reminder
+    profile = get_profile(user_sub) or {}
+    email = profile.get("email") or profile.get("displayed_email")
+    if email:
+        send_alert_email(
+            [email],
+            subject="You left items in your cart",
+            body_text=(
+                f"You have {items_count} item(s) waiting in your cart. "
+                f"Complete your purchase: /cart?cartId={cart_id}"
+            ),
+        )
+
+    # Update cart reminder tracking
+    T.shopping_cart.update_item(
+        Key={"PK": cart["PK"], "SK": cart["SK"]},
+        UpdateExpression=(
+            "SET last_reminder_at = :ts, "
+            "abandoned_at = if_not_exists(abandoned_at, :ts) "
+            "ADD reminder_count :one"
+        ),
+        ExpressionAttributeValues={":ts": ts, ":one": 1},
+    )
+
+
+def get_abandonment_stats() -> Dict[str, Any]:
+    """Return aggregate cart abandonment metrics for admin dashboard."""
+    # Scan all cart records (type=cart) — limited to 1000 for performance
+    resp = T.shopping_cart.scan(
+        FilterExpression="attribute_exists(cart_id) AND #t = :cart_type",
+        ExpressionAttributeNames={"#t": "type"},
+        ExpressionAttributeValues={":cart_type": "cart"},
+        Limit=1000,
+    )
+    items = resp.get("Items", [])
+
+    total_open = 0
+    total_abandoned = 0
+    total_purchased = 0
+
+    for item in items:
+        status = item.get("status")
+        if status == "OPEN":
+            total_open += 1
+            abandoned_at = int(item.get("abandoned_at", 0) or 0)
+            if abandoned_at > 0:
+                total_abandoned += 1
+        elif status == "PURCHASED":
+            total_purchased += 1
+
+    total_carts = total_open + total_purchased
+    abandonment_rate = (total_abandoned / total_open * 100) if total_open > 0 else 0.0
+
+    return {
+        "total_open": total_open,
+        "total_abandoned": total_abandoned,
+        "total_purchased": total_purchased,
+        "total_carts": total_carts,
+        "abandonment_rate": round(abandonment_rate, 2),
     }

@@ -14,6 +14,7 @@ import type {
   CatalogReview,
   CatalogReviewIn,
   PaginatedList,
+  StockAdjustment,
 } from "@/api/types";
 
 // ─── Shopping Cart ───────────────────────────────────────────────
@@ -39,8 +40,14 @@ export const removeCartItem = (cartId: string, sku: string) =>
 export const getCartTotal = (cartId: string) =>
   api.get<CartTotal>(`/ui/shoppingcart/carts/${cartId}/total`);
 
-export const purchaseCart = (cartId: string) =>
-  api.post<CartPurchase>(`/ui/shoppingcart/carts/${cartId}/purchase`);
+export const purchaseCart = (
+  cartId: string,
+  body?: { promo_code?: string; promo_code_id?: string },
+) =>
+  api.post<CartPurchase>(
+    `/ui/shoppingcart/carts/${cartId}/purchase`,
+    body ?? {},
+  );
 
 export const deleteCart = (cartId: string) =>
   api.del<OkResp>(`/ui/shoppingcart/carts/${cartId}`);
@@ -99,3 +106,34 @@ export const uploadItemImage = (categoryId: string, itemId: string, file: File) 
 
 export const createReview = (itemId: string, body: CatalogReviewIn) =>
   api.post<CatalogReview>(`/ui/catalog/items/${itemId}/reviews`, body);
+
+export const adjustStock = (
+  itemId: string,
+  body: { delta?: number; absolute?: number; reason?: string },
+) => api.patch<StockAdjustment>(`/ui/catalog/items/${itemId}/stock`, body);
+
+export const reorderCatalogItems = (itemIds: string[]) =>
+  api.patch<{ ok: boolean; results: Array<{ item_id: string; ok: boolean; error?: string }> }>(
+    "/ui/catalog/items/reorder",
+    { item_ids: itemIds },
+  );
+
+// ─── Bulk Operations (UX-004) ──────────────────────���────────────────────────
+
+export interface BulkResult {
+  results: Array<{ item_id: string; ok: boolean; error?: string }>;
+  succeeded: number;
+  failed: number;
+}
+
+export const bulkDeleteCatalogItems = (itemIds: string[]) =>
+  api.post<BulkResult>("/ui/catalog/items/bulk-delete", { item_ids: itemIds });
+
+export const bulkUpdateCatalogItems = (
+  itemIds: string[],
+  updates: Record<string, string>,
+) =>
+  api.post<BulkResult>("/ui/catalog/items/bulk-update", {
+    item_ids: itemIds,
+    updates,
+  });

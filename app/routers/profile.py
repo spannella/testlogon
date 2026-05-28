@@ -13,7 +13,7 @@ from boto3.dynamodb.conditions import Attr, Key
 from fastapi import APIRouter, Depends, HTTPException, File, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
-from app.models import ProfilePatchReq, ProfilePutReq
+from app.models import PreferencesPatchReq, ProfilePatchReq, ProfilePutReq
 from app.core.aws import ddb
 from app.core.cursor import decode_cursor, encode_cursor
 from app.core.tables import T
@@ -32,6 +32,7 @@ from app.services.profile_discoverability import (
     DiscoverabilityState,
 )
 from app.services.rate_limit import rate_limit_profile_lookup
+from app.services.user_preferences import get_user_preferences, update_user_preferences
 from app.auth.deps import get_authenticated_user
 from app.services.sessions import require_ui_session
 from app.core.normalize import client_ip_from_request
@@ -583,3 +584,38 @@ def _resolve_canonical_identifier_for_user_sub(user_sub: str) -> str:
         if candidate and _is_alias_lookup_candidate(candidate):
             return candidate
     return candidate_user_sub
+
+
+# ─── UI Preferences (UX-001) ─────────────────────────────────────────────────
+
+
+@router.get("/settings/preferences")
+async def ui_get_preferences(ctx=Depends(require_ui_session)):
+    """Return the user's UI preferences.
+
+    Returns {"preferences": {...}} where the preferences object contains
+    only the keys that have been explicitly set. Missing keys mean the
+    frontend should use its default value.
+    """
+    user_sub = ctx["user_sub"]
+    prefs = get_user_preferences(user_sub)
+    return {"preferences": prefs}
+
+
+@router.patch("/settings/preferences")
+async def ui_update_preferences(
+    body: PreferencesPatchReq,
+    ctx=Depends(require_ui_session),
+):
+    """Merge-update UI preferences for the current user.
+
+    Accepts partial updates -- only provided fields are merged.
+    Returns {"ok": True} on success.
+    """
+    user_sub = ctx["user_sub"]
+    updates = body.model_dump(exclude_none=True)
+    if not updates:
+        return {"ok": True}  # No-op for empty body
+
+    update_user_preferences(user_sub, updates)
+    return {"ok": True}

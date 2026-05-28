@@ -104,6 +104,8 @@ class Tables:
     refund_requests: Any
     translations: Any
     group_call_sessions: Any
+    sms_delivery: Any
+    email_delivery: Any
 
 T = Tables(
     sessions=ddb.Table(S.ddb_sessions_table),
@@ -202,4 +204,6 @@ T = Tables(
     refund_requests=ddb.Table(S.refund_requests_table_name),
     translations=ddb.Table(S.translations_table_name),
     group_call_sessions=ddb.Table(S.group_call_sessions_table_name),
+    sms_delivery=ddb.Table(S.sms_delivery_table_name),
+    email_delivery=ddb.Table(S.email_delivery_table_name),
 )

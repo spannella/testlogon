@@ -435,6 +435,49 @@ export interface CrossUserProfileResp {
   profile: Profile;
 }
 
+// ─── Public Profile (SOC-006 Storefront) ───────────────────────────
+
+export interface PublicProfileData {
+  user_id: string;
+  identifier: string;
+  canonical_identifier?: string | null;
+  display_name: string;
+  title?: string | null;
+  description?: string | null;
+  location?: string | null;
+  profile_photo_url?: string | null;
+  cover_photo_url?: string | null;
+  follower_count: number;
+  following_count: number;
+  post_count: number;
+  is_following: boolean;
+  is_followed_by: boolean;
+  is_mutual: boolean;
+  has_subscription_plans: boolean;
+  created_at?: number | null;
+  discoverability?: string | null;
+}
+
+export interface ProfilePostItem {
+  post_id: string;
+  created_at: string;
+  body_preview?: string | null;
+  image_urls: string[];
+  video_id?: string | null;
+  has_video: boolean;
+  locked: boolean;
+  unlock_price_cents?: number | null;
+  like_count: number;
+  comment_count: number;
+  tip_total_cents: number;
+}
+
+export interface ProfilePostsResponse {
+  items: ProfilePostItem[];
+  next_cursor?: string | null;
+  total_count: number;
+}
+
 // ─── Addresses ───────────────────────────────────────────────────
 
 export interface AddressIn {
@@ -1646,6 +1689,10 @@ export interface CartSummary {
   purchased_at?: string;
   purchased_total_cents?: number;
   currency: string;
+  // SHOP-003: Abandonment tracking
+  last_activity_at?: number;
+  abandoned_at?: number;
+  reminder_count?: number;
 }
 
 export interface CartItemIn {
@@ -1688,6 +1735,10 @@ export interface CartPurchase {
   purchased_total_cents: number;
   currency: string;
   purchase_txn_id?: string;
+  original_total_cents?: number;
+  discount_cents?: number;
+  promo_code_id?: string;
+  promo_discount_type?: string;
 }
 
 // ─── Catalog ─────────────────────────────────────────────────────
@@ -1714,6 +1765,8 @@ export interface CatalogItemIn {
   currency?: string;
   image_urls?: string[];
   attributes?: Record<string, unknown>;
+  stock_count?: number | null;
+  low_stock_threshold?: number;
 }
 
 export interface CatalogItem {
@@ -1728,6 +1781,19 @@ export interface CatalogItem {
   creator_id?: string;
   created_at: string;
   updated_at: string;
+  stock_count?: number | null;
+  stock_status: string;
+  low_stock_threshold: number;
+  stock_updated_at?: string;
+  position?: number | null;
+}
+
+export interface StockAdjustment {
+  item_id: string;
+  stock_count?: number | null;
+  stock_status: string;
+  low_stock_threshold: number;
+  stock_updated_at?: string;
 }
 
 export interface CatalogReviewIn {
@@ -1778,6 +1844,13 @@ export interface BroadcastPostMeta {
   broadcast_url?: string;
 }
 
+export interface ImageVariant {
+  url: string;
+  width: number;
+  height: number;
+  size_bytes?: number;
+}
+
 export interface FeedPost {
   post_id: string;
   author_id: string;
@@ -1789,6 +1862,7 @@ export interface FeedPost {
   body_format?: "plain" | "markdown" | "rich";
   body_version?: number;
   image_urls?: string[];
+  image_variants?: Array<Record<string, ImageVariant>>;
   video?: {
     video_id: string;
     title: string;
@@ -1831,6 +1905,18 @@ export interface FeedPost {
   post_type?: string;
   /** BCAST-010: broadcast metadata for broadcast post types */
   broadcast_meta?: BroadcastPostMeta;
+  /** SOCIAL-001: whether the current viewer has bookmarked this post */
+  bookmarked?: boolean;
+  /** SOCIAL-002: repost count for this post */
+  repost_count?: number;
+  /** SOCIAL-002: whether the current viewer has reposted this post */
+  reposted_by_me?: boolean;
+  /** SOCIAL-002: present when a feed item is a repost — who reposted it */
+  reposted_by?: { user_id: string; display_name: string };
+  /** SOCIAL-002: quote text from a quote repost */
+  repost_quote?: string;
+  /** SOCIAL-006: hashtags/topics on this post */
+  tags?: string[];
 }
 
 export interface FeedComment {
@@ -1864,6 +1950,7 @@ export interface CreatePostReq {
   body_format?: "plain" | "markdown" | "rich";
   body_version?: number;
   image_urls?: string[];
+  image_variants?: Array<Record<string, ImageVariant>>;
   file_paths?: string[];
   lock_type?: "fixed_price" | "tip_lottery";
   unlock_price_cents?: number;
@@ -1880,6 +1967,8 @@ export interface CreatePostReq {
   lottery_won_at?: string;
   lottery_version?: number;
   video_id?: string;
+  /** SOCIAL-006: explicit tags for the post */
+  tags?: string[];
 }
 
 export interface CreateCommentReq {
@@ -2005,11 +2094,22 @@ export interface PurchaseTransactionSummary {
   description?: string;
 }
 
+export interface CarrierEvent {
+  timestamp?: string;
+  description?: string;
+  location?: string;
+}
+
 export interface PurchaseShipping {
   carrier?: string;
   tracking_number?: string;
+  tracking_url?: string;
+  status?: string;
   shipped_at?: number;
   delivered_at?: number;
+  estimated_delivery?: string;
+  carrier_events?: CarrierEvent[];
+  last_carrier_check?: number;
   address?: Record<string, unknown>;
 }
 
@@ -2096,6 +2196,51 @@ export interface SubscriptionInvoice {
   proration_amount_cents?: number;
   proration_period_start?: number;
   proration_period_end?: number;
+}
+
+// ─── Plan CRUD Types ─────────────────────────────────────────────
+
+export interface PlanCreateReq {
+  name: string;
+  description?: string;
+  price_cents: number;
+  currency?: string;
+  interval: "month" | "year";
+  annual_price_cents?: number;
+  metadata?: Record<string, unknown>;
+  asset_paths?: string[];
+}
+
+export interface PlanUpdateReq {
+  name?: string;
+  description?: string;
+  price_cents?: number;
+  currency?: string;
+  interval?: "month" | "year";
+  annual_price_cents?: number;
+  status?: "active" | "archived";
+  metadata?: Record<string, unknown>;
+  asset_paths?: string[];
+}
+
+// ─── Discount Code Types ─────────────────────────────────────────
+
+export interface DiscountCodeCreateReq {
+  code: string;
+  percent_off: number;
+  duration: "once" | "forever" | "repeating";
+  duration_months?: number;
+  active?: boolean;
+}
+
+export interface DiscountCode {
+  code: string;
+  percent_off: number;
+  duration: string;
+  duration_months?: number;
+  active: boolean;
+  created_at: number;
+  updated_at: number;
 }
 
 // ─── Push Devices ────────────────────────────────────────────────
@@ -2832,6 +2977,34 @@ export interface AnalyticsDateRangeParams {
   limit?: number;
 }
 
+export interface ContentAnalyticsViewsItem {
+  date: string;
+  views: number;
+  unique_viewers: number;
+}
+
+export interface ContentAnalyticsRevenueBreakdown {
+  tips: number;
+  unlocks: number;
+  vod: number;
+}
+
+export interface ContentAnalytics {
+  content_id: string;
+  content_type: string;
+  title: string;
+  thumbnail_url?: string;
+  published_at?: number;
+  total_views: number;
+  total_revenue_cents: number;
+  engagement_rate: number;
+  like_count: number;
+  comment_count: number;
+  view_time_series: ContentAnalyticsViewsItem[];
+  revenue_breakdown: ContentAnalyticsRevenueBreakdown;
+  currency: string;
+}
+
 // ─── Privacy / GDPR (PRIVACY-001) ────────────────────────────────
 
 export interface ExportRequestBody {
@@ -3273,4 +3446,124 @@ export interface GroupCallMediaUpdateOut {
 export interface GroupCallSignalOut {
   ok: boolean;
   relayed_to: string;
+}
+
+// ─── Blocking ───────────────────────────────────────────────────
+
+export interface BlockedUser {
+  user_id: string;
+  display_name?: string;
+  profile_photo_url?: string;
+  blocked_at: string;
+}
+
+export interface BlockedUsersResponse {
+  blocked_users: BlockedUser[];
+  next_cursor?: string;
+  total_count: number;
+}
+
+export interface BlockStatusResponse {
+  is_blocked_by_me: boolean;
+  is_blocking_me: boolean;
+}
+
+export interface BlockActionResponse {
+  ok: boolean;
+  status: "blocked" | "unblocked";
+  target_user_id: string;
+}
+
+// ─── Tip Leaderboards (SOCIAL-005) ──────────────────────────────────
+
+export interface TopSupporter {
+  rank: number;
+  user_id: string;
+  display_name: string;
+  avatar_url: string | null;
+  total_cents: number;
+  tip_count: number;
+  last_tip_at: number;
+}
+
+export interface TopSupportersResp {
+  creator_id: string;
+  period: string;
+  supporters: TopSupporter[];
+  total_tip_cents: number;
+  total_supporters: number;
+  computed_at: number;
+}
+
+// ─── Creator Payouts (BILLING-002) ──────────────────────────────
+
+export interface PayoutBalance {
+  available_cents: number;
+  pending_cents: number;
+  total_earned_cents: number;
+  hold_cents: number;
+  currency: string;
+  minimum_payout_cents: number;
+}
+
+export interface Payout {
+  payout_id: string;
+  user_id: string;
+  amount_cents: number;
+  method: string;
+  status: string;
+  created_at: number;
+  updated_at: number;
+  notes: string;
+  reject_reason: string;
+  approved_by: string;
+  completed_at: number | null;
+}
+
+export interface PayoutCreateResp {
+  ok: boolean;
+  payout_id: string;
+  amount_cents: number;
+  status: string;
+}
+
+export interface PayoutActionResp {
+  ok: boolean;
+  payout_id: string;
+  status: string;
+}
+
+export interface PayoutListResp {
+  items: Payout[];
+  next_cursor: string | null;
+}
+
+export interface EarningsBreakdown {
+  subscriptions: number;
+  tips: number;
+  unlocks: number;
+  vod_purchases: number;
+  other: number;
+}
+
+export interface EarningsSummary {
+  total_cents: number;
+  breakdown: EarningsBreakdown;
+  transaction_count: number;
+  currency: string;
+}
+
+export interface EarningsTransaction {
+  entry_id: string;
+  ts: number;
+  amount_cents: number;
+  reason: string;
+  category: string;
+  currency: string;
+  meta: Record<string, unknown>;
+}
+
+export interface EarningsTransactionsResp {
+  items: EarningsTransaction[];
+  next_cursor: string | null;
 }

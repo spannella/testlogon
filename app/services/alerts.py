@@ -54,6 +54,7 @@ ALERT_EVENT_TYPES: List[str] = [
     "new_follower","post_liked","post_reaction","post_comment",
     "comment_reply","mention","subscription_started","post_shared",
     "post_tip","message_tip",
+    "cart.abandoned",
 ]
 
 # In-memory pubsub for SSE (single-process). For multi-process, swap with Redis/SQS/etc.
@@ -352,24 +353,84 @@ def send_alert_email(to_emails: List[str], subject: str, body_text: str) -> None
     except Exception:
         pass
 
-def send_alert_sms(to_numbers: List[str], body_text: str) -> None:
+def send_alert_sms(to_numbers: List[str], body_text: str) -> List[Dict[str, Any]]:
+    """Send SMS via SNS. Returns list of {number, message_id, status} dicts."""
     if not to_numbers:
-        return
+        return []
+
     if S.dev_mode:
         from datetime import datetime, timezone
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        results = []
         for n in to_numbers:
             entry = f"[{ts}] ALERT_SMS TO={n}\n  Body: {body_text}\n\n"
             _write_dev_log(S.dev_sms_log, entry)
-        return
+            # Record dev delivery in DDB
+            try:
+                from app.services.sms_delivery import record_sms_dev_logged
+                record_sms_dev_logged(n, body_text)
+            except Exception:
+                pass
+            results.append({"number": n, "message_id": f"dev-{now_ts()}", "status": "dev_logged"})
+        return results
+
     if not S.alerts_sms_enabled:
-        return
+        return []
+
+    from app.metrics import SMS_SENT, SMS_FAILED, SMS_SUPPRESSED, SMS_RATE_LIMITED
+
+    results: List[Dict[str, Any]] = []
     try:
         sns = sns_client()
-        for n in to_numbers[:5]:
-            sns.publish(PhoneNumber=n, Message=body_text[:1400])
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.exception("Failed to create SNS client: %s", str(exc)[:200])
+        return []
+
+    for n in to_numbers[:5]:
+        # Check suppression (opt-out)
+        if S.sms_suppression_enabled:
+            try:
+                from app.services.sms_delivery import is_sms_suppressed
+                if is_sms_suppressed(n):
+                    results.append({"number": n, "message_id": None, "status": "suppressed"})
+                    SMS_SUPPRESSED.labels(reason="opt_out").inc()
+                    continue
+            except Exception:
+                pass
+
+        # Check per-number daily limit
+        try:
+            from app.services.sms_delivery import sms_daily_limit_exceeded
+            if sms_daily_limit_exceeded(n):
+                results.append({"number": n, "message_id": None, "status": "rate_limited"})
+                SMS_RATE_LIMITED.inc()
+                logger.info("SMS rate limited for %s (daily limit exceeded)", n)
+                continue
+        except Exception:
+            pass
+
+        try:
+            response = sns.publish(PhoneNumber=n, Message=body_text[:1400])
+            message_id = response.get("MessageId", "")
+            try:
+                from app.services.sms_delivery import record_sms_sent
+                record_sms_sent(n, body_text, message_id)
+            except Exception:
+                pass
+            SMS_SENT.inc()
+            results.append({"number": n, "message_id": message_id, "status": "sent"})
+            logger.info("SMS sent: message_id=%s, to=%s", message_id, n)
+        except Exception as exc:
+            try:
+                from app.services.sms_delivery import record_sms_failure
+                record_sms_failure(n, body_text, str(exc))
+            except Exception:
+                pass
+            SMS_FAILED.inc()
+            results.append({"number": n, "message_id": None, "status": "failed"})
+            logger.exception("SMS send failed: to=%s, error=%s", n, str(exc)[:200])
+
+    return results
 
 def _webhook_event_types() -> Set[str]:
     if not S.alerts_webhook_event_types:

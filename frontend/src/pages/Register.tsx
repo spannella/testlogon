@@ -4,6 +4,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { ArrowLeft, CheckCircle2, Circle, Eye, EyeOff, HelpCircle, Loader2, Shield, XCircle } from "lucide-react";
+import { PageMeta } from "@/components/shared/PageMeta";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -500,6 +501,7 @@ export default function Register() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background via-background to-primary/5 p-4">
+      <PageMeta title="Create Account" />
       <div className="pointer-events-none fixed inset-0 overflow-hidden">
         <div className="absolute -left-32 -top-32 h-96 w-96 rounded-full bg-primary/5 blur-3xl" />
         <div className="absolute -bottom-32 -right-32 h-96 w-96 rounded-full bg-primary/10 blur-3xl" />

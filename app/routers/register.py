@@ -217,6 +217,15 @@ async def register_confirm(
     mark_user_verified(username)
     audit_event("register_confirm", username, req, outcome="success")
 
+    # ── Referral attribution hook (AFFILIATE-001) ───────────────
+    try:
+        ref_code = req.cookies.get("ref_attribution", "")
+        if ref_code and S.referral_enabled:
+            from app.services.referrals import attribute_referral as _attr_ref
+            _attr_ref(username, ref_code, ip)
+    except Exception:
+        logger.warning("referral attribution failed for %s", username, exc_info=True)
+
     session = create_real_session(req, username, mfa_verified_at=now_ts())
     rotate_session_cookies(req, response, username, session)
     session_id = session_id_value(session)

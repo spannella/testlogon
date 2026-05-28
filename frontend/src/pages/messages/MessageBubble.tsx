@@ -61,6 +61,7 @@ import { FileMessageCard } from "./FileMessageCard";
 import { WaveformPlayer } from "./WaveformPlayer";
 import { VideoShareCard } from "./VideoShareCard";
 import { ReadReceipts, ViewTracker } from "./ReadReceipts";
+import { DeliveryStatus } from "./DeliveryStatus";
 import { ForwardDialog } from "./ForwardDialog";
 import { MessageDetailsSheet } from "./MessageDetailsSheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -1656,6 +1657,7 @@ export function MessageBubble({ message, isOwn, showSender, conversationId, onRe
               </span>
             )}
             <span>{time}</span>
+            <DeliveryStatus message={message} isOwn={isOwn} />
           </div>
         </div>
       </div>

@@ -176,6 +176,21 @@ export interface ReportFeedContentReq {
 export const reportFeedContent = (body: ReportFeedContentReq) =>
   api.post<{ ok: boolean; report_id: string }>("/moderation/reports", body);
 
+// ── Reposts (SOCIAL-002) ──────────────────────────────────────────────
+
+export const repostPost = (postId: string, body?: { quote?: string }) =>
+  api.post<{ ok: boolean; repost_id: string; repost_count: number }>(
+    `/posts/${postId}/repost`, body ?? {},
+  );
+
+export const undoRepost = (postId: string) =>
+  api.del<{ ok: boolean; repost_count: number }>(`/posts/${postId}/repost`);
+
+export const getReposts = (postId: string, params?: { limit?: number; cursor?: string }) =>
+  api.get<{ reposts: Array<{ repost_id: string; user_id: string; display_name: string; quote?: string; created_at: string }>; next_cursor?: string; total_count: number }>(
+    `/posts/${postId}/reposts`, params as Record<string, string> | undefined,
+  );
+
 export function issueVideoPostEntitlement(postId: string) {
   return api.post<{
     video_id: string;
@@ -184,3 +199,17 @@ export function issueVideoPostEntitlement(postId: string) {
     playback_expires_at: number;
   }>(`/ui/posts/${postId}/video/entitlement`);
 }
+
+// ── Bulk Operations (UX-004) ────────────────────────────────────────────────
+
+export interface PostBulkResult {
+  results: Array<{ post_id: string; ok: boolean; error?: string }>;
+  succeeded: number;
+  failed: number;
+}
+
+export const bulkDeletePosts = (postIds: string[]) =>
+  api.post<PostBulkResult>("/posts/bulk-delete", { post_ids: postIds });
+
+export const bulkArchivePosts = (postIds: string[]) =>
+  api.post<PostBulkResult>("/posts/bulk-archive", { post_ids: postIds });

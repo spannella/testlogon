@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { Routes, Route } from "react-router-dom";
+import { Helmet } from "react-helmet-async";
 import { Loader2 } from "lucide-react";
 
 import ProtectedRoute from "@/components/ProtectedRoute";
@@ -31,6 +32,7 @@ const ProfilePage = lazy(() => import("@/pages/settings/ProfilePage"));
 const SettingsPage = lazy(() => import("@/pages/settings/SettingsPage"));
 const PurchasesPage = lazy(() => import("@/pages/purchases/PurchasesPage"));
 const SubscriptionsPage = lazy(() => import("@/pages/subscriptions/SubscriptionsPage"));
+const TierManager = lazy(() => import("@/pages/subscriptions/TierManager"));
 const RootRoleManagementPage = lazy(() => import("@/pages/admin/RootRoleManagementPage"));
 const ModerationBoardPage = lazy(() => import("@/pages/admin/ModerationBoardPage"));
 const PaymentIncidentQueuePage = lazy(() => import("@/pages/admin/PaymentIncidentQueuePage"));
@@ -48,6 +50,8 @@ const QuestionnaireRespondentPage = lazy(() => import("@/pages/questionnaires/Qu
 const PublicUserProfilePage = lazy(() => import("@/pages/profile/PublicUserProfilePage"));
 const VideosPage = lazy(() => import("@/pages/videos/VideosPage"));
 const DiscoverPage = lazy(() => import("@/pages/discover/DiscoverPage"));
+const TagPage = lazy(() => import("@/pages/discover/TagPage"));
+const SearchPage = lazy(() => import("@/pages/search/SearchPage"));
 const VideoPlayerPage = lazy(() => import("@/pages/videos/VideoPlayerPage"));
 const BroadcastPage = lazy(() => import("@/pages/broadcast/BroadcastPage"));
 const LivePlayer = lazy(() => import("@/pages/broadcast/LivePlayer"));
@@ -57,7 +61,10 @@ const RateLimitDashboard = lazy(() => import("@/pages/admin/RateLimitDashboard")
 const GalleryPage = lazy(() => import("@/pages/gallery/GalleryPage"));
 const GalleryVideoDetailPage = lazy(() => import("@/pages/gallery/VideoDetailPage"));
 const AnalyticsPage = lazy(() => import("@/pages/analytics/AnalyticsPage"));
+const ContentDetailPage = lazy(() => import("@/pages/analytics/ContentDetailPage"));
+const PayoutDashboard = lazy(() => import("@/pages/payouts/PayoutDashboard"));
 const PrivacyPage = lazy(() => import("@/pages/settings/PrivacyPage"));
+const BlockedUsersPage = lazy(() => import("@/pages/settings/BlockedUsersPage"));
 const WebhooksPage = lazy(() => import("@/pages/settings/WebhooksPage"));
 const GeoRulesPage = lazy(() => import("@/pages/settings/GeoRulesPage"));
 const ReferralDashboard = lazy(() => import("@/pages/referrals/ReferralDashboard"));
@@ -65,6 +72,7 @@ const PromoCodesPage = lazy(() => import("@/pages/promo/PromoCodesPage"));
 const SchedulerPage = lazy(() => import("@/pages/scheduler/SchedulerPage"));
 const RefundRequestsPage = lazy(() => import("@/pages/billing/RefundRequestsPage"));
 const AdminRefundQueuePage = lazy(() => import("@/pages/admin/AdminRefundQueuePage"));
+const SavedPage = lazy(() => import("@/pages/saved/SavedPage"));
 
 function PageSpinner() {
   return (
@@ -80,8 +88,17 @@ export default function App() {
   const showCanonicalProfileRoute = isCanonicalProfileNavigationEnabled();
 
   return (
-    <Suspense fallback={<PageSpinner />}>
-      <Routes>
+    <>
+      <Helmet>
+        <title>Control Panel</title>
+        <meta name="description" content="Your all-in-one platform for messaging, commerce, and content creation." />
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="Control Panel" />
+        <meta property="og:locale" content="en_US" />
+        <meta name="twitter:card" content="summary" />
+      </Helmet>
+      <Suspense fallback={<PageSpinner />}>
+        <Routes>
         {/* Public routes (no shell) */}
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
@@ -113,6 +130,9 @@ export default function App() {
           <Route path="cart/checkout" element={<Checkout />} />
           <Route path="feed" element={<FeedPage />} />
           <Route path="discover" element={<DiscoverPage />} />
+          <Route path="discover/tags/:tag" element={<TagPage />} />
+          <Route path="search" element={<SearchPage />} />
+          <Route path="saved" element={<SavedPage />} />
           <Route path="posts/:postId" element={<PostDetailPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="tickets" element={<TicketsPage />} />
@@ -128,12 +148,16 @@ export default function App() {
           <Route path="profile" element={<ProfilePage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="settings/privacy" element={<PrivacyPage />} />
+          <Route path="settings/blocked" element={<BlockedUsersPage />} />
           <Route path="settings/webhooks" element={<WebhooksPage />} />
           <Route path="settings/geo" element={<GeoRulesPage />} />
           <Route path="purchases" element={<PurchasesPage />} />
           <Route path="purchases/:txnId" element={<PurchasesPage />} />
           <Route path="subscriptions" element={<SubscriptionsPage />} />
+          <Route path="subscriptions/manage" element={<TierManager />} />
           <Route path="analytics" element={<AnalyticsPage />} />
+          <Route path="analytics/content/:contentId" element={<ContentDetailPage />} />
+          <Route path="payouts" element={<PayoutDashboard />} />
           <Route path="referrals" element={<ReferralDashboard />} />
           <Route path="promo" element={<PromoCodesPage />} />
           <Route path="root/roles" element={<RootRoleManagementPage />} />
@@ -151,5 +175,6 @@ export default function App() {
         <Route path="*" element={<ErrorPage status={404} />} />
       </Routes>
     </Suspense>
+    </>
   );
 }

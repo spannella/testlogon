@@ -205,6 +205,18 @@ export default function ProductDetail() {
             </p>
           </div>
 
+          {/* Stock status */}
+          {item.stock_status === "low_stock" && (
+            <Badge variant="outline" className="border-orange-500 text-orange-600" data-testid="stock-badge">
+              Only {item.stock_count} left!
+            </Badge>
+          )}
+          {item.stock_status === "out_of_stock" && (
+            <Badge variant="destructive" data-testid="stock-badge">
+              Out of Stock
+            </Badge>
+          )}
+
           {item.description && (
             <p className="text-sm text-muted-foreground">{item.description}</p>
           )}
@@ -252,10 +264,15 @@ export default function ProductDetail() {
             <Button
               className="flex-1"
               onClick={() => addToCartMutation.mutate()}
-              disabled={addToCartMutation.isPending}
+              disabled={addToCartMutation.isPending || item.stock_status === "out_of_stock"}
+              title={item.stock_status === "out_of_stock" ? "Out of stock" : undefined}
             >
               <ShoppingCart className="mr-2 h-4 w-4" />
-              {addToCartMutation.isPending ? "Adding..." : "Add to Cart"}
+              {item.stock_status === "out_of_stock"
+                ? "Out of Stock"
+                : addToCartMutation.isPending
+                  ? "Adding..."
+                  : "Add to Cart"}
             </Button>
           </div>
         </div>

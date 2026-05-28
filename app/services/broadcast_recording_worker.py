@@ -230,6 +230,29 @@ def process_recording(recording_id: str) -> Optional[RecordingRecord]:
         # Step 6: Finalize
         result = finalize_recording(recording, transcode_result, thumbnail_key, mp4_result)
         logger.info("Recording %s completed successfully", recording_id)
+
+        # BCAST-010: Create VOD post in newsfeed when recording is ready
+        if result and result.status == "ready":
+            try:
+                from app.services.broadcast_newsfeed import create_vod_post
+                from app.services.broadcast_store import get_session as _get_sess
+                from app.services.broadcast_viewers import get_viewer_count
+
+                session = _get_sess(recording.session_id)
+                viewer_count = get_viewer_count(recording.session_id)
+                create_vod_post(
+                    session_id=recording.session_id,
+                    creator_id=session.created_by,
+                    session_name=session.name,
+                    recording_id=recording.recording_id,
+                    recording_duration_seconds=float(result.duration_seconds or 0),
+                    recording_playback_url=None,
+                    peak_viewer_count=viewer_count,
+                    thumbnail_url=session.thumbnail_url,
+                )
+            except Exception:
+                logger.exception("VOD post creation failed for session %s (non-fatal)", recording.session_id)
+
         return result
 
     except Exception as exc:

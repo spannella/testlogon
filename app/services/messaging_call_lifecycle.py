@@ -47,12 +47,16 @@ class CallLifecycleError(ValueError):
 
 
 def _load_conversation_participants(conversation_id: str) -> set[str]:
+    import os
     from app.core.aws import ddb
+    from boto3.dynamodb.conditions import Key
 
-    table_name = "Conversations"
-    row = ddb.Table(table_name).get_item(Key={"conversation_id": conversation_id}).get("Item") or {}
-    members = row.get("participant_ids") or []
-    return {str(m).strip() for m in members if str(m).strip()}
+    table_name = os.getenv("DDB_PARTICIPANTS", "Participants")
+    items = ddb.Table(table_name).query(
+        IndexName="GSI1",
+        KeyConditionExpression=Key("GSI1PK").eq(conversation_id),
+    ).get("Items", [])
+    return {str(item["user_id"]).strip() for item in items if item.get("user_id")}
 
 
 def _ensure_participant(*, user_id: str, participants: set[str]) -> None:
@@ -138,6 +142,9 @@ def create_invite(
     client_platform: str = "unknown",
     client_browser: str = "unknown",
     timeline_emitter: Callable[..., dict[str, object]] = emit_call_timeline_event,
+    paid: bool = False,
+    rate_cents_per_min: int = 0,
+    max_duration_seconds: int = 0,
 ) -> tuple[CallSessionRecord, LifecycleEvent]:
     participants = participant_resolver(conversation_id)
     _ensure_participant(user_id=caller_user_id, participants=participants)
@@ -172,6 +179,9 @@ def create_invite(
         callee_user_id=callee_user_id,
         initial_mode=initial_mode,  # type: ignore[arg-type]
         state="invited",  # type: ignore[arg-type]
+        paid=paid,
+        rate_cents_per_min=rate_cents_per_min,
+        max_duration_seconds=max_duration_seconds,
     )
     event = _build_event(
         record=record,
@@ -371,6 +381,14 @@ def end_call(
             end_reason=reason or next_state,
             network_path=updated.network_path or "unknown",
         )
+    # CALL-011: Finalize billing for paid calls
+    if updated.paid:
+        try:
+            from app.services.call_billing_timer import finalize_call_billing
+            finalize_call_billing(call_id)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("call_billing_finalize_error", extra={"call_id": call_id})
     timeline_emitter(
         call_id=updated.call_id,
         conversation_id=updated.conversation_id,

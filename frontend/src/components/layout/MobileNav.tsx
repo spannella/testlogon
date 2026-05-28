@@ -29,6 +29,9 @@ import {
   Tag,
   Webhook,
   Globe,
+  Bookmark,
+  Wallet,
+  Layers,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
@@ -56,8 +59,10 @@ const PRIMARY_TABS = [
 const MORE_LINKS = [
   { label: "Feed", i18nKey: "nav.feed", path: "/feed", icon: Rss },
   { label: "Discover", i18nKey: "nav.discover", path: "/discover", icon: Compass },
+  { label: "Saved", i18nKey: "nav.saved", path: "/saved", icon: Bookmark },
   { label: "Cart", i18nKey: "nav.cart", path: "/cart", icon: ShoppingCart },
   { label: "Billing", i18nKey: "nav.billing", path: "/billing", icon: CreditCard },
+  { label: "Tier Manager", i18nKey: "nav.tierManager", path: "/subscriptions/manage", icon: Layers },
   { label: "Calendar", i18nKey: "nav.calendar", path: "/calendar", icon: CalendarDays },
   { label: "Signing", i18nKey: "nav.signing", path: "/signing", icon: FilePen },
   { label: "Gallery", i18nKey: "nav.gallery", path: "/gallery", icon: PlaySquare },
@@ -78,6 +83,7 @@ const MORE_LINKS = [
   { label: "Video Review", i18nKey: "nav.videoReview", path: "/admin/video-review", icon: Video },
   { label: "DMCA Claims", i18nKey: "nav.dmcaClaims", path: "/admin/dmca", icon: Scale },
   { label: "Analytics", i18nKey: "nav.analytics", path: "/analytics", icon: BarChart3 },
+  { label: "Payouts", i18nKey: "nav.payouts", path: "/payouts", icon: Wallet },
   { label: "Referrals", i18nKey: "nav.referrals", path: "/referrals", icon: Share2 },
   { label: "Promo Codes", i18nKey: "nav.promoCodes", path: "/promo", icon: Tag },
 ];

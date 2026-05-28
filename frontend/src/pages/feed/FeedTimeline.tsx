@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { Loader2, Newspaper } from "lucide-react";
+import { Loader2, Newspaper, Repeat2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CreatePost } from "./CreatePost";
 import { PostCard } from "./PostCard";
@@ -96,7 +96,21 @@ export function FeedTimeline({
       ) : (
         <>
           {allPosts.map((post) => (
-            <PostCard key={post.post_id} post={post} />
+            <div key={post.post_id}>
+              {post.reposted_by && (
+                <div className="flex items-center gap-1 px-4 py-1.5 text-sm text-muted-foreground" data-testid="repost-attribution">
+                  <Repeat2 className="h-3.5 w-3.5" />
+                  <span className="font-medium">{post.reposted_by.display_name}</span>
+                  <span>reposted</span>
+                </div>
+              )}
+              {post.repost_quote && (
+                <div className="px-4 pb-2 text-sm italic text-foreground" data-testid="repost-quote">
+                  &ldquo;{post.repost_quote}&rdquo;
+                </div>
+              )}
+              <PostCard post={post} />
+            </div>
           ))}
 
           <div ref={sentinelRef} className="h-4" />

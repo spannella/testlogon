@@ -57,6 +57,8 @@ export function ItemEditor({
   const [currency, setCurrency] = useState("USD");
   const [attrs, setAttrs] = useState<AttrRow[]>([]);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
+  const [stockCount, setStockCount] = useState("");
+  const [lowStockThreshold, setLowStockThreshold] = useState("5");
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -74,6 +76,8 @@ export function ItemEditor({
           : [{ key: "", value: "" }],
       );
       setImageUrls(item.image_urls ?? []);
+      setStockCount(item.stock_count != null ? String(item.stock_count) : "");
+      setLowStockThreshold(String(item.low_stock_threshold ?? 5));
     } else if (open) {
       setName("");
       setDescription("");
@@ -81,6 +85,8 @@ export function ItemEditor({
       setCurrency("USD");
       setAttrs([{ key: "", value: "" }]);
       setImageUrls([]);
+      setStockCount("");
+      setLowStockThreshold("5");
     }
   }, [open, item]);
 
@@ -132,6 +138,9 @@ export function ItemEditor({
       if (k) attributes[k] = row.value;
     }
 
+    const parsedStock = stockCount.trim() === "" ? undefined : parseInt(stockCount, 10);
+    const parsedThreshold = lowStockThreshold.trim() === "" ? undefined : parseInt(lowStockThreshold, 10);
+
     setSaving(true);
     try {
       if (isEdit && item) {
@@ -142,6 +151,8 @@ export function ItemEditor({
           currency,
           image_urls: imageUrls,
           attributes,
+          stock_count: parsedStock != null && !isNaN(parsedStock) ? parsedStock : undefined,
+          low_stock_threshold: parsedThreshold != null && !isNaN(parsedThreshold) ? parsedThreshold : undefined,
         });
       } else {
         await createCatalogItem(categoryId, {
@@ -151,6 +162,8 @@ export function ItemEditor({
           currency,
           image_urls: imageUrls,
           attributes,
+          stock_count: parsedStock != null && !isNaN(parsedStock) ? parsedStock : undefined,
+          low_stock_threshold: parsedThreshold != null && !isNaN(parsedThreshold) ? parsedThreshold : undefined,
         });
       }
 
@@ -218,6 +231,32 @@ export function ItemEditor({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+          </div>
+
+          {/* Stock Management */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <Label htmlFor="item-stock">Stock Quantity</Label>
+              <Input
+                id="item-stock"
+                type="number"
+                min="0"
+                value={stockCount}
+                onChange={(e) => setStockCount(e.target.value)}
+                placeholder="Unlimited"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="item-threshold">Low Stock Alert At</Label>
+              <Input
+                id="item-threshold"
+                type="number"
+                min="0"
+                value={lowStockThreshold}
+                onChange={(e) => setLowStockThreshold(e.target.value)}
+                placeholder="5"
+              />
             </div>
           </div>
 

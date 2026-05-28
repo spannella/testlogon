@@ -30,6 +30,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { ApiError } from "@/api/client";
+import { ExportCsvButton } from "@/components/shared/ExportCsvButton";
 
 import { getContacts, addContact, removeContact, updateContact } from "@/api/endpoints/contacts";
 import { findOrCreateDm, sendFileShareMessage, sendCalendarShareMessage } from "@/api/endpoints/messaging";
@@ -392,10 +393,13 @@ export default function ContactsPage() {
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-6 py-4">
         <h1 className="text-xl font-semibold">Contacts</h1>
-        <Button size="sm" onClick={() => setAddOpen(true)}>
-          <UserPlus className="mr-2 h-4 w-4" />
-          Add Contact
-        </Button>
+        <div className="flex items-center gap-2">
+          <ExportCsvButton source="contacts" />
+          <Button size="sm" onClick={() => setAddOpen(true)}>
+            <UserPlus className="mr-2 h-4 w-4" />
+            Add Contact
+          </Button>
+        </div>
       </div>
 
       {/* Contact list */}

@@ -63,7 +63,12 @@ def _table_defs() -> List[TableDef]:
         TableDef(_resolve_table_name(S.calendar_table_name, "calendar"), "calendar_id", "sk"),
         TableDef(_resolve_table_name(S.purchase_transactions_table_name, "purchase_transactions"), "user_sub", "sk"),
         TableDef(_resolve_table_name(S.purchase_events_table_name, "purchase_transaction_events"), "pk", "sk"),
-        TableDef(_resolve_table_name(S.shopping_cart_table_name, "shopping_cart"), "PK", "SK"),
+        TableDef(
+            _resolve_table_name(S.shopping_cart_table_name, "shopping_cart"),
+            "PK", "SK",
+            gsi=[{"index_name": "ByStatusActivity", "partition_key": "status", "sort_key": "last_activity_at"}],
+            attr_types={"last_activity_at": "N"},
+        ),
         TableDef(
             _resolve_table_name(S.catalog_table_name, "shopping_catalog"),
             "PK",
@@ -938,6 +943,26 @@ def _table_defs() -> List[TableDef]:
             ],
             attr_types={"created_at": "N"},
         ),
+        # SmsDelivery: pk=pk, sk=sk, GSI ByStatus, TTL ttl_epoch
+        TableDef(
+            _resolve_table_name(S.sms_delivery_table_name, "SmsDelivery"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
+        # EmailDelivery: pk=pk, sk=sk, GSI ByStatus, TTL ttl_epoch
+        TableDef(
+            _resolve_table_name(S.email_delivery_table_name, "EmailDelivery"),
+            "pk",
+            "sk",
+            gsi=[
+                {"index_name": "ByStatus", "partition_key": "status", "sort_key": "created_at"},
+            ],
+            attr_types={"created_at": "N"},
+        ),
     ]
 
 
@@ -1119,6 +1144,17 @@ def main() -> None:
     _wait_for_tables(ddb, created)
     _enable_ttl_if_needed(ddb, _resolve_table_name(S.api_usage_table_name, "api_usage_events"))
     _enable_ttl_if_needed(ddb, os.getenv("APP_TABLE", "app_single_table"))
+    # SHOP-003: Enable TTL on shopping_cart table with attribute "ttl"
+    _cart_table = _resolve_table_name(S.shopping_cart_table_name, "shopping_cart")
+    try:
+        client = ddb.meta.client
+        _retry_transient_ddb_call(
+            client.update_time_to_live,
+            TableName=_cart_table,
+            TimeToLiveSpecification={"Enabled": True, "AttributeName": "ttl"},
+        )
+    except Exception:
+        pass
     print(f"Ensured {len(created)} DynamoDB tables exist.")
 
 

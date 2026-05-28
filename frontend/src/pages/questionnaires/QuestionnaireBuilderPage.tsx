@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { arrayMove } from "@dnd-kit/sortable";
 import { GripVertical, Loader2, Plus, Save, Trash2 } from "lucide-react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -23,6 +24,7 @@ import {
 } from "@/api/endpoints/questionnaires";
 import type { QuestionnaireQuestion, QuestionnaireSection } from "@/api/types";
 import { EmptyState } from "@/components/shared/EmptyState";
+import SortableList from "@/components/shared/SortableList";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,6 +36,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 import QuestionTypeConfigEditor from "./QuestionTypeConfigEditor";
+import QuestionnaireAnalyticsTab from "./QuestionnaireAnalyticsTab";
 import ValidationRuleBuilder from "./ValidationRuleBuilder";
 import { defaultConfigForType, type BuilderQuestionType, validateQuestionConfig } from "./questionConfig";
 import { toBackendRulePayload, type BuilderRule, validateRuleReferences } from "./validationRules";
@@ -63,7 +66,6 @@ export default function QuestionnaireBuilderPage() {
   const sectionSaveTimers = React.useRef<Record<string, number>>({});
   const questionSaveTimers = React.useRef<Record<string, number>>({});
   const metaTimer = React.useRef<number | null>(null);
-  const [draggingSectionId, setDraggingSectionId] = React.useState<string | null>(null);
   const [publishOpen, setPublishOpen] = React.useState(false);
   const [readiness, setReadiness] = React.useState<{ ok: boolean; items: string[] }>({ ok: false, items: [] });
   const [publishResult, setPublishResult] = React.useState<{ versionId: string; publishedAt: string } | null>(null);
@@ -392,44 +394,11 @@ export default function QuestionnaireBuilderPage() {
         )}
       />
 
-      <Card data-testid="questionnaire-analytics-card">
-        <CardHeader>
-          <CardTitle>Response analytics</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <div data-testid="analytics-freshness">Updated at {analyticsQuery.data?.analytics?.generated_at || "-"} (SLA {analyticsQuery.data?.analytics?.freshness_sla_seconds || 60}s)</div>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            <div data-testid="analytics-total-starts">Starts: <strong>{analyticsQuery.data?.analytics?.totals?.starts ?? 0}</strong></div>
-            <div data-testid="analytics-total-completions">Completions: <strong>{analyticsQuery.data?.analytics?.totals?.completions ?? 0}</strong></div>
-            <div data-testid="analytics-version-count">Published versions: <strong>{analyticsQuery.data?.analytics?.versions?.length ?? 0}</strong></div>
-          </div>
-          {(analyticsQuery.data?.analytics?.versions || []).map((row) => (
-            <div key={row.version_id} className="rounded border p-2" data-testid={`analytics-version-${row.version_id}`}>
-              <div className="font-medium">Version {row.version_number ?? "?"} ({row.version_id})</div>
-              <div data-testid={`analytics-funnel-${row.version_id}`}>
-                Funnel: {row.funnel.starts} starts → {row.funnel.completions} completions ({Math.round((row.funnel.completion_rate || 0) * 100)}%)
-              </div>
-              <div>Avg completion: {row.average_completion_seconds == null ? "-" : `${Math.round(row.average_completion_seconds)}s`}</div>
-            </div>
-          ))}
-          <div>
-            <div className="font-medium">Top drop-off points</div>
-            <ul data-testid="analytics-dropoff-list" className="list-disc pl-5">
-              {(analyticsQuery.data?.analytics?.totals?.top_dropoffs || []).map((item) => (
-                <li key={`${item.label}-${item.count}`}>{item.label}: {item.count}</li>
-              ))}
-            </ul>
-          </div>
-          <div>
-            <div className="font-medium">Validation hotspots</div>
-            <ul data-testid="analytics-hotspot-list" className="list-disc pl-5">
-              {(analyticsQuery.data?.analytics?.totals?.top_validation_hotspots || []).map((item) => (
-                <li key={`${item.key}-${item.count}`}>{item.key}: {item.count}</li>
-              ))}
-            </ul>
-          </div>
-        </CardContent>
-      </Card>
+      <QuestionnaireAnalyticsTab
+        analytics={analyticsQuery.data?.analytics}
+        isLoading={analyticsQuery.isLoading}
+        questionnaireId={questionnaireId}
+      />
 
       {mode === "preview" && (
         <Card data-testid="questionnaire-preview-mode">
@@ -481,21 +450,20 @@ export default function QuestionnaireBuilderPage() {
         <CardContent className="space-y-4">
           {sections.length === 0 && <EmptyState title="No sections yet" description="Create your first section to start structuring the questionnaire." action={{ label: "Add section", onClick: createSection }} />}
 
-          {sections.map((section, index) => (
-            <div key={section.section_id} className="rounded-md border p-3 space-y-3 bg-background" draggable onDragStart={() => setDraggingSectionId(section.section_id)} onDragOver={(e) => e.preventDefault()} onDrop={async () => {
-              if (!draggingSectionId || draggingSectionId === section.section_id) return;
-              const from = sections.findIndex((s) => s.section_id === draggingSectionId);
-              const to = sections.findIndex((s) => s.section_id === section.section_id);
-              if (from < 0 || to < 0) return;
-              const ordered = [...sections];
-              const [item] = ordered.splice(from, 1);
-              if (!item) return;
-              ordered.splice(to, 0, item);
+          <SortableList
+            items={sections}
+            getItemId={(s) => s.section_id}
+            className="space-y-4"
+            onReorder={async (oldIndex, newIndex) => {
+              const ordered = arrayMove(sections, oldIndex, newIndex);
               await reorder(ordered);
-              setDraggingSectionId(null);
-            }}>
+            }}
+            renderItem={(section, index, dragHandleProps) => (
+              <div className="rounded-md border p-3 space-y-3 bg-background">
               <div className="flex items-center gap-2">
-                <GripVertical className="h-4 w-4 text-muted-foreground" />
+                <span {...dragHandleProps} data-testid={`section-drag-handle-${section.section_id}`}>
+                  <GripVertical className="h-4 w-4 text-muted-foreground" />
+                </span>
                 <Input aria-label={`Section title ${section.section_id}`} value={section.title} onChange={(e) => handleSectionChange(section.section_id, { title: e.target.value })} />
                 <Button variant="ghost" size="icon" onClick={() => moveSection(index, -1)} aria-label="Move up">↑</Button>
                 <Button variant="ghost" size="icon" onClick={() => moveSection(index, 1)} aria-label="Move down">↓</Button>
@@ -609,7 +577,8 @@ export default function QuestionnaireBuilderPage() {
                 ))}
               </div>
             </div>
-          ))}
+            )}
+          />
         </CardContent>
       </Card>
 

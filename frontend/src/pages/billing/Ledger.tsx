@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Download, Receipt, RotateCcw } from "lucide-react";
+import { Receipt, RotateCcw } from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { DataTable, type ColumnDef, type SortState } from "@/components/shared/DataTable";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { EmptyState } from "@/components/shared/EmptyState";
+import { ExportCsvButton } from "@/components/shared/ExportCsvButton";
 import { getLedger } from "@/api/endpoints/billing";
 import { RefundRequestDialog } from "./RefundRequestDialog";
 import type { LedgerEntry } from "@/api/types";
@@ -151,31 +152,6 @@ export function Ledger() {
     return arr;
   }, [filtered, sort]);
 
-  const exportCsv = () => {
-    const header = "Date,Type,Amount,Status,Reason";
-    const rows = sorted.map(
-      (e) =>
-        `${formatDate(e.ts)},${e.type},${(e.amount_cents / 100).toFixed(2)},${e.state},${e.reason ?? ""}`,
-    );
-    const csv = [header, ...rows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "ledger.csv";
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  if (ledgerQuery.isLoading) {
-    return (
-      <div className="space-y-3">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <Skeleton key={i} className="h-12 w-full rounded-lg" />
-        ))}
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-4">
@@ -208,13 +184,24 @@ export function Ledger() {
               My Refund Requests
             </Button>
           </Link>
-          <Button variant="outline" size="sm" onClick={exportCsv} disabled={sorted.length === 0}>
-            <Download className="mr-1 h-3.5 w-3.5" />
-            Export CSV
-          </Button>
+          <ExportCsvButton
+            source="billing_ledger"
+            params={{
+              ...(startDate ? { from_date: Math.floor(new Date(startDate).getTime() / 1000) } : {}),
+              ...(endDate ? { to_date: Math.floor(new Date(endDate).getTime() / 1000) + 86400 } : {}),
+            }}
+          />
         </div>
       </div>
 
+      {ledgerQuery.isLoading ? (
+        <div className="space-y-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-12 w-full rounded-lg" />
+          ))}
+        </div>
+      ) : (
+      <>
       {/* Table */}
       <DataTable
         columns={columns}
@@ -261,6 +248,8 @@ export function Ledger() {
         transaction={refundTransaction}
         onClose={() => setRefundTransaction(null)}
       />
+      </>
+      )}
     </div>
   );
 }

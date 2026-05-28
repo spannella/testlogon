@@ -208,6 +208,7 @@ S3_BUCKET_IMAGES = os.getenv("S3_BUCKET_IMAGES", "my-chat-images")
 
 ONLINE_WINDOW_SEC = int(os.getenv("ONLINE_WINDOW_SEC", "30"))
 PRESENCE_TTL_SEC = int(os.getenv("PRESENCE_TTL_SEC", "120"))
+PRESENCE_SSE_COOLDOWN_SEC = int(os.getenv("PRESENCE_SSE_COOLDOWN_SEC", "60"))
 TYPING_TTL_SEC = int(os.getenv("TYPING_TTL_SEC", "10"))
 
 VIEWS_TTL_SEC = int(os.getenv("VIEWS_TTL_SEC", "2592000"))  # 30d
@@ -5802,6 +5803,11 @@ def find_or_create_dm(inp: FindOrCreateDmIn, req: Request = None, user_id: str =
     if user_id == target_sub:
         raise HTTPException(400, "Cannot DM yourself")
 
+    # Block enforcement: prevent DM creation between blocked users
+    from app.services.blocking import is_any_block
+    if is_any_block(user_id, target_sub):
+        raise HTTPException(403, "Cannot message this user")
+
     existing_id = _find_existing_dm(user_id, target_sub)
     if existing_id:
         convo_item = tbl_convos.get_item(Key={"conversation_id": existing_id}).get("Item")
@@ -7644,6 +7650,13 @@ def send_text_message(
         participants = resp.get("Items", [])
     except Exception:
         participants = []
+    # Block enforcement: prevent sending messages to blocked users in DMs
+    if convo.get("type") == "dm":
+        from app.services.blocking import is_any_block as _is_any_block_check
+        for participant in participants:
+            pid = participant.get("user_id")
+            if pid and pid != user_id and _is_any_block_check(user_id, pid):
+                raise HTTPException(403, "Cannot send message to this user")
     for participant in participants:
         pid = participant.get("user_id")
         if pid and pid != user_id:
@@ -11385,6 +11398,40 @@ def get_typing(conversation_id: str, user_id: str = Depends(get_messaging_user_i
 # -------------------------
 # Presence (online)
 # -------------------------
+def _fanout_presence_update(user_id: str, online: bool, last_seen_at: int) -> None:
+    """Push presence:update SSE to all conversation partners."""
+    try:
+        parts = tbl_parts.query(KeyConditionExpression=Key("user_id").eq(user_id), Limit=500).get("Items", [])
+        conversation_ids = {str(p.get("conversation_id") or "") for p in parts if p.get("conversation_id")}
+        seen_users: set[str] = set()
+        ts = now_ts()
+        ttl = ts + 7 * 24 * 3600
+        payload = _ddb_safe({"user_id": user_id, "online": online, "last_seen_at": last_seen_at})
+        with tbl_events.batch_writer() as bw:
+            for cid in conversation_ids:
+                resp = tbl_parts.query(IndexName="GSI1", KeyConditionExpression=Key("GSI1PK").eq(cid))
+                for p in resp.get("Items", []):
+                    uid = str(p.get("user_id") or "")
+                    if not uid or uid == user_id or uid in seen_users:
+                        continue
+                    if p.get("status") != "active":
+                        continue
+                    seen_users.add(uid)
+                    bw.put_item(
+                        Item={
+                            "user_id": uid,
+                            "event_id": _event_id(),
+                            "type": "presence:update",
+                            "created_at": ts,
+                            "conversation_id": "",
+                            "payload": payload,
+                            "ttl": ttl,
+                        }
+                    )
+    except Exception:
+        pass
+
+
 @router.post("/presence/heartbeat")
 def presence_heartbeat(
     inp: PresenceHeartbeatIn,
@@ -11399,6 +11446,16 @@ def presence_heartbeat(
     )
     ts = now_ts()
     status = _normalize_presence_status(inp.status)
+
+    # Check previous heartbeat for cooldown-based SSE fanout
+    prev_item = None
+    try:
+        prev_resp = tbl_presence.get_item(Key={"user_id": user_id})
+        prev_item = prev_resp.get("Item")
+    except Exception:
+        pass
+    prev_last_seen = int(prev_item.get("last_seen_at", 0) or 0) if prev_item else 0
+
     tbl_presence.put_item(
         Item={
             "user_id": user_id,
@@ -11408,6 +11465,11 @@ def presence_heartbeat(
             "ttl": ts + PRESENCE_TTL_SEC,
         }
     )
+
+    online = status in {"online", "available"}
+    if ts - prev_last_seen >= PRESENCE_SSE_COOLDOWN_SEC:
+        _fanout_presence_update(user_id, online, ts)
+
     routing = _handle_helpdesk_presence_event(user_id=user_id, status=status, ts=ts)
     audit_event(
         "messaging_presence_heartbeat_processed",
@@ -11423,7 +11485,7 @@ def presence_heartbeat(
     return {
         "ok": True,
         "user_id": user_id,
-        "online": status in {"online", "available"},
+        "online": online,
         "last_seen_at": ts,
         "status": status,
         "routing": routing,
@@ -12189,7 +12251,17 @@ async def _expire_stale_invites() -> None:
 
 async def _messaging_background_loop() -> None:
     """Background task: deliver due scheduled messages and expire timed-out messages."""
+    import time as _time
+    from app.services.job_registry import register_task, report_error, report_poll
+
+    register_task("scheduled_messages", 30, enabled=True,
+                   description="Delivers scheduled messages and expires timed-out messages")
+
     while True:
+        _start = _time.perf_counter()
+        _processed = 0
+        _failed = 0
+        _loop_error = False
         # A) Deliver due scheduled messages
         try:
             resp = tbl_msgs.scan(
@@ -12198,12 +12270,15 @@ async def _messaging_background_loop() -> None:
             for item in resp.get("Items", []):
                 try:
                     _deliver_scheduled_message(item)
+                    _processed += 1
                 except Exception as exc:
+                    _failed += 1
                     logger.error(
                         "Failed to deliver scheduled message %s: %s",
                         item.get("message_id"), exc,
                     )
         except Exception as exc:
+            _loop_error = True
             logger.error("Scheduled messages loop error: %s", exc)
 
         # B) Expire messages past expires_at
@@ -12240,16 +12315,26 @@ async def _messaging_background_loop() -> None:
                         "Expired message %s in conversation %s",
                         item.get("message_id"), item.get("conversation_id"),
                     )
+                    _processed += 1
                 except Exception as exc:
+                    _failed += 1
                     logger.error(
                         "Failed to expire message %s: %s",
                         item.get("message_id"), exc,
                     )
         except Exception as exc:
+            _loop_error = True
             logger.error("Expiry loop error: %s", exc)
 
         # C) Expire stale call invites (server-side ringing timeout backstop)
         await _expire_stale_invites()
+
+        _dur = (_time.perf_counter() - _start) * 1000
+        if _loop_error:
+            report_error("scheduled_messages", "Loop iteration error")
+        else:
+            report_poll("scheduled_messages", items_processed=_processed,
+                        items_failed=_failed, duration_ms=_dur)
 
         await asyncio.sleep(30)
 

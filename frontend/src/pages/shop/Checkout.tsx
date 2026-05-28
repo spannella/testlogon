@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -7,6 +7,9 @@ import {
   XCircle,
   CreditCard,
   Star,
+  Tag,
+  Loader2,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -14,14 +17,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import {
   getCartItems,
   getCartTotal,
   purchaseCart,
 } from "@/api/endpoints/cart";
+import { validatePromoCode } from "@/api/endpoints/promoCodes";
 import { getPaymentMethods } from "@/api/endpoints/billing";
-import type { PaymentMethod } from "@/api/types";
+import type { PaymentMethod, PromoValidateOut } from "@/api/types";
+import { ApiError } from "@/api/client";
+import { useAuthStore } from "@/stores/authStore";
 
 function formatCents(cents: number, currency = "USD"): string {
   return new Intl.NumberFormat("en-US", {
@@ -43,6 +50,13 @@ export default function Checkout() {
   >("idle");
   const [orderId, setOrderId] = useState("");
 
+  // Promo code state (SHOP-002)
+  const [promoCode, setPromoCode] = useState("");
+  const [promoResult, setPromoResult] = useState<PromoValidateOut | null>(null);
+  const [promoError, setPromoError] = useState("");
+  const [promoLoading, setPromoLoading] = useState(false);
+  const [promoExpanded, setPromoExpanded] = useState(false);
+
   const itemsQuery = useQuery({
     queryKey: ["cart-items", cartId],
     queryFn: () => getCartItems(cartId),
@@ -60,8 +74,65 @@ export default function Checkout() {
     queryFn: getPaymentMethods,
   });
 
+  const items = itemsQuery.data?.items ?? [];
+  const total = totalQuery.data;
+  const methods: PaymentMethod[] = Array.isArray(methodsQuery.data) ? methodsQuery.data : [];
+
+  // Derive creator_user_id from cart items for promo validation
+  // Falls back to the current user's ID when items lack creator info
+  const currentUserId = useAuthStore((s) => s.userId);
+  const creatorId = useMemo(() => {
+    const ids = new Set(
+      items
+        .map((i: Record<string, unknown>) => (i as any).creator_user_id ?? (i as any).seller_id)
+        .filter(Boolean),
+    );
+    if (ids.size === 1) return [...ids][0] as string;
+    // Fallback: use current user as creator (self-created items)
+    return currentUserId ?? undefined;
+  }, [items, currentUserId]);
+
+  // Effective total considering promo discount
+  const effectiveTotal = promoResult
+    ? promoResult.final_price_cents
+    : total?.total_cents ?? 0;
+
+  // Promo validation handler
+  const handleApplyPromo = async () => {
+    if (!promoCode.trim()) return;
+    setPromoLoading(true);
+    setPromoError("");
+    try {
+      const result = await validatePromoCode({
+        code: promoCode.trim(),
+        checkout_type: "shop",
+        item_price_cents: total?.total_cents ?? 0,
+        creator_user_id: creatorId ?? "",
+      });
+      if (result.valid) {
+        setPromoResult(result);
+        setPromoError("");
+      } else {
+        setPromoError(result.message ?? "Invalid code");
+        setPromoResult(null);
+      }
+    } catch {
+      setPromoError("Failed to validate code");
+      setPromoResult(null);
+    } finally {
+      setPromoLoading(false);
+    }
+  };
+
+  const handleRemovePromo = () => {
+    setPromoResult(null);
+    setPromoCode("");
+    setPromoError("");
+  };
+
   const purchaseMutation = useMutation({
-    mutationFn: () => purchaseCart(cartId),
+    mutationFn: () =>
+      purchaseCart(cartId, promoResult ? { promo_code: promoCode } : undefined),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["carts"] });
       queryClient.invalidateQueries({ queryKey: ["cart-items", cartId] });
@@ -70,16 +141,23 @@ export default function Checkout() {
       setConfirmOpen(false);
       toast.success("Order placed successfully!");
     },
-    onError: () => {
-      setPurchaseResult("error");
+    onError: (err: unknown) => {
+      const detail =
+        err instanceof ApiError ? err.detail : undefined;
+      const status =
+        err instanceof ApiError ? err.status : 0;
+      if (status === 422 && detail) {
+        // Promo code became invalid between validate and purchase
+        setPromoError(detail);
+        setPromoResult(null);
+        toast.error(detail);
+      } else {
+        setPurchaseResult("error");
+        toast.error("Purchase failed");
+      }
       setConfirmOpen(false);
-      toast.error("Purchase failed");
     },
   });
-
-  const items = itemsQuery.data?.items ?? [];
-  const total = totalQuery.data;
-  const methods: PaymentMethod[] = Array.isArray(methodsQuery.data) ? methodsQuery.data : [];
 
   // Auto-select default payment method
   if (!selectedMethodId && methods.length > 0) {
@@ -182,12 +260,86 @@ export default function Checkout() {
                 </div>
               ))}
               <Separator />
+              {promoResult && (
+                <div className="flex items-center justify-between text-sm text-green-600" data-testid="promo-discount-line">
+                  <span>Promo discount ({promoCode})</span>
+                  <span>-{formatCents(promoResult.discount_cents)}</span>
+                </div>
+              )}
               <div className="flex items-center justify-between font-semibold">
                 <span>Total</span>
                 <span className="text-lg">
-                  {total ? formatCents(total.total_cents, total.currency) : "..."}
+                  {total
+                    ? formatCents(effectiveTotal, total.currency)
+                    : "..."}
                 </span>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Promo Code (SHOP-002) */}
+          <Card>
+            <CardContent className="py-4">
+              <button
+                className="flex items-center gap-2 text-sm text-primary hover:underline"
+                onClick={() => setPromoExpanded(!promoExpanded)}
+                data-testid="promo-expand-btn"
+              >
+                <Tag className="h-4 w-4" />
+                Have a promo code?
+              </button>
+              {promoExpanded && (
+                <div className="mt-3 space-y-2">
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Enter code"
+                      value={promoCode}
+                      onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
+                      disabled={!!promoResult}
+                      onKeyDown={(e) =>
+                        e.key === "Enter" && !promoResult && handleApplyPromo()
+                      }
+                      data-testid="promo-input"
+                    />
+                    {promoResult ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRemovePromo}
+                        data-testid="promo-remove-btn"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    ) : (
+                      <Button
+                        onClick={handleApplyPromo}
+                        disabled={promoLoading || !promoCode.trim()}
+                        data-testid="promo-apply-btn"
+                      >
+                        {promoLoading ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          "Apply"
+                        )}
+                      </Button>
+                    )}
+                  </div>
+                  {promoError && (
+                    <p className="text-sm text-destructive" data-testid="promo-error">
+                      {promoError}
+                    </p>
+                  )}
+                  {promoResult && (
+                    <p
+                      className="text-sm text-green-600 font-medium"
+                      data-testid="promo-success"
+                    >
+                      Code applied: -{formatCents(promoResult.discount_cents)}{" "}
+                      discount
+                    </p>
+                  )}
+                </div>
+              )}
             </CardContent>
           </Card>
 
@@ -247,14 +399,16 @@ export default function Checkout() {
             onClick={() => setConfirmOpen(true)}
           >
             Place Order
-            {total ? ` — ${formatCents(total.total_cents, total.currency)}` : ""}
+            {total
+              ? ` — ${formatCents(effectiveTotal, total.currency)}`
+              : ""}
           </Button>
 
           <ConfirmDialog
             open={confirmOpen}
             onOpenChange={setConfirmOpen}
             title="Confirm Purchase"
-            description={`Place your order for ${total ? formatCents(total.total_cents, total.currency) : "..."}?`}
+            description={`Place your order for ${total ? formatCents(effectiveTotal, total.currency) : "..."}?`}
             confirmLabel="Place Order"
             onConfirm={() => purchaseMutation.mutate()}
             loading={purchaseMutation.isPending}

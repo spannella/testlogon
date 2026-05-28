@@ -37,10 +37,16 @@ def _worker_id() -> str:
 
 async def transcode_worker_loop() -> None:
     """Main polling loop for the transcode worker."""
+    import time as _time
+    from app.services.job_registry import register_task, report_error, report_poll
+
     global _CONCURRENCY_SEMAPHORE
     max_concurrent = max(1, S.transcode_max_concurrent_jobs)
     _CONCURRENCY_SEMAPHORE = asyncio.Semaphore(max_concurrent)
     poll_interval = max(5, S.transcode_poll_interval_seconds)
+
+    register_task("transcode_worker", poll_interval, enabled=True,
+                   description="Processes video transcode jobs via FFmpeg")
 
     logger.info(
         "Transcode worker started: max_concurrent=%d, poll_interval=%ds",
@@ -49,9 +55,11 @@ async def transcode_worker_loop() -> None:
     )
 
     while not _SHUTDOWN:
+        _start = _time.perf_counter()
         try:
             result = list_jobs_by_status("queued", limit=max_concurrent)
             jobs = result.get("items", [])
+            _dispatched = 0
             for job in jobs:
                 # Skip jobs with future retry time
                 next_retry = job.get("next_retry_at")
@@ -60,7 +68,11 @@ async def transcode_worker_loop() -> None:
                 if _CONCURRENCY_SEMAPHORE.locked():
                     break
                 asyncio.create_task(_process_job_with_semaphore(job))
-        except Exception:
+                _dispatched += 1
+            _dur = (_time.perf_counter() - _start) * 1000
+            report_poll("transcode_worker", items_processed=_dispatched, duration_ms=_dur)
+        except Exception as exc:
+            report_error("transcode_worker", str(exc))
             logger.exception("Transcode worker poll failed")
         await asyncio.sleep(poll_interval)
 
@@ -321,7 +333,11 @@ async def _run_ffmpeg_for_rendition(
 
 def start_transcode_worker_task() -> None:
     """Register the transcode worker as a startup task. Follows broadcast_reconciler pattern."""
+    from app.services.job_registry import register_task
+
     if not S.transcode_worker_enabled:
+        register_task("transcode_worker", 30, enabled=False,
+                       description="Processes video transcode jobs via FFmpeg")
         logger.info("Transcode worker disabled (TRANSCODE_WORKER_ENABLED=0)")
         return
     logger.info("Registering transcode worker background task")

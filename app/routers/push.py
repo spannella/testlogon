@@ -11,6 +11,19 @@ from app.services.sessions import require_ui_session
 router = APIRouter(prefix="/ui", tags=["push"])
 
 
+@router.get("/push/vapid-key")
+async def ui_get_vapid_key():
+    """Return the VAPID public key for push subscription.
+
+    The VAPID public key is safe to expose publicly -- it is used by
+    the browser to authenticate the application server when subscribing
+    to push notifications.
+    """
+    if not S.vapid_public_key:
+        raise HTTPException(404, "VAPID not configured")
+    return {"vapid_public_key": S.vapid_public_key}
+
+
 @router.get("/push/devices")
 async def ui_list_push_devices(ctx=Depends(require_ui_session)):
     return {"devices": list_push_devices(ctx["user_sub"])}

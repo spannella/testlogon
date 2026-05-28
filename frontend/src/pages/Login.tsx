@@ -3,6 +3,7 @@ import { useNavigate, Link } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { PageMeta } from "@/components/shared/PageMeta";
 import { Loader2, Shield, Smartphone, Mail, KeyRound, ArrowLeft, Fingerprint, Send, HelpCircle, Eye, EyeOff, Timer } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -397,6 +398,7 @@ export default function Login() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-background via-background to-primary/5 p-4">
+      <PageMeta title="Log In" />
       {/* Background decoration */}
       <div className="pointer-events-none fixed inset-0 overflow-hidden">
         <div className="absolute -left-32 -top-32 h-96 w-96 rounded-full bg-primary/5 blur-3xl" />

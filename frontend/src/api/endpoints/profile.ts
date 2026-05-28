@@ -1,5 +1,5 @@
 import { ApiError, api } from "@/api/client";
-import type { CrossUserProfileResp, Profile, Address, AddressIn, AddressValidateReq, AddressValidateResp } from "@/api/types";
+import type { CrossUserProfileResp, Profile, Address, AddressIn, AddressValidateReq, AddressValidateResp, PublicProfileData, ProfilePostsResponse } from "@/api/types";
 import { useAuthStore } from "@/stores/authStore";
 import { useImpersonationStore } from "@/stores/impersonationStore";
 
@@ -243,6 +243,29 @@ export async function getProfileByIdentifier(identifier: string): Promise<CrossU
     throw mapProfileLookupError(err);
   }
 }
+
+// ─── Public Profile (SOC-006 Storefront) ────────────────────────
+
+export const getPublicProfile = (identifier: string) =>
+  api.get<PublicProfileData>(`/ui/profile/public/${encodeURIComponent(identifier)}`);
+
+export const getProfilePosts = (
+  identifier: string,
+  params?: {
+    limit?: number;
+    cursor?: string;
+    filter?: "all" | "text" | "image" | "video" | "locked";
+  },
+) => {
+  const qs: Record<string, string> = {};
+  if (params?.limit) qs.limit = String(params.limit);
+  if (params?.cursor) qs.cursor = params.cursor;
+  if (params?.filter && params.filter !== "all") qs.filter = params.filter;
+  return api.get<ProfilePostsResponse>(
+    `/ui/profile/public/${encodeURIComponent(identifier)}/posts`,
+    Object.keys(qs).length > 0 ? qs : undefined,
+  );
+};
 
 // ─── Addresses ───────────────────────────────────────────────────
 

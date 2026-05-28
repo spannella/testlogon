@@ -1,8 +1,10 @@
 import { useState, useCallback, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Heart, MessageCircle, Lock, DollarSign, X, ChevronLeft, ChevronRight, CreditCard, Check, Loader2, Share2, FileText, Flag } from "lucide-react";
+import { Heart, MessageCircle, Lock, DollarSign, X, ChevronLeft, ChevronRight, CreditCard, Check, Loader2, Share2, FileText, Flag, Bookmark, BookmarkCheck, Hash } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -16,6 +18,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { likePost, unlikePost, unlockPost, addPostReaction, removePostReaction, reportFeedContent } from "@/api/endpoints/newsfeed";
+import { createBookmark, removeBookmark } from "@/api/endpoints/bookmarks";
 import { getPaymentMethods } from "@/api/endpoints/billing";
 import { ApiError } from "@/api/client";
 import { useAuthStore } from "@/stores/authStore";
@@ -25,11 +28,13 @@ import { EditPostDialog } from "./EditPostDialog";
 import { RichContentRenderer } from "./RichContentRenderer";
 import { TipDialog } from "./TipDialog";
 import { SharePostDialog } from "./SharePostDialog";
+import { RepostButton } from "./RepostButton";
 import { FilePreview } from "@/pages/files/FilePreview";
 import { ReportContentModal, type ReportContentPayload } from "@/components/shared/ReportContentModal";
 import { resolveCanonicalProfilePath } from "@/components/shared/UserProfileLink";
 import { VideoPostPlayer } from "./VideoPostPlayer";
-import type { FeedPost, PaymentMethod, PostFileAttachment } from "@/api/types";
+import type { FeedPost, ImageVariant, PaymentMethod, PostFileAttachment } from "@/api/types";
+import { ResponsiveImage } from "@/components/shared/ResponsiveImage";
 import { BroadcastPostCard } from "@/components/newsfeed/BroadcastPostCard";
 import type { FileEntry } from "@/api/types";
 import { isTipLotteryEnabled } from "@/config/featureFlags";
@@ -60,10 +65,11 @@ function formatRelative(dateStr: string): string {
 
 interface PostImageGridProps {
   urls: string[];
+  imageVariants?: Array<Record<string, ImageVariant>>;
   onClickImage: (index: number) => void;
 }
 
-function PostImageGrid({ urls, onClickImage }: PostImageGridProps) {
+function PostImageGrid({ urls, imageVariants, onClickImage }: PostImageGridProps) {
   const count = urls.length;
 
   if (count === 1) {
@@ -74,10 +80,13 @@ function PostImageGrid({ urls, onClickImage }: PostImageGridProps) {
         aria-label="Open image 1"
         onClick={() => onClickImage(0)}
       >
-        <img
+        <ResponsiveImage
           src={urls[0]}
+          variants={imageVariants?.[0]}
           alt=""
           className="max-h-80 w-full rounded-lg object-cover transition-transform hover:scale-[1.02]"
+          sizes="(max-width: 640px) 100vw, 640px"
+          loading="lazy"
         />
       </button>
     );
@@ -94,7 +103,7 @@ function PostImageGrid({ urls, onClickImage }: PostImageGridProps) {
             aria-label={`Open image ${i + 1}`}
             onClick={() => onClickImage(i)}
           >
-            <img src={url} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" />
+            <ResponsiveImage src={url} variants={imageVariants?.[i]} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" loading="lazy" />
           </button>
         ))}
       </div>
@@ -111,7 +120,7 @@ function PostImageGrid({ urls, onClickImage }: PostImageGridProps) {
           aria-label="Open image 1"
           onClick={() => onClickImage(0)}
         >
-          <img src={urls[0]} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" />
+          <ResponsiveImage src={urls[0]} variants={imageVariants?.[0]} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" loading="lazy" />
         </button>
         {/* Two square cells below */}
         {urls.slice(1).map((url, i) => (
@@ -122,7 +131,7 @@ function PostImageGrid({ urls, onClickImage }: PostImageGridProps) {
             aria-label={`Open image ${i + 2}`}
             onClick={() => onClickImage(i + 1)}
           >
-            <img src={url} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" />
+            <ResponsiveImage src={url} variants={imageVariants?.[i + 1]} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" loading="lazy" />
           </button>
         ))}
       </div>
@@ -140,7 +149,7 @@ function PostImageGrid({ urls, onClickImage }: PostImageGridProps) {
             aria-label={`Open image ${i + 1}`}
             onClick={() => onClickImage(i)}
           >
-            <img src={url} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" />
+            <ResponsiveImage src={url} variants={imageVariants?.[i]} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" loading="lazy" />
           </button>
         ))}
       </div>
@@ -159,7 +168,7 @@ function PostImageGrid({ urls, onClickImage }: PostImageGridProps) {
           aria-label={`Open image ${i + 1}`}
           onClick={() => onClickImage(i)}
         >
-          <img src={url} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" />
+          <ResponsiveImage src={url} variants={imageVariants?.[i]} alt="" className="h-full w-full object-cover transition-transform hover:scale-[1.02]" loading="lazy" />
           {i === 3 && extra > 0 && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/50 text-white text-xl font-semibold">
               +{extra}
@@ -190,6 +199,7 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
   const [reportMediaOpen, setReportMediaOpen] = useState(false);
   const [reportMediaIndex, setReportMediaIndex] = useState<number | null>(null);
   const [reportMediaServerError, setReportMediaServerError] = useState<string | null>(null);
+  const [isBookmarked, setIsBookmarked] = useState(false);
 
   const imageUrls = post.image_urls ?? [];
   const isOwn = post.author_id === userId;
@@ -213,6 +223,38 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
       queryClient.invalidateQueries({ queryKey: ["feed"] });
     },
     onError: () => {
+      toast.error("Action failed");
+    },
+  });
+
+  const bookmarkMutation = useMutation({
+    mutationFn: () =>
+      isBookmarked
+        ? removeBookmark("post", post.post_id)
+        : createBookmark({ content_type: "post", content_id: post.post_id }),
+    onMutate: () => {
+      setIsBookmarked((prev) => !prev);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["bookmarks"] });
+      toast.success(isBookmarked ? "Saved" : "Removed from saved");
+    },
+    onError: (error) => {
+      // 409 = already bookmarked — treat as success (idempotent)
+      const status = error instanceof ApiError ? error.status : 0;
+      if (status === 409) {
+        setIsBookmarked(true);
+        queryClient.invalidateQueries({ queryKey: ["bookmarks"] });
+        toast.success("Saved");
+        return;
+      }
+      // 404 on delete = already removed — treat as success
+      if (status === 404) {
+        setIsBookmarked(false);
+        queryClient.invalidateQueries({ queryKey: ["bookmarks"] });
+        return;
+      }
+      setIsBookmarked((prev) => !prev);
       toast.error("Action failed");
     },
   });
@@ -464,6 +506,19 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
           )}
         </div>
 
+        {/* SOCIAL-006: Tag chips */}
+        {(post.tags ?? []).length > 0 && !isLocked && (
+          <div className="mt-2 flex flex-wrap gap-1.5" data-testid="post-tags">
+            {(post.tags ?? []).map((tag) => (
+              <Link key={tag} to={`/discover/tags/${tag}`}>
+                <Badge variant="outline" className="text-xs cursor-pointer hover:bg-accent">
+                  #{tag}
+                </Badge>
+              </Link>
+            ))}
+          </div>
+        )}
+
         {/* Video embed */}
         {post.video && !isLocked && (
           <VideoPostPlayer postId={post.post_id} video={post.video} className="mt-3" />
@@ -486,7 +541,7 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
 
         {/* Image grid */}
         {imageUrls.length > 0 && (
-          <PostImageGrid urls={imageUrls} onClickImage={setLightboxIdx} />
+          <PostImageGrid urls={imageUrls} imageVariants={post.image_variants} onClickImage={setLightboxIdx} />
         )}
 
         {/* File attachment cards */}
@@ -545,12 +600,37 @@ export function PostCard({ post, defaultShowComments = false }: PostCardProps) {
               <span>Tip</span>
             </button>
           )}
+          <RepostButton
+            postId={post.post_id}
+            authorId={post.author_id}
+            repostCount={post.repost_count ?? 0}
+            repostedByMe={post.reposted_by_me ?? false}
+            isLocked={post.unlock_price_cents != null && post.unlock_price_cents > 0 && !!post.locked}
+            isOwn={isOwn}
+          />
           <button
             className="flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
             onClick={() => setShareOpen(true)}
             aria-label="Share post"
           >
             <Share2 className="h-4 w-4" />
+          </button>
+          <button
+            className={cn(
+              "flex items-center gap-1 text-sm transition-colors",
+              isBookmarked
+                ? "text-amber-500"
+                : "text-muted-foreground hover:text-amber-500",
+            )}
+            onClick={() => bookmarkMutation.mutate()}
+            disabled={bookmarkMutation.isPending}
+            aria-label={isBookmarked ? "Remove bookmark" : "Bookmark post"}
+          >
+            {isBookmarked ? (
+              <BookmarkCheck className="h-4 w-4 fill-amber-500" />
+            ) : (
+              <Bookmark className="h-4 w-4" />
+            )}
           </button>
           {(post.tip_total_cents ?? 0) > 0 && (
             <span className="ml-auto text-xs text-emerald-600">

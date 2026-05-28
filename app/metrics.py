@@ -123,6 +123,25 @@ APP_INFO = Info(
     "app",
     "Application metadata",
 )
+# SMS delivery metrics (PLATFORM-007)
+SMS_SENT = Counter(
+    "sms_sent_total",
+    "Total SMS messages successfully sent via SNS",
+)
+SMS_FAILED = Counter(
+    "sms_failed_total",
+    "Total SMS send failures",
+)
+SMS_SUPPRESSED = Counter(
+    "sms_suppressed_total",
+    "Total SMS messages skipped due to suppression/opt-out",
+    ["reason"],
+)
+SMS_RATE_LIMITED = Counter(
+    "sms_rate_limited_total",
+    "Total SMS messages skipped due to rate limiting",
+)
+
 FILEMGR_PURGE_RESULTS = Counter(
     "filemgr_purge_results_total",
     "File manager purge outcomes",

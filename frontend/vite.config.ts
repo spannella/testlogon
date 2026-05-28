@@ -88,6 +88,16 @@ export default defineConfig({
           return null;
         },
       },
+      "/questionnaires": {
+        target: "http://localhost:8000",
+        bypass: (req) => {
+          const accept = req.headers["accept"] ?? "";
+          if (typeof accept === "string" && accept.includes("text/html")) {
+            return "/index.html";
+          }
+          return null;
+        },
+      },
     },
   },
   build: {

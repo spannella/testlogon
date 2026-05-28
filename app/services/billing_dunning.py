@@ -272,17 +272,31 @@ def process_dunning_queue() -> None:
 
 
 async def billing_dunning_loop() -> None:
+    import time as _time
+    from app.services.job_registry import register_task, report_error, report_poll
+
     interval = max(60, int(S.billing_dunning_interval_seconds))
+    register_task("billing_dunning", interval, enabled=True,
+                   description="Retries failed payment collection for overdue accounts")
+
     while True:
+        _start = _time.perf_counter()
         try:
             process_dunning_queue()
-        except Exception:
+            _dur = (_time.perf_counter() - _start) * 1000
+            report_poll("billing_dunning", duration_ms=_dur)
+        except Exception as exc:
+            report_error("billing_dunning", str(exc))
             logger.exception("Billing dunning loop failed")
         await asyncio.sleep(interval)
 
 
 def start_billing_dunning_task() -> None:
+    from app.services.job_registry import register_task
+
     if not S.billing_dunning_enabled:
+        register_task("billing_dunning", 60, enabled=False,
+                       description="Retries failed payment collection for overdue accounts")
         logger.info("Billing dunning disabled")
         return
     asyncio.create_task(billing_dunning_loop())

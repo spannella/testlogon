@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowLeft,
+  ExternalLink,
   FileText,
   CheckCircle2,
   RotateCcw,
@@ -378,6 +379,7 @@ export function TransactionDetail() {
             deliveredAt={txn.shipping?.delivered_at}
             completedAt={txn.completed_at}
             revertedAt={txn.reverted_at}
+            carrierEvents={txn.shipping?.carrier_events}
           />
         </CardContent>
       </Card>
@@ -441,7 +443,23 @@ export function TransactionDetail() {
                 {txn.shipping.tracking_number && (
                   <div>
                     <dt className="text-muted-foreground">Tracking</dt>
-                    <dd className="font-mono text-xs">{txn.shipping.tracking_number}</dd>
+                    <dd>
+                      {txn.shipping.tracking_url ? (
+                        <a
+                          href={txn.shipping.tracking_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-mono text-xs text-primary underline hover:text-primary/80"
+                          data-testid="tracking-link"
+                          title={`Track on ${txn.shipping.carrier?.toUpperCase() || "carrier"}`}
+                        >
+                          {txn.shipping.tracking_number}
+                          <ExternalLink className="ml-1 inline h-3 w-3" />
+                        </a>
+                      ) : (
+                        <span className="font-mono text-xs">{txn.shipping.tracking_number}</span>
+                      )}
+                    </dd>
                   </div>
                 )}
                 {txn.shipping.shipped_at && (

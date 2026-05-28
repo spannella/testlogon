@@ -1,4 +1,5 @@
 import { api } from "../client";
+import type { TopSupportersResp } from "../types";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -25,6 +26,8 @@ export interface FollowStatus {
   is_following: boolean;
   is_followed_by: boolean;
   is_mutual: boolean;
+  is_blocked_by_me?: boolean;
+  is_blocking_me?: boolean;
 }
 
 export interface FollowResponse {
@@ -61,3 +64,11 @@ export const getFollowStatus = (userId: string) =>
 
 export const getMutualFollowers = (userId: string, params?: Record<string, string>) =>
   api.get<FollowListResponse>(`/ui/social/mutual/${userId}`, params);
+
+// ── Tip Leaderboards (SOCIAL-005) ────────────────────────────────
+
+export const getTopSupporters = (
+  creatorId: string,
+  params?: { period?: string; limit?: number },
+) =>
+  api.get<TopSupportersResp>(`/ui/creators/${creatorId}/top-supporters`, params as Record<string, string>);

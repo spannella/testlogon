@@ -4,11 +4,13 @@ import { api } from "@/api/client";
 
 export type BroadcastSessionStatus =
   | "draft"
+  | "scheduled"
   | "provisioning"
   | "ready"
   | "live"
   | "stopping"
   | "stopped"
+  | "cancelled"
   | "error";
 
 export interface BroadcastProfile {
@@ -45,6 +47,13 @@ export interface BroadcastSession {
   aws_input_arn: string | null;
   aws_channel_arn: string | null;
   provider_state_snapshot: Record<string, unknown>;
+  // Scheduling fields (BCAST-009)
+  scheduled_at?: number | null;
+  schedule_status?: string | null;
+  name?: string | null;
+  description?: string | null;
+  thumbnail_url?: string | null;
+  cancelled_at?: string | null;
 }
 
 export interface BroadcastPlaybackUrl {

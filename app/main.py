@@ -35,6 +35,7 @@ from app.routers.billing_ccbill import router as billing_ccbill_router
 from app.routers.ccbill_mock import router as ccbill_mock_router
 from app.routers.google_calendar_mock import router as google_calendar_mock_router
 from app.routers.google_drive_mock import router as google_drive_mock_router
+from app.routers.google_drive_integration import router as google_drive_integration_router
 from app.routers.apple_caldav_mock import router as apple_caldav_mock_router
 from app.routers.jira_mock import router as jira_mock_router
 from app.routers.paypal_mock import router as paypal_mock_router
@@ -57,17 +58,19 @@ from app.routers.admin_calendar_integrations import router as admin_calendar_int
 from app.routers.device_trust import router as device_trust_router
 from app.routers.newsfeed import router as newsfeed_router, startup as newsfeed_startup
 from app.routers.purchase_history import router as purchase_history_router
-from app.routers.shoppingcart import router as shoppingcart_router
+from app.routers.shoppingcart import router as shoppingcart_router, start_cart_abandonment_task
 from app.routers.catalog import router as catalog_router
 from app.routers.subscription_server import router as subscription_server_router
 from app.routers.admin_usage import router as admin_usage_router
 from app.routers.admin_entitlements import router as admin_entitlements_router
 from app.routers.admin_tenant_watermark_assets import router as admin_tenant_watermark_assets_router
 from app.routers.ups import router as ups_router
+from app.routers.carrier_tracking_mock import router as carrier_tracking_mock_router
 from app.routers.projects import router as projects_router
 from app.routers.contacts import router as contacts_router
 from app.routers.social import router as social_router
 from app.routers.discovery import router as discovery_router
+from app.routers.search import router as search_router
 from app.routers.broadcast import router as broadcast_router
 from app.routers.broadcast_devtools import router as broadcast_devtools_router
 from app.routers.entitlements import router as entitlements_router
@@ -99,6 +102,8 @@ from app.routers.call_billing import router as call_billing_router
 from app.routers.group_calls import router as group_calls_router
 from app.routers.vod_bridge import router as vod_bridge_router
 from app.routers.creator_earnings import router as creator_earnings_router
+from app.routers.tip_leaderboard import router as tip_leaderboard_router
+from app.routers.tip_leaderboard import internal_router as tip_leaderboard_internal_router
 from app.routers.creator_analytics import router as creator_analytics_router
 from app.routers.creator_payouts import router as creator_payouts_router
 from app.routers.admin_payouts import router as admin_payouts_router
@@ -140,7 +145,12 @@ from app.routers.geo_rules import router as geo_rules_router
 from app.routers.scheduler import router as scheduler_router
 from app.routers.i18n import router as i18n_router
 from app.services.unified_scheduler import start_unified_scheduler_task
+from app.routers.csv_export import router as csv_export_router
 from app.routers.refund_requests import router as refund_requests_router
+from app.routers.admin_jobs import router as admin_jobs_router
+from app.routers.admin_sms import router as admin_sms_router
+from app.routers.admin_email import router as admin_email_router
+from app.routers.ses_notifications import router as ses_notifications_router
 from app.routers.recommendations import (
     gallery_for_you_router as reco_gallery_router,
     similar_router as reco_similar_router,
@@ -289,6 +299,7 @@ def create_app() -> FastAPI:
     app.include_router(ccbill_mock_router)
     app.include_router(google_calendar_mock_router)
     app.include_router(google_drive_mock_router)
+    app.include_router(google_drive_integration_router)
     app.include_router(apple_caldav_mock_router)
     app.include_router(jira_mock_router)
     app.include_router(paypal_mock_router)
@@ -360,10 +371,12 @@ def create_app() -> FastAPI:
     app.include_router(admin_entitlements_router)
     app.include_router(admin_tenant_watermark_assets_router)
     app.include_router(ups_router)
+    app.include_router(carrier_tracking_mock_router)
     app.include_router(projects_router)
     app.include_router(contacts_router)
     app.include_router(social_router)
     app.include_router(discovery_router)
+    app.include_router(search_router)
     app.include_router(broadcast_router)
     app.include_router(broadcast_devtools_router)
     app.include_router(tickets_router)
@@ -396,16 +409,23 @@ def create_app() -> FastAPI:
     app.include_router(group_calls_router)
     app.include_router(vod_bridge_router)
     app.include_router(creator_earnings_router)
+    app.include_router(tip_leaderboard_router)
+    app.include_router(tip_leaderboard_internal_router)
     app.include_router(creator_analytics_router)
     app.include_router(creator_payouts_router)
     app.include_router(admin_payouts_router)
     app.include_router(admin_rate_limits_router)
+    app.include_router(admin_jobs_router)
+    app.include_router(admin_sms_router)
+    app.include_router(admin_email_router)
+    app.include_router(ses_notifications_router)
     app.include_router(privacy_router)
     app.include_router(admin_privacy_router)
     app.include_router(stories_router)
     app.include_router(referrals_router)
     app.include_router(referrals_internal_router)
     app.include_router(webhooks_router)
+    app.include_router(csv_export_router)
     app.include_router(refund_requests_router)
     app.include_router(promo_codes_router)
     app.include_router(geo_rules_router)
@@ -419,6 +439,7 @@ def create_app() -> FastAPI:
     app.add_event_handler("startup", start_broadcast_reconciler_task)
     app.add_event_handler("startup", start_transcode_worker_task)
     app.add_event_handler("startup", start_webhook_dispatcher_task)
+    app.add_event_handler("startup", start_cart_abandonment_task)
 
     uncovered_policy_routes: set[str] = set()
     for route in app.routes:

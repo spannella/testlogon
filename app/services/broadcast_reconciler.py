@@ -126,15 +126,30 @@ def reconcile_once(*, now_ts: int | None = None) -> dict:
 
 
 def start_broadcast_reconciler_task() -> None:
+    import time as _time
+    from app.services.job_registry import register_task, report_error, report_poll
+
     if not S.broadcast_reconciler_enabled:
+        register_task("broadcast_reconciler", 30, enabled=False,
+                       description="Detects broadcast state drift and stale sessions")
         return
+
+    interval = max(5, int(S.broadcast_reconciler_interval_seconds or 30))
+    register_task("broadcast_reconciler", interval, enabled=True,
+                   description="Detects broadcast state drift and stale sessions")
 
     async def _runner() -> None:
         while True:
+            _start = _time.perf_counter()
             try:
-                reconcile_once()
-            except Exception:
-                pass
-            await asyncio.sleep(max(5, int(S.broadcast_reconciler_interval_seconds or 30)))
+                result = reconcile_once()
+                _dur = (_time.perf_counter() - _start) * 1000
+                report_poll("broadcast_reconciler",
+                            items_processed=result.get("checked", 0),
+                            items_failed=result.get("drift_incidents", 0) + result.get("stale_incidents", 0),
+                            duration_ms=_dur)
+            except Exception as exc:
+                report_error("broadcast_reconciler", str(exc))
+            await asyncio.sleep(interval)
 
     asyncio.create_task(_runner())

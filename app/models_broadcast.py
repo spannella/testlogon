@@ -7,11 +7,14 @@ from pydantic import BaseModel, Field
 
 BroadcastSessionStatus = Literal[
     "draft",
+    "scheduled",
     "provisioning",
     "ready",
     "live",
+    "private",
     "stopping",
     "stopped",
+    "cancelled",
     "error",
 ]
 
@@ -44,6 +47,26 @@ class BroadcastSessionModel(BaseModel):
     created_by: str = Field(min_length=1)
     created_at: str = ""
     updated_at: str = ""
+
+    # Scheduling (BCAST-009)
+    scheduled_at: Optional[int] = None
+    schedule_status: Optional[str] = None  # "scheduled", "launched", "cancelled"
+    name: Optional[str] = None
+    description: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    cancelled_at: Optional[str] = None
+    announcement_post_id: Optional[str] = None
+
+    # Go-Private (BCAST-011)
+    private_session_id: Optional[str] = None
+    private_behavior: Optional[str] = None  # "pause", "end"
+    private_min_rate_cents: Optional[int] = None
+
+    # Private Chat (BCAST-012)
+    private_chat_enabled: bool = False
+    private_chat_tiers: Optional[list] = None  # [{minutes, price_cents}, ...]
+    private_chat_voyeur_enabled: bool = False
+    private_chat_voyeur_price_cents: Optional[int] = None
 
 
 class BroadcastOutputModel(BaseModel):
@@ -78,7 +101,11 @@ class BroadcastSecretReferenceModel(BaseModel):
 
 class BroadcastActionAuditEventModel(BaseModel):
     audit_id: str = Field(min_length=1)
-    action: Literal["create_profile", "create_session", "start_session", "stop_session", "delete_session"]
+    action: Literal[
+        "create_profile", "create_session", "start_session", "stop_session", "delete_session",
+        "schedule_session", "cancel_scheduled_session", "reschedule_session",
+        "go_private", "end_private", "private_chat_start", "private_chat_end",
+    ]
     actor: str = Field(min_length=1)
     correlation_id: str = Field(min_length=1)
     resource_type: Literal["profile", "session"]

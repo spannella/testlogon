@@ -8,6 +8,7 @@ import { PageTransition } from "@/components/shared/PageTransition";
 import { OfflineBanner } from "@/components/shared/OfflineBanner";
 import { SessionExpiryWarning } from "@/components/shared/SessionExpiryWarning";
 import { useOfflineQueue } from "@/hooks/useOfflineQueue";
+import { useUiStore } from "@/stores/uiStore";
 import {
   Sheet,
   SheetContent,
@@ -23,6 +24,14 @@ function OfflineQueueFlusher() {
 
 export default function AppShell() {
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
+  const prefsLoaded = useUiStore((s) => s.prefsLoaded);
+  const loadServerPreferences = useUiStore((s) => s.loadServerPreferences);
+
+  React.useEffect(() => {
+    if (!prefsLoaded) {
+      loadServerPreferences();
+    }
+  }, [prefsLoaded, loadServerPreferences]);
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -100,6 +109,9 @@ import {
   Tag,
   Webhook,
   Globe,
+  Bookmark,
+  Wallet,
+  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Separator } from "@/components/ui/separator";
@@ -114,6 +126,7 @@ const MOBILE_NAV_GROUPS = [
       { label: "Dashboard", path: "/", icon: LayoutDashboard },
       { label: "Messages", path: "/messages", icon: MessageSquare },
       { label: "Feed", path: "/feed", icon: Rss },
+      { label: "Saved", path: "/saved", icon: Bookmark },
     ],
   },
   {
@@ -124,7 +137,9 @@ const MOBILE_NAV_GROUPS = [
       { label: "Billing", path: "/billing", icon: CreditCard },
       { label: "Orders", path: "/purchases", icon: ClipboardList },
       { label: "Subscriptions", path: "/subscriptions", icon: Repeat },
+      { label: "Tier Manager", path: "/subscriptions/manage", icon: Layers },
       { label: "Analytics", path: "/analytics", icon: BarChart3 },
+      { label: "Payouts", path: "/payouts", icon: Wallet },
       { label: "Referrals", path: "/referrals", icon: Share2 },
       { label: "Promo Codes", path: "/promo", icon: Tag },
     ],
