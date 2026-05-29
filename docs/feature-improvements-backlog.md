@@ -1,7 +1,7 @@
 # Feature Improvements Backlog
 
 Living document of identified gaps and improvement opportunities.
-Last updated: 2026-05-29 (153 tickets across 13 feature areas)
+Last updated: 2026-05-29 (171 tickets across 14 feature areas)
 
 ---
 
@@ -492,6 +492,59 @@ BOT-004 (AI/LLM) ← most advanced, depends on framework
 
 ---
 
+## AI Agent Orchestration Platform (Deep Dive — 2026-05-29)
+
+18 detailed ticket specs generated in `docs/tickets/AGENT-*.md`. ~301 planned E2E tests total.
+
+### Core Infrastructure
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 154 | AGENT-001 | LLM Provider Key Management | P0 | 18 | 623-626 |
+| 155 | AGENT-002 | Terminal Worker Provisioning | P0 | 18 | 627-630 |
+| 156 | AGENT-003 | Worker Agent Framework & Lifecycle | P0 | 16 | 631-634 |
+| 157 | AGENT-004 | Worker Fleet Management UI | P0 | 18 | 635-638 |
+| 158 | AGENT-005 | Agent Memory & Context Injection | P1 | 18 | 639-642 |
+| 159 | AGENT-006 | Terminal Monitoring & Feedback Loop | P0 | 16 | 643-646 |
+| 160 | AGENT-007 | Agent PR & Ticket Integration | P0 | 18 | 647-650 |
+
+### Technical Agent Types
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 161 | AGENT-008 | Coder Agent | P0 | 16 | 651-654 |
+| 162 | AGENT-009 | QA Agent | P0 | 16 | 655-658 |
+| 163 | AGENT-010 | DevOps/SRE Agent | P1 | 16 | 659-662 |
+| 164 | AGENT-011 | Solution Architect Agent | P1 | 14 | 663-666 |
+| 165 | AGENT-012 | Project Manager Agent | P1 | 18 | 667-670 |
+
+### Non-Technical Agent Types
+
+| # | Ticket | Feature | Priority | Tests | Sections |
+|---|--------|---------|----------|-------|----------|
+| 166 | AGENT-013 | Product Manager Agent | P1 | 16 | 671-674 |
+| 167 | AGENT-014 | Documentation Agent | P2 | 16 | 675-678 |
+| 168 | AGENT-015 | Compliance & Security Agent | P1 | 16 | 679-682 |
+| 169 | AGENT-016 | Stylist / UI Agent | P2 | 15 | 683-686 |
+| 170 | AGENT-017 | Marketing Agent | P2 | 18 | 687-690 |
+| 171 | AGENT-018 | Accountant / Cost Tracking Agent | P1 | 18 | 691-694 |
+
+### Dependency Chain
+
+```
+AGENT-001 (LLM keys) + INFRA-003/004 (compute) ← foundation
+    ↓
+AGENT-002 (provisioning) ← installs tools, injects keys
+    ↓
+AGENT-003 (framework) ← core agent loop, state machine
+    ↓
+AGENT-004 (fleet UI) + AGENT-005 (memory) + AGENT-006 (monitoring) + AGENT-007 (PR/ticket) ← platform services
+    ↓
+AGENT-008-018 (agent types) ← plug into framework as configuration profiles
+```
+
+---
+
 ## Investigation Queue
 
 - [x] Accounting deep dive: basic user, content provider, admin perspectives
@@ -507,5 +560,6 @@ BOT-004 (AI/LLM) ← most advanced, depends on framework
 - [x] Core platform gaps: web push, creator storefront, privacy deletion, analytics engine
 - [x] Financial gaps: consumer (invoices, promo, cart, tax, currency), creator (revenue, commission, tax, payouts, affiliate, collab, engagement), admin (dashboard, health, fraud, audit, bulk ops, config)
 - [x] Admin tooling: subscription tier UI, email/SMS dashboards, rate limit admin UI
+- [x] AI agent orchestration: LLM keys, worker provisioning, agent framework, 11 agent types
 - [ ] Additional gaps from `docs/gap-analysis.md` (30 verified gaps)
 - [ ] Media/streaming feature gaps
