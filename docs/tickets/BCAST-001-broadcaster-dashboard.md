@@ -575,204 +575,98 @@ And to `AppShell.tsx` MobileSidebar NAV_ITEMS.
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 E2E Test Structure (`frontend/e2e/broadcaster.spec.ts`)
+### Unit Tests (pytest)
 
-Following the established pattern (see `tickets.spec.ts`, `catalog-subscriptions.spec.ts`):
+**Test file**: `tests/test_broadcast_dashboard.py`
 
-```typescript
-import { test, expect, type Page } from "@playwright/test";
+**Mock setup**: moto mock for DynamoDB (`BroadcastProfiles`, `BroadcastSessions`, `BroadcastOutputs` tables). Mock broadcast provider returns instant transitions.
 
-// Use admin session (broadcast start/stop require admin/root role)
-const sessions = { /* loaded from e2e_admin_session_setup.py */ };
+| Test Function | Description |
+|---|---|
+| `test_list_sessions_returns_creator_sessions` | List sessions filtered by creator; returns only owned sessions |
+| `test_create_session_with_profile_link` | Create session linked to profile; status = draft |
+| `test_get_session_returns_full_details` | Get session by ID; includes ingest_url, stream_key_ref, status |
+| `test_list_profiles_returns_all` | List all profiles for creator; includes region, preset, DRM fields |
+| `test_create_profile_validation` | Missing name/region/preset returns 422 |
+| `test_delete_session_requires_admin` | Non-admin delete returns 403 |
+| `test_audit_log_records_actions` | Create+start+stop; audit log has all 3 entries |
 
-function injectAuth(page: Page, identity: string) { /* inject cookies */ }
-function apiPost(page: Page, identity: string, path: string, body: object) { /* CSRF POST */ }
-function apiGet(page: Page, path: string) { /* GET with cookies */ }
-function apiDelete(page: Page, identity: string, path: string) { /* DELETE with CSRF */ }
-```
+### Integration Tests
 
-### 5.2 Test Sections
+Cross-service tests with real DynamoDB Local:
 
-**Section 80: Profile CRUD API (5 tests)**
-- Creates a profile with all fields
-- Verifies profile appears in list response
-- Validates required field errors (missing name, region, preset)
-- Validates region/preset max-length constraints
-- Creates profile with DRM fields
+1. Create profile -> create session -> start -> verify status transitions through DDB
+2. List sessions with status filter returns only matching sessions
+3. Audit log query returns entries with correct actor and action fields
+4. Playback URL minting returns valid signed URL with future expires_at
 
-**Section 81: Session CRUD API (6 tests)**
-- Creates a session linked to a profile
-- Verifies session starts in "draft" status
-- Gets session by ID returns full details
-- Verifies ingest_url and stream_key_ref are stored
-- Lists sessions returns the created session
-- Deletes session (admin role required)
+### E2E Tests (Playwright)
 
-**Section 82: Session Lifecycle API (7 tests)**
-- Starts session (draft -> provisioning -> ready/live)
-- Verifies started_at is set after start
-- Stops session (live -> stopping -> stopped)
-- Verifies stopped_at is set after stop
-- Attempts invalid transition (stopped -> live) returns 409
-- Attempts start without admin role returns 403
-- Verifies idempotency with x-idempotency-key header
+**Test file**: `frontend/e2e/broadcaster.spec.ts`
 
-**Section 83: Playback URL API (4 tests)**
-- Mints playback URL for a session
-- Verifies response includes session_id, playback_url, expires_at
-- Verifies expires_at is in the future
-- Verifies playback URL format includes session reference
+**Auth pattern**: `injectAuth(page, "root")` for admin/root operations; CSRF header for POST/DELETE
 
-**Section 84: Audit Log API (4 tests)**
-- Creates profile + session + start -> queries audit
-- Verifies all actions appear (create_profile, create_session, start_session)
-- Filters by actor
-- Verifies 403 for non-admin users
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Create profile with all fields | POST returns 200 with profile ID; profile appears in GET list |
+| 2 | Create session linked to profile | POST returns session with status='draft' and ingest_url |
+| 3 | Get session by ID returns details | Response includes id, status, ingest_url, stream_key_ref |
+| 4 | List sessions returns created session | GET `/broadcast/sessions` includes test session |
+| 5 | Start session transitions status | POST `.../start`; status transitions to 'live' |
+| 6 | Stop session transitions to stopped | POST `.../stop`; status = 'stopped'; stopped_at set |
+| 7 | Delete session removes it | DELETE returns 200; subsequent GET returns 404 |
+| 8 | Mint playback URL returns signed URL | Response has playback_url and future expires_at |
+| 9 | Audit log records all actions | GET `/broadcast/admin/audit` returns create/start/stop entries |
+| 10 | Page loads with Sessions tab | Navigate to `/broadcast`; 'Sessions' tab heading visible |
+| 11 | Session card shows status badge | Card displays status badge with correct color |
+| 12 | Profile tab shows profile cards | Switch to Profiles tab; profile name and region visible |
+| 13 | Invalid transition returns 409 | Attempt start on stopped session -> 409 |
+| 14 | Non-admin start returns 403 | Alice (USER) attempts start -> 403 |
 
-**Section 85: Broadcaster Page UI (8 tests)**
-- Page loads with "Broadcaster" heading
-- Sessions tab shows session cards with status badges
-- Clicking "View Details" opens session detail dialog
-- RTMP URL is displayed and copy button works
-- Profile tab shows profile cards
-- "New Session" dialog opens and submits
-- "New Profile" dialog opens and submits
-- Status badge updates after polling (start session via API, verify UI shows "live")
+**Negative tests**: 409 invalid state transition, 403 non-admin start/stop/delete, 404 non-existent session, 422 missing required fields
 
-**Section 86: Session Actions UI (5 tests)**
-- Start button shows confirmation dialog
-- Stop button shows confirmation dialog
-- Delete button shows confirmation dialog with "are you sure" text
-- After confirming stop, session card updates to "stopped" status
-- "Mint Playback URL" button shows URL and copy button
+**Edge cases**: Concurrent start requests (idempotency), polling during transition states, empty session list
 
-### 5.3 Test Helpers
+### Test Data Requirements
 
-```typescript
-// Create a profile for test sessions
-async function createTestProfile(page: Page, identity: string): Promise<string> {
-  const resp = await apiPost(page, identity, "/broadcast/profiles", {
-    name: `E2E Profile ${Date.now()}`,
-    region: "us-east-1",
-    rendition_preset: "720p_3mbps",
-  });
-  const body = await resp.json();
-  return body.id;
-}
+Seed broadcast profile + session via API in `beforeAll`. Use unique `Date.now()` suffixed names to avoid cross-run conflicts.
 
-// Create a session in draft state
-async function createTestSession(page: Page, identity: string, profileId: string): Promise<string> {
-  const resp = await apiPost(page, identity, "/broadcast/sessions", {
-    profile_id: profileId,
-    ingest_url: "rtmp://localhost:1935/live",
-    stream_key_ref: "arn:aws:secretsmanager:us-east-1:123456:secret:stream-key",
-  });
-  const body = await resp.json();
-  return body.id;
-}
-```
+**Test users**: Root (ROOT, start/stop/delete), Alice (USER, create profile/session), Charlie (ADMIN, audit access)
 
-### 5.4 Testing Status Transitions
+### CI/Pipeline
 
-Status transitions are the most critical path. The test strategy:
-
-1. **Create** a session -> assert status = `"draft"`
-2. **Start** -> assert status transitions (may go through `provisioning`/`ready`/`live` depending on the mock provider implementation)
-3. **Poll** (or GET) until status is `"live"` (with timeout)
-4. **Stop** -> assert status transitions to `"stopping"` then `"stopped"`
-5. **Invalid transition** -> assert 409 with `BROADCAST_INVALID_STATE_TRANSITION` error code
-
-Since the dev stack uses a mock provider (`app/services/broadcast_orchestrator.py`), transitions may be instant. Tests should use `expect.poll()` or retry-loop assertions:
-
-```typescript
-// Poll until status reaches target
-await expect.poll(async () => {
-  const resp = await apiGet(page, `/broadcast/sessions/${sessionId}`);
-  const data = await resp.json();
-  return data.status;
-}, { timeout: 15000, intervals: [1000] }).toBe("live");
-```
-
-### 5.5 Testing RTMP URL Display
-
-```typescript
-test("RTMP ingest URL is displayed and copyable", async ({ page }) => {
-  await injectAuth(page, "root");
-  await page.goto("/broadcaster");
-
-  // Open detail dialog for the test session
-  await page.getByRole("button", { name: /view details/i }).first().click();
-
-  // Verify RTMP URL is visible
-  const ingestUrl = page.getByText("rtmp://localhost:1935/live");
-  await expect(ingestUrl).toBeVisible();
-
-  // Click copy button and verify clipboard
-  const copyBtn = page.getByRole("button", { name: /copy/i }).first();
-  await copyBtn.click();
-
-  // Verify toast or clipboard content
-  await expect(page.getByText(/copied/i)).toBeVisible();
-});
-```
-
-### 5.6 Test Data Cleanup
-
-Each test run should use unique identifiers (timestamp-suffixed names) to avoid
-conflicts with previous runs. The `afterAll` block should delete test sessions:
-
-```typescript
-test.afterAll(async ({ request }) => {
-  for (const id of createdSessionIds) {
-    await request.delete(`http://localhost:8000/broadcast/sessions/${id}`, {
-      headers: { Authorization: `Bearer ${sessions.root.access_token}` },
-    });
-  }
-});
-```
-
-### 5.7 Potential Flakiness Mitigations
-
-1. **Polling races**: Use `expect.poll()` with generous timeouts instead of fixed waits
-2. **Status transition speed**: Mock provider may be instant; don't assume intermediate states are visible in UI
-3. **Shared DDB state**: Use unique profile/session names per run (`${Date.now()}` suffix)
-4. **Admin role requirement**: Always use `root` identity for start/stop/delete operations
-5. **CSRF token**: All POST/DELETE via `page.request` must include `x-csrf-token` header matching the session's CSRF token
+Serial execution (shared broadcast state). `BROADCAST_PROVIDER=local` for instant transitions. Retry-safe (idempotent create with unique names).
 
 ---
 
-## Appendix A: File Reference
+## Dependencies & Merge Safety
 
-| Existing File | Relevance |
-|---------------|-----------|
-| `app/routers/broadcast.py` | All backend endpoints |
-| `app/models_broadcast.py` | Pydantic models (session status literal, profile/session/output models) |
-| `app/services/broadcast_store.py` | DynamoDB CRUD + list functions |
-| `app/services/broadcast_state_machine.py` | Status transition validation |
-| `app/services/broadcast_orchestrator.py` | Start/stop with provider integration |
-| `app/services/broadcast_playback.py` | Playback URL minting |
-| `app/services/broadcast_audit.py` | Audit log query/record |
-| `app/services/broadcast_cloudfront.py` | CloudFront token validation |
-| `app/routers/broadcast_devtools.py` | Dev-only debug status endpoint |
-| `frontend/src/api/client.ts` | API client with auth/CSRF/refresh |
-| `frontend/src/components/shared/PageHeader.tsx` | Reusable page header |
-| `frontend/src/components/shared/EmptyState.tsx` | Empty state placeholder |
-| `frontend/src/components/ui/` | All shadcn/ui primitives |
-| `frontend/playwright.config.ts` | E2E test configuration |
-| `e2e_admin_session_setup.py` | Seeds admin/root test sessions |
+### Depends On
 
-## Appendix B: Dependencies & Risks
+No upstream dependencies. This ticket is self-contained.
 
-| Risk | Mitigation |
-|------|------------|
-| No list endpoint exists | Add `GET /broadcast/sessions` + `GET /broadcast/profiles` (Phase 1) |
-| Vite proxy missing `/broadcast` | Add proxy entry (Phase 2) |
-| Mock provider behavior unknown | Check `broadcast_orchestrator.py` to confirm instant transitions in dev |
-| DRM credentials display | Never show raw secrets; only show ARN references (already enforced by `enforce_secret_reference_only`) |
-| Admin-only actions in non-admin sessions | Disable start/stop/delete buttons when `role !== "admin" && role !== "root"` |
-| Large session lists | Pagination support via `has_more` + cursor (future enhancement) |
+### Depended On By
+
+| Ticket | What It Needs |
+|---|---|
+| BCAST-002 | Broadcast session and playback URL endpoints for viewer player |
+| BCAST-007 | Sidebar navigation routes to `/broadcast` |
+| BCAST-009 | Session scheduling uses session CRUD endpoints |
+
+### Merge Strategy
+
+Independent. Frontend page at `/broadcast` (already exists), backend endpoints already registered. No new DDB tables needed.
+
+### Merge Checklist
+
+- [ ] Broadcast endpoint files exist in `frontend/src/api/endpoints/broadcast*.ts`
+- [ ] Route `/broadcast` registered in `App.tsx` with lazy import
+- [ ] Sidebar entry present in `Sidebar.tsx` and `MobileNav.tsx`
+- [ ] Vite proxy for `/broadcast` configured in `vite.config.ts`
+- [ ] E2E test `broadcaster.spec.ts` passes in CI
+- [ ] No breaking changes to existing broadcast API
 
 ---
 

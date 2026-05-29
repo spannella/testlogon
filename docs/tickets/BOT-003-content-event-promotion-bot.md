@@ -771,6 +771,96 @@ PromotionBotPage                      data-testid="promotion-bot-page"
 
 ---
 
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**Test file**: `tests/test_bot_content_promotion.py`
+
+**Mock setup**: moto mock for DynamoDB (bot tables, messages table). Mock LLM API for BOT-004.
+
+| Test Function | Description |
+|---|---|
+| `test_create_bot` | Create bot with name, avatar, description; verify stored |
+| `test_list_bots_for_creator` | List bots; returns only creator's bots |
+| `test_update_bot_state` | Transition active -> paused -> active; verify state |
+| `test_assign_bot_to_conversation` | Assign bot; verify assignment stored |
+| `test_trigger_evaluation` | Send message matching keyword trigger; bot responds |
+| `test_bot_message_has_sender_type_bot` | Bot message has `sender_type=bot` and bot identity |
+| `test_max_bots_per_creator` | Exceed limit (10); returns 409 |
+
+### Integration Tests
+
+Cross-service tests with real DynamoDB Local:
+
+1. Create bot -> assign to conversation -> send trigger message -> verify bot response
+2. Bot message appears in conversation with correct sender identity
+3. Paused bot does not respond to triggers
+
+### E2E Tests (Playwright)
+
+**Test file**: `frontend/e2e/bot-content-promotion.spec.ts`
+
+**Auth pattern**: `injectAuth(page, "alice")` for creator; `injectAuth(page, "bob")` for user interacting with bot; CSRF header for mutations
+
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | API creates bot | POST returns bot with ID |
+| 2 | API lists creator bots | GET returns array of bots |
+| 3 | API updates bot state | PATCH state to paused; verify |
+| 4 | API assigns bot to conversation | POST assignment; verify |
+| 5 | Bot responds to trigger | Send keyword message; bot reply appears |
+| 6 | Bot message shows bot badge | Bot message has 'Bot' indicator |
+| 7 | UI bot management page loads | Navigate to bot management; heading visible |
+| 8 | UI create bot form works | Fill form; submit; bot appears in list |
+| 9 | Paused bot does not respond | Pause bot; send trigger; no response |
+| 10 | Unauthenticated returns 401 | No session -> 401 |
+| 11 | Non-owner bot access returns 403 | Bob tries to edit Alice's bot -> 403 |
+| 12 | Max bots limit enforced | Create 11th bot -> 409 |
+
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 non-existent bot, 409 max limit, 422 validation
+
+**Edge cases**: Bot assigned to ALL_DMS wildcard, concurrent trigger messages, empty trigger config, bot in disabled state
+
+### Test Data Requirements
+
+Create test bot via API in `beforeAll`. Create test conversation between Alice and Bob for trigger testing.
+
+**Test users**: Alice (USER, bot creator), Bob (USER, message sender), Root (ROOT, admin)
+
+### CI/Pipeline
+
+Serial execution. Retry-safe (unique bot names per run).
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| BOT-001 | Bot framework and `send_bot_message()` | Implemented | No -- must merge after |
+| BOT-002 | Template engine and scheduled sends | Implemented | No -- must merge after |
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+
+Sequential after BOT-002. Adds content set CRUD, promotion strategies, and broadcast/calendar integration.
+
+### Merge Checklist
+
+- [ ] DDB table `ChatBots` added to `scripts/local-ddb-init.py`
+- [ ] Bot service and router registered in `app/main.py`
+- [ ] Frontend bot management page and API wrappers created
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing messaging system
+
+---
+
 ## Codebase References
 
 | Claim | File | Line(s) | Status |

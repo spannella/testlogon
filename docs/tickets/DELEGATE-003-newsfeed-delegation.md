@@ -833,3 +833,78 @@ curl -X POST http://localhost:8000/ui/feed/posts/post-abc-123/approve \
 | `frontend/src/pages/feed/DelegateFeedPage.tsx` | — | Delegate feed management | NOT YET CREATED |
 | `frontend/src/pages/feed/DraftApprovalQueue.tsx` | — | Draft approval queue | NOT YET CREATED |
 | `frontend/e2e/delegates-newsfeed.spec.ts` | — | E2E tests | NOT YET CREATED |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_delegate_feed.py`
+
+| # | Test Function | Description | Mocks |
+|---|--------------|-------------|-------|
+| 1 | `test_create_post_as_creator` | Post created with author_id=creator and delegate metadata | moto DDB |
+| 2 | `test_approval_workflow_pending` | Post saved as draft with approval_status=pending | moto DDB |
+| 3 | `test_approve_draft_publishes` | Status transitions to published, fan-out triggered | moto DDB |
+| 4 | `test_reject_draft` | approval_status=rejected, removed from queue | moto DDB |
+| 5 | `test_moderate_comment_requires_feed_moderate` | 403 without feed_moderate permission | moto DDB |
+| 6 | `test_delegate_locking_enforced` | lock_price_cents rejected when allow_delegate_locking=false | moto DDB |
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Draft approval workflow: delegate submits, creator approves, post in feed | delegates, delegate_feed, newsfeed_fanout |
+| 2 | Scheduled + approval: approved scheduled post publishes at scheduled time | delegate_feed, newsfeed_scheduler |
+| 3 | Comment moderation with full audit trail | delegate_feed, newsfeed |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/delegates-newsfeed.spec.ts`
+
+Tests use `injectAuth(page, identity)` for cookie-based auth and include CSRF headers (`x-csrf-token`) on all POST/PUT/DELETE requests. Negative tests cover 401 (unauthenticated), 403 (wrong role/user), 404 (not found), 409 (conflict), and 422 (validation) responses. Edge cases include duplicate operations (idempotency), concurrent access, and feature-flag-disabled behavior.
+
+**Total E2E tests**: 16
+
+### Test Data Requirements
+
+- DDB seeds: required tables created via `scripts/local-ddb-init.py`
+- Test users: Alice, Bob, Root, Charlie via `e2e_session_setup.py` / `e2e_admin_session_setup.py`
+- Feature flag: `FEED_DELEGATION_ENABLED` in `.env.local`
+
+### CI/Pipeline
+
+- Feature flag: `FEED_DELEGATION_ENABLED` must be enabled for tests to run
+- Serial execution: run with `--workers 1` to avoid shared state conflicts
+- Retry safety: tests use unique timestamps/UUIDs per run; safe to retry on failure
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Status | What It Provides |
+|--------|--------|-----------------|
+| DELEGATE-001 | Required | Permission checks, delegation settings, audit infrastructure |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| DELEGATE-005 | Wraps feed delegation for API key access |
+
+### Merge Strategy
+
+**Sequential (after DELEGATE-001)** -- Changes are additive (new service files, new router, new frontend pages). Shared infrastructure files (`main.py`, `settings.py`, `tables.py`, `local-ddb-init.py`) receive only additive modifications.
+
+### Merge Checklist
+
+- [ ] `app/services/delegate_feed.py` created
+- [ ] `app/routers/delegate_feed.py` registered in `main.py`
+- [ ] DraftApprovalQueue GSI added to newsfeed table
+- [ ] All 16 E2E tests pass
+- [ ] Feature flag `FEED_DELEGATION_ENABLED` added to `.env.local.example`
+- [ ] All E2E tests pass
+- [ ] No regressions in existing test suite

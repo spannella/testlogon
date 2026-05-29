@@ -862,6 +862,97 @@ The `record_campaign_impression` function checks `remaining_cents` after each im
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_syndicate_ads.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_create_ad_campaign` | Create ad campaign verified |
+| 2 | `test_campaign_uses_treasury_balance` | Campaign uses treasury balance verified |
+| 3 | `test_ad_impression_recorded` | Ad impression recorded verified |
+| 4 | `test_campaign_budget_enforcement` | Campaign budget enforcement verified |
+| 5 | `test_campaign_lifecycle_active_paused_ended` | Campaign lifecycle active paused ended verified |
+| 6 | `test_ad_targeting_syndicate_audience` | Ad targeting syndicate audience verified |
+| 7 | `test_campaign_stats_aggregation` | Campaign stats aggregation verified |
+| 8 | `test_non_admin_cannot_create_campaign` | Non admin cannot create campaign verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Create campaign -> treasury debited -> ads served to syndicate followers -> impressions recorded
+2. Campaign budget exhausted -> status changes to ended -> no more impressions served
+3. Campaign paused -> ads stop serving -> resume restores delivery
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/syndicate-ads.spec.ts`
+**Sections**: 1-3 (10 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Create ad campaign | 201; campaign linked to syndicate |
+| 2 | Campaign uses treasury | Treasury balance decremented by budget |
+| 3 | Ad impression served | GET ad returns campaign creative |
+| 4 | Campaign budget enforcement | Exhausted campaign stops serving |
+| 5 | Campaign stats | GET stats shows impressions and spend |
+| 6 | Pause and resume campaign | Status transitions work |
+| 7 | Non-admin cannot create | 403 |
+| 8 | Campaign targeting | Ads served to syndicate followers only |
+
+**Negative tests**: 403 non-admin create, 400 insufficient treasury balance, 404 syndicate not found, 400 invalid campaign dates
+
+**Edge cases**: Campaign with $0.01 budget, concurrent impression recording, campaign spanning member join/leave
+
+### Test Data Requirements
+
+- **DDB seeds**: Syndicate with treasury from SYND-004; ad placement configuration; follower records
+- **Test users**: Alice (admin/campaign creator), Bob (syndicate follower/ad viewer)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: SYNDICATES_ENABLED=true, AD_PLACEMENT_ENABLED=true
+- **Serial execution**: Must run after SYND-004 treasury is seeded with balance
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| SYND-001 | Syndicate membership for ad targeting by syndicate audience |
+| SYND-004 | Treasury for advertising spend budget |
+| Ad placement (existing) | app/services/ad_placement.py for impression recording and revenue |
+
+### Depended On By
+
+No downstream tickets depend on this feature.
+
+### Merge Strategy: **Sequential**
+
+Requires SYND-001 + SYND-004. Last in SYND chain. Integrates with existing ad placement service.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Codebase References
 
 ### Verified Existing Infrastructure

@@ -962,6 +962,94 @@ None. `recharts` is already installed (`^3.8.1` in `package.json:59`) and can be
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_questionnaire_analytics.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_response_summary_aggregation` | Response summary aggregation verified |
+| 2 | `test_response_count_by_question` | Response count by question verified |
+| 3 | `test_response_distribution_for_choice_question` | Response distribution for choice question verified |
+| 4 | `test_text_response_listing` | Text response listing verified |
+| 5 | `test_date_range_filter` | Date range filter verified |
+| 6 | `test_export_responses_csv` | Export responses csv verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Submit 10 questionnaire responses -> analytics endpoint returns accurate counts and distributions
+2. Filter by date range -> only responses within range aggregated
+3. Export CSV includes all responses with question labels
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/questionnaire-analytics.spec.ts`
+**Sections**: 1-3 (10 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Analytics page shows response count | Total responses badge visible |
+| 2 | Chart renders for choice question | Bar chart with option counts |
+| 3 | Text responses listed | Free-text answers displayed |
+| 4 | Date range filter works | Select range; chart updates |
+| 5 | Export CSV downloads | Click Export; file downloaded |
+| 6 | Empty state for no responses | No responses yet message |
+| 7 | Multiple questions analytics | Each question has its own chart |
+| 8 | Percentage labels on chart | % values visible on bars |
+
+**Negative tests**: 404 questionnaire not found, 403 non-owner analytics, 401 unauthenticated
+
+**Edge cases**: Questionnaire with 0 responses, 1000+ responses aggregation, question type changes after responses
+
+### Test Data Requirements
+
+- **DDB seeds**: Questionnaire with mixed question types; 10-20 response submissions
+- **Test users**: Alice (questionnaire owner), Bob (respondent)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: None
+- **Serial execution**: Response seeding must complete before analytics query tests
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| Questionnaire system (existing) | Response data in questionnaires table |
+| Analytics page (existing) | AnalyticsPage layout for embedding charts |
+
+### Depended On By
+
+No downstream tickets depend on this feature.
+
+### Merge Strategy: **Independent**
+
+Read-only analytics views over existing questionnaire response data.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix: Codebase Citations
 
 | Claim | File | Line(s) | Status |

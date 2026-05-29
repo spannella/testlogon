@@ -947,6 +947,101 @@ Estimated cost: ~0.5 WCU per post * 100K posts = 50K WCU total (spread over minu
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_hashtags.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_extract_hashtags_from_body` | Extract hashtags from body verified |
+| 2 | `test_normalize_tags_lowercases` | Normalize tags lowercases verified |
+| 3 | `test_write_tag_index_creates_entries` | Write tag index creates entries verified |
+| 4 | `test_create_post_with_tags` | Create post with tags verified |
+| 5 | `test_post_to_dict_includes_tags` | Post to dict includes tags verified |
+| 6 | `test_get_posts_by_tag` | Get posts by tag verified |
+| 7 | `test_trending_tags_returns_ranked_list` | Trending tags returns ranked list verified |
+| 8 | `test_max_tags_per_post_enforced` | Max tags per post enforced verified |
+| 9 | `test_tag_length_validation` | Tag length validation verified |
+| 10 | `test_duplicate_tags_deduplicated` | Duplicate tags deduplicated verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Create post with #photography in body -> tag auto-extracted -> appears in GET /discover/tags/photography
+2. Trending tags endpoint returns tags ranked by recent post count
+3. Tag page shows both posts and videos matching the tag
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/hashtags.spec.ts`
+**Sections**: 1-4 (15 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Create post with tags | 201; tags field in response |
+| 2 | Auto-extract hashtags from body | Body with #photography -> tags includes photography |
+| 3 | Get posts by tag | GET /discover/tags/photography returns tagged posts |
+| 4 | Trending tags returns list | GET /discover/trending-tags returns non-empty array |
+| 5 | Tag page loads and shows posts | Navigate to /discover/tags/photography; posts visible |
+| 6 | Clickable hashtag in post body | Click #photography -> navigates to tag page |
+| 7 | Tag input widget in CreatePost | Type tag; chip appears |
+| 8 | Video tags appear in discovery | Video with matching tag appears on tag page |
+
+**Negative tests**: 400 tag >50 chars, 400 >20 tags per post, 404 unknown tag returns empty results (200), 422 invalid characters in tag
+
+**Edge cases**: Unicode hashtags, tags with numbers, empty body with explicit tags, duplicate tags in body text
+
+### Test Data Requirements
+
+- **DDB seeds**: Posts with various tags; videos with matching tags in VideoMetadata table
+- **Test users**: Alice (creator), Bob (viewer)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: HASHTAGS_ENABLED=true (default)
+- **Serial execution**: Tag index write tests must verify GSI propagation before read tests
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| Newsfeed (existing) | Post creation and _post_to_dict for tags field |
+| Discovery router (existing) | Trending and tag discovery endpoints |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| SOC-005 | Hashtag links from profile posts tab |
+| SOCIAL-003 | Tag-based content discovery in global search |
+
+### Merge Strategy: **Independent**
+
+Adds tags field to posts and tag index. No breaking changes to existing post API.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix: Codebase Citations
 
 | Claim | File | Line(s) | Status |

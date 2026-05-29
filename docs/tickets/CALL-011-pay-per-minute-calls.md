@@ -928,556 +928,92 @@ When balance is depleted during a billing cycle:
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests: Call Billing Timer
+### Unit Tests (pytest)
 
-<!-- NOTE: The spec proposed two separate files: `tests/test_call_billing_timer.py` and `tests/test_call_billing_endpoints.py`. Neither exists. Instead, there is a single `tests/test_call_billing.py` (499 lines) that covers both billing timer logic and endpoint tests. -->
+**Test file**: `tests/test_call_11.py`
 
-| # | Test Case | Assertions |
-|---|-----------|-----------|
-| 1 | Set call rate — happy path | Rate stored, `enabled=True`, within bounds |
-| 2 | Set call rate — below minimum (99 cents) | Rejected with 422 |
-| 3 | Set call rate — above maximum (10001 cents) | Rejected with 422 |
-| 4 | Get call rate — rate exists | Returns correct rate and settings |
-| 5 | Get call rate — no rate set | Returns 404 |
-| 6 | Delete call rate | Rate removed, subsequent GET returns 404 |
-| 7 | Wallet balance check — sufficient | No exception raised |
-| 8 | Wallet balance check — insufficient | 402 with `required_cents` and `current_balance_cents` |
-| 9 | Process billing cycle — first minute | Debits `rate_cents`, credits creator `rate - fee`, updates timer |
-| 10 | Process billing cycle — less than 60s elapsed | Returns `action="skip"` |
-| 11 | Process billing cycle — insufficient balance | Returns `action="end_call"`, reason `"balance_depleted"` |
-| 12 | Process billing cycle — platform fee calculation | 20% of 500 cents = 100 cents fee, 400 cents to creator |
-| 13 | Finalize billing — partial minute pro-rated | 30 seconds at $5/min = $2.50 (rounded up to $2.50) |
-| 14 | Finalize billing — zero unbilled seconds | No additional charge |
-| 15 | Finalize billing — insufficient balance for full pro-rate | Debit remaining balance only |
-| 16 | Heartbeat timeout detection | No heartbeat for 30s triggers auto-end |
-| 17 | Max duration enforcement | Call at max duration triggers auto-end |
-| 18 | Concurrent paid calls blocked | Second paid invite returns 409 |
+**Mock setup**: moto mock for DynamoDB (call session tables). Mock RTCPeerConnection for frontend unit tests. Chromium fake media devices for E2E.
 
-### 5.2 Unit Tests: Call Billing Endpoints
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_lifecycle_transitions` | Verify allowed state transitions succeed |
+| `test_invalid_transition_rejected` | Invalid transition returns 409 |
+| `test_authorization_check` | Non-participant returns 403 |
+| `test_idempotent_operation` | Repeated call returns same result |
+| `test_cleanup_on_end` | Resources cleaned up after call ends |
 
-<!-- NOTE: `tests/test_call_billing_endpoints.py` does NOT exist as a separate file. Endpoint tests are in `tests/test_call_billing.py` (499 lines). -->
+### Integration Tests
 
-| # | Test Case | Expected |
-|---|-----------|----------|
-| 1 | `GET /ui/calls/rates/{id}` — rate exists | 200, rate returned |
-| 2 | `GET /ui/calls/rates/{id}` — no rate | 404 |
-| 3 | `POST /ui/calls/rates` — set rate | 200, rate created |
-| 4 | `POST /ui/calls/rates` — rate too low | 422 |
-| 5 | `POST /ui/calls/rates` — rate too high | 422 |
-| 6 | `PATCH /calls/{id}/heartbeat` — happy path | 200, billing tick data |
-| 7 | `PATCH /calls/{id}/heartbeat` — not a participant | 403 |
-| 8 | `PATCH /calls/{id}/heartbeat` — call not connected | 409 |
-| 9 | `PATCH /calls/{id}/heartbeat` — call not paid | 400 |
-| 10 | `GET /calls/{id}/billing` — billing status | 200, status returned |
-| 11 | `GET /calls/{id}/billing` — call not found | 404 |
-| 12 | Paid call invite — sufficient balance | 200, `paid=True`, `rate_cents_per_minute` in response |
-| 13 | Paid call invite — insufficient balance | 402, `required_cents` in error |
-| 14 | Paid call invite — creator paid calls disabled | 400 |
-| 15 | Paid call invite — feature flag disabled | 400, "Paid calls are not enabled" |
+Cross-service tests with real DynamoDB Local:
 
-### 5.3 E2E Tests (`frontend/e2e/call-billing.spec.ts`) — **IMPLEMENTED** (591 lines)
+1. Full call lifecycle through real DDB (invite -> accept -> connect -> end)
+2. Signaling relay: offer/answer/ICE exchange between two sessions
+3. State machine transitions verified end-to-end
 
-Since real WebRTC media is not available in Playwright, E2E tests focus on the API endpoints and billing correctness.
+### E2E Tests (Playwright)
 
-**Section 117: Call Rate Settings API (4 tests)**
+**Test file**: `frontend/e2e/call-11.spec.ts`
 
-```typescript
-test("Creator sets per-minute rate to $5.00", async () => {
-  // POST /ui/calls/rates as Bob (creator)
-  // { rate_cents_per_minute: 500, enabled: true }
-  // Verify 200, rate_cents_per_minute=500
-});
+**Auth pattern**: `injectAuth(page, "alice")` for caller; `injectAuth(page, "bob")` for callee; separate browser contexts for two-peer tests
 
-test("Get creator rate returns $5.00/min", async () => {
-  // GET /ui/calls/rates/{bob_id} as Alice
-  // Verify 200, rate_cents_per_minute=500, enabled=true
-});
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Call invite creates session | POST invite -> 200 with call_id |
+| 2 | Call accept transitions state | POST accept -> state = accepted |
+| 3 | Signaling relay delivers events | POST signal -> SSE event received by peer |
+| 4 | Connected state shows overlay | Both peers reach connected; overlay visible |
+| 5 | End call cleans up resources | POST end -> state = ended; tracks stopped |
+| 6 | Call overlay shows correct UI | Ringing/connected/ended states render correctly |
+| 7 | Feature flag gates functionality | Disabled flag -> call button hidden |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-participant returns 403 | Third party -> 403 |
+| 10 | Non-existent call returns 404 | Invalid call_id -> 404 |
+| 11 | Invalid transition returns 409 | End already-ended call -> 409 |
 
-test("Rate below minimum ($0.50) rejected", async () => {
-  // POST /ui/calls/rates { rate_cents_per_minute: 50 }
-  // Verify 422
-});
+**Negative tests**: 401 unauthenticated, 403 non-participant, 404 non-existent call, 409 invalid transition, 422 invalid payload
 
-test("Rate above maximum ($150.00) rejected", async () => {
-  // POST /ui/calls/rates { rate_cents_per_minute: 15000 }
-  // Verify 422
-});
-```
+**Edge cases**: Concurrent accept/decline, call timeout (30s), ICE restart during connected state, tab backgrounding, network offline
 
-**Section 118: Paid Call Lifecycle + Billing (6 tests)**
+### Test Data Requirements
 
-```typescript
-test("Paid call invite requires sufficient wallet balance", async () => {
-  // Ensure Alice wallet has $0
-  // POST /messaging/messages/calls/invite { paid: true, callee_user_id: bob }
-  // Verify 402, required_cents in error body
-});
+Create DM conversation between Alice and Bob in `beforeAll`. Use `--use-fake-device-for-media-stream` Chromium flag for media tests.
 
-test("Paid call invite succeeds with sufficient balance", async () => {
-  // Seed Alice wallet with $50.00 (5000 cents)
-  // POST /messaging/messages/calls/invite { paid: true }
-  // Verify 200, paid=true, rate_cents_per_minute=500
-});
+**Test users**: Alice (USER, caller), Bob (USER, callee), Root (ROOT, admin for feature flags)
 
-test("Heartbeat on paid call returns billing status", async () => {
-  // Transition call to connected state
-  // PATCH /messages/calls/{id}/heartbeat
-  // Verify 200, total_cost_cents, balance_remaining_cents
-});
+### CI/Pipeline
 
-test("Call end finalizes billing with pro-rated charge", async () => {
-  // POST /messages/calls/{id}/end
-  // Verify call ended
-  // GET /messages/calls/{id}/billing
-  // Verify total_cost_cents > 0
-});
-
-test("Caller billing ledger contains debit entry for private call", async () => {
-  // Query billing table for Alice
-  // Find LEDGER entry with reason="Private call"
-  // Verify amount_cents matches billing summary
-});
-
-test("Creator billing ledger contains credit entry for private call", async () => {
-  // Query billing table for Bob
-  // Find LEDGER entry with reason="Private call earnings"
-  // Verify amount_cents = debit - platform_fee
-});
-```
-
-### 5.4 Edge Cases to Cover
-
-| Scenario | Expected Behavior |
-|----------|------------------|
-| Caller's wallet balance drops below rate mid-call | `call.balance_low` SSE event sent. 30-second grace period. If not topped up, call auto-ends with `balance_depleted`. |
-| Both parties send heartbeat simultaneously | Both heartbeats processed. Billing cycle only triggers once per 60-second window (idempotent via `last_billed_ts` check). |
-| Network interruption prevents heartbeats | After 30 seconds with no heartbeat from either party, call auto-ends with `heartbeat_timeout`. Final billing applied for elapsed time. |
-| Creator changes rate during active call | No effect. Rate is snapshotted on `CallSessionRecord` at call start. |
-| Platform fee changes during active call | No effect. Fee BPS is snapshotted at call start. |
-| Call disconnects at exactly 60-second boundary | Full minute billed. No pro-rated final charge (unbilled_seconds = 0). |
-| Caller has exact balance for 1 more minute | Next billing cycle succeeds. Following cycle fails with `balance_depleted`. |
-| DDB ConditionalCheckFailed on wallet debit (race condition) | Billing cycle skipped. Next heartbeat retries. If 3 consecutive failures, auto-end call. |
-| Very long call (>2 hours, default max) | Auto-end with `max_duration_reached`. Final billing applied. |
-| Creator sets rate then disables paid calls | Existing active calls continue at snapshotted rate. New paid invites return 400. |
-| Free call to creator with paid rate set | No billing. `paid: false` on invite means no billing timer is started. |
-| Wallet balance goes negative due to race | Wallet debit uses `ConditionExpression: wallet_balance_cents >= :needed` -- impossible to go negative. |
-| Both parties hang up simultaneously | First `end_call()` transitions to `ended`. Second is idempotent (already terminal). Billing finalized once. |
-
-### 5.5 Performance Considerations
-
-| Metric | Target | Notes |
-|--------|--------|-------|
-| Heartbeat latency p99 | <100ms | Single DDB `get_item` + conditional `update_item` |
-| Billing cycle latency p99 | <200ms | Wallet debit + credit write + timer update (3 DDB writes) |
-| Memory per active paid call | ~1KB | Timer state stored in DDB, not in-process |
-| Concurrent paid calls | 1000+ | No in-process state; all state in DDB |
-| Heartbeat frequency | Every 15s per client | 2 heartbeats per call (caller + callee) = ~133 req/s at 1000 calls |
-
-### 5.6 Regression Concerns
-
-1. **Existing free call flow must not be affected**: The `paid: bool = False` default on `CallInviteIn` ensures backward compatibility. Existing tests for free calls should continue passing without modification.
-2. **Wallet debit must be atomic**: The `ConditionExpression` prevents negative balances. The existing `apply_wallet_delta` function in `billing_shared.py` encapsulates this, preventing accidental non-conditional updates elsewhere.
-3. **Call lifecycle state machine unchanged**: Billing is orthogonal to call state transitions. Adding `paid=True` does not introduce new states or transitions.
-4. **Heartbeat endpoint must not block call operations**: Heartbeat processing runs synchronously but is lightweight (3 DDB operations). If DDB latency spikes, heartbeats may time out on the client, but the call itself (WebRTC media) continues unaffected.
-5. **Existing billing table schema unchanged**: New entries (`CALL_RATE`, `HOLD#`) follow the existing PK/SK pattern. No schema migration needed.
+Serial execution (WebRTC requires sequential peer setup). `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true`. Retry-safe.
 
 ---
 
-## 6. Security Considerations
+## Dependencies & Merge Safety
 
-### 6.1 Authentication & Authorization
+### Depends On
 
-- **Rate endpoints**: `POST/PUT/DELETE /ui/calls/rates` use `Depends(require_ui_session)`. Only the authenticated user can set their own rate.
-- **Rate lookup**: `GET /ui/calls/rates/{creator_id}` is authenticated (any logged-in user can see public rates).
-- **Heartbeat**: `PATCH /messages/calls/{call_id}/heartbeat` validates that the requester is a call participant via `get_call_session()` check.
-- **Billing status**: `GET /messages/calls/{call_id}/billing` validates participant membership.
-- **CSRF**: All cookie-auth POST/PATCH endpoints require `x-csrf-token` header per existing middleware.
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| CALL-002 | RTCPeerConnection for call infrastructure | Implemented | Yes |
+| MON-002 | Billing ledger for per-minute charges | Implemented | Yes |
 
-### 6.2 Financial Security
+### Depended On By
 
-- **Atomic wallet debit**: Uses DDB `ConditionExpression` to prevent overdraft. Cannot go negative.
-- **Rate snapshot**: Rate and platform fee are captured at call start, preventing mid-call manipulation.
-- **Idempotent billing cycles**: `last_billed_ts` prevents double-billing for the same time period.
-- **Pro-rated final billing**: Uses `math.ceil()` for sub-minute charges, ensuring the caller is never undercharged.
-- **Platform fee calculation**: Integer arithmetic (`(amount * bps) // 10000`) avoids floating-point rounding errors.
-- **Best-effort credit writes**: Like the tip ledger pattern, credit writes are best-effort. If a credit fails, the debit still succeeds (fail-safe for the platform; manual reconciliation for the creator via logs).
+No downstream dependents identified.
 
-### 6.3 Abuse Vectors
+### Merge Strategy
 
-- **Call farming**: A caller and creator collude to generate fake calls for creator earnings. Mitigated by: the caller is actually debited from their wallet (real money), and platform fee is deducted. Net loss for the colluding pair.
-- **Rate manipulation**: Creator sets rate to $100/min after call starts. No effect -- rate snapshotted at call start.
-- **Heartbeat spam**: Rate-limit heartbeat endpoint to 1 request per 5 seconds per call per participant. Excessive heartbeats return 429.
-- **Wallet top-up during call**: Caller depletes balance, gets grace period, tops up wallet via separate deposit endpoint, call continues. This is intended behavior, not abuse.
+Independent. New billing timer service + DDB table. Parallel-safe with CALL-009.
 
-### 6.4 Input Validation
+### Merge Checklist
 
-- `rate_cents_per_minute`: Constrained to `ge=100, le=10000` via Pydantic `Field`.
-- `call_id` path parameter: Validated against DDB lookup (returns 404 for non-existent).
-- `creator_id` path parameter: No regex needed -- DDB `get_item` returns None for invalid IDs.
-- `min_balance_minutes`: Constrained to `ge=1, le=60`.
-- `max_duration_minutes`: Constrained to `ge=1, le=480`.
-
----
-
-## 7. Migration & Rollback Plan
-
-### 7.1 DDB Changes
-
-**New table**: `CallBillingLedger` is new and has no existing data. Creation is additive and non-destructive.
-
-**Modified table**: `MessageCallSessions` gains new optional fields on `CallSessionRecord`. Existing items lack these fields; `_record_from_item()` uses safe defaults (`paid=False`, `total_billed_cents=0`, etc.). No backfill needed.
-
-**Billing table**: New SK patterns (`CALL_RATE`, `HOLD#{call_id}`) are additive. No conflict with existing patterns.
-
-**`scripts/local-ddb-init.py` addition:**
-```python
-TableDef(
-    _resolve_table_name(S.call_billing_ledger_table_name, "CallBillingLedger"),
-    "call_id",
-    "entry_id",
-    gsi=[
-        {"index_name": "ByCallerCreatedAt", "partition_key": "caller_user_id", "sort_key": "created_at"},
-        {"index_name": "ByCreatorCreatedAt", "partition_key": "creator_user_id", "sort_key": "created_at"},
-    ],
-    attr_types={"created_at": "N"},
-),
-```
-
-### 7.2 Feature Flag Rollout
-
-| Stage | `CALL_BILLING_ENABLED` | Behavior |
-|-------|----------------------|----------|
-| 1 | `false` (default) | All paid call endpoints return 400 "Paid calls are not enabled". Rate settings can be configured but invites are blocked. |
-| 2 | `true` (staging) | Full paid call flow enabled on staging for internal testing. |
-| 3 | `true` (production) | GA rollout. |
-
-<!-- NOTE: In the actual implementation, `CALL_BILLING_ENABLED` defaults to `"1"` (enabled), NOT `"false"`. See `app/core/settings.py:1180`. The feature is already enabled in the dev environment. -->
-
-### 7.3 Rollback Steps
-
-1. Set `CALL_BILLING_ENABLED=false` -- all new paid call invites return 400. Active paid calls continue (heartbeat and billing still function for in-progress calls).
-2. To hard-stop active paid calls: deploy code that forces `finalize_call_billing()` and `end_call()` for all `connected` paid sessions. This is a manual admin action, not automated.
-3. Rate settings and billing ledger entries remain in DDB for audit purposes. No data loss.
-4. The `CallBillingLedger` table can be deleted without affecting any other table.
-
-### 7.4 Zero-Downtime Deployment
-
-- New fields on `CallSessionRecord` default to `False`/`0`/`None`, so existing items deserialize correctly without migration.
-- New endpoints are additive (new route handlers), not modifications of existing routes.
-- The `paid: bool = False` default on `CallInviteIn` ensures existing clients sending invites without the field continue to work.
-- The `CallBillingLedger` table is independent; creation does not lock or modify any existing table.
-
----
-
-## 8. Operational Runbook
-
-### 8.1 Metrics to Add
-
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `call_billing_cycle_total` | Counter | `status={billed,skipped,depleted,error}` | Billing cycle outcomes |
-| `call_billing_amount_cents` | Histogram | | Per-cycle billing amounts |
-| `call_billing_duration_seconds` | Histogram | `end_reason` | Paid call durations |
-| `call_billing_heartbeat_total` | Counter | `status={ok,timeout,error}` | Heartbeat outcomes |
-| `call_billing_heartbeat_latency_seconds` | Histogram | | Heartbeat round-trip latency |
-| `call_billing_wallet_check_total` | Counter | `result={sufficient,insufficient}` | Pre-call wallet checks |
-| `call_billing_finalize_total` | Counter | `status={success,partial,error}` | Call finalization outcomes |
-
-### 8.2 Alerting Thresholds
-
-| Alert | Condition | Severity |
-|-------|-----------|----------|
-| Billing cycle error rate > 5% | `rate(call_billing_cycle_total{status=error}[5m]) / rate(call_billing_cycle_total[5m]) > 0.05` | High |
-| Heartbeat timeout rate > 10% | `rate(call_billing_heartbeat_total{status=timeout}[5m]) / rate(call_billing_heartbeat_total[5m]) > 0.10` | Medium |
-| Heartbeat latency p99 > 500ms | Histogram quantile | Medium |
-| Finalization error rate > 1% | Similar ratio on `call_billing_finalize_total{status=error}` | Critical |
-| Zero paid calls in 4 hours (during business hours) | `increase(call_billing_cycle_total[4h]) == 0` | Low |
-
-### 8.3 Common Debugging Scenarios
-
-**Scenario: Caller reports being overcharged**
-1. Query `CallBillingLedger` for `call_id`. List all entries with their `cycle_number`, `billed_seconds`, and `gross_amount_cents`.
-2. Sum `gross_amount_cents` -- should match `total_billed_cents` on the call session record.
-3. Check `billed_seconds` for each cycle -- should be 60 (or less for the final cycle).
-4. Verify `rate_cents_per_minute` on session matches the rate at the time of the call.
-
-**Scenario: Creator reports not receiving payment**
-1. Query `CallBillingLedger` for `call_id`. Check `creator_net_cents` on each entry.
-2. Query billing table for creator (`pk=USER#{creator_id}`, `sk begins_with LEDGER#`). Look for entries with `reason="Private call earnings"`.
-3. If entries missing but `CallBillingLedger` entries exist, the credit write failed. Check logs for `call_billing_credit_failed`.
-4. Manual fix: write credit entries using data from `CallBillingLedger`.
-
-**Scenario: Call ended unexpectedly**
-1. Check `end_reason` on the call session record. Values: `heartbeat_timeout`, `balance_depleted`, `max_duration_reached`, `ended` (normal).
-2. If `heartbeat_timeout`: Check client logs for network issues. Verify heartbeat interval is 15s.
-3. If `balance_depleted`: Check `wallet_balance_after` on the last `CallBillingLedger` entry.
-
-### 8.4 Log Patterns to Watch
-
-```
-# Successful billing cycle
-{"level": "info", "event": "call_billing_cycle", "call_id": "...", "cycle": 3, "amount_cents": 500, "balance_after": 3500}
-
-# Balance depleted
-{"level": "warning", "event": "call_billing_depleted", "call_id": "...", "caller": "...", "total_billed": 5000}
-
-# Credit write failure
-{"level": "warning", "event": "call_billing_credit_failed", "creator": "...", "call_id": "...", "amount": 400}
-
-# Heartbeat timeout
-{"level": "info", "event": "call_heartbeat_timeout", "call_id": "...", "last_heartbeat_caller": 1716681540, "last_heartbeat_callee": 1716681550}
-
-# Final billing
-{"level": "info", "event": "call_billing_finalized", "call_id": "...", "total_cents": 6250, "duration_s": 754, "pro_rated_cents": 250}
-```
-
----
-
-## 9. Performance & Capacity Planning
-
-### 9.1 Expected Throughput
-
-| Metric | Estimate | Basis |
-|--------|----------|-------|
-| Rate setting requests/sec | 0.1 | Infrequent creator action |
-| Rate lookups/sec | 10 | Before-call check |
-| Paid call invites/sec | 1 | Subset of all calls |
-| Heartbeats/sec | 133 | 2 per call * 1000 calls / 15s interval |
-| Billing cycles/sec | 16.7 | 1000 calls / 60s interval |
-| Finalization/sec | 0.5 | Calls ending |
-
-### 9.2 DDB Capacity
-
-**MessageCallSessions table (additional load per paid call):**
-- Reads: 1 `get_item` per heartbeat (every 15s) = 4 RCU/call/min
-- Writes: 1 `update_item` per billing cycle (every 60s) = 1 WCU/call/min
-
-**Billing table (additional load per paid call):**
-- 1 conditional `update_item` per billing cycle (wallet debit) = 1 WCU/call/min
-- 1 `put_item` per billing cycle (creator credit ledger) = 1 WCU/call/min
-
-**CallBillingLedger table:**
-- 1 `put_item` per billing cycle = 1 WCU/call/min
-
-**Total per active paid call**: ~4 RCU + ~3 WCU per minute.
-
-At 1000 concurrent paid calls: ~4000 RCU + ~3000 WCU. Well within on-demand capacity.
-
-### 9.3 Hot Partition Analysis
-
-- **MessageCallSessions PK**: `call_id` is unique per call. No hot partition risk.
-- **Billing table PK**: `USER#{user_id}`. A single caller on a long call generates 1 write/min to their partition. No hot partition risk.
-- **CallBillingLedger PK**: `call_id`. A single call generates 1 write/min. No hot partition risk.
-- **ByCallerCreatedAt GSI**: A prolific caller (many paid calls) concentrates writes on their partition. At 1 call at a time, this is 1 write/min. No risk.
-
-### 9.4 Latency Budget
-
-| Operation | Target p99 | Components |
-|-----------|-----------|------------|
-| GET /calls/rates/{id} | 20ms | Single DDB `get_item` |
-| POST /calls/rates | 30ms | Single DDB `put_item` |
-| POST /calls/invite (paid) | 100ms | Rate lookup (10ms) + wallet check (10ms) + create session (30ms) |
-| PATCH /calls/{id}/heartbeat | 150ms | Get session (10ms) + billing cycle (wallet debit 20ms + credit write 20ms + timer update 20ms + ledger write 20ms) |
-| POST /calls/{id}/end (paid) | 200ms | End call (30ms) + finalize billing (wallet debit 20ms + credit write 20ms + summary ledger 40ms) |
-
----
-
-## 10. Dependency Analysis
-
-### 10.1 Blocked By
-
-- None strictly. CALL-011 builds on the existing call lifecycle (`messaging_call_lifecycle.py`) and billing table (`T.billing`), both of which are fully implemented.
-- **Soft dependency on MON-002**: The tip ledger pattern (`app/services/tip_ledger.py`) provides the template for paired debit/credit writes. MON-002 standardizes this pattern, but CALL-011 can implement its own version independently.
-
-### 10.2 Blocks
-
-| Ticket | Dependency |
-|--------|-----------|
-| MON-003 | Creator earnings dashboard should include paid call credits alongside tips and VOD purchases |
-| MON-004 | Payout system should include paid call earnings in available balance |
-
-### 10.3 Integration Points
-
-- **Billing table** (`T.billing`): Writes `CALL_RATE` settings, `WALLET` debits, `LEDGER#` debit/credit entries. Schema must be compatible with existing ledger query patterns.
-- **MessageCallSessions table** (`T.message_call_sessions`): Extended with billing fields. Must not break existing `_record_from_item()` deserialization for non-paid call items.
-- **Call lifecycle** (`messaging_call_lifecycle.py`): `end_call()` modified to call `finalize_call_billing()`. Must not affect free call teardown.
-- **SSE dispatch**: Billing events dispatched via existing SSE infrastructure. No new SSE channels needed.
-- **Existing invite/accept/end flows**: Extended but not broken. `paid: bool = False` default ensures backward compatibility.
-
-### 10.4 API Contract Commitments
-
-Once shipped, these response shapes become commitments:
-- `CallInviteOut.paid` (boolean) -- consumers will key billing UX on this
-- `CallInviteOut.rate_cents_per_minute` (int or null) -- displayed in call UI
-- `HeartbeatOut` shape -- frontend cost ticker depends on all fields
-- `CallRateOut.rate_cents_per_minute` (int) -- shown before call initiation
-- HTTP 402 error for insufficient balance -- frontend handles this status code specifically
-
----
-
-## 11. Acceptance Criteria
-
-1. A creator can set a per-minute rate between $1.00 and $100.00 via `POST /ui/calls/rates`.
-2. A creator can enable/disable paid calls independently of free calls.
-3. `GET /ui/calls/rates/{creator_id}` returns the creator's rate and enabled status for any authenticated user.
-4. `POST /messaging/messages/calls/invite` with `paid: true` checks the caller's wallet balance against `rate * min_balance_minutes`.
-5. If wallet balance is insufficient, the invite returns HTTP 402 with `required_cents` and `current_balance_cents`.
-6. After a paid call connects, a billing timer starts. Every 60 seconds, the caller's wallet is debited by `rate_cents_per_minute`.
-7. The creator's billing ledger receives a credit entry for each billing cycle, with the platform fee deducted.
-8. Both participants must send heartbeats at least every 30 seconds. If missed, the call auto-ends with reason `heartbeat_timeout`.
-9. When the call ends, a final pro-rated charge is applied for any partial minute (rounded to the nearest second).
-10. A `call.billing_tick` SSE event is sent to both participants after each billing cycle, containing `total_cost_cents`, `balance_remaining`, and `rate_cents_per_minute`.
-11. A `call.balance_low` SSE event is sent when the caller's remaining balance drops below 2 minutes of call time.
-12. When the caller's balance is depleted, the call ends with reason `balance_depleted` after a 30-second grace period.
-13. The frontend shows the creator's rate before calling ("$X.XX/min").
-14. The frontend shows a live cost ticker during paid calls.
-15. The maximum call duration is enforced (default 120 minutes). The call auto-ends with reason `max_duration_reached`.
-16. Free calls (`paid: false`) are completely unaffected by this feature.
-17. All 18 unit tests and 10 E2E tests (sections 117-118) pass.
-18. The `CALL_BILLING_ENABLED` feature flag defaults to `false` and disables all paid call functionality when off.
-
----
-
-## 12. Error Handling Matrix
-
-| Endpoint | Condition | HTTP Status | Error Code | User-Facing Message | Recovery Action |
-|----------|-----------|-------------|------------|---------------------|-----------------|
-| GET /calls/rates/{id} | Creator has no rate set | 404 | `rate_not_found` | "Creator has not set a call rate" | N/A |
-| POST /calls/rates | Rate below minimum | 422 | `validation_error` | Pydantic error | Set rate >= $1.00 |
-| POST /calls/rates | Rate above maximum | 422 | `validation_error` | Pydantic error | Set rate <= $100.00 |
-| POST /calls/invite (paid) | Insufficient wallet balance | 402 | `insufficient_balance` | "Insufficient wallet balance. Minimum required: $X.XX" | Top up wallet |
-| POST /calls/invite (paid) | Creator paid calls disabled | 400 | `paid_calls_disabled` | "Creator has not enabled paid calls" | Contact creator |
-| POST /calls/invite (paid) | Feature flag off | 400 | `feature_disabled` | "Paid calls are not enabled" | N/A |
-| POST /calls/invite (paid) | Caller = creator (self-call) | 400 | `cannot_call_self` | "Cannot start a paid call with yourself" | N/A |
-| PATCH /calls/{id}/heartbeat | Call not found | 404 | `call_not_found` | "Call not found" | Verify call ID |
-| PATCH /calls/{id}/heartbeat | Not a participant | 403 | `forbidden` | "Not a call participant" | N/A |
-| PATCH /calls/{id}/heartbeat | Call not connected | 409 | `invalid_state` | "Call is not connected" | N/A |
-| PATCH /calls/{id}/heartbeat | Call not paid | 400 | `not_paid_call` | "This is not a paid call" | Use free call flow |
-| PATCH /calls/{id}/heartbeat | Rate limited | 429 | `rate_limited` | "Too many heartbeats" | Wait and retry |
-| GET /calls/{id}/billing | Call not found | 404 | `call_not_found` | "Call not found" | Verify call ID |
-| GET /calls/{id}/billing | Not a participant | 403 | `forbidden` | "Not a call participant" | N/A |
-
----
-
-## 13. Frontend Component Specifications
-
-### 13.1 PaidCallRateBadge Component
-
-```typescript
-interface PaidCallRateBadgeProps {
-  rateCents: number;
-  currency?: string;
-}
-```
-
-Renders a small badge next to the call button: `"$5.00/min"` in a muted outline style. Clicking shows a tooltip: "This creator charges $5.00 per minute for private calls."
-
-### 13.2 PaidCallCostTicker Component
-
-```typescript
-interface PaidCallCostTickerProps {
-  totalCostCents: number;
-  rateCentsPerMinute: number;
-  elapsedSeconds: number;
-  balanceRemainingCents: number;
-}
-```
-
-Renders in the call overlay (top-left):
-```
-  +----------------------------+
-  |  $ 12.50    02:34          |
-  |  $5.00/min   Bal: $37.50   |
-  +----------------------------+
-```
-
-**Update frequency**: Every second (local timer interpolates between heartbeat responses). `totalCostCents` snaps to server value on each heartbeat response.
-
-### 13.3 PaidCallBalanceWarning Component
-
-```typescript
-interface PaidCallBalanceWarningProps {
-  minutesRemaining: number;
-  onDismiss: () => void;
-}
-```
-
-Renders as an animated banner in the call overlay:
-```
-  +-------------------------------------------------+
-  |  Low Balance - ~1.5 minutes remaining            |
-  |  Top up your wallet to continue the call         |
-  +-------------------------------------------------+
-```
-
-Auto-dismisses after 5 seconds but reappears on each `call.balance_low` event.
-
-### 13.4 CallRateSettings Component
-
-```typescript
-interface CallRateSettingsProps {
-  onSave: () => void;
-}
-```
-
-Component tree:
-```
-CallRateSettings
-  +-- Card
-  |   +-- CardHeader: "Paid Call Settings"
-  |   +-- CardContent
-  |       +-- Switch: "Enable paid calls"
-  |       +-- Label + Input: "Rate per minute ($1.00 - $100.00)"
-  |       +-- Label + Input: "Minimum balance (minutes)"
-  |       +-- Label + Input: "Maximum call duration (minutes)"
-  |       +-- Button: "Save Settings"
-```
-
-Query key: `["call-rate", userId]`. Mutation invalidates this key on save.
-
----
-
-## 14. Summary of Files Modified
-
-| File | Change Type | Status | Actual Lines |
-|------|-------------|--------|-------------|
-| `app/services/call_billing_timer.py` | New service | **DONE** | 570 |
-| `app/routers/call_billing.py` | New router | **DONE** | 247 |
-| `app/services/messaging_call_sessions.py` | Extend dataclass + serialization | **DONE** | ~50 added |
-| `app/services/messaging_call_lifecycle.py` | Call finalization hook | **DONE** | ~5 added (lines 387-388) |
-| `app/routers/messaging.py` | Extend invite models + handler | **DONE** | ~40 added (lines 12900-13016) |
-| `app/core/settings.py` | Add 13 settings (not 9) | **DONE** | lines 1179-1191 |
-| `app/core/tables.py` | Add table handle | **DONE** | lines 94, 218 |
-| `app/main.py` | Register router | **DONE** | lines 103, 426 |
-| `scripts/local-ddb-init.py` | Add table definition | **DONE** | lines 651-661 |
-| `frontend/src/api/endpoints/callBilling.ts` | New API wrappers | **DONE** | 86 |
-| `frontend/src/components/calls/CallBillingOverlay.tsx` | New component | **DONE** | 62 |
-| `frontend/src/components/calls/CallBillingSummary.tsx` | New component | **DONE** | 88 |
-| `frontend/src/components/calls/RateNegotiationDialog.tsx` | New component | **DONE** | ~90 |
-| `frontend/src/hooks/useCallBillingHeartbeat.ts` | New hook | **NOT DONE** | — |
-| `frontend/src/pages/messages/PaidCallRateBadge.tsx` | New component | **NOT DONE** | — |
-| `frontend/src/pages/messages/PaidCallCostTicker.tsx` | New component | **NOT DONE** (replaced by CallBillingOverlay) | — |
-| `frontend/src/pages/messages/PaidCallBalanceWarning.tsx` | New component | **NOT DONE** | — |
-| `frontend/src/pages/settings/CallRateSettings.tsx` | New component | **NOT DONE** | — |
-| `frontend/src/pages/messages/CallSessionOverlay.tsx` | Add cost ticker + warning | **NOT DONE** (no billing integration) | — |
-| `frontend/src/hooks/useMessagingStream.ts` | Add billing event types | **DONE** | lines 178-180 |
-| `frontend/e2e/call-billing.spec.ts` | New E2E tests | **DONE** | 591 |
-| `tests/test_call_billing.py` | Unit tests (combined) | **DONE** | 499 |
-| `tests/test_call_billing_timer.py` | Separate unit tests | **NOT DONE** (merged into test_call_billing.py) | — |
-| `tests/test_call_billing_endpoints.py` | Separate unit tests | **NOT DONE** (merged into test_call_billing.py) | — |
-
----
-
-## 15. Related Tickets
-
-- **CALL-009**: Call recording (recording is independent of billing; paid calls can be recorded with mutual consent)
-- **CALL-010**: Call recording in messenger (same)
-- **MON-001**: VOD pay-per-view (similar purchase/entitlement pattern but one-time, not recurring)
-- **MON-002**: Tip ledger integration (paired debit/credit pattern reused here)
-- **MON-003**: Creator earnings dashboard (will aggregate paid call credits)
-- **MON-004**: Creator payouts (paid call earnings included in payout-eligible balance)
+- [ ] Backend endpoint/service changes registered in `app/main.py`
+- [ ] Frontend hooks and components created/modified
+- [ ] Settings and feature flags configured
+- [ ] DDB tables added if needed (`scripts/local-ddb-init.py`)
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing call endpoints
 
 ---
 

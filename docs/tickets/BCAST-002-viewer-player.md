@@ -641,173 +641,94 @@ The implementation follows established frontend patterns:
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 E2E Test File Structure
+### Unit Tests (pytest)
 
-**`frontend/e2e/broadcast-player.spec.ts`**
+**Test file**: `tests/test_broadcast_playback.py`
 
-The test file follows established E2E patterns (serial describe blocks, section numbering,
-cookie-based auth injection, `apiPost` helpers with CSRF).
+**Mock setup**: moto mock for DynamoDB (broadcast sessions/outputs tables). Use static DRM token `dev-token` for key delivery tests.
 
-### 5.2 HLS Stub Server
+| Test Function | Description |
+|---|---|
+| `test_mint_playback_url_returns_signed_url` | Mint URL; response has session_id, playback_url, expires_at |
+| `test_playback_url_expires_in_future` | expires_at > now_ts() |
+| `test_issue_entitlement_returns_jwt` | Issue entitlement; token is valid JWT with correct claims |
+| `test_entitlement_respects_max_ttl` | TTL > max returns capped TTL |
+| `test_validate_entitlement_rejects_expired` | Expired token returns 401 |
+| `test_drm_key_delivery_with_valid_token` | Valid DRM token returns 16-byte key |
+| `test_drm_key_delivery_rejects_invalid_token` | Invalid DRM token returns 403 |
 
-Since E2E tests cannot rely on a real RTMP ingest + transcoder, we use a **static HLS
-fixture** served by the Vite dev server:
+### Integration Tests
 
-1. Place a minimal valid HLS manifest + segment at:
-   ```
-   frontend/public/test-fixtures/hls/
-     master.m3u8          # Master playlist with 1 rendition
-     stream_0/
-       playlist.m3u8      # Media playlist with 3 segments
-       segment_000.ts     # ~1s MPEG-TS segment (can be a synthetic 1-frame video)
-       segment_001.ts
-       segment_002.ts
-   ```
+Cross-service tests with real DynamoDB Local:
 
-2. In E2E tests, intercept the playback URL response to point at the fixture:
-   ```ts
-   await page.route("**/broadcast/sessions/*/playback-url", async (route) => {
-     await route.fulfill({
-       status: 200,
-       contentType: "application/json",
-       body: JSON.stringify({
-         session_id: testSessionId,
-         playback_url: "http://localhost:3000/test-fixtures/hls/master.m3u8",
-         expires_at: Math.floor(Date.now() / 1000) + 600,
-       }),
-     });
-   });
-   ```
+1. Mint playback URL -> verify signed URL can be validated by CloudFront token verifier
+2. Issue entitlement -> use token in `/protected/ping` -> verify 200
+3. Full flow: create session -> start -> mint URL -> issue entitlement -> verify access
 
-3. For segment requests, intercept and serve a minimal valid TS:
-   ```ts
-   // Alternatively, let Vite serve static files from public/
-   // No route interception needed if fixtures are in public/
-   ```
+### E2E Tests (Playwright)
 
-### 5.3 Test Sections
+**Test file**: `frontend/e2e/broadcast-player.spec.ts`
 
-| Section | Name | Tests |
-|---------|------|-------|
-| 110.1 | Player loads and renders video element | Verify `<video>` is attached, controls visible |
-| 110.2 | Quality selector shows available levels | Mock manifest with multiple renditions, verify dropdown |
-| 110.3 | Play/pause toggle works | Click play, verify playing state; click pause, verify paused |
-| 110.4 | Fullscreen button triggers fullscreen API | Click fullscreen, verify `document.fullscreenElement` |
-| 110.5 | Live indicator shown for live sessions | Mock session status=live, verify "LIVE" badge |
-| 110.6 | Error state on manifest load failure | Intercept manifest 404, verify error UI |
-| 110.7 | Error state on expired playback URL | Intercept manifest 403, verify "expired" message |
-| 110.8 | Entitlement token refresh | Set short TTL, verify re-issue call before expiry |
-| 110.9 | Autoplay blocked fallback | Mock `video.play()` rejection, verify play button overlay |
-| 110.10 | Page renders 404 for invalid session ID | Navigate to `/watch/nonexistent`, verify error state |
+**Auth pattern**: `injectAuth(page, "alice")` for authenticated viewer; route interception for HLS fixture stubs
 
-### 5.4 Testing Error States
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Player page loads with video element | Navigate to `/watch/{id}`; `<video>` element attached |
+| 2 | Quality selector shows available levels | Mock manifest with renditions; dropdown lists levels |
+| 3 | Play/pause toggle works | Click play; verify playing; click pause; verify paused |
+| 4 | Live indicator shown for live sessions | Mock session status=live; 'LIVE' badge visible |
+| 5 | Error state on manifest 404 | Intercept manifest -> 404; error UI visible with retry button |
+| 6 | Error state on expired playback URL | Intercept manifest -> 403; 'expired' message visible |
+| 7 | Entitlement token refresh fires | Set short TTL; verify re-issue API call before expiry |
+| 8 | Page renders error for invalid session | Navigate to `/watch/nonexistent`; error state visible |
+| 9 | Player controls visible in connected state | Play, volume, fullscreen buttons visible |
+| 10 | Fullscreen button triggers fullscreen API | Click fullscreen; `document.fullscreenElement` set |
 
-```ts
-test("110.6 Error state when manifest fails to load", async ({ page }) => {
-  // Intercept to return 404 for manifest
-  await page.route("**/hls/**/*.m3u8", (route) =>
-    route.fulfill({ status: 404, body: "Not Found" })
-  );
+**Negative tests**: 401 unauthenticated entitlement issue, 403 expired/invalid DRM token, 404 non-existent session
 
-  await page.goto(`/watch/${testSessionId}`);
-  await expect(page.getByText(/stream unavailable/i)).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByRole("button", { name: /retry/i })).toBeVisible();
-});
+**Edge cases**: Autoplay blocked fallback, Safari native HLS path, token refresh during playback, network interruption recovery
 
-test("110.7 Error state when playback URL is expired", async ({ page }) => {
-  await page.route("**/broadcast/sessions/*/playback-url", async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        session_id: testSessionId,
-        playback_url: "http://localhost:3000/test-fixtures/hls/master.m3u8",
-        expires_at: Math.floor(Date.now() / 1000) - 10, // already expired
-      }),
-    });
-  });
+### Test Data Requirements
 
-  // Also make manifest return 403 (simulating cache proxy rejection)
-  await page.route("**/test-fixtures/hls/master.m3u8", (route) =>
-    route.fulfill({ status: 403, body: "Forbidden" })
-  );
+Create broadcast session in `live` status via API in `beforeAll`. Place HLS fixture files in `frontend/public/test-fixtures/hls/`. Intercept playback URL response to point at fixture.
 
-  await page.goto(`/watch/${testSessionId}`);
-  await expect(page.getByText(/expired/i)).toBeVisible({ timeout: 10_000 });
-});
-```
+**Test users**: Alice (USER, viewer), Root (ROOT, session creator for test setup)
 
-### 5.5 Testing DRM Flow
+### CI/Pipeline
 
-Since DRM key delivery in dev mode accepts a static token (`dev-token`), E2E tests can:
+Serial execution. HLS fixtures served by Vite dev server. Retry-safe (player page is read-only).
 
-1. Create an HLS fixture with `#EXT-X-KEY:METHOD=AES-128,URI="/broadcast/drm/keys/test-stream?token=dev-token"`.
-2. Place a 16-byte key file at `tmp/broadcast-hls/keys/test-stream.key`.
-3. Encrypt fixture segments with that key using `openssl enc -aes-128-cbc`.
-4. Verify the player loads and plays without showing DRM error UI.
+---
 
-```ts
-test("110.11 DRM-protected stream plays with valid token", async ({ page }) => {
-  // Stub session with DRM profile
-  await page.route("**/broadcast/sessions/*", async (route) => {
-    if (route.request().method() === "GET") {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          id: testSessionId,
-          status: "live",
-          profile_id: "drm-profile",
-        }),
-      });
-    } else {
-      await route.continue();
-    }
-  });
+## Dependencies & Merge Safety
 
-  await page.goto(`/watch/${testSessionId}`);
-  // Should NOT show DRM error
-  await expect(page.getByText(/drm.*not supported/i)).not.toBeVisible({ timeout: 5_000 });
-  // Should show the video element with a non-zero currentTime after playback starts
-  await page.waitForFunction(() => {
-    const v = document.querySelector("video");
-    return v && v.readyState >= 2; // HAVE_CURRENT_DATA
-  }, { timeout: 15_000 });
-});
-```
+### Depends On
 
-### 5.6 Unit Tests (Vitest)
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| BCAST-001 | Broadcast session CRUD and playback URL mint endpoint | Implemented | Yes |
 
-The player hooks can be tested independently:
+### Depended On By
 
-- **`usePlaybackEntitlement.test.ts`**: Mock `issuePlaybackEntitlement` API call, verify
-  token state updates, verify refresh timer fires at 75% TTL.
-- **`usePlayerState.test.ts`**: Drive state machine transitions, verify valid transitions
-  only (e.g., cannot go from IDLE to PAUSED directly).
-- **`QualitySelector.test.tsx`**: Render with mock levels, verify dropdown items, verify
-  `onQualityChange` callback.
+| Ticket | What It Needs |
+|---|---|
+| BCAST-004 | Viewer count badge on player page |
+| BCAST-005 | Live chat panel alongside player |
 
-### 5.7 Test Data Cleanup
+### Merge Strategy
 
-The player page is **read-only** from a data perspective (no DynamoDB writes except
-entitlement issuance which uses an in-memory cache). No cleanup is needed between test
-runs. Entitlement tokens expire naturally. The broadcast session used in tests can be
-created once in `beforeAll` and left in place.
+Parallel-safe with BCAST-001. New page (`/watch/:sessionId`), new components in `pages/broadcast/`. Uses existing broadcast backend.
 
-### 5.8 Browser Compatibility Matrix
+### Merge Checklist
 
-| Browser | HLS Method | DRM Support | Notes |
-|---------|-----------|-------------|-------|
-| Chrome/Edge | HLS.js (MSE) | Widevine + AES-128 | Full support |
-| Firefox | HLS.js (MSE) | Widevine + AES-128 | Full support |
-| Safari | Native `<video>` | FairPlay + AES-128 | HLS.js not needed; native handles ABR |
-| Safari (iOS) | Native `<video>` | FairPlay + AES-128 | Fullscreen via `webkitEnterFullscreen` |
-| Mobile Chrome | HLS.js (MSE) | Widevine + AES-128 | Touch controls |
-
-E2E tests run in Chromium only (per `playwright.config.ts`), but the component includes
-Safari-specific code paths that should be manually verified.
+- [ ] LivePlayer component exists at `frontend/src/pages/broadcast/LivePlayer.tsx`
+- [ ] hls.js dependency in `frontend/package.json`
+- [ ] Route registered in `App.tsx`
+- [ ] Playback entitlement endpoints functional
+- [ ] E2E test `broadcast-player.spec.ts` passes in CI
+- [ ] No breaking changes to broadcast API
 
 ---
 

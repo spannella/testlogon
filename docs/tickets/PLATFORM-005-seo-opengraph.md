@@ -935,3 +935,85 @@ CRAWLER_META_INJECTION_ENABLED=true
 | Profile page fetches via getProfileByIdentifier | `PublicUserProfilePage.tsx` | 24 | VERIFIED |
 | Event page fetches public event | `PublicEventPage.tsx` | 52-56 | VERIFIED |
 | Sidebar navigation groups | `frontend/src/components/layout/Sidebar.tsx` | 68-137 | VERIFIED |
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_meta.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_profile_meta_display_name` | GET /api/meta?url=/u/alice; title has display name |
+| 2 | `test_profile_meta_bio_truncated` | Bio >200 chars truncated |
+| 3 | `test_missing_user_default` | Non-existent user; default meta |
+| 4 | `test_event_meta_title` | GET /api/meta?url=/event/cal/evt; event title in title |
+| 5 | `test_locked_post_hides_body` | Locked post; generic description |
+| 6 | `test_unknown_path_default` | GET /api/meta?url=/foo; default meta |
+| 7 | `test_meta_url_max_length` | URL >512 chars; 422 |
+
+All tests use moto-mocked DynamoDB.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Meta endpoint reads profile data | meta router + profile service |
+| 2 | Meta endpoint reads event data | meta router + calendar service |
+| 3 | Crawler middleware injects OG tags | Vite plugin + meta endpoint |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/seo-meta.spec.ts` -- 13 tests
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; CSRF header for mutations.
+
+Sections: 1 (meta API, 5), 2 (client-side Helmet, 5), 3 (crawler middleware, 3)
+
+**Negative/edge tests**: Missing user returns defaults, locked post hides body, non-crawler gets normal SPA
+
+### Test Data Requirements
+
+- DDB seeds: profiles, calendar events, posts
+- Test users: Alice with public profile
+- Public event created in beforeAll
+
+### CI/Pipeline
+
+- Feature flags: CRAWLER_META_INJECTION_ENABLED=true
+- Serial execution (1 worker), 1 retry per playwright.config.ts
+- Retry-safe: unique timestamps in test data
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | Standalone feature |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| PLATFORM-004 | Enhances | Image variants provide og:image dimensions |
+
+### Merge Strategy
+
+**Independent** -- No prerequisites. Additive changes to index.html and page components.
+
+### Merge Checklist
+
+- [ ] react-helmet-async installed
+- [ ] HelmetProvider wraps app in main.tsx
+- [ ] Default Helmet in App.tsx
+- [ ] Page-specific Helmet on all pages
+- [ ] /api/meta endpoint registered in main.py
+- [ ] Crawler middleware for social media bots
+- [ ] E2E pass: `npx playwright test e2e/seo-meta.spec.ts`

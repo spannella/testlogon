@@ -793,3 +793,71 @@ All file paths relative to the repository root.
 - `scripts/local-ddb-init.py` — Add `syndicate_content` TableDef with 1 GSI
 - `app/services/syndicates.py` (SYND-001, when created) — Add membership lifecycle hooks for auto-licensing
 - `frontend/src/App.tsx` — Add syndicate licensing routes
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_syndicate_licensing.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_enable_open_licensing` | Enable open licensing |
+| 2 | `test_disable_open_licensing` | Disable open licensing |
+| 3 | `test_set_syndicate_terms` | Set syndicate terms |
+| 4 | `test_auto_license_on_content_create` | Auto license on content create |
+| 5 | `test_new_member_gets_existing_licenses` | New member gets existing licenses |
+| 6 | `test_leaving_member_keeps_licenses` | Leaving member keeps licenses |
+| 7 | `test_exempt_content_from_auto_license` | Exempt content from auto license |
+| 8 | `test_no_new_licenses_after_disable` | No new licenses after disable |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/syndicate-licensing.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~14 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `SYNDICATE_OPEN_LICENSING_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| LICENSE-002 | Content License Issuance for auto-license creation | Hard |
+| LICENSE-003 | Revenue Sharing for syndicate-level terms | Soft |
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Sequential -- requires LICENSE-002 merged first. Auto-licensing creates IssuedLicense records using LICENSE-002 infrastructure.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: SYNDICATE_OPEN_LICENSING_ENABLED=true
+- [ ] Service file created/modified: `app/services/syndicate_licensing.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/syndicate-licensing.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_syndicate_licensing.py`

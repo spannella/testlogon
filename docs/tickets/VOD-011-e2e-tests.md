@@ -1007,6 +1007,92 @@ The VOD-011 E2E test suite passes when:
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_vod_011.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_vod_011_crud` | Vod 011 crud verified |
+| 2 | `test_vod_011_validation` | Vod 011 validation verified |
+| 3 | `test_vod_011_auth` | Vod 011 auth verified |
+| 4 | `test_vod_011_not_found` | Vod 011 not found verified |
+| 5 | `test_vod_011_edge_cases` | Vod 011 edge cases verified |
+| 6 | `test_vod_011_integration` | Vod 011 integration verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. VOD E2E Tests integrates with video metadata CRUD lifecycle
+2. End-to-end flow from video creation through vod e2e tests feature
+3. Error propagation from video metadata service to vod e2e tests layer
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/vod-011.spec.ts`
+**Sections**: 1-3 (10 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | VOD E2E Tests API returns 200 | 200; expected fields present |
+| 2 | VOD E2E Tests handles invalid input | 422 or 400 response |
+| 3 | VOD E2E Tests requires auth | 401 without session |
+| 4 | VOD E2E Tests UI renders | Page loads; key elements visible |
+| 5 | VOD E2E Tests integrates with video metadata | Video data correctly referenced |
+
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 video not found, 422 invalid input
+
+**Edge cases**: Video in processing state, deleted video reference, concurrent operations
+
+### Test Data Requirements
+
+- **DDB seeds**: Video metadata records from VOD-001; related vod e2e tests test data
+- **Test users**: Alice (creator), Bob (viewer)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: VOD_ENABLED=true
+- **Serial execution**: Must run after VOD-001 video metadata table is created and seeded
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| VOD-001 | Video metadata CRUD |
+| VOD-008 | Player page |
+| VOD-009 | Routes and navigation |
+
+### Depended On By
+
+No downstream tickets depend on this feature.
+
+### Merge Strategy: **Sequential**
+
+Requires VOD-001 video metadata model. Also depends on VOD-008, VOD-009.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix A: File Change Summary
 
 | File | Change Type | Description |

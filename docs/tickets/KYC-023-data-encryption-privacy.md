@@ -1009,3 +1009,73 @@ test("237.5 Audit log pagination works correctly", async ({ page }) => {
 | `scripts/mock_kms_server.py` | 33 | Mock KMS server on port 7999 |
 | `app/services/kyc_encryption.py` | -- | **Does not exist yet** — new implementation required |
 | `frontend/src/api/endpoints/kyc-cases.ts` | -- | **Does not exist yet** — new file required |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_kyc_encryption.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_encrypt_fields_stores_ciphertext` | Encrypt fields stores ciphertext |
+| 2 | `test_decrypt_fields_returns_plaintext` | Decrypt fields returns plaintext |
+| 3 | `test_mask_fields_applies_rules` | Mask fields applies rules |
+| 4 | `test_generate_user_dek_stores_wrapped` | Generate user dek stores wrapped |
+| 5 | `test_rotate_dek_reencrypts_fields` | Rotate dek reencrypts fields |
+| 6 | `test_destroy_keys_deletes_all_deks` | Destroy keys deletes all deks |
+| 7 | `test_log_access_writes_audit_entry` | Log access writes audit entry |
+| 8 | `test_mask_document_number_last_four` | Mask document number last four |
+| 9 | `test_mask_dob_shows_year_only` | Mask dob shows year only |
+| 10 | `test_decrypt_without_reason_raises_400` | Decrypt without reason raises 400 |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/kyc-encryption.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~22 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `KYC_ENCRYPTION_ENABLED=true`, `KYC_ENCRYPTION_AUDIT_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| KYC-001 | Admin Review Dashboard for masked/decrypted PII display | Hard |
+| KYC-012 | Compliance Reporting for encrypted data export | Soft |
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Feature-flag-gated -- KYC_ENCRYPTION_ENABLED=false by default. Encryption wraps existing case creation; backward-compatible when disabled.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: KYC_ENCRYPTION_ENABLED=true, KYC_ENCRYPTION_AUDIT_ENABLED=true
+- [ ] Service file created/modified: `app/services/kyc_encryption.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/kyc-encryption.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_kyc_encryption.py`

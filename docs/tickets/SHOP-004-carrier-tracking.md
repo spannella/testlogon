@@ -1382,3 +1382,83 @@ No new query keys needed. The tracking URL and events are part of the transactio
 | UPS mock endpoints | `app/routers/ups.py` | 121-169 | VERIFIED: token, quote, label, validate |
 | Mock tracking number format | `app/routers/ups.py` | 154 | VERIFIED: `f"1ZMOCK{int(time.time()*1000)}"` |
 | UPS settings | `app/core/settings.py` | 294-298 | VERIFIED: 5 settings (was 278-283; line drift) |
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_carrier_tracking.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_shop_004_create` | Create primary entity; 201 |
+| 2 | `test_shop_004_read` | Read back entity; correct fields |
+| 3 | `test_shop_004_update` | Update entity; 200; changes reflected |
+| 4 | `test_shop_004_delete` | Delete entity; 200/204 |
+| 5 | `test_shop_004_auth_required` | No auth; 401 |
+| 6 | `test_shop_004_validation` | Invalid input; 422 |
+
+All tests use moto-mocked DynamoDB.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | End-to-end happy path through all layers | router + service + DDB |
+| 2 | Error handling propagates correctly | router + service layer |
+| 3 | Feature flag disables functionality | settings + router |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/carrier-tracking.spec.ts` -- 14 tests
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; CSRF header for mutations.
+
+Tests cover API CRUD, UI rendering, negative cases (401/403/404/422), and edge cases.
+
+**Negative/edge tests**: 401 unauthenticated, 403 insufficient role, 404 not found, 422 validation error, 409 conflict
+
+### Test Data Requirements
+
+- DDB seeds: feature-specific tables via setup scripts
+- Test users: Alice, Bob, Root, Charlie (admin)
+- Sessions via `e2e_admin_session_setup.py`
+
+### CI/Pipeline
+
+- Feature flags: Feature-specific flags (see Rollout Plan section)
+- Serial execution (1 worker), 1 retry per playwright.config.ts
+- Retry-safe: unique timestamps in test data
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | Standalone feature |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | No downstream dependents identified |
+
+### Merge Strategy
+
+**Independent** -- Extends existing UPS integration with tracking status pipeline.
+
+### Merge Checklist
+
+- [ ] Backend service and router implemented
+- [ ] DDB tables created in local-ddb-init.py (if new)
+- [ ] Frontend types added to api/types.ts
+- [ ] Frontend page/component created
+- [ ] Route added to App.tsx
+- [ ] E2E pass: `npx playwright test e2e/carrier-tracking.spec.ts`

@@ -842,3 +842,92 @@ test.beforeAll(async ({ browser }) => {
 | `T.messages.put_item(...)` | Should be `tbl_msgs.put_item(...)` — messaging.py uses module-level table handles, not `T.*` |
 | `_update_conversation_last_message()` and `_emit_message_sse()` | These named functions do not exist; use `_send_single_destination_message()` (line 4806) or call `tbl_convos.update_item()` + `fanout_event_to_conversation()` directly |
 | `app/models.py` for `SendCountdownMessageIn` | All messaging Pydantic models are defined in `app/routers/messaging.py`, not `app/models.py` |
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_countdown_messages.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_create_countdown_valid` | POST with valid future target; 201; kind=countdown, title/target set |
+| 2 | `test_countdown_past_target_rejected` | target_datetime in past; 422 |
+| 3 | `test_countdown_broadcast_without_event_id` | broadcast type without event_id; 422 |
+| 4 | `test_countdown_custom_no_event_id` | custom type without event_id; 201 |
+| 5 | `test_countdown_title_too_long` | 201-char title; 422 |
+| 6 | `test_countdown_invalid_event_type` | invalid event type; 422 |
+| 7 | `test_countdown_in_message_list` | Create countdown; GET messages; present with correct fields |
+| 8 | `test_countdown_non_participant` | Non-member POST; 403 |
+
+All tests use moto-mocked DynamoDB. Messages/Conversations/Participants tables seeded in conftest fixtures.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Countdown updates conversation last_message | messaging router + conversations table |
+| 2 | Countdown triggers SSE fanout to participants | messaging router + SSE publish |
+| 3 | Countdown in group visible to all members | messaging router + participants table |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/countdown-messages.spec.ts` -- 24 tests, sections 306-311
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; `sessions[identity].csrf_token` for CSRF header on POST.
+
+| Section | Tests | Key Assertions |
+|---------|-------|----------------|
+| 306 | 5 | Countdown API CRUD: create valid, custom type, broadcast link, reject past, reject missing event_id |
+| 307 | 4 | Conversation: appears in list, Bob receives, supports replies, last_message preview |
+| 308 | 3 | Rendering: timer display visible, title shown, expired shows completion |
+| 309 | 4 | Validation: title >200 (422), invalid type (422), calendar type (201), call type (201) |
+| 310 | 4 | Group chats: create in group, multiple countdowns, reply, non-participant 403 |
+| 311 | 4 | CTA buttons: broadcast Watch Live, call Join Call, custom Time's up, correct href |
+
+**Negative tests**: 422 for past target, missing event_id, title too long, invalid type. 403 for non-participant.
+
+### Test Data Requirements
+
+- DDB seeds: Messages, Conversations, Participants via `e2e_session_setup.py`
+- Test users: Alice (sender), Bob (recipient)
+- DM conversation + group conversation created in `beforeAll`
+
+### CI/Pipeline
+
+- Feature flag: `COUNTDOWN_MESSAGES_ENABLED=true`
+- Serial execution (1 worker), 1 retry per `playwright.config.ts`
+- Retry-safe: unique `Date.now()` timestamps in countdown titles
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | Standalone; uses existing message infrastructure |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| FEED-005 | Component | CountdownCard reused for newsfeed countdown posts |
+
+### Merge Strategy
+
+**Independent** -- No prerequisite tickets. Can merge at any time.
+
+### Merge Checklist
+
+- [ ] `"countdown"` added to `kind` Literal in MessageOut (messaging.py:2330)
+- [ ] `_message_out_from_item()` populates countdown fields
+- [ ] CountdownCard.tsx and CountdownComposerDialog.tsx created
+- [ ] ComposeBar and MessageBubble integrate countdown components
+- [ ] E2E pass: `npx playwright test e2e/countdown-messages.spec.ts`
+- [ ] No regressions: `npx playwright test e2e/messaging-features.spec.ts`

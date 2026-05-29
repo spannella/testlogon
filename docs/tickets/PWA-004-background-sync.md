@@ -1440,3 +1440,84 @@ token is specific to the user's session and expires when the session expires.
 ### Key Correction
 
 **This ticket appears to be ALREADY IMPLEMENTED.** All three proposed new files (`syncQueueDb.ts`, `swMessageHandler.ts`, `DeadLetterPanel.tsx`) exist with the described functionality.
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_background_sync.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_pwa_004_create` | Create primary entity; 201 |
+| 2 | `test_pwa_004_read` | Read back entity; correct fields |
+| 3 | `test_pwa_004_update` | Update entity; 200; changes reflected |
+| 4 | `test_pwa_004_delete` | Delete entity; 200/204 |
+| 5 | `test_pwa_004_auth_required` | No auth; 401 |
+| 6 | `test_pwa_004_validation` | Invalid input; 422 |
+
+All tests use moto-mocked DynamoDB.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | End-to-end happy path through all layers | router + service + DDB |
+| 2 | Error handling propagates correctly | router + service layer |
+| 3 | Feature flag disables functionality | settings + router |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/pwa-sync.spec.ts` -- 10 tests
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; CSRF header for mutations.
+
+Tests cover API CRUD, UI rendering, negative cases (401/403/404/422), and edge cases.
+
+**Negative/edge tests**: 401 unauthenticated, 403 insufficient role, 404 not found, 422 validation error, 409 conflict
+
+### Test Data Requirements
+
+- DDB seeds: feature-specific tables via setup scripts
+- Test users: Alice, Bob, Root, Charlie (admin)
+- Sessions via `e2e_admin_session_setup.py`
+
+### CI/Pipeline
+
+- Feature flags: Feature-specific flags (see Rollout Plan section)
+- Serial execution (1 worker), 1 retry per playwright.config.ts
+- Retry-safe: unique timestamps in test data
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| PWA-002 | Required | Service worker from PWA-002 |
+| PWA-003 | Required | Offline cache for queued operations |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| PWA-005 | Required | Optimistic UI consumes sync queue status |
+
+### Merge Strategy
+
+**Sequential** -- Requires PWA-002 and PWA-003 merged first.
+
+### Merge Checklist
+
+- [ ] Backend service and router implemented
+- [ ] DDB tables created in local-ddb-init.py (if new)
+- [ ] Frontend types added to api/types.ts
+- [ ] Frontend page/component created
+- [ ] Route added to App.tsx
+- [ ] E2E pass: `npx playwright test e2e/pwa-sync.spec.ts`

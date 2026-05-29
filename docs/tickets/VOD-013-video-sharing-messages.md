@@ -1026,6 +1026,91 @@ test("134.3 Video title shown on the card", async ({ page }) => {
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_vod_013.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_vod_013_crud` | Vod 013 crud verified |
+| 2 | `test_vod_013_validation` | Vod 013 validation verified |
+| 3 | `test_vod_013_auth` | Vod 013 auth verified |
+| 4 | `test_vod_013_not_found` | Vod 013 not found verified |
+| 5 | `test_vod_013_edge_cases` | Vod 013 edge cases verified |
+| 6 | `test_vod_013_integration` | Vod 013 integration verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Video Sharing in Messages integrates with video metadata CRUD lifecycle
+2. End-to-end flow from video creation through video sharing in messages feature
+3. Error propagation from video metadata service to video sharing in messages layer
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/vod-013.spec.ts`
+**Sections**: 1-3 (10 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Video Sharing in Messages API returns 200 | 200; expected fields present |
+| 2 | Video Sharing in Messages handles invalid input | 422 or 400 response |
+| 3 | Video Sharing in Messages requires auth | 401 without session |
+| 4 | Video Sharing in Messages UI renders | Page loads; key elements visible |
+| 5 | Video Sharing in Messages integrates with video metadata | Video data correctly referenced |
+
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 video not found, 422 invalid input
+
+**Edge cases**: Video in processing state, deleted video reference, concurrent operations
+
+### Test Data Requirements
+
+- **DDB seeds**: Video metadata records from VOD-001; related video sharing in messages test data
+- **Test users**: Alice (creator), Bob (viewer)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: VOD_ENABLED=true
+- **Serial execution**: Must run after VOD-001 video metadata table is created and seeded
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| VOD-001 | Video metadata for preview card |
+| Messaging (existing) | Message creation with kind=video_share |
+
+### Depended On By
+
+No downstream tickets depend on this feature.
+
+### Merge Strategy: **Sequential**
+
+Requires VOD-001 video metadata model. Can merge after VOD-001.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix A: Configuration Reference
 
 | Environment Variable | Default | Description |

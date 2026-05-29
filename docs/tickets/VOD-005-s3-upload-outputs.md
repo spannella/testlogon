@@ -1014,6 +1014,66 @@ These are not part of the automated test suite but are defined for load testing:
 
 ---
 
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+| Test | Description |
+|------|-------------|
+| `test_upload_segment_small_file` | Upload 1KB file via `upload_segment()`; verify object exists in S3 with correct `ContentType` and `CacheControl` |
+| `test_upload_segment_triggers_multipart_for_large_file` | Upload 12MB file (above 8MB threshold); verify upload succeeds and ETag contains `-` |
+| `test_upload_vod_outputs_creates_all_objects` | Mock output dir with `master.m3u8`, rendition playlists, segments, thumbnail; verify all objects at expected S3 keys |
+| `test_upload_vod_outputs_correct_content_types` | `.m3u8` -> `application/vnd.apple.mpegurl`; `.ts` -> `video/mp2t`; `.jpg` -> `image/jpeg` |
+| `test_upload_vod_outputs_master_playlist_cache_control` | `master.m3u8` has `max-age=5, stale-while-revalidate=10`; variant playlists have `max-age=31536000, immutable` |
+| `test_abort_incomplete_uploads` | Start multipart upload; call `abort_incomplete_uploads()`; verify no multipart uploads remain |
+| `test_ensure_vod_lifecycle_policy` | Call `ensure_vod_lifecycle_policy()`; verify lifecycle rules with `retention=vod` tag filter |
+| `test_mint_vod_dev_playback_url` | With `dev_mode=True`; URL format is `http://localhost:8000/mock/s3/vod-output/tenants/...` |
+| `test_mint_vod_cloudfront_playback_url` | With `cloudfront_domain` set; URL contains `cf_token=` and `cf_expires=` params |
+| `test_extract_thumbnails_produces_jpegs` | Extract at timestamps [0, 1, 2] from 3-second test video; verify 3 JPEG files created |
+
+**Framework**: pytest + moto (S3 mock + DynamoDB mock)
+**Test files**: `tests/test_vod_s3_upload.py`, `tests/test_vod_thumbnail.py`, `tests/test_vod_playback_url.py`
+
+### Integration Tests
+
+| Scenario | Services | Assertion |
+|----------|----------|-----------|
+| Full upload pipeline end-to-end | `vod_s3_uploader.py` + `vod_playback_url.py` + moto S3 | All objects in S3; playback URL resolves to valid manifest via `get_object()` |
+| Complete job with outputs updates DDB | `transcode_job_store.py` | DDB record has `status=completed`, all output fields populated, `progress_pct=100` |
+| Upload failure aborts multipart and retries | `vod_s3_uploader.py` + mocked S3 error | `abort_incomplete_uploads()` called; job transitions to pending |
+| Thumbnail extraction skips timestamps beyond duration | `vod_thumbnail_extractor.py` | Extract at [0, 100] from 3s video; only 1 thumbnail produced |
+| URL path normalization prevents traversal | `vod_playback_url.py` | `asset_id="../../../etc/passwd"` raises `ValueError` |
+
+### E2E Tests (Playwright)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Submit transcode job with short test asset | Job reaches `status=completed` within 60s timeout |
+| 2 | Completed job has output fields | Response includes `output_hls_manifest_uri`, `output_playback_url`, `output_thumbnail_keys` |
+| 3 | Fetch manifest via dev URL | `GET /mock/s3/vod-output/tenants/.../hls/master.m3u8` returns 200 with HLS content type |
+| 4 | Fetch thumbnail via dev URL | `GET /mock/s3/vod-output/tenants/.../thumbnails/poster_0s.jpg` returns 200 with `image/jpeg` |
+| 5 | Verify metadata.json | `GET /mock/s3/vod-output/tenants/.../metadata.json` returns valid JSON with `renditions` and `thumbnails` |
+| 6 | Upload progress reaches 100% | Poll job status; `progress_pct` reaches 100 before completion |
+| 7 | Completed job has valid playback URL | `output_playback_url` is non-null and points to manifest |
+| 8 | Thumbnail keys list is populated | `output_thumbnail_keys` has at least 1 entry |
+
+**Auth**: `injectAuth(page, "alice")` + CSRF header
+**Test file**: `frontend/e2e/vod-pipeline.spec.ts`
+
+### Test Data Requirements
+- DDB tables: `TranscodeJobs`, `VideoMetadata`
+- S3 buckets: `vod-output` pre-created by moto in dev mode (already in `_dev_buckets` at `app/main.py:369`)
+- Short test video pre-seeded in moto S3 by `beforeAll`
+- Test users: Alice (USER)
+
+### CI/Pipeline
+- Feature flag: `VOD_THUMBNAIL_ENABLED=true` (default)
+- Serial execution with `workers: 1`
+- Retry-safe (each test submits fresh jobs; S3 outputs namespaced by job ID)
+- Thumbnail tests require `ffmpeg` on PATH (skip gracefully if unavailable)
+
+---
+
 ## Appendix A: Configuration Reference
 
 | Env Variable | Default | Description |

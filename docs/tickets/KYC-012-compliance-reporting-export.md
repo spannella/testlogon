@@ -1754,3 +1754,92 @@ test.beforeAll(async ({ browser }) => {
 | `frontend/src/pages/admin/KycComplianceDashboard.tsx` | `frontend/src/pages/admin/` | NOT FOUND -- new page required |
 | `frontend/src/api/endpoints/kyc-reporting.ts` | `frontend/src/api/endpoints/` | NOT FOUND -- new endpoint file required |
 | `/admin/kyc/compliance` route | `frontend/src/App.tsx` | NOT FOUND -- new route required |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_kyc_compliance.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_generate_compliance_report_csv`
+  - `test_generate_compliance_report_pdf`
+  - `test_report_includes_screening_results`
+  - `test_report_includes_risk_scores`
+  - `test_filter_by_date_range`
+  - `test_filter_by_verification_status`
+  - `test_report_sha256_checksum`
+
+### Integration Tests
+
+  - Compliance report aggregates KYC submissions with screening and risk data
+  - CSV export includes all required regulatory fields
+  - Report generation stored with metadata in audit table
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/kyc-compliance.spec.ts`
+**Test count**: 10
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `kyc_submissions, kyc_screening_results` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `KYC_COMPLIANCE_REPORTS_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| KYC-001 | Admin KYC Review Dashboard | Reports accessed from dashboard |
+| KYC-006 | Sanctions & PEP Screening | Screening results included in reports |
+| KYC-008 | Risk Scoring Engine | Risk scores included in reports |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| (none) | — | No other tickets depend on this one |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after KYC-001, KYC-006, KYC-008. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 10 E2E tests pass with `npx playwright test kyc-compliance.spec.ts`

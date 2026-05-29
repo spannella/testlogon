@@ -1352,3 +1352,83 @@ export function ColorSwatch({ color, hex, selected, onClick }: ColorSwatchProps)
 | `frontend/e2e/theme-switcher.spec.ts` | 152 | `settingsBtn()` helper |
 | `frontend/e2e/theme-switcher.spec.ts` | 193 | Test 96.2 (dark mode CSS variable) |
 | `frontend/e2e/theme-switcher.spec.ts` | 206 | Test 96.3 (dark mode foreground CSS variable) |
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_theme_customization.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_platform_013_create` | Create primary entity; 201 |
+| 2 | `test_platform_013_read` | Read back entity; correct fields |
+| 3 | `test_platform_013_update` | Update entity; 200; changes reflected |
+| 4 | `test_platform_013_delete` | Delete entity; 200/204 |
+| 5 | `test_platform_013_auth_required` | No auth; 401 |
+| 6 | `test_platform_013_validation` | Invalid input; 422 |
+
+All tests use moto-mocked DynamoDB.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | End-to-end happy path through all layers | router + service + DDB |
+| 2 | Error handling propagates correctly | router + service layer |
+| 3 | Feature flag disables functionality | settings + router |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/theme-customization.spec.ts` -- 14 tests
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; CSRF header for mutations.
+
+Tests cover API CRUD, UI rendering, negative cases (401/403/404/422), and edge cases.
+
+**Negative/edge tests**: 401 unauthenticated, 403 insufficient role, 404 not found, 422 validation error, 409 conflict
+
+### Test Data Requirements
+
+- DDB seeds: feature-specific tables via setup scripts
+- Test users: Alice, Bob, Root, Charlie (admin)
+- Sessions via `e2e_admin_session_setup.py`
+
+### CI/Pipeline
+
+- Feature flags: Feature-specific flags (see Rollout Plan section)
+- Serial execution (1 worker), 1 retry per playwright.config.ts
+- Retry-safe: unique timestamps in test data
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | Standalone feature |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | No downstream dependents identified |
+
+### Merge Strategy
+
+**Independent** -- Frontend-only changes to ThemeProvider + preferences.
+
+### Merge Checklist
+
+- [ ] Backend service and router implemented
+- [ ] DDB tables created in local-ddb-init.py (if new)
+- [ ] Frontend types added to api/types.ts
+- [ ] Frontend page/component created
+- [ ] Route added to App.tsx
+- [ ] E2E pass: `npx playwright test e2e/theme-customization.spec.ts`

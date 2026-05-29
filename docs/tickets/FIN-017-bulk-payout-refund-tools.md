@@ -1529,3 +1529,93 @@ export const undoBatch = (batchId: string) =>
 | `app/services/alerts.py` | :355 | `write_alert` for notification on bulk operation completion |
 | `app/auth/policy.py` | :63, :67 | `require_root` at `:63`, `require_admin_or_root` at `:67` |
 | `scripts/local-ddb-init.py` | :59 | `billing` table (PK=pk, SK=sk) |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_bulk_operations.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_dry_run_payouts_all_valid`
+  - `test_dry_run_payouts_not_found`
+  - `test_dry_run_payouts_frozen_user`
+  - `test_execute_payout_batch_succeeds`
+  - `test_execute_payout_batch_mixed_results`
+  - `test_import_csv_payouts_valid`
+  - `test_import_csv_payouts_duplicate_user`
+  - `test_undo_batch_within_window`
+  - `test_undo_batch_after_window_fails`
+
+### Integration Tests
+
+  - Bulk approve calls approve_payout for each valid payout in sequence
+  - Batch progress updates in DDB after each item processed
+  - Undo reverses all succeeded items and updates ledger entries
+  - CSV import creates pending payout requests in creator_payouts table
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/admin-bulk-ops.spec.ts`
+**Test count**: 25
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `bulk_operations` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `BULK_OPS_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| FIN-015 | Fraud Detection Dashboard | Checks user frozen status via fraud_detection table |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| (none) | — | No other tickets depend on this one |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after FIN-015. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 25 E2E tests pass with `npx playwright test admin-bulk-ops.spec.ts`

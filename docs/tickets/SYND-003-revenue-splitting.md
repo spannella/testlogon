@@ -727,6 +727,100 @@ When a member with 0% weight exists (e.g., new member before weights are updated
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_revenue_splitting.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_equal_split_divides_evenly` | Equal split divides evenly verified |
+| 2 | `test_weighted_split_respects_percentages` | Weighted split respects percentages verified |
+| 3 | `test_rounding_remainder_to_first_member` | Rounding remainder to first member verified |
+| 4 | `test_split_writes_per_member_credit_entries` | Split writes per member credit entries verified |
+| 5 | `test_platform_fee_deducted_before_split` | Platform fee deducted before split verified |
+| 6 | `test_split_history_recorded` | Split history recorded verified |
+| 7 | `test_update_split_config_applies_to_future` | Update split config applies to future verified |
+| 8 | `test_performance_split_uses_engagement_metrics` | Performance split uses engagement metrics verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Bundle payment triggers split processor -> per-member credits appear in billing ledger -> earnings dashboard shows bundle income
+2. Admin changes split from equal to weighted -> next payment uses new percentages
+3. Rounding: $10.00 split 3 ways -> $3.34 + $3.33 + $3.33 (remainder to first member)
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/revenue-splitting.spec.ts`
+**Sections**: 1-3 (10 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Configure equal split | 200; mode=equal stored |
+| 2 | Trigger split after payment | Per-member credits in ledger |
+| 3 | Member earnings show bundle income | GET /earnings includes split credit |
+| 4 | Weighted split respects percentages | Members receive correct proportions |
+| 5 | Update split config | 200; future payments use new rules |
+| 6 | Split history shows all distributions | GET history returns itemized splits |
+| 7 | Platform fee deducted | Net distributable = payment - fee |
+| 8 | Admin views full breakdown | GET detail shows per-member amounts |
+
+**Negative tests**: 400 weighted percentages not summing to 100%, 403 non-admin config change, 404 syndicate not found, 422 invalid split mode
+
+**Edge cases**: Single member syndicate (100% to one), member joins mid-period (prorated?), $0.01 payment split 5 ways
+
+### Test Data Requirements
+
+- **DDB seeds**: Syndicate with split config; subscription payments in billing table; member profiles
+- **Test users**: Alice (admin), Bob/Charlie (members), Dave (subscriber/payer)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: SYNDICATES_ENABLED=true
+- **Serial execution**: Must run after SYND-002 subscription payment tests
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| SYND-001 | Syndicate membership — list_members for member roster |
+| SYND-002 | Bundle subscriptions — payment triggers split processing |
+| Billing shared (existing) | new_ledger_entry for per-member credit entries |
+| Tip ledger (existing) | Pattern for paired debit/credit entries |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| SYND-004 | Treasury receives platform fee share from splits |
+
+### Merge Strategy: **Sequential**
+
+Requires SYND-001 + SYND-002 for membership and payments. Extends billing ledger.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Codebase References
 
 | Claim | File | Line(s) | Status |

@@ -915,3 +915,68 @@ voice_message_waveform_samples: int = int(os.environ.get("VOICE_MESSAGE_WAVEFORM
 | `frontend/src/pages/messages/VoiceRecorder.tsx` | — | ALREADY EXISTS: voice recorder component |
 | `frontend/src/pages/messages/WaveformPlayer.tsx` | — | ALREADY EXISTS: waveform playback component |
 <!-- NOTE: Voice messages are FULLY IMPLEMENTED in backend (endpoints, models, waveform processing, settings) and frontend (VoiceRecorder, WaveformPlayer). This ticket should be marked as Complete. -->
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_voice_messages.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_create_voice_message_stores_metadata` | Create voice message stores metadata |
+| 2 | `test_waveform_data_stored` | Waveform data stored |
+| 3 | `test_duration_validation` | Duration validation |
+| 4 | `test_listen_once_consumption` | Listen once consumption |
+| 5 | `test_voice_in_group_conversation` | Voice in group conversation |
+| 6 | `test_reply_to_voice_message` | Reply to voice message |
+| 7 | `test_scheduled_voice_send` | Scheduled voice send |
+| 8 | `test_max_duration_enforced` | Max duration enforced |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/voice-messages.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~14 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `VOICE_MESSAGES_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+No dependencies -- this ticket can be implemented independently.
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Independent -- new message kind=voice_message. S3 upload reuses existing presign pattern. No modification to existing message kinds.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: VOICE_MESSAGES_ENABLED=true
+- [ ] Service file created/modified: `app/routers/messaging.py (extended)`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/voice-messages.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_voice_messages.py`

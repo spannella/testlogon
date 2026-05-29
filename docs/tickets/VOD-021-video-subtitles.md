@@ -2018,6 +2018,92 @@ These settings are placed after the VOD-019 settings in `app/core/settings.py` (
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_vod_021.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_vod_021_crud` | Vod 021 crud verified |
+| 2 | `test_vod_021_validation` | Vod 021 validation verified |
+| 3 | `test_vod_021_auth` | Vod 021 auth verified |
+| 4 | `test_vod_021_not_found` | Vod 021 not found verified |
+| 5 | `test_vod_021_edge_cases` | Vod 021 edge cases verified |
+| 6 | `test_vod_021_integration` | Vod 021 integration verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Video Subtitles integrates with video metadata CRUD lifecycle
+2. End-to-end flow from video creation through video subtitles feature
+3. Error propagation from video metadata service to video subtitles layer
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/vod-021.spec.ts`
+**Sections**: 1-3 (10 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Video Subtitles API returns 200 | 200; expected fields present |
+| 2 | Video Subtitles handles invalid input | 422 or 400 response |
+| 3 | Video Subtitles requires auth | 401 without session |
+| 4 | Video Subtitles UI renders | Page loads; key elements visible |
+| 5 | Video Subtitles integrates with video metadata | Video data correctly referenced |
+
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 video not found, 422 invalid input
+
+**Edge cases**: Video in processing state, deleted video reference, concurrent operations
+
+### Test Data Requirements
+
+- **DDB seeds**: Video metadata records from VOD-001; related video subtitles test data
+- **Test users**: Alice (creator), Bob (viewer)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: VOD_ENABLED=true
+- **Serial execution**: Must run after VOD-001 video metadata table is created and seeded
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| VOD-001 | Video metadata for subtitle attachment |
+| VOD-008 | Player page for subtitle rendering |
+| S3 mock (existing) | Subtitle file storage |
+
+### Depended On By
+
+No downstream tickets depend on this feature.
+
+### Merge Strategy: **Sequential**
+
+Requires VOD-001 video metadata model. Also depends on VOD-008.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix A: Codebase Citations
 
 | Claim | File | Line(s) | Status |

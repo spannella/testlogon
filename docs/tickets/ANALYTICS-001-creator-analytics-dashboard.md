@@ -573,152 +573,105 @@ export const refreshAnalytics = () =>
 
 ---
 
-## 10. Testing Strategy
+## Testing Strategy
 
-### Unit Tests (`tests/test_creator_analytics.py`)
+### Unit Tests (pytest)
 
-| Test | Description |
-|------|-------------|
-| `test_rollup_aggregates_billing_ledger` | Seed billing LEDGER entries for a creator; run rollup; assert daily row has correct revenue_tips_cents, revenue_subscriptions_cents, etc. |
-| `test_rollup_aggregates_video_views` | Seed video view records; run rollup; assert total_views and unique_viewers correct. |
-| `test_rollup_aggregates_subscriber_changes` | Seed SUBSCRIBER entries; run rollup; assert new_subscribers, churned_subscribers, net_subscribers correct. |
-| `test_rollup_idempotent` | Run rollup twice for the same date; assert row is updated, not duplicated. |
-| `test_overview_empty_creator` | No rollup data; assert overview returns all zeros. |
-| `test_revenue_breakdown_correct_attribution` | Seed rollups with known values; assert breakdown dict matches. |
-| `test_date_range_validation` | Assert 400 for from_date > to_date, range > 365 days, malformed date strings. |
-| `test_granularity_week_aggregation` | Seed 14 daily rollups; request granularity=week; assert 2 data points in time_series. |
-| `test_granularity_month_aggregation` | Seed 60 daily rollups; request granularity=month; assert 2 data points. |
-| `test_top_content_sort_by_views` | Seed rollups with top_content_ids; assert sort by views returns highest first. |
-| `test_top_content_sort_by_revenue` | Same, sorted by revenue. |
-| `test_audience_country_merge` | Two daily rollups with overlapping countries; assert merged counts correct. |
-| `test_refresh_rate_limit` | Call refresh twice within 5 minutes; assert second returns 429. |
-| `test_cross_user_isolation` | Create rollups for two creators; assert each can only see their own. |
+**Test file**: `tests/test_creator_analytics.py`
 
-### E2E Test Matrix (`frontend/e2e/analytics.spec.ts`)
+**Mock setup**: moto mock for DynamoDB (`analytics_rollups`, `billing`, `video_views`, `subscriptions` tables). Patch `now_ts()` for deterministic timestamps.
 
-**Section A: Analytics API (8 tests)**
+| Test Function | Description |
+|---|---|
+| `test_rollup_aggregates_billing_ledger` | Seed billing LEDGER entries for a creator; run rollup; verify daily row has correct `revenue_tips_cents`, `revenue_subscriptions_cents` |
+| `test_rollup_aggregates_video_views` | Seed video view records; run rollup; verify `total_views` and `unique_viewers` |
+| `test_rollup_aggregates_subscriber_changes` | Seed SUBSCRIBER entries; verify `new_subscribers`, `churned_subscribers`, `net_subscribers` |
+| `test_rollup_idempotent` | Run rollup twice for same date; assert one row updated, not duplicated |
+| `test_overview_returns_zeros_for_empty_creator` | No rollup data; overview endpoint returns all zeros |
+| `test_revenue_breakdown_correct_attribution` | Seed rollups with known values; verify breakdown dict matches expected sources |
+| `test_date_range_validation_rejects_inverted` | `from_date > to_date` returns 400; range > 365 days returns 400 |
+| `test_granularity_week_aggregation` | 14 daily rollups; `granularity=week` produces 2 data points |
+| `test_refresh_rate_limit_429` | Call refresh twice in 5 minutes; second returns 429 |
+| `test_cross_user_isolation` | Two creators' rollups; each only sees their own data |
 
-| # | Test | Setup | Assertion |
-|---|------|-------|-----------|
-| 1 | Empty analytics returns zero for new creator | Alice (no seeded data) | Overview returns `period_views: 0`, `period_revenue_cents: 0` |
-| 2 | Revenue breakdown includes seeded tip/subscription/unlock credits | Seed LEDGER entries + run rollup | Breakdown keys match expected sources |
-| 3 | Time range filter excludes out-of-range data | Seed rollups for May 1-27; query May 10-15 | Time series has exactly 6 entries |
-| 4 | Daily granularity produces per-day time series | Query with granularity=day | Each time_series entry is one day |
-| 5 | Top content returns ranked list by view count | Seed rollups with known top_content_ids | First item has highest views |
-| 6 | Subscriber growth shows correct net change | Seed rollups with subscriber data | net_change matches sum of daily net |
-| 7 | Audience endpoint returns country/device breakdown | Seed rollups with audience maps | Countries and devices arrays populated |
-| 8 | Overview returns aggregated summary cards | Seed multiple daily rollups | period_views = sum of daily views |
+### Integration Tests
 
-**Section B: Analytics API Edge Cases (4 tests)**
+Cross-service tests with real DynamoDB Local:
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 1 | Invalid date range returns 400 | from_date=2026-06-01, to_date=2026-05-01 -> 400 |
-| 2 | Unauthenticated request returns 401 | No session cookies -> 401 |
-| 3 | Very large date range caps at rollup limit | from_date=2024-01-01, to_date=2026-05-27 -> 400 (>365 days) |
-| 4 | Refresh endpoint triggers without error | POST /ui/analytics/refresh -> 200 with ok=true |
+1. Rollup job scans billing + video_views + subscriptions tables and writes correct daily row
+2. API request reads rollup rows and aggregates correctly by week/month granularity
+3. Refresh endpoint triggers rollup; subsequent GET returns updated data
+4. Date range filtering excludes out-of-range rollup rows
 
-**Section C: Analytics UI (6 tests)**
+### E2E Tests (Playwright)
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 1 | Analytics page loads with summary cards | Navigate to /analytics; 4 summary cards visible |
-| 2 | Revenue breakdown chart renders category legend | Legend contains "Tips", "Subscriptions", "Unlocks" |
-| 3 | Date range selector updates all charts | Click "30d" preset; URL params update; charts re-render |
-| 4 | Top content table shows content titles and metrics | Table rows have Title, Views, Revenue columns |
-| 5 | Subscriber growth chart renders line with data points | SVG path elements present in chart container |
-| 6 | Page is responsive on mobile viewport | Set viewport 375x667; cards stack vertically; charts full-width |
+**Test file**: `frontend/e2e/analytics.spec.ts`
 
----
+**Auth pattern**: `injectAuth(page, "alice")` for cookie auth; `apiPost` with CSRF for `POST /ui/analytics/refresh`
 
-## 11. Monitoring & Alerting
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Empty analytics returns zero for new creator | GET `/ui/analytics/overview` returns `period_views: 0`, `period_revenue_cents: 0` |
+| 2 | Revenue breakdown includes seeded sources | Seed LEDGER entries + run rollup; breakdown keys match tips/subscriptions/unlocks |
+| 3 | Time range filter excludes out-of-range data | Seed rollups May 1-27; query May 10-15; `time_series` has exactly 6 entries |
+| 4 | Daily granularity produces per-day series | Query with `granularity=day`; each entry is one day |
+| 5 | Top content returns ranked list by views | Seed rollups with `top_content_ids`; first item has highest views |
+| 6 | Subscriber growth shows correct net change | `net_change` matches sum of daily net |
+| 7 | Audience endpoint returns demographics | `countries` and `devices` arrays populated |
+| 8 | Overview aggregates summary cards | `period_views` equals sum of daily views |
+| 9 | Invalid date range returns 400 | `from_date=2026-06-01, to_date=2026-05-01` -> 400 |
+| 10 | Unauthenticated request returns 401 | No session cookies -> 401 |
+| 11 | Date range exceeding 365 days returns 400 | `from_date=2024-01-01, to_date=2026-05-27` -> 400 |
+| 12 | Refresh endpoint returns 200 | POST `/ui/analytics/refresh` -> `{ok: true}` |
+| 13 | Analytics page loads with 4 summary cards | Navigate to `/analytics`; Views, Revenue, New Subscribers, Total Subscribers cards visible |
+| 14 | Revenue chart renders category legend | Legend contains "Tips", "Subscriptions", "Unlocks" |
+| 15 | Date range selector updates charts | Click "30d" preset; URL params update; charts re-render |
+| 16 | Top content table shows titles and metrics | Table rows have Title, Views, Revenue columns |
 
-### Metrics to Track
+**Negative tests**: 401 unauthenticated, 400 invalid date range, 400 range > 365 days, 429 refresh rate limit
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `analytics_rollup_duration_seconds` | Histogram | - | Time taken for each rollup job execution |
-| `analytics_rollup_creators_processed` | Counter | - | Number of creator rollups written per run |
-| `analytics_rollup_errors_total` | Counter | `error_type` | Errors during rollup (DDB timeout, source scan failure) |
-| `analytics_api_request_duration_seconds` | Histogram | `endpoint` | Latency per analytics API endpoint |
-| `analytics_api_requests_total` | Counter | `endpoint`, `status` | Request count by endpoint and HTTP status |
-| `analytics_refresh_requests_total` | Counter | - | Manual refresh trigger count |
+**Edge cases**: Empty creator (no rollups), single-day range, full-year range, week/month granularity boundary alignment
 
-### Dashboard Queries
+### Test Data Requirements
 
-- **Rollup health**: `rate(analytics_rollup_errors_total[5m]) > 0` -- any rollup errors in the last 5 minutes.
-- **API latency**: `histogram_quantile(0.95, analytics_api_request_duration_seconds)` -- 95th percentile should be < 500ms.
-- **Rollup freshness**: Compare `now()` to the latest `updated_at` timestamp in the SUMMARY sentinel. Alert if > 30 minutes stale.
+Seed `analytics_rollups` table with `CREATOR#{alice_sub}` daily rows via DDB `put_item` in `beforeAll`. Use `e2e_admin_session_setup.py` identities.
 
-### Alert Thresholds
+**Test users**: Alice (USER, analytics owner), Bob (USER, cross-user isolation), Root (ROOT, admin GSI queries)
 
-| Alert | Condition | Severity |
-|-------|-----------|----------|
-| Rollup job failing | `analytics_rollup_errors_total` increases for 3 consecutive runs | Warning |
-| Rollup job stalled | No `analytics_rollup_creators_processed` increase for 1 hour | Critical |
-| API latency high | P95 > 2 seconds for 5 minutes | Warning |
-| Dashboard error rate | `analytics_api_requests_total{status="5xx"}` / total > 5% for 5 minutes | Critical |
+### CI/Pipeline
+
+`ANALYTICS_ROLLUP_ENABLED=true` in `.env.local`. Serial execution (shared rollup data). Retry-safe (idempotent rollup writes).
 
 ---
 
-## 12. Open Questions & Risks
+## Dependencies & Merge Safety
 
-### Unresolved Decisions
+### Depends On
 
-1. **Real-time vs. batch**: Should the rollup job run in-process as an asyncio background task, or be triggered externally (e.g., via a cron-style `POST /internal/analytics/rollup`)? In-process is simpler but ties rollup to the web server lifecycle. Recommendation: Start in-process, migrate to external trigger when scaling to multiple backend instances.
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| MON-003 | Creator Earnings Dashboard (`creator_earnings.py` for revenue scanning logic) | Implemented | Yes |
 
-2. **Content title resolution**: The `top_content_ids` list contains IDs but not titles. Should the API endpoint resolve titles by querying `T.video_metadata` / `T.app_single_table` (newsfeed posts)? This adds latency. Alternative: Store titles in the rollup row at aggregation time (stale if title changes). Recommendation: Resolve at read time with a parallel batch-get; cache titles in React Query.
+### Depended On By
 
-3. **Audience GeoIP source**: Where does the country data come from? Options: (a) Parse `X-Forwarded-For` + GeoIP database in the view-tracking middleware. (b) Use Cloudfront's `CloudFront-Viewer-Country` header. Recommendation: (a) for dev mode with a free MaxMind GeoLite2 DB; (b) for production.
+| Ticket | What It Needs |
+|---|---|
+| ANALYTICS-002 | Analytics rollups table, top-content endpoint, AnalyticsPage for drill-down enhancements |
 
-4. **Watch time tracking**: Currently the platform tracks view events but not watch duration. Should this ticket also add a `POST /ui/analytics/heartbeat` endpoint that the video player calls every 30 seconds? This adds complexity. Recommendation: Defer watch time to a follow-up ticket; use view count as the primary engagement metric for v1.
+### Merge Strategy
 
-### Technical Risks
+Independent. New table (`AnalyticsRollups`), new router (`/ui/analytics/*`), new page (`/analytics`). No conflicts with existing code.
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Billing table scan is slow for large datasets | Rollup job takes > 15 minutes | Add date-based GSI to billing table; process in parallel per creator |
-| Rollup job conflicts with web server memory | OOM on small instances | Set `analytics_rollup_lookback_days=1` in production; run full backfill off-hours |
-| Recharts bundle size | Adds ~50KB gzipped to frontend bundle | Already used for other charts in the app; lazy-load analytics page |
+### Merge Checklist
 
-### Dependency Risks
-
-- **MON-003 not yet deployed**: If `creator_earnings.py` is not available, the revenue aggregation logic must be reimplemented. Mitigation: Review `creator_earnings.py` early; extract shared utility functions. <!-- VERIFIED: creator_earnings.py EXISTS and is deployed. get_earnings_summary() at line 47, get_earnings_transactions() at line 117. Router registered in main.py at line 100/363. This dependency risk is already mitigated. -->
-- **Video view tracking not consistent**: If `T.video_views` is not populated for all view events, view counts will be underreported. Mitigation: Add view count validation in E2E tests.
-
----
-
-## 13. Implementation Timeline
-
-### Phase 1: Backend Foundation (Days 1-3)
-
-| Day | Task |
-|-----|------|
-| 1 | Add settings, table definition, table handle. Create `app/services/creator_analytics.py` with rollup query functions. Create Pydantic models in `app/models.py`. |
-| 2 | Create `app/services/analytics_rollup_job.py` -- implement source table scanners (billing, views, subscriptions, posts, ads, calls). Write daily aggregation logic. |
-| 3 | Create `app/routers/creator_analytics.py` -- implement all 7 endpoints. Register router in `app/main.py`. Write unit tests. |
-
-### Phase 2: Backend Polish + Background Job (Days 4-5)
-
-| Day | Task |
-|-----|------|
-| 4 | Implement background rollup job (asyncio task in app startup). Add refresh endpoint with rate limiting. Add granularity aggregation (week/month). |
-| 5 | Write comprehensive unit tests. Edge cases: empty data, date boundaries, cross-user isolation, rate limits. Fix bugs found during testing. |
-
-### Phase 3: Frontend (Days 6-8)
-
-| Day | Task |
-|-----|------|
-| 6 | Create `AnalyticsPage.tsx`, `SummaryCard`, `DateRangePicker`. Create API endpoints and TypeScript types. Add route to `App.tsx`, sidebar/mobile nav entries. |
-| 7 | Create `ViewTrendsChart.tsx`, `RevenueBreakdownChart.tsx`, `SubscriberGrowthChart.tsx` using Recharts. Wire up React Query hooks with URL-param-driven date range. |
-| 8 | Create `TopContentTable.tsx` and `AudienceDemographics.tsx`. Responsive layout tuning. Loading skeletons and empty states. |
-
-### Phase 4: E2E Tests + Polish (Days 9-10)
-
-| Day | Task |
-|-----|------|
-| 9 | Write `frontend/e2e/analytics.spec.ts` -- API tests (sections A + B) with seeded rollup data. |
-| 10 | Write UI E2E tests (section C). Final integration testing. Performance testing with 365-day range. Documentation updates. |
+- [ ] `AnalyticsRollups` table added to `scripts/local-ddb-init.py` with `ByDateCreatedAt` GSI (`created_at: N`)
+- [ ] Settings added to `app/core/settings.py`: `analytics_rollups_table_name`, `analytics_rollup_enabled`, interval, lookback
+- [ ] Table handle `T.analytics_rollups` added to `app/core/tables.py`
+- [ ] Router `creator_analytics_router` registered in `app/main.py`
+- [ ] Frontend route `/analytics` added to `App.tsx` with lazy import
+- [ ] Sidebar entry added to `Sidebar.tsx`, `AppShell.tsx`, `MobileNav.tsx`
+- [ ] E2E test `analytics.spec.ts` passes in CI
+- [ ] No breaking changes to existing endpoints
 
 ---
 

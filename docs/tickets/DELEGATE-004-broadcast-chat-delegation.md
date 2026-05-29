@@ -731,3 +731,80 @@ Bans are session-scoped:
 | `app/services/broadcast_scheduler.py` | all | Scheduled broadcast promotion | EXISTS |
 | `app/services/broadcast_audit.py` | all | Broadcast audit logging | EXISTS (modify) |
 | `app/services/sessions.py` | 283 | `require_ui_session` (NOT in app/auth/deps.py) | EXISTS |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_delegate_broadcast.py`
+
+| # | Test Function | Description | Mocks |
+|---|--------------|-------------|-------|
+| 1 | `test_pin_chat_message` | Message pinned and system message generated | moto DDB |
+| 2 | `test_delete_moderated_message` | Message deleted and audit entry written | moto DDB |
+| 3 | `test_mute_viewer_duration_cap` | Mute duration capped at 24 hours | moto DDB |
+| 4 | `test_ban_viewer_creates_item` | BAN# item created under session PK | moto DDB |
+| 5 | `test_banned_viewer_cannot_chat` | send_chat_message rejected for banned user | moto DDB |
+| 6 | `test_start_broadcast_requires_control` | 403 without broadcast_control permission | moto DDB |
+| 7 | `test_moderator_cannot_ban_creator` | Ban rejected for session creator | moto DDB |
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Multi-moderator: both pin/delete independently without conflicts | delegate_broadcast, broadcast_chat_store |
+| 2 | Ban enforcement: banned viewer blocked from chat | delegate_broadcast, broadcast_chat_store |
+| 3 | Broadcast control: delegate starts, stops, schedules broadcasts | delegate_broadcast, broadcast_store |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/delegates-broadcast.spec.ts`
+
+Tests use `injectAuth(page, identity)` for cookie-based auth and include CSRF headers (`x-csrf-token`) on all POST/PUT/DELETE requests. Negative tests cover 401 (unauthenticated), 403 (wrong role/user), 404 (not found), 409 (conflict), and 422 (validation) responses. Edge cases include duplicate operations (idempotency), concurrent access, and feature-flag-disabled behavior.
+
+**Total E2E tests**: 16
+
+### Test Data Requirements
+
+- DDB seeds: required tables created via `scripts/local-ddb-init.py`
+- Test users: Alice, Bob, Root, Charlie via `e2e_session_setup.py` / `e2e_admin_session_setup.py`
+- Feature flag: `BROADCAST_DELEGATION_ENABLED` in `.env.local`
+
+### CI/Pipeline
+
+- Feature flag: `BROADCAST_DELEGATION_ENABLED` must be enabled for tests to run
+- Serial execution: run with `--workers 1` to avoid shared state conflicts
+- Retry safety: tests use unique timestamps/UUIDs per run; safe to retry on failure
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Status | What It Provides |
+|--------|--------|-----------------|
+| DELEGATE-001 | Required | `require_delegate_permission`, delegation infrastructure |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| DELEGATE-005 | Wraps broadcast delegation for API key access |
+
+### Merge Strategy
+
+**Sequential (after DELEGATE-001)** -- Changes are additive (new service files, new router, new frontend pages). Shared infrastructure files (`main.py`, `settings.py`, `tables.py`, `local-ddb-init.py`) receive only additive modifications.
+
+### Merge Checklist
+
+- [ ] `app/services/delegate_broadcast.py` created
+- [ ] `app/routers/delegate_broadcast.py` registered in `main.py`
+- [ ] `mod:*` SSE event types added to `broadcast_sse.py`
+- [ ] Ban check added to `broadcast_chat_store.py`
+- [ ] All 16 E2E tests pass
+- [ ] Feature flag `BROADCAST_DELEGATION_ENABLED` added to `.env.local.example`
+- [ ] All E2E tests pass
+- [ ] No regressions in existing test suite

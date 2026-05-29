@@ -1363,3 +1363,89 @@ Disable the feature by:
 | Google Drive mock E2E tests | `frontend/e2e/google-drive-mock.spec.ts` | exists | VERIFIED |
 | No frontend Google Drive UI | `frontend/src/pages/files/` | all | VERIFIED: no Drive picker or browser component |
 | No google-drive endpoint file | `frontend/src/api/endpoints/` | all | VERIFIED: no google-drive.ts file |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_google_drive_picker.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_connect_google_drive_stores_credentials`
+  - `test_list_drive_files`
+  - `test_import_drive_file_to_file_manager`
+  - `test_mount_drive_folder`
+  - `test_disconnect_google_drive_removes_credentials`
+  - `test_refresh_token_flow`
+
+### Integration Tests
+
+  - OAuth flow stores encrypted credentials via provider_credentials service
+  - Drive file import downloads content and creates file manager entry
+  - Mount creates bidirectional sync between Drive folder and file manager
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/google-drive-picker.spec.ts`
+**Test count**: 10
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `No new tables (uses existing file provider and credential tables)` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `GOOGLE_DRIVE_PICKER_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| (none) | — | This ticket has no blocking dependencies |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| (none) | — | No other tickets depend on this one |
+
+### Merge Strategy
+
+**Independent**
+
+This ticket can be merged independently of other tickets. It introduces new tables/endpoints without modifying existing ones in a breaking way.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 10 E2E tests pass with `npx playwright test google-drive-picker.spec.ts`

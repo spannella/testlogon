@@ -393,326 +393,91 @@ Caller                    Backend                     Callee
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests (`tests/`) — IMPLEMENTED
+### Unit Tests (pytest)
 
-Unit tests exist at `tests/test_call_timeout.py` (337 lines). See Codebase References.
+**Test file**: `tests/test_call_7.py`
 
-#### 5.1.1 Lifecycle Tests
+**Mock setup**: moto mock for DynamoDB (call session tables). Mock RTCPeerConnection for frontend unit tests. Chromium fake media devices for E2E.
 
-```python
-# tests/test_call_timeout.py (see tests/test_call_timeout.py:73-130)
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_lifecycle_transitions` | Verify allowed state transitions succeed |
+| `test_invalid_transition_rejected` | Invalid transition returns 409 |
+| `test_authorization_check` | Non-participant returns 403 |
+| `test_idempotent_operation` | Repeated call returns same result |
+| `test_cleanup_on_end` | Resources cleaned up after call ends |
 
-def test_timeout_call_transitions_invited_to_missed():
-    """timeout_call() on an invited call sets state=missed, end_reason=no_answer."""
-    record, event = create_invite(...)
-    updated, timeout_event = timeout_call(call_id=record.call_id, actor_user_id=caller_id)
-    assert updated.state == "missed"
-    assert updated.end_reason == "no_answer"
-    assert updated.end_ts is not None
-    assert timeout_event.event_type == "call.missed"
-    assert timeout_event.to_state == "missed"
+### Integration Tests
 
-def test_timeout_call_rejected_if_already_accepted():
-    """timeout_call() returns 409 if call is already accepted."""
-    record, _ = create_invite(...)
-    accept_invite(call_id=record.call_id, actor_user_id=callee_id)
-    with pytest.raises(CallLifecycleError) as exc_info:
-        timeout_call(call_id=record.call_id, actor_user_id=caller_id)
-    assert exc_info.value.code == "invalid_state_transition"
+Cross-service tests with real DynamoDB Local:
 
-def test_timeout_call_idempotent():
-    """Second timeout_call() with same idempotency_key returns same result."""
-    record, _ = create_invite(...)
-    r1, e1 = timeout_call(call_id=record.call_id, actor_user_id=caller_id, idempotency_key="key1")
-    r2, e2 = timeout_call(call_id=record.call_id, actor_user_id=caller_id, idempotency_key="key1")
-    assert r1.state == r2.state == "missed"
+1. Full call lifecycle through real DDB (invite -> accept -> connect -> end)
+2. Signaling relay: offer/answer/ICE exchange between two sessions
+3. State machine transitions verified end-to-end
 
-def test_timeout_call_by_non_caller_forbidden():
-    """Only the caller (or system) can timeout a call."""
-    record, _ = create_invite(...)
-    with pytest.raises(CallLifecycleError) as exc_info:
-        timeout_call(call_id=record.call_id, actor_user_id=callee_id)
-    assert exc_info.value.code == "forbidden"
+### E2E Tests (Playwright)
 
-def test_timeout_call_system_actor_allowed():
-    """Server backstop uses actor_user_id='system' which should be allowed."""
-    record, _ = create_invite(...)
-    updated, event = timeout_call(call_id=record.call_id, actor_user_id="system")
-    assert updated.state == "missed"
-```
+**Test file**: `frontend/e2e/call-7.spec.ts`
 
-#### 5.1.2 Timeline Tests
+**Auth pattern**: `injectAuth(page, "alice")` for caller; `injectAuth(page, "bob")` for callee; separate browser contexts for two-peer tests
 
-```python
-def test_missed_call_timeline_preview():
-    """emit_call_timeline_event with call.missed produces 'Missed call' preview."""
-    result = emit_call_timeline_event(
-        call_id="c1", conversation_id="conv1", actor_user_id="u1",
-        event_type="call.missed", call_state="missed", reason="no_answer",
-    )
-    assert result["text"] == "Missed call"
-```
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Call invite creates session | POST invite -> 200 with call_id |
+| 2 | Call accept transitions state | POST accept -> state = accepted |
+| 3 | Signaling relay delivers events | POST signal -> SSE event received by peer |
+| 4 | Connected state shows overlay | Both peers reach connected; overlay visible |
+| 5 | End call cleans up resources | POST end -> state = ended; tracks stopped |
+| 6 | Call overlay shows correct UI | Ringing/connected/ended states render correctly |
+| 7 | Feature flag gates functionality | Disabled flag -> call button hidden |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-participant returns 403 | Third party -> 403 |
+| 10 | Non-existent call returns 404 | Invalid call_id -> 404 |
+| 11 | Invalid transition returns 409 | End already-ended call -> 409 |
 
-#### 5.1.3 Background Loop Tests
+**Negative tests**: 401 unauthenticated, 403 non-participant, 404 non-existent call, 409 invalid transition, 422 invalid payload
 
-```python
-def test_expire_stale_invites_transitions_old_calls():
-    """Calls in 'invited' state older than timeout are transitioned to 'missed'."""
-    # Create a call with start_ts 60 seconds ago
-    record = create_call_session(
-        call_id="c1", conversation_id="conv1",
-        caller_user_id="caller", callee_user_id="callee",
-        initial_mode="audio", state="invited",
-        start_ts=now_ts() - 60,
-    )
-    _expire_stale_invites()
-    updated = get_call_session("c1")
-    assert updated.state == "missed"
+**Edge cases**: Concurrent accept/decline, call timeout (30s), ICE restart during connected state, tab backgrounding, network offline
 
-def test_expire_stale_invites_skips_recent_calls():
-    """Calls in 'invited' state within timeout window are not touched."""
-    record = create_call_session(
-        call_id="c2", conversation_id="conv1",
-        caller_user_id="caller", callee_user_id="callee",
-        initial_mode="audio", state="invited",
-        start_ts=now_ts() - 5,  # Only 5 seconds old
-    )
-    _expire_stale_invites()
-    updated = get_call_session("c2")
-    assert updated.state == "invited"
-```
+### Test Data Requirements
 
-### 5.2 API Integration Tests
+Create DM conversation between Alice and Bob in `beforeAll`. Use `--use-fake-device-for-media-stream` Chromium flag for media tests.
 
-```python
-def test_timeout_endpoint_returns_missed_state(client, alice_session, bob_session):
-    """POST /messages/calls/{id}/timeout transitions to missed."""
-    # Alice creates invite to Bob
-    resp = client.post("/ui/messages/calls/invite", json={...}, cookies=alice_session)
-    call_id = resp.json()["call_id"]
-    # Alice times out the call
-    resp = client.post(f"/ui/messages/calls/{call_id}/timeout",
-                       json={"reason": "no_answer"}, cookies=alice_session)
-    assert resp.status_code == 200
-    assert resp.json()["state"] == "missed"
+**Test users**: Alice (USER, caller), Bob (USER, callee), Root (ROOT, admin for feature flags)
 
-def test_timeout_after_accept_returns_409(client, alice_session, bob_session):
-    """POST /timeout after callee accepted returns 409 Conflict."""
-    resp = client.post("/ui/messages/calls/invite", json={...}, cookies=alice_session)
-    call_id = resp.json()["call_id"]
-    client.post(f"/ui/messages/calls/{call_id}/accept", cookies=bob_session)
-    resp = client.post(f"/ui/messages/calls/{call_id}/timeout", cookies=alice_session)
-    assert resp.status_code == 409
-```
+### CI/Pipeline
 
-### 5.3 E2E Tests (`frontend/e2e/`)
-
-<!-- NOTE: frontend/e2e/call-timeout.spec.ts does NOT exist yet — new implementation required -->
-Proposed new file: `frontend/e2e/call-timeout.spec.ts`
-
-```typescript
-test.describe("Section 80: Call ringing timeout", () => {
-  test("80.1 Outgoing call shows timeout UI after 30s with no answer", async ({ page }) => {
-    // Inject Alice auth, navigate to DM with Bob
-    // Initiate call (mock Bob never answering)
-    // Fast-forward or use a short timeout override
-    // Assert CallSessionOverlay shows "Call timed out with no answer."
-  });
-
-  test("80.2 Timeout call creates 'Missed call' timeline message", async ({ page, request }) => {
-    // Create invite via API
-    // Call timeout endpoint
-    // Fetch messages for conversation
-    // Assert system message with text "Missed call" exists
-  });
-
-  test("80.3 Callee receives missed call SSE and sees timeline event", async ({ page }) => {
-    // Alice calls Bob, timeout fires
-    // Bob's page receives call.missed SSE
-    // Bob's conversation shows "Missed call" system message
-  });
-
-  test("80.4 Timeout is rejected if callee already accepted (race condition)", async ({ request }) => {
-    // Create invite, accept, then try timeout
-    // Assert 409 response
-  });
-
-  test("80.5 Server backstop catches calls where client timer failed", async ({ request }) => {
-    // Create invite with start_ts in the past (> 30s ago)
-    // Wait for background loop tick (or call internal endpoint)
-    // Assert call state is now "missed"
-  });
-
-  test("80.6 Missed call does not block subsequent calls to same callee", async ({ request }) => {
-    // Create invite, timeout it
-    // Create a new invite to same callee
-    // Assert success (no callee_busy error)
-  });
-});
-```
-
-### 5.4 State Machine Unit Tests (Frontend)
-
-```typescript
-// In a jest/vitest test file for callStateMachine.ts
-describe("callStateReducer timeout handling", () => {
-  it("transitions outgoing_ringing to timeout on REMOTE_DECLINE with reason=timeout", () => {
-    const state = { ...createInitialCallMachineState(), phase: "outgoing_ringing" as const };
-    const next = callStateReducer(state, { type: "REMOTE_DECLINE", reason: "timeout" });
-    expect(next.phase).toBe("timeout");
-    expect(next.reasonMessage).toBe("Call timed out with no answer.");
-  });
-
-  it("allows RESET from timeout phase", () => {
-    const state = { ...createInitialCallMachineState(), phase: "timeout" as const };
-    const next = callStateReducer(state, { type: "RESET" });
-    expect(next.phase).toBe("idle");
-  });
-});
-```
-
-### 5.5 Metrics Verification
-
-After implementation, verify via the `/metrics` endpoint:
-- `webrtc_call_setup_total{outcome="failure", reason="timeout_no_answer"}` increments on timeout
-- `webrtc_call_timeout_total{source="client"}` and `{source="server"}` distinguish timeout origin
-
-### 5.6 Manual QA Checklist
-
-1. Start a call, do not answer on callee device, verify timeout at 30s
-2. Start a call, answer at 29s, verify call connects (no timeout)
-3. Start a call, caller closes browser tab, verify server backstop triggers within 45s
-4. Verify "Missed call" appears in both caller and callee conversation timelines
-5. Verify callee receives push notification (if push is enabled) for missed call
-6. Verify caller can immediately re-call after a missed call (no busy lock)
-7. Verify `callTimeoutRef` is cleared on component unmount (no memory leak)
-8. Test with configurable timeout (set env var to 10s, verify faster timeout)
+Serial execution (WebRTC requires sequential peer setup). `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true`. Retry-safe.
 
 ---
 
-## 6. Architecture Diagram
+## Dependencies & Merge Safety
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│               Ringing Timeout & Missed Call Flow                    │
-└─────────────────────────────────────────────────────────────────────┘
+### Depends On
 
-  Caller                        Server (SSE)                   Callee
-    │                              │                              │
-    │  POST /calls/initiate        │                              │
-    │─────────────────────────────▶│                              │
-    │                              │  SSE: call:incoming          │
-    │  Start client timer (30s)    │──────────────────────────────▶│
-    │                              │                              │
-    │                              │  Start server timer (45s)    │
-    │                              │                              │
-    │  ... 30s elapses ...         │                              │
-    │                              │                              │
-    │  Client timer fires          │                              │
-    │  POST /calls/{id}/cancel     │                              │
-    │  reason="timeout_no_answer"  │                              │
-    │─────────────────────────────▶│                              │
-    │                              │  SSE: call:cancelled         │
-    │                              │──────────────────────────────▶│
-    │                              │  Cancel server timer         │
-    │                              │  Write missed_call record    │
-    │                              │  SSE: call:missed            │
-    │                              │──────────────────────────────▶│
-    │                              │                              │
-    │  Show "No answer" UI         │              Show "Missed call"
-    │                              │                              │
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| CALL-001 | Call lifecycle endpoints (invite/accept/decline/end) | Implemented | Yes |
 
-  Server Backstop (if client fails to cancel):
-    │                              │
-    │  ... 45s elapses ...         │
-    │                              │  Server timer fires
-    │                              │  Force-cancel call
-    │  SSE: call:cancelled         │  Write missed_call
-    │◀──────────────────────────── │──────────────────────────────▶│
-```
+### Depended On By
 
----
+No downstream dependents identified.
 
-## 7. DynamoDB Access Patterns
+### Merge Strategy
 
-<!-- NOTE: The table names and key schemas below do NOT match the actual implementation. The actual table is MessageCallSessions with PK=call_id (no SK), not "calls" with PK=CALL#{call_id}/SK=META. There are no separate call_events or call_timers tables. The actual patterns are:
-- Create call: MessageCallSessions table, PK=call_id, state="invited" (see scripts/local-ddb-init.py:631-638)
-- Timeout call: MessageCallSessions table, update call_id item SET state=missed (see messaging_call_lifecycle.py:432-438)
-- Stale invite scan: MessageCallSessions full table scan FilterExpression state=invited AND start_ts<=cutoff (see messaging.py:12481-12482)
-- Timeline message: Messages table, PK=conversation_id, SK=sys_call_{call_id}_call_missed_{ts} (see messaging_call_timeline.py:52)
--->
+Independent. Backend timeout function + frontend timer. Parallel-safe with CALL-002 through CALL-006.
 
-| Access Pattern | Table | Key | Notes |
-|----------------|-------|-----|-------|
-| Create call session | `MessageCallSessions` | PK: `call_id` | `state="invited"`, `start_ts=now_ts()` |
-| Timeout call | `MessageCallSessions` | PK: `call_id` | SET `state=missed`, `end_ts`, `end_reason` |
-| Stale invite scan | `MessageCallSessions` | Full scan | `FilterExpression`: `state=invited AND start_ts <= cutoff` |
-| Timeline message | `Messages` | PK: `conversation_id`, SK: `sys_call_{call_id}_call_missed_{ts}` | System message with text "Missed call" |
+### Merge Checklist
 
----
-
-## 8. Error Handling Matrix
-
-| Error Scenario | Behavior | User-Facing Message | Recovery Action |
-|----------------|----------|---------------------|-----------------|
-| Client timer fires but server already answered | Client cancel returns 409; ignore | No message (call connected) | Auto-resolve; call continues |
-| Server timer fires but client already cancelled | Server cancel is idempotent | No extra message | No action needed |
-| Both timers fire simultaneously | Conditional update on call status; first write wins | "No answer" shown once | Idempotent; no conflict |
-| Network failure during timeout | Client-side timer still fires; offline cancel queued | "Call timed out" (optimistic) | Sync on reconnect |
-| Callee answers at exactly 30s | Answer POST races with cancel POST; answer wins if first | Call connects | Server resolves race |
-| Call cancelled before timeout | Clear client timer; clear server timer | "Call cancelled" | Normal flow |
-
----
-
-## 9. Performance Considerations
-
-| Concern | Mitigation |
-|---------|-----------|
-| Timer accuracy (30s client) | `setTimeout` with drift check; re-fire if < 29s elapsed |
-| Server timer resource leak | DDB TTL on call_timers (60s); cron cleanup for orphans |
-| Missed call notification fan-out | Single SSE event per callee; no fan-out needed |
-| Concurrent calls to same callee | Each call has independent timers; no interference |
-| Memory leak from unmounted timers | Clear `callTimeoutRef` in `useEffect` cleanup |
-
----
-
-## 10. Rollout Plan
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `CALL_RINGING_TIMEOUT_ENABLED` | `true` | Enable client-side timeout |
-| `CALL_SERVER_BACKSTOP_ENABLED` | `true` | Enable server-side timeout backup |
-| `CALL_TIMEOUT_SECONDS` | `30` | Configurable timeout duration |
-| `CALL_SERVER_BACKSTOP_SECONDS` | `45` | Server backup timeout |
-
-### Canary
-
-1. **Week 1**: Deploy with defaults (30s/45s). Monitor timeout vs answer rates.
-2. **Week 2**: Adjust timeout if miss rate is too high (increase to 45s/60s).
-3. **Week 3**: Verify missed call notifications and UI in all clients.
-
----
-
-## 11. Expanded E2E Test Details
-
-### Additional Edge Cases (4 tests)
-
-| # | Test | Assertion |
-|---|------|-----------|
-| E1 | Answer at 29.9 seconds | Call connects; no timeout; no missed call |
-| E2 | Caller disconnects during ringing | Server backstop fires; callee sees missed call |
-| E3 | Multiple rapid call/timeout cycles | Each creates independent missed call records |
-| E4 | Timeout with push notification enabled | Push notification sent with "Missed call from {name}" |
-
-### Negative Tests (3 tests)
-
-| # | Test | Assertion |
-|---|------|-----------|
-| N1 | Cancel non-existent call | POST cancel with bad call_id; 404 |
-| N2 | Timeout already-answered call | Server timeout on answered call; no-op; call continues |
-| N3 | Invalid timeout configuration | Set CALL_TIMEOUT_SECONDS=0; 422 on config update |
+- [ ] Backend endpoint/service changes registered in `app/main.py`
+- [ ] Frontend hooks and components created/modified
+- [ ] Settings and feature flags configured
+- [ ] DDB tables added if needed (`scripts/local-ddb-init.py`)
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing call endpoints
 
 ---
 

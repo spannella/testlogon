@@ -1114,3 +1114,90 @@ test.beforeAll(async ({ browser }) => {
 | `app/models.py` in files to modify | All messaging models are in `app/routers/messaging.py`, not `app/models.py` |
 | `MessageOut.preview` does not exist | It already exists at line 2342 as `Optional[Dict[str, Any]]` |
 | `SendTextMessageIn` needs `preview` field added | Already has `preview: Optional[LinkPreviewIn]` at line 1851 |
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_message_formatting.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_send_markdown_message` | POST format=markdown; 201; format=markdown in response |
+| 2 | `test_default_format_plain` | POST without format; format=plain |
+| 3 | `test_mentions_non_participant_rejected` | mentioned_user_ids with non-participant; 400 |
+| 4 | `test_mentions_empty_list` | mentioned_user_ids=[]; 201 |
+| 5 | `test_mention_creates_notification` | Mention Bob; notification created |
+| 6 | `test_link_preview_valid_url` | POST /link-preview known URL; 200; title present |
+| 7 | `test_link_preview_invalid_scheme` | POST ftp:// URL; 422 |
+| 8 | `test_mentions_over_50_rejected` | >50 mentions; 422 |
+| 9 | `test_self_mention_no_notification` | Mention self; no notification |
+
+Moto-mocked DynamoDB. Existing `_fetch_link_preview` reused.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Mention creates notification | messaging router + notifications table |
+| 2 | Link preview auto-fetched on send | messaging router + _fetch_link_preview |
+| 3 | Format field persisted and returned | messaging router + Messages table |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/message-formatting.spec.ts` -- 21 tests, sections 329-333
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; CSRF for POST.
+
+| Section | Tests | Key Assertions |
+|---------|-------|----------------|
+| 329 | 5 | Markdown API: markdown format (201), plain default, mentions, non-participant (400), code block |
+| 330 | 4 | Link preview: known domain (200), unknown domain, text preserved, non-http (422) |
+| 331 | 6 | Rendering: bold strong, italic em, strike del, code pre, URL auto-linked, preview card |
+| 332 | 3 | Toggle & mention: format toggle, live preview, @ autocomplete |
+| 333 | 3 | Edge cases: XSS escaped, nested formatting, empty mentions |
+
+**Negative tests**: 400 non-participant mention, 422 non-http URL, 422 >50 mentions.
+
+### Test Data Requirements
+
+- DDB seeds: Messages, Conversations, Participants, Notifications
+- Test users: Alice, Bob
+
+### CI/Pipeline
+
+- Feature flags: `MSG012_MARKDOWN_ENABLED`, `MSG012_LINK_PREVIEW_ENABLED`, `MSG012_MENTIONS_ENABLED`
+- Serial execution, retry-safe with unique text prefixes
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | Uses existing message + link preview infrastructure |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| FEED-008 | Component | MarkdownRenderer shared with enhanced post composer |
+
+### Merge Strategy
+
+**Independent** -- No prerequisites. Feature flags gate each sub-feature.
+
+### Merge Checklist
+
+- [ ] `format` and `mentioned_user_ids` on SendTextMessageIn and MessageOut
+- [ ] Mention validation in send_text_message
+- [ ] Link preview endpoint added
+- [ ] MarkdownRenderer.tsx, MentionAutocomplete.tsx, LinkPreviewCard.tsx created
+- [ ] ComposeBar integrates toggle, preview, autocomplete
+- [ ] E2E pass: `npx playwright test e2e/message-formatting.spec.ts`

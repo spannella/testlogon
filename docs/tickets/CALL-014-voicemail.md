@@ -2499,3 +2499,84 @@ This ensures old clients do not crash when encountering voicemail messages — t
 | 58 | `frontend/e2e/voicemail.spec.ts` | 1-733 | E2E tests (17 tests) |
 | 59 | `tests/test_voicemail.py` | — | Does NOT exist (unit tests not implemented) |
 | 60 | `frontend/src/hooks/useMessagingStream.ts` | — | No voicemail event handling (not implemented) |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_voicemail.py`
+
+| # | Test Function | Description | Mocks |
+|---|--------------|-------------|-------|
+| 1 | `test_presign_voicemail_eligible_states` | Presign succeeds for declined/missed/busy call states | moto DDB |
+| 2 | `test_presign_voicemail_ineligible_states` | Presign rejects ended/canceled/failed with 400 | moto DDB |
+| 3 | `test_presign_voicemail_not_caller` | 403 when non-caller tries to presign | moto DDB |
+| 4 | `test_presign_voicemail_paid_call` | 400 for paid calls (CALL-011) | moto DDB |
+| 5 | `test_presign_voicemail_duplicate` | 409 when call already has voicemail_message_id | moto DDB |
+| 6 | `test_create_voicemail_writes_message` | DDB message item with kind=voicemail and all fields | moto DDB |
+| 7 | `test_create_voicemail_updates_call_session` | voicemail_message_id set on CallSessionRecord | moto DDB |
+| 8 | `test_create_voicemail_sends_alert` | write_alert called for callee with voicemail_received event | moto DDB |
+| 9 | `test_voicemail_projection_audio` | _message_out_from_item returns audio voicemail dict | moto DDB |
+| 10 | `test_voicemail_projection_video` | _message_out_from_item returns video_url for video mode | moto DDB |
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Full voicemail flow: decline call, presign, upload, create voicemail | call_lifecycle, call_sessions, messaging, alerts |
+| 2 | Group call voicemail: alert sent to all non-caller participants | call_lifecycle, messaging, alerts |
+| 3 | Voicemail signaling: call.voicemail_start/complete allowed in terminal states | call_signaling, broadcast_sse |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/voicemail.spec.ts`
+
+Tests use `injectAuth(page, identity)` for cookie-based auth and include CSRF headers (`x-csrf-token`) on all POST/PUT/DELETE requests. Negative tests cover 401 (unauthenticated), 403 (wrong role/user), 404 (not found), 409 (conflict), and 422 (validation) responses. Edge cases include duplicate operations (idempotency), concurrent access, and feature-flag-disabled behavior.
+
+**Total E2E tests**: 17
+
+### Test Data Requirements
+
+- DDB seeds: required tables created via `scripts/local-ddb-init.py`
+- Test users: Alice, Bob, Root, Charlie via `e2e_session_setup.py` / `e2e_admin_session_setup.py`
+- Feature flag: `VOICEMAIL_ENABLED` in `.env.local`
+
+### CI/Pipeline
+
+- Feature flag: `VOICEMAIL_ENABLED` must be enabled for tests to run
+- Serial execution: run with `--workers 1` to avoid shared state conflicts
+- Retry safety: tests use unique timestamps/UUIDs per run; safe to retry on failure
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Status | What It Provides |
+|--------|--------|-----------------|
+| CALL-001 | Implemented | Signaling endpoint infrastructure |
+| CALL-007 | Implemented | Ringing timeout triggering missed state |
+| MSG-002 | Implemented | Voice message recording/playback pipeline |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| (none currently) | -- |
+
+### Merge Strategy
+
+**Independent** -- Changes are additive (new service files, new router, new frontend pages). Shared infrastructure files (`main.py`, `settings.py`, `tables.py`, `local-ddb-init.py`) receive only additive modifications.
+
+### Merge Checklist
+
+- [ ] ConversationView.tsx passes `voicemailEligible` and `conversationId` to CallSessionOverlay
+- [ ] useMessagingStream.ts handles voicemail SSE events
+- [ ] `tests/test_voicemail.py` created and passing
+- [ ] All 17 E2E tests in `voicemail.spec.ts` pass
+- [ ] Feature flag `VOICEMAIL_ENABLED` added to `.env.local.example`
+- [ ] All E2E tests pass
+- [ ] No regressions in existing test suite

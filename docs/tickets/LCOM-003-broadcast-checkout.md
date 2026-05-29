@@ -1679,3 +1679,74 @@ Purchase Completed (order created)
 | `app/services/broadcast_orders.py` | -- | **Does not exist yet** -- new implementation required |
 | `frontend/src/pages/broadcast/QuickBuyDialog.tsx` | -- | **Does not exist yet** -- new component required |
 | `frontend/src/pages/broadcast/PurchaseCounter.tsx` | -- | **Does not exist yet** -- new component required |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_broadcast_orders.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_create_order_success` | Create order success |
+| 2 | `test_create_order_with_quantity` | Create order with quantity |
+| 3 | `test_writes_billing_ledger` | Writes billing ledger |
+| 4 | `test_idempotency_returns_same` | Idempotency returns same |
+| 5 | `test_invalid_pm_raises_400` | Invalid pm raises 400 |
+| 6 | `test_purchase_counter_increments` | Purchase counter increments |
+| 7 | `test_list_session_orders` | List session orders |
+| 8 | `test_list_buyer_orders` | List buyer orders |
+| 9 | `test_order_out_coerces_decimals` | Order out coerces decimals |
+| 10 | `test_counter_reset` | Counter reset |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/broadcast-quick-buy.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~24 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `BROADCAST_QUICK_BUY_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| LCOM-001 | Broadcast Product Shelf for price lookup | Hard |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| LCOM-004 | Exclusive Pricing modifies price resolution in quick-buy |
+
+### Merge Strategy
+**Sequential -- requires LCOM-001 merged first. Quick-buy reads shelf item price_cents. Feature-flag-gated behind BROADCAST_QUICK_BUY_ENABLED.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: BROADCAST_QUICK_BUY_ENABLED=true
+- [ ] Service file created/modified: `app/services/broadcast_orders.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/broadcast-quick-buy.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_broadcast_orders.py`

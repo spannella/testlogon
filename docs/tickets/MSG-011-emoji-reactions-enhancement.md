@@ -984,3 +984,89 @@ test.beforeAll(async ({ browser }) => {
 | `custom_emojis` table referenced as existing | Does not exist; requires MSG-007 |
 | `resolveCustomShortcodes` API referenced | Does not exist; requires MSG-007 |
 | Reaction endpoint returns `{ok, conversation_id, message_id, emoji, action}` | Actually returns only `{"ok": true}` (line 10150) |
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_emoji_reactions_enhanced.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_reaction_limit_allows_20` | Add 20 different emojis; all succeed |
+| 2 | `test_reaction_limit_rejects_21st` | 21st unique emoji; 400 |
+| 3 | `test_same_emoji_second_user` | Second user adds existing emoji; 200 (not new unique) |
+| 4 | `test_reaction_details_user_info` | GET details; response has user_sub + display_name |
+| 5 | `test_reaction_details_empty` | No reactions; `{ reactions: {} }` |
+| 6 | `test_custom_emoji_stored` | Add `custom:test_emoji`; stored in reactions |
+| 7 | `test_remove_nonexistent_idempotent` | Remove emoji not present; 200 |
+
+Moto-mocked DynamoDB. Messages table seeded with test message items.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Reaction update triggers SSE broadcast | messaging router + SSE fanout |
+| 2 | Details batch-fetches user profiles | messaging router + users table |
+| 3 | Limit enforced across concurrent users | messaging router + DDB conditional update |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/emoji-reactions-enhanced.spec.ts` -- 16 tests, sections 326-329
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; CSRF header for POST.
+
+| Section | Tests | Key Assertions |
+|---------|-------|----------------|
+| 326 | 5 | Limit & details API: add (200), details with user info, 20 allowed, 21st rejected (400), second user (200) |
+| 327 | 4 | Quick-react: double-click adds heart, removes on second, count badge, animation class |
+| 328 | 4 | Detail popover: opens on click, emoji tabs, user names, closes on dismiss |
+| 329 | 3 | Custom emoji: API react (200), appears in reactions, in details |
+
+**Negative tests**: 400 for 21st reaction, 403 non-participant, 404 non-existent message, 422 empty emoji.
+
+### Test Data Requirements
+
+- DDB seeds: Messages, Conversations, Participants, Users
+- Test users: Alice, Bob
+- Test message created in `beforeAll`
+
+### CI/Pipeline
+
+- Feature flags: `MSG011_REACTION_LIMIT=true`, `MSG011_REACTION_DETAILS=false` (enable in test env)
+- Serial execution, retry-safe (idempotent reaction operations)
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| MSG-006 | Required | EmojiPicker component used in enhanced reaction picker |
+| MSG-007 | Optional | Custom emoji system for `custom:shortcode` reactions; degrades gracefully |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | No downstream dependents |
+
+### Merge Strategy
+
+**Sequential** -- Requires MSG-006 merged first. MSG-007 optional.
+
+### Merge Checklist
+
+- [ ] MSG-006 merged and EmojiPicker available
+- [ ] Reaction limit validation added to `react_to_message` (messaging.py:10087)
+- [ ] `/reactions/details` GET endpoint added
+- [ ] ReactionDetailPopover.tsx created
+- [ ] Double-tap quick-react in MessageBubble
+- [ ] E2E pass: `npx playwright test e2e/emoji-reactions-enhanced.spec.ts`

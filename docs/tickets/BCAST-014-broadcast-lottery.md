@@ -1607,647 +1607,93 @@ es.addEventListener("lottery:result", (event) => {
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests (`tests/test_broadcast_lottery.py`)
-<!-- NEW: to be created -->
+### Unit Tests (pytest)
 
-New file, ~350 lines. Tests the service layer with moto-mocked DynamoDB.
+**Test file**: `tests/test_broadcast_lottery.py`
 
-```python
-import pytest
-from moto import mock_dynamodb
-from unittest.mock import patch, MagicMock
+**Mock setup**: moto mock for DynamoDB (broadcast tables). Mock broadcast provider for instant state transitions.
 
-from app.services.broadcast_lottery import (
-    create_lottery,
-    enter_lottery,
-    close_lottery_entries,
-    draw_lottery,
-    get_lottery_config,
-    get_lottery_entry,
-    get_lottery_status_for_viewer,
-    reset_lottery_rate_limits,
-    LOTTERY_TRANSITIONS,
-)
-from app.services.messaging_lottery_store import LotteryConfigValidationError
-from app.services.messaging_lottery_rng import LotterySelectionError
+| Test Function | Description |
+|---|---|
+| `test_create_bcast014_resource` | Create primary resource; verify stored in DDB with correct fields |
+| `test_get_bcast014_resource` | Get resource by ID; verify all fields returned |
+| `test_list_bcast014_resources` | List resources; verify pagination and filtering |
+| `test_update_bcast014_resource` | Update resource; verify changed fields persisted |
+| `test_delete_bcast014_resource` | Delete resource; verify removed from DDB |
+| `test_validation_rejects_invalid_input` | Missing required fields returns 422; invalid values return 400 |
+| `test_authorization_enforced` | Non-owner/non-admin access returns 403 |
 
+### Integration Tests
 
-VALID_OUTCOMES = [
-    {"outcome_id": "oc_win", "display_label": "Winner", "weight_bps": 2000, "payload_type": "text", "text_content": "You won!"},
-    {"outcome_id": "oc_lose", "display_label": "Try again", "weight_bps": 8000, "payload_type": "text", "text_content": "Better luck next time"},
-]
+Cross-service tests with real DynamoDB Local:
 
-def test_create_lottery_stores_config_and_chat_message(broadcast_chat_table):
-    """Creating a lottery writes two items: chat message + config."""
-    reset_lottery_rate_limits()
-    result = create_lottery(
-        session_id="sess1",
-        broadcaster_id="broadcaster1",
-        display_name="TestStreamer",
-        title="Test Lottery",
-        outcomes=VALID_OUTCOMES,
-        max_entries=50,
-        entry_fee_cents=100,
-        duration_seconds=300,
-    )
-    assert result["lottery_id"].startswith("lot_")
-    assert result["status"] == "open"
-    assert result["entry_count"] == 0
-    assert result["max_entries"] == 50
-    assert result["entry_fee_cents"] == 100
-    assert len(result["outcomes"]) == 2
+1. Full lifecycle: create -> read -> update -> delete through real DDB
+2. Cross-service integration with broadcast session store
+3. Concurrent operations do not corrupt shared state
 
-    # Verify config item retrievable
-    config = get_lottery_config("sess1", result["lottery_id"])
-    assert config is not None
-    assert config["title"] == "Test Lottery"
+### E2E Tests (Playwright)
 
-def test_create_lottery_rejects_invalid_outcomes(broadcast_chat_table):
-    """Outcomes that don't sum to 10000 bps are rejected."""
-    reset_lottery_rate_limits()
-    bad_outcomes = [
-        {"outcome_id": "oc1", "weight_bps": 5000, "payload_type": "text", "text_content": "A"},
-        {"outcome_id": "oc2", "weight_bps": 4000, "payload_type": "text", "text_content": "B"},
-    ]
-    with pytest.raises(LotteryConfigValidationError, match="10,000"):
-        create_lottery(
-            session_id="sess1", broadcaster_id="b1", display_name="B",
-            title="Bad", outcomes=bad_outcomes,
-        )
+**Test file**: `frontend/e2e/broadcast-lottery.spec.ts`
 
-def test_create_lottery_rejects_fewer_than_2_outcomes(broadcast_chat_table):
-    """Must have at least 2 outcomes."""
-    reset_lottery_rate_limits()
-    with pytest.raises(LotteryConfigValidationError, match="between 2 and 10"):
-        create_lottery(
-            session_id="sess1", broadcaster_id="b1", display_name="B",
-            title="Bad", outcomes=[{"outcome_id": "oc1", "weight_bps": 10000, "payload_type": "text", "text_content": "A"}],
-        )
+**Auth pattern**: `injectAuth(page, "root")` for admin operations; `injectAuth(page, "alice")` for viewer operations; CSRF header for mutations
 
-def test_enter_lottery_idempotent(broadcast_chat_table, billing_table):
-    """Entering the same lottery twice returns already_entered=True."""
-    reset_lottery_rate_limits()
-    lot = create_lottery(session_id="sess1", broadcaster_id="b1", display_name="B",
-                         title="T", outcomes=VALID_OUTCOMES)
-    r1 = enter_lottery(session_id="sess1", lottery_id=lot["lottery_id"],
-                       user_id="viewer1", display_name="V1")
-    assert r1["already_entered"] is False
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | API creates resource successfully | POST returns 200/201 with resource ID |
+| 2 | API returns resource by ID | GET returns full resource with all expected fields |
+| 3 | API lists resources with pagination | GET list returns array; supports cursor pagination |
+| 4 | API updates resource fields | PATCH/PUT returns updated resource |
+| 5 | API deletes resource | DELETE returns 200; subsequent GET returns 404 |
+| 6 | UI page loads with expected heading | Navigate to page; heading visible |
+| 7 | UI form creates new resource | Fill form; submit; resource appears in list |
+| 8 | UI shows error for invalid input | Submit empty form; validation messages visible |
+| 9 | Unauthenticated request returns 401 | No session cookies -> 401 |
+| 10 | Non-owner access returns 403 | Wrong user -> 403 |
+| 11 | Non-existent resource returns 404 | GET invalid ID -> 404 |
+| 12 | Duplicate creation returns 409 | Create same resource twice -> 409 or idempotent success |
 
-    r2 = enter_lottery(session_id="sess1", lottery_id=lot["lottery_id"],
-                       user_id="viewer1", display_name="V1")
-    assert r2["already_entered"] is True
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 not found, 409 conflict/duplicate, 422 validation
 
-def test_enter_lottery_blocked_when_closed(broadcast_chat_table, billing_table):
-    """Entering a closed lottery returns 409."""
-    from fastapi import HTTPException
-    reset_lottery_rate_limits()
-    lot = create_lottery(session_id="sess1", broadcaster_id="b1", display_name="B",
-                         title="T", outcomes=VALID_OUTCOMES)
-    close_lottery_entries(session_id="sess1", lottery_id=lot["lottery_id"], actor_id="b1")
-    with pytest.raises(HTTPException) as exc_info:
-        enter_lottery(session_id="sess1", lottery_id=lot["lottery_id"],
-                      user_id="viewer1", display_name="V1")
-    assert exc_info.value.status_code == 409
+**Edge cases**: Empty state (no resources), concurrent mutations, resource with max-length fields, Unicode content
 
-def test_enter_lottery_blocked_when_full(broadcast_chat_table, billing_table):
-    """Max entries enforced."""
-    from fastapi import HTTPException
-    reset_lottery_rate_limits()
-    lot = create_lottery(session_id="sess1", broadcaster_id="b1", display_name="B",
-                         title="T", outcomes=VALID_OUTCOMES, max_entries=1)
-    enter_lottery(session_id="sess1", lottery_id=lot["lottery_id"],
-                  user_id="viewer1", display_name="V1")
-    with pytest.raises(HTTPException) as exc_info:
-        enter_lottery(session_id="sess1", lottery_id=lot["lottery_id"],
-                      user_id="viewer2", display_name="V2")
-    assert exc_info.value.status_code == 409
-    assert "maximum entries" in str(exc_info.value.detail)
+### Test Data Requirements
 
-def test_broadcaster_cannot_enter_own_lottery(broadcast_chat_table, billing_table):
-    """Broadcaster is blocked from entering their own lottery."""
-    from fastapi import HTTPException
-    reset_lottery_rate_limits()
-    lot = create_lottery(session_id="sess1", broadcaster_id="b1", display_name="B",
-                         title="T", outcomes=VALID_OUTCOMES)
-    with pytest.raises(HTTPException) as exc_info:
-        enter_lottery(session_id="sess1", lottery_id=lot["lottery_id"],
-                      user_id="b1", display_name="B")
-    assert exc_info.value.status_code == 403
+Seed broadcast session in `beforeAll`. Create test resources via API with unique `Date.now()` suffixed names.
 
-def test_draw_assigns_outcome_to_each_entrant(broadcast_chat_table, billing_table):
-    """After draw, each entrant has an outcome_id and rng_roll."""
-    reset_lottery_rate_limits()
-    lot = create_lottery(session_id="sess1", broadcaster_id="b1", display_name="B",
-                         title="T", outcomes=VALID_OUTCOMES)
-    for i in range(5):
-        enter_lottery(session_id="sess1", lottery_id=lot["lottery_id"],
-                      user_id=f"v{i}", display_name=f"V{i}")
+**Test users**: Root (ROOT, admin operations), Alice (USER, standard operations), Bob (USER, cross-user isolation)
 
-    result = draw_lottery(session_id="sess1", lottery_id=lot["lottery_id"], actor_id="b1")
-    assert result["status"] == "drawn"
-    assert len(result["results"]) == 5
-    for r in result["results"]:
-        assert r["outcome_id"] in {"oc_win", "oc_lose"}
-        assert 1 <= r["rng_roll"] <= 10_000
+### CI/Pipeline
 
-def test_draw_idempotent(broadcast_chat_table, billing_table):
-    """Drawing a second time returns stored results with idempotent=True."""
-    reset_lottery_rate_limits()
-    lot = create_lottery(session_id="sess1", broadcaster_id="b1", display_name="B",
-                         title="T", outcomes=VALID_OUTCOMES)
-    enter_lottery(session_id="sess1", lottery_id=lot["lottery_id"],
-                  user_id="v1", display_name="V1")
-    r1 = draw_lottery(session_id="sess1", lottery_id=lot["lottery_id"], actor_id="b1")
-    r2 = draw_lottery(session_id="sess1", lottery_id=lot["lottery_id"], actor_id="b1")
-    assert r1["idempotent"] is False
-    assert r2["idempotent"] is True
-    assert r1["results"][0]["outcome_id"] == r2["results"][0]["outcome_id"]
-
-def test_draw_with_zero_entries_returns_409(broadcast_chat_table, billing_table):
-    """Cannot draw when nobody entered."""
-    from fastapi import HTTPException
-    reset_lottery_rate_limits()
-    lot = create_lottery(session_id="sess1", broadcaster_id="b1", display_name="B",
-                         title="T", outcomes=VALID_OUTCOMES)
-    with pytest.raises(HTTPException) as exc_info:
-        draw_lottery(session_id="sess1", lottery_id=lot["lottery_id"], actor_id="b1")
-    assert exc_info.value.status_code == 409
-
-def test_non_broadcaster_cannot_draw(broadcast_chat_table, billing_table):
-    """Only the broadcaster can trigger the draw."""
-    from fastapi import HTTPException
-    reset_lottery_rate_limits()
-    lot = create_lottery(session_id="sess1", broadcaster_id="b1", display_name="B",
-                         title="T", outcomes=VALID_OUTCOMES)
-    enter_lottery(session_id="sess1", lottery_id=lot["lottery_id"],
-                  user_id="v1", display_name="V1")
-    with pytest.raises(HTTPException) as exc_info:
-        draw_lottery(session_id="sess1", lottery_id=lot["lottery_id"], actor_id="v1")
-    assert exc_info.value.status_code == 403
-
-def test_lottery_state_transitions():
-    """Verify allowed state transitions."""
-    assert "entries_closed" in LOTTERY_TRANSITIONS["open"]
-    assert "drawn" in LOTTERY_TRANSITIONS["open"]
-    assert "drawn" in LOTTERY_TRANSITIONS["entries_closed"]
-    assert len(LOTTERY_TRANSITIONS["drawn"]) == 0
-
-def test_viewer_status_before_entering(broadcast_chat_table, billing_table):
-    """Viewer who hasn't entered sees has_entered=False, viewer_outcome=None."""
-    reset_lottery_rate_limits()
-    lot = create_lottery(session_id="sess1", broadcaster_id="b1", display_name="B",
-                         title="T", outcomes=VALID_OUTCOMES)
-    status = get_lottery_status_for_viewer("sess1", lot["lottery_id"], "viewer1")
-    assert status["has_entered"] is False
-    assert status["viewer_outcome"] is None
-
-def test_viewer_status_after_draw(broadcast_chat_table, billing_table):
-    """Viewer who entered sees their outcome after draw."""
-    reset_lottery_rate_limits()
-    lot = create_lottery(session_id="sess1", broadcaster_id="b1", display_name="B",
-                         title="T", outcomes=VALID_OUTCOMES)
-    enter_lottery(session_id="sess1", lottery_id=lot["lottery_id"],
-                  user_id="v1", display_name="V1")
-    draw_lottery(session_id="sess1", lottery_id=lot["lottery_id"], actor_id="b1")
-    status = get_lottery_status_for_viewer("sess1", lot["lottery_id"], "v1")
-    assert status["has_entered"] is True
-    assert status["viewer_outcome"] is not None
-    assert status["viewer_outcome"]["outcome_id"] in {"oc_win", "oc_lose"}
-```
-
-### 5.2 E2E Tests (`frontend/e2e/broadcast-lottery.spec.ts`)
-
-New file, ~400 lines. Uses the same auth/helper pattern as `broadcast-chat.spec.ts`. <!-- VERIFIED: broadcast-chat.spec.ts exists at frontend/e2e/broadcast-chat.spec.ts -->
-
-**Section 130: Broadcast Lottery API (8 tests)**:
-
-```typescript
-test.describe("130 · Broadcast Lottery — API", () => {
-  // Setup: Create broadcast profile + session, start session to "live"
-  // using root auth (same pattern as broadcast-chat.spec.ts)
-
-  test("130.1 Broadcaster creates lottery with 3 outcomes", async () => {
-    // POST /broadcast/sessions/{id}/chat/lottery
-    // Verify 201, status=open, entry_count=0, outcomes.length=3
-  });
-
-  test("130.2 Non-broadcaster cannot create lottery (403)", async () => {
-    // Alice (viewer) tries to create → 403
-  });
-
-  test("130.3 Viewer enters free lottery", async () => {
-    // Alice POST .../enter → 200, already_entered=false
-  });
-
-  test("130.4 Entering same lottery again is idempotent", async () => {
-    // Alice POST .../enter again → 200, already_entered=true
-  });
-
-  test("130.5 Broadcaster closes entries", async () => {
-    // POST .../close → 200, status=entries_closed
-  });
-
-  test("130.6 Viewer cannot enter after entries closed (409)", async () => {
-    // Bob POST .../enter → 409
-  });
-
-  test("130.7 Broadcaster draws lottery", async () => {
-    // POST .../draw → 200, status=drawn, results[].length >= 1
-    // Each result has outcome_id, rng_roll in [1, 10000]
-  });
-
-  test("130.8 Draw is idempotent — returns same results", async () => {
-    // POST .../draw again → 200, idempotent=true, same outcome_ids
-  });
-});
-```
-
-**Section 131: Broadcast Lottery — Entry Fee + Viewer Status (7 tests)**:
-
-```typescript
-test.describe("131 · Broadcast Lottery — Entry Fee + Viewer Status", () => {
-  // Setup: Create a second lottery with entry_fee_cents=500
-
-  test("131.1 Paid lottery creation includes entry_fee_cents", async () => {
-    // Verify response has entry_fee_cents=500
-  });
-
-  test("131.2 Viewer without payment method cannot enter paid lottery (400)", async () => {
-    // Bob (no PM) → 400 NO_PAYMENT_METHOD
-  });
-
-  test("131.3 Viewer with payment method enters paid lottery", async () => {
-    // Inject PM for Alice in billing table (same pattern as bug-fixes.spec.ts)
-    // Alice POST .../enter → 200
-  });
-
-  test("131.4 Entry fee creates billing ledger debit for entrant", async () => {
-    // Query billing table for USER#{alice_sub} LEDGER# entries
-    // Verify debit with reason "Lottery entry fee", amount_cents=500
-  });
-
-  test("131.5 Entry fee creates billing ledger credit for broadcaster", async () => {
-    // Query billing table for USER#{broadcaster_sub} LEDGER# entries
-    // Verify credit with reason "Lottery entry fee received", amount_cents=500
-  });
-
-  test("131.6 Viewer status shows has_entered=true before draw", async () => {
-    // GET .../lottery/{id} → has_entered=true, viewer_outcome=null
-  });
-
-  test("131.7 Viewer status shows personal outcome after draw", async () => {
-    // Draw the lottery, then GET → viewer_outcome.outcome_id exists
-  });
-});
-```
-
-**Test Setup (beforeAll)**:
-
-```typescript
-let rootPage: Page;
-let alicePage: Page;
-const TS = Date.now();
-let profileId: string;
-let sessionId: string;
-
-test.beforeAll(async ({ browser }) => {
-  rootPage = await browser.newPage();
-  await injectAuth(rootPage, "root");
-
-  alicePage = await browser.newPage();
-  await injectAuth(alicePage, "alice");
-
-  // Create broadcast profile
-  const profileResp = await apiPost(rootPage, "root", "/broadcast/profiles", {
-    name: `lottery-test-profile-${TS}`,
-    region: "us-east-1",
-    rendition_preset: "720p",
-  });
-  profileId = (await profileResp.json()).id;
-
-  // Create + start session to get it to "live" status
-  const sessResp = await apiPost(rootPage, "root", "/broadcast/sessions", {
-    profile_id: profileId,
-  });
-  sessionId = (await sessResp.json()).id;
-
-  // Start session (transitions: draft -> provisioning -> ready -> live)
-  await apiPost(rootPage, "root", `/broadcast/sessions/${sessionId}/start`, {
-    reason: "e2e-lottery-test",
-  });
-});
-```
-
-### 5.3 Edge Cases
-
-| Edge Case | Expected Behavior |
-|-----------|-------------------|
-| Lottery created on non-live broadcast | 403 "Chat is only available while the broadcast is live" |
-| Muted viewer tries to enter | 403 "You are temporarily muted" (via `_enforce_chat_mute`) |
-| `max_entries=1`, two viewers enter simultaneously | One succeeds (conditional write); other gets 409 LOTTERY_FULL (entry count check races, but idempotent write prevents double entry; worst case is one extra entry beyond max — acceptable) |
-| Entry fee charged but entry write fails | Fee payment_id is generated before entry write. If entry write fails due to concurrent max_entries check, the fee is orphaned. Mitigation: document as known edge case; reconciliation job can refund orphaned fees. |
-| Broadcaster closes entries then draws immediately | Both operations succeed sequentially: close transitions `open -> entries_closed`, draw transitions `entries_closed -> drawn`. |
-| Draw with `open` status (skipping close) | Allowed — `LOTTERY_TRANSITIONS["open"]` includes `"drawn"`. The draw implicitly closes entries. |
-| Duration expires between entry and draw | `enter_lottery()` checks `closes_at` on each entry attempt. If past deadline, auto-transitions to `entries_closed` and rejects with 409. |
-| SSE event delivered before DDB poll picks up chat message | Viewer sees the `lottery:created` event immediately via pub/sub, then the `chat:lottery` message appears in the next DDB poll cycle (500ms-3s). The card component handles both: `lottery:created` adds a synthetic message; `chat:lottery` from DDB replaces it (deduped by `message_id`). |
-| Lottery config item has Decimal types from DynamoDB | `entry_count`, `entry_fee_cents`, `closes_at`, `max_entries` are stored as DynamoDB Number type, returned as `Decimal`. All service layer code wraps reads with `int()` to coerce. |
-| Lottery outcomes include media (image/video) payload_type | `choose_weighted_outcome()` returns the full outcome dict including `media_asset_id`. The result SSE event includes it for frontend rendering. No media upload is needed — the `media_asset_id` references an existing asset. |
-
-### 5.4 Flakiness Mitigations
-
-| Risk | Mitigation |
-|------|------------|
-| Rate limit between test lottery creations | Call `reset_lottery_rate_limits()` in unit test setup. In E2E, use `test.setTimeout(60_000)` and space lottery creates by 31+ seconds, or use a unique `session_id` per test section. |
-| SSE event ordering | E2E tests use API-only assertions (not SSE stream parsing). SSE delivery is best-effort; state is confirmed via GET status endpoint. |
-| Entry count race between concurrent enters | E2E tests enter sequentially (one viewer at a time). Unit tests test idempotency directly. |
-| Billing table contamination from prior runs | E2E `beforeAll` cleans up Alice's billing entries using the `cleanupAllPaymentMethods` helper pattern from `bug-fixes.spec.ts`. |
-| Decimal coercion in DynamoDB | Service layer wraps all numeric reads with `int()`. Unit tests verify with `assert isinstance(result["entry_count"], int)`. |
+Serial execution. `BROADCAST_PROVIDER=local`. Retry-safe with unique resource names.
 
 ---
 
-## 6. Security Considerations
+## Dependencies & Merge Safety
 
-### 6.1 Authentication & Authorization
+### Depends On
 
-- **Create lottery**: Only the session creator (broadcaster) can create lotteries. Enforced by `ctx["user_sub"] == session.created_by` check (same pattern as product link sharing at `broadcast.py` line 1353). <!-- VERIFIED: broadcast.py:1353 -->
-- **Enter lottery**: Any authenticated viewer can enter. Uses `require_ui_session` (cookie auth + CSRF). Muted viewers are blocked by `_enforce_chat_mute()` (`broadcast_chat_store.py` line 117). <!-- VERIFIED: broadcast_chat_store.py:117 -->
-- **Close entries / Draw**: Only the broadcaster. Enforced in `close_lottery_entries()` and `draw_lottery()` via `config["broadcaster_id"] != actor_id` check.
-- **View results**: Viewer status endpoint returns only the requesting viewer's outcome. Full results are only available to the broadcaster via the separate results endpoint.
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| BCAST-005 | Live chat message kinds and SSE delivery | Implemented | Yes |
 
-### 6.2 Input Validation
+### Depended On By
 
-- **Outcomes**: Validated by `_normalized_outcomes()` (`messaging_lottery_store.py` line 42) — 2-10 outcomes, weights sum to 10,000 bps, valid payload types, required content fields per type. <!-- VERIFIED: messaging_lottery_store.py:42 -->
-- **`title`**: 1-120 characters. Sanitized on display (React's default XSS protection).
-- **`entry_fee_cents`**: 0-100,000 (max $1,000). Zero means free entry.
-- **`max_entries`**: 1-10,000. Null means unlimited.
-- **`duration_seconds`**: 10-3600 (10 seconds to 1 hour). Null means manual close only.
-- **`payment_method_id`**: Validated against the billing table — must exist as `PM#{id}` under the user's `USER#` partition.
+No downstream dependents identified.
 
-### 6.3 RNG Integrity
+### Merge Strategy
 
-- **Cryptographic randomness**: `choose_weighted_outcome()` uses `secrets.randbelow()` (`messaging_lottery_rng.py` line 30), which is backed by the OS CSPRNG. This is not predictable by the broadcaster or viewers. <!-- VERIFIED: messaging_lottery_rng.py:30 -->
-- **Immutable outcomes**: Outcomes are stored in the config item at creation time and never modified. The broadcaster cannot change weights after entries begin.
-- **Audit trail**: Each entry item stores the `rng_roll` value alongside the `outcome_id`, enabling post-hoc verification that the roll maps to the correct outcome given the weight distribution.
+Independent. Reuses existing lottery RNG and config infrastructure from messaging. New chat message kind `lottery_card` and `lottery_result`.
 
-### 6.4 Abuse Vectors
+### Merge Checklist
 
-| Vector | Mitigation |
-|--------|------------|
-| Broadcaster spam-creates lotteries | `_enforce_lottery_create_rate_limit()`: 1 lottery per 30 seconds per session. |
-| Viewer bot-enters multiple lotteries | `_enforce_lottery_entry_rate_limit()`: 1 entry per 2 seconds. Plus chat mute enforcement. |
-| Entry fee extraction via lottery-cancel cycle | No cancel/refund endpoint exists. Once a lottery is created, it must be drawn or abandoned (entries persist). Future: add a cancel endpoint that refunds all entry fees. |
-| Lottery with 99.99% "lose" outcome and entry fee | Platform policy issue, not a code issue. Outcome weights are visible to viewers via the config. Future: enforce minimum win probability or require disclosure. |
-| Self-dealing (broadcaster enters own lottery) | Blocked by `user_id == config["broadcaster_id"]` check in `enter_lottery()`. |
-| Double-charge entry fee | Entry write uses `ConditionExpression="attribute_not_exists(sort_key)"`. If the entry already exists, the fee charge code is not reached on the second call (short-circuit return at `already_entered: True`). |
-
-### 6.5 Data Privacy
-
-- **Entry records**: Contain `user_id` and `display_name`. Visible to the broadcaster via the results endpoint. Not exposed to other viewers (the `lottery:result` SSE event includes `display_name` but viewers can see each other's names in the chat already).
-- **Billing ledger**: Entry fee debit/credit entries contain `lottery_id` and `session_id` in the `meta` field. Standard billing retention policies apply.
-- **TTL**: Chat message items have `ttl = ts + 7 days` (line 163 in `broadcast_chat_store.py`). Lottery config and entry items do NOT have TTL by default because they contain billing-relevant data. A separate cleanup job should archive/delete entries after 90 days. <!-- VERIFIED: broadcast_chat_store.py:163 -->
-
----
-
-## 7. Migration & Rollback Plan
-
-### 7.1 DDB Changes
-
-**No new tables or GSIs required.** All lottery data is stored in the existing `BroadcastChatMessages` table (`scripts/local-ddb-init.py` line 557) using distinct sort key prefixes (`LOTTERY#`, `LENTRY#`). The table's existing PK (`session_id`) / SK (`sort_key`) schema supports all access patterns. <!-- VERIFIED: local-ddb-init.py:557 -->
-
-### 7.2 Schema Backward Compatibility
-
-- **New `lottery_id` field on `BroadcastChatMessageOut`**: Optional with `None` default. Existing messages without `lottery_id` are unaffected. The frontend safely ignores `null` lottery fields.
-- **New `kind="lottery"`**: The `_chat_msg_out()` function (`broadcast_chat_store.py` line 304) already returns `kind` as a string from the DDB item. Existing items without `kind` default to `"text"`. The new `"lottery"` value only appears on newly created lottery messages. <!-- VERIFIED: broadcast_chat_store.py:304 -->
-- **LOTTERY# and LENTRY# sort key items**: These are invisible to existing chat history queries because `get_chat_history()` (line 210) uses `Key("sort_key").lt(before_sort_key)` where `before_sort_key` is always a timestamp-prefixed string. `LOTTERY#` and `LENTRY#` are lexicographically after all timestamp strings. <!-- VERIFIED: broadcast_chat_store.py:210 -->
-
-### 7.3 Feature Flag
-
-Add a new setting to `app/core/settings.py`: <!-- NEW: setting to be added -->
-
-```python
-broadcast_lottery_enabled: bool = os.environ.get(
-    "BROADCAST_LOTTERY_ENABLED", "true"
-).lower() in ("1", "true", "yes", "on")
-```
-
-All lottery endpoints check this flag first:
-
-```python
-def _require_broadcast_lottery_enabled() -> None:
-    if not S.broadcast_lottery_enabled:
-        raise HTTPException(
-            status_code=403,
-            detail={"code": "BROADCAST_LOTTERY_DISABLED", "message": "Lottery feature is not enabled"},
-        )
-```
-
-### 7.4 Rollback Steps
-
-1. Set `BROADCAST_LOTTERY_ENABLED=false` to disable all lottery endpoints. Existing lottery cards in chat become static (no interaction possible).
-2. Revert frontend to remove lottery components. Chat messages with `kind="lottery"` render as plain text (the `text` field contains the lottery title).
-3. Revert backend endpoints. Existing lottery data in DDB is inert (no active queries against `LOTTERY#` / `LENTRY#` items).
-4. No data migration needed. Orphaned lottery items are harmless and can be cleaned up via a one-time scan script if desired.
-
-### 7.5 Zero-Downtime Deployment
-
-- All new endpoints are additive (new routes under existing `/broadcast/sessions/{id}/chat/` prefix).
-- The `BroadcastChatMessageOut` change adds an optional field (backward compatible).
-- The `_chat_msg_out()` change adds a conditional key (no impact on existing items).
-- SSE stream changes are additive (new event types; existing clients ignore unknown events).
-
----
-
-## 8. Acceptance Criteria
-
-### Lottery Creation
-
-1. A broadcaster can create a lottery in a live broadcast chat session by providing a title, 2-10 weighted outcomes, and optional `max_entries`, `entry_fee_cents`, and `duration_seconds`. The response has `status: "open"` and a generated `lottery_id`.
-2. Attempting to create a lottery on a non-live session returns HTTP 403.
-3. Attempting to create a lottery as a non-broadcaster (viewer) returns HTTP 403.
-4. Outcome weights must sum to exactly 10,000 basis points (100%). The validation reuses `_normalized_outcomes()` from `messaging_lottery_store.py` (line 42). Invalid weights return HTTP 422. <!-- VERIFIED: messaging_lottery_store.py:42 -->
-5. The lottery appears in the broadcast chat as a message with `kind="lottery"` and is visible in the chat history returned by `GET /sessions/{id}/chat`.
-6. A `lottery:created` SSE event is published to all session subscribers when the lottery is created.
-
-### Entries
-
-7. Any authenticated viewer (except the broadcaster) can enter an open lottery via `POST .../enter`. The entry is idempotent — entering twice returns `already_entered: true` without creating a duplicate.
-8. The broadcaster is blocked from entering their own lottery (HTTP 403 with code `BROADCASTER_CANNOT_ENTER`).
-9. Muted viewers cannot enter (HTTP 403 from `_enforce_chat_mute()`).
-10. After each entry, a `lottery:entry` SSE event is published with the updated `entry_count`.
-11. When `max_entries` is set and the count reaches the limit, subsequent entries return HTTP 409 with code `LOTTERY_FULL`.
-12. When `duration_seconds` is set and the current time exceeds `closes_at`, entry attempts auto-transition the lottery to `entries_closed` and return HTTP 409.
-
-### Entry Fees
-
-13. When `entry_fee_cents > 0`, the viewer must have a valid payment method. If no `payment_method_id` is provided, the viewer's default payment method is used. If no default exists, HTTP 400 is returned with code `NO_PAYMENT_METHOD`.
-14. A successful paid entry creates a billing ledger debit entry (`LEDGER#{ts}#{id}`) for the viewer with `reason="Lottery entry fee"` and a corresponding credit entry for the broadcaster with `reason="Lottery entry fee received"`.
-15. Free lotteries (`entry_fee_cents=0`) do not require a payment method and create no billing entries.
-
-### Close & Draw
-
-16. The broadcaster can close entries via `POST .../close`, transitioning the lottery from `open` to `entries_closed`. A `lottery:closed` SSE event is published.
-17. The broadcaster can trigger the draw via `POST .../draw`. The draw transitions the lottery to `drawn` and assigns an outcome to each entrant using `choose_weighted_outcome()` from `messaging_lottery_rng.py`.
-18. The draw can be triggered directly from `open` state (skipping explicit close) or from `entries_closed` state.
-19. Drawing with zero entries returns HTTP 409 with code `LOTTERY_NO_ENTRIES`.
-20. The draw is idempotent — calling draw on an already-drawn lottery returns the stored results with `idempotent: true`.
-21. Only the broadcaster can close entries or draw (HTTP 403 for viewers).
-22. A `lottery:result` SSE event is published with the full results list (all entrants' outcomes).
-
-### Viewer Status
-
-23. `GET .../lottery/{id}` returns the lottery state from the requesting viewer's perspective: `has_entered`, `entry_count`, `status`, and `viewer_outcome` (populated only after draw, only for the requesting viewer's result).
-24. The broadcaster can access full results via `GET .../lottery/{id}/results`, which includes all entrants' outcomes.
-
-### RNG Integrity
-
-25. Each entrant's outcome is selected using `choose_weighted_outcome()` with `_secure_roll_1_to_10000()` (cryptographic RNG). The `rng_roll` value (1-10000) is stored per entry and included in results for audit.
-26. Outcome weights are immutable after lottery creation. The config item stores outcomes at creation time and they cannot be modified.
-
-### Rate Limiting
-
-27. Lottery creation is rate-limited to 1 per 30 seconds per broadcaster per session.
-28. Lottery entry is rate-limited to 1 per 2 seconds per viewer per session.
-
-### Testing
-
-29. All E2E tests (sections 130-131) pass with 0 flakes on 3 consecutive runs.
-30. Unit tests cover: creation with valid/invalid outcomes, idempotent entry, entry blocking (closed/full/muted/broadcaster), draw with outcome assignment, draw idempotency, state transitions, viewer status before/after draw.
-
----
-
-## 9. Error Handling Matrix
-
-| Error Condition | HTTP Status | Error Code | User Message | Recovery |
-|----------------|-------------|------------|--------------|----------|
-| Create lottery on non-live session | 403 | BROADCAST_NOT_LIVE | "Chat is only available while the broadcast is live" | Wait for broadcast to go live |
-| Non-broadcaster creates lottery | 403 | NOT_SESSION_CREATOR | "Only the broadcaster can create lotteries" | Only broadcaster can create |
-| Invalid outcome weights | 422 | N/A | "lottery weights must sum to 10,000 basis points" | Fix weights to sum to 10000 |
-| Fewer than 2 outcomes | 422 | N/A | "lottery outcomes count must be between 2 and 10" | Add more outcomes |
-| Enter non-existent lottery | 404 | LOTTERY_NOT_FOUND | "Lottery not found" | Check lottery_id |
-| Enter closed lottery | 409 | LOTTERY_NOT_OPEN | "Lottery is no longer accepting entries" | Entry period is over |
-| Enter full lottery | 409 | LOTTERY_FULL | "Lottery has reached maximum entries" | Lottery is full |
-| Enter after duration expired | 409 | LOTTERY_CLOSED | "Lottery entry period has ended" | Entry period is over |
-| Broadcaster enters own lottery | 403 | BROADCASTER_CANNOT_ENTER | "Broadcaster cannot enter their own lottery" | Broadcaster cannot participate |
-| Muted viewer enters | 403 | BROADCAST_CHAT_MUTED | "You are temporarily muted in this chat" | Wait for mute to expire |
-| No payment method for paid lottery | 400 | NO_PAYMENT_METHOD | "Add a payment method in Billing to enter paid lotteries" | Add PM in Billing page |
-| Invalid payment method ID | 400 | N/A | "Payment method not found" | Use a valid PM |
-| Draw with zero entries | 409 | LOTTERY_NO_ENTRIES | "Cannot draw with zero entries" | Wait for entries |
-| Non-broadcaster draws | 403 | NOT_BROADCASTER | "Only the broadcaster can draw" | Only broadcaster can draw |
-| Draw already-drawn lottery | 200 | N/A | (idempotent success) | Results already available |
-| Close already-closed lottery | 409 | LOTTERY_NOT_OPEN | "Lottery is already entries_closed" | Already closed |
-| Lottery create rate limited | 429 | BROADCAST_LOTTERY_CREATE_RATE_LIMITED | "You can create one lottery every 30 seconds" | Wait 30s |
-| Lottery entry rate limited | 429 | BROADCAST_LOTTERY_ENTRY_RATE_LIMITED | "You can enter one lottery every 2 seconds" | Wait 2s |
-| Feature disabled | 403 | BROADCAST_LOTTERY_DISABLED | "Lottery feature is not enabled" | Enable feature flag |
-
----
-
-## 10. Performance & Capacity Planning
-
-### 10.1 DDB Capacity
-
-| Operation | Pattern | WCU/RCU |
-|-----------|---------|---------|
-| Create lottery | 2 PutItem (chat msg + config) | 2 WCU |
-| Enter lottery | 1 PutItem (entry) + 1 UpdateItem (count) | 2 WCU |
-| Close entries | 1 UpdateItem (status) | 1 WCU |
-| Draw (N entrants) | N UpdateItem (entry outcomes) + 1 UpdateItem (status) + 1 UpdateItem (drawn_at) | N+2 WCU |
-| Get lottery status | 1 GetItem (config) + 1 GetItem (entry) | 2 RCU |
-| List entries for draw | 1 Query (begins_with) | 1-2 RCU (depends on entry count) |
-| Chat history (existing) | Unaffected — LOTTERY#/LENTRY# items excluded by SK range | 0 additional |
-
-### 10.2 Hot Partition Analysis
-
-All lottery items for a session share the same `session_id` partition. A popular broadcast with 10,000 concurrent viewers, 5 active lotteries, and 1,000 entries per lottery generates:
-
-- **Write burst on entry**: Up to 1,000 PutItem + 1,000 UpdateItem over ~5 minutes = ~7 WCU sustained. Well within DynamoDB's 1,000 WCU per partition.
-- **Write burst on draw**: 1,000 UpdateItem in rapid succession. At ~100 UpdateItem/s, completes in ~10s. The DDB partition can handle 1,000 WCU burst.
-- **Read burst on status check**: After draw, 10,000 viewers GET status = 20,000 RCU burst. With DDB auto-scaling and on-demand capacity, this is handled. Each GetItem is 0.5 RCU (eventually consistent).
-
-### 10.3 SSE Fan-Out
-
-The `lottery:result` event is published once via `broadcast_sse_publish()` and fanned out to all subscribers' in-memory queues. With 10,000 concurrent SSE connections, this is 10,000 `queue.put_nowait()` calls — completes in <100ms on a single process (in-memory, no I/O).
-
-The SSE event payload for a draw with 1,000 results is approximately 200KB of JSON. This is large but within SSE limits. For very large draws (>1,000 entrants), consider publishing only a summary event via SSE and having viewers fetch their individual result via the GET status endpoint.
-
----
-
-## 11. Dependency Analysis
-
-### 11.1 Tickets This Is Blocked By
-
-| Ticket | Dependency | Detail |
-|--------|-----------|--------|
-| BCAST-005 | Live chat infrastructure | Chat messages table, SSE pub/sub, rate limiting. All implemented. |
-
-### 11.2 Tickets This Blocks
-
-| Ticket | Dependency | Detail |
-|--------|-----------|--------|
-| None | — | BCAST-014 is a self-contained engagement feature. |
-
-### 11.3 Integration Points
-
-- **`app/services/messaging_lottery_store.py::_normalized_outcomes()`** (line 42) — called for outcome validation. No modification needed. <!-- VERIFIED: messaging_lottery_store.py:42 -->
-- **`app/services/messaging_lottery_rng.py::choose_weighted_outcome()`** (line 33) — called for each entrant during draw. No modification needed. <!-- VERIFIED: messaging_lottery_rng.py:33 -->
-- **`app/services/broadcast_sse.py::broadcast_sse_publish()`** (line 29) — called for all lottery lifecycle events. No modification needed. <!-- VERIFIED: broadcast_sse.py:29 -->
-- **`app/services/broadcast_chat_store.py::_chat_msg_out()`** (line 296) — modified to include `lottery_id`. <!-- VERIFIED: broadcast_chat_store.py:296 -->
-- **`app/services/broadcast_chat_store.py::_enforce_chat_mute()`** (line 117) — called during entry. No modification needed. <!-- VERIFIED: broadcast_chat_store.py:117 -->
-- **`app/core/tables.py::T.broadcast_chat_messages`** (line 80 field / line 180 init) — used for all DDB operations. No modification needed. <!-- VERIFIED: tables.py:80 (field), :180 (init) -->
-- **`app/routers/broadcast.py`** — SSE stream generator (line 1405) modified for hybrid pub/sub + poll delivery. <!-- VERIFIED: broadcast.py:1405 -->
-
----
-
-## Appendix A: API Reference Summary
-
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| POST | `/broadcast/sessions/{id}/chat/lottery` | Broadcaster | Create a lottery |
-| POST | `/broadcast/sessions/{id}/chat/lottery/{lid}/enter` | Any viewer | Enter a lottery |
-| POST | `/broadcast/sessions/{id}/chat/lottery/{lid}/close` | Broadcaster | Close entries |
-| POST | `/broadcast/sessions/{id}/chat/lottery/{lid}/draw` | Broadcaster | Execute draw |
-| GET | `/broadcast/sessions/{id}/chat/lottery/{lid}` | Any viewer | Get lottery status (viewer perspective) |
-| GET | `/broadcast/sessions/{id}/chat/lottery/{lid}/results` | Broadcaster | Get full draw results |
-
-## Appendix B: Configuration
-
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `BROADCAST_LOTTERY_ENABLED` | `true` | Enable/disable lottery feature |
-| `BROADCAST_CHAT_RATE_LIMIT_MS` | `2000` | Existing chat rate limit (shared with entry) |
-
-## Appendix C: Related Tickets
-
-- **BCAST-005**: Live chat — provides the chat message table, SSE infrastructure, and mute system that lottery extends
-- **LCOM-001**: Product shelf — lottery outcomes could reference shelf products (future enhancement)
-- **BCAST-012**: Private chat tiers — entry fees share the billing ledger pattern
-
----
-
-## Appendix D: Sort Key Namespace Safety
-
-The `BroadcastChatMessages` table uses `sort_key` (S) as the sort key. Existing items use timestamp-prefixed sort keys: `"{ts_ms:016d}#{msg_id}"` (e.g., `"0001716912345678#cm_abc123"`). This ticket introduces two new sort key prefixes:
-
-- `LOTTERY#{lottery_id}` (e.g., `"LOTTERY#lot_abc123"`)
-- `LENTRY#{lottery_id}#{user_id}` (e.g., `"LENTRY#lot_abc123#user456"`)
-
-**Lexicographic safety**: ASCII digits `0-9` (codes 48-57) sort before uppercase `L` (code 76). All timestamp-prefixed sort keys start with `0` and are exactly 16 digits, so they always sort before `L*`. This means:
-
-1. `get_chat_history()` (line 210) uses `ScanIndexForward=False` with `sort_key.lt(before_sort_key)` — `LOTTERY#` and `LENTRY#` items are always greater than any timestamp SK, so they are never returned by chat history queries. <!-- VERIFIED: broadcast_chat_store.py:210 -->
-2. `fetch_chat_messages_after()` (line 240) uses `sort_key.gt(after_sort_key)` — if `after_sort_key` is a timestamp, `LOTTERY#`/`LENTRY#` items would be included. However, this function is only called by the SSE polling loop, which filters on `msg.get("deleted")` and calls `_chat_msg_out()` which handles the `kind` field. Lottery config and entry items lack a `message_id` field, so they would fail in `_chat_msg_out()`. **Mitigation**: Add a filter in the SSE poll loop to skip items where `sort_key` starts with `LOTTERY#` or `LENTRY#`: <!-- VERIFIED: broadcast_chat_store.py:240 -->
-
-```python
-# In broadcast_chat_stream_route SSE generator (after fetching messages):
-for msg in messages:
-    sk = msg.get("sort_key", "")
-    if sk.startswith("LOTTERY#") or sk.startswith("LENTRY#"):
-        cursor = sk  # Advance cursor past these items
-        continue
-    # ... existing processing ...
-```
-
-This filter ensures that lottery config and entry items, while co-located in the same table partition, never leak into the chat message SSE stream. They are only accessed via direct GetItem/Query calls with known sort key prefixes.
+- [ ] DDB table/fields added to `scripts/local-ddb-init.py` (if new table needed)
+- [ ] Settings added to `app/core/settings.py`
+- [ ] Service and router files created/modified
+- [ ] Frontend components and API wrappers created
+- [ ] E2E test passes in CI
+- [ ] No breaking changes to existing endpoints
 
 ---
 

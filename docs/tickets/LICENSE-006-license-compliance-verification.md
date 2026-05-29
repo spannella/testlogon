@@ -918,3 +918,72 @@ When a compliance flag is created:
 | `app/services/license_agreements.py` | — | DOES NOT EXIST: dependency from LICENSE-001, not yet implemented |
 | `app/services/issued_licenses.py` | — | DOES NOT EXIST: dependency from LICENSE-002, not yet implemented |
 | `app/services/content_moderation.py` | — | DOES NOT EXIST: moderation logic lives in `app/routers/moderation.py` and service files like `moderation_audit_log.py`, `moderation_policy_engine.py` |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_license_compliance.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_verify_license_active_on_publish` | Verify license active on publish |
+| 2 | `test_flag_expired_license_content` | Flag expired license content |
+| 3 | `test_creator_compliance_overview` | Creator compliance overview |
+| 4 | `test_admin_compliance_dashboard` | Admin compliance dashboard |
+| 5 | `test_resolve_compliance_issue` | Resolve compliance issue |
+| 6 | `test_community_flag_creates_review` | Community flag creates review |
+| 7 | `test_owner_flag_priority` | Owner flag priority |
+| 8 | `test_expiry_notification_30_days` | Expiry notification 30 days |
+| 9 | `test_revoked_license_flags_content` | Revoked license flags content |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/license-compliance.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~16 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `LICENSE_COMPLIANCE_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| LICENSE-001 | Agreement management for validity checks | Hard |
+| LICENSE-002 | License Issuance for license status tracking | Hard |
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Sequential -- requires LICENSE-001 and LICENSE-002 merged first. Compliance checks query agreement and license records.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: LICENSE_COMPLIANCE_ENABLED=true
+- [ ] Service file created/modified: `app/services/license_compliance.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/license-compliance.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_license_compliance.py`

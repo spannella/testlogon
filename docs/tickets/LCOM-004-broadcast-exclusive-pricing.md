@@ -2637,3 +2637,71 @@ All file paths are relative to the repository root.
 - `frontend/src/pages/broadcast/ProductShelfCard.tsx` — Viewer shelf card (LCOM-001 frontend)
 - `frontend/src/pages/broadcast/ProductLinkCard.tsx` — Chat product link card (LCOM-002 frontend)
 - `frontend/src/pages/broadcast/QuickBuyDialog.tsx` — Quick-buy dialog (LCOM-003 frontend)
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_broadcast_exclusive_pricing.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_set_broadcast_price` | Set broadcast price |
+| 2 | `test_clear_broadcast_price` | Clear broadcast price |
+| 3 | `test_resolve_effective_price_uses_broadcast` | Resolve effective price uses broadcast |
+| 4 | `test_resolve_effective_price_fallback_catalog` | Resolve effective price fallback catalog |
+| 5 | `test_price_expiry_after_session_end` | Price expiry after session end |
+| 6 | `test_flash_deal_timer` | Flash deal timer |
+| 7 | `test_viewer_sees_both_prices` | Viewer sees both prices |
+| 8 | `test_set_price_requires_session_creator` | Set price requires session creator |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/broadcast-exclusive-pricing.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~18 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `BROADCAST_EXCLUSIVE_PRICING_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| LCOM-001 | Broadcast Product Shelf for shelf item storage | Hard |
+| LCOM-003 | Broadcast Quick-Buy for price resolution | Hard |
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Sequential -- requires LCOM-001 and LCOM-003 merged first. Extends shelf items with broadcast_price_cents field and modifies quick-buy price resolution.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: BROADCAST_EXCLUSIVE_PRICING_ENABLED=true
+- [ ] Service file created/modified: `app/services/broadcast_product_shelf.py (extended)`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/broadcast-exclusive-pricing.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_broadcast_exclusive_pricing.py`

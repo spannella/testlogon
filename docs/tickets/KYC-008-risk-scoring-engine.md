@@ -1259,3 +1259,97 @@ test("181.7 List users by invalid tier returns 422", async () => {
 | Risk scoring admin endpoints | `app/routers/kyc_cases.py` | NOT FOUND -- new endpoints required |
 | Risk tier assignment logic | `app/services/kyc_cases.py` | NOT FOUND -- new logic required (extends `_risk()`) |
 | `frontend/src/pages/admin/KycRiskDashboard.tsx` | `frontend/src/pages/admin/` | NOT FOUND -- new page required |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_kyc_risk_scoring.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_compute_risk_score_all_clear`
+  - `test_compute_risk_score_high_risk`
+  - `test_risk_components_weighting`
+  - `test_score_update_on_document_verification`
+  - `test_score_update_on_screening_result`
+  - `test_risk_score_history`
+  - `test_auto_flag_high_risk_user`
+  - `test_risk_score_capped_at_100`
+
+### Integration Tests
+
+  - Risk score recomputes when any KYC component status changes
+  - High risk score triggers admin notification
+  - Risk score history preserves all recomputation events
+  - Admin can view risk breakdown by component in dashboard
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/kyc-risk.spec.ts`
+**Test count**: 12
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `kyc_submissions (risk score records)` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `KYC_RISK_SCORING_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| KYC-001 | Admin KYC Review Dashboard | Risk scores displayed in dashboard |
+| KYC-002 | Identity Document Verification | Document status feeds risk score |
+| KYC-004 | Proof of Residency | Residency status feeds risk score |
+| KYC-005 | Proof of Funds | Funds status feeds risk score |
+| KYC-006 | Sanctions & PEP Screening | Screening results feed risk score |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| KYC-009 | Tiered Verification Levels | Risk score determines verification tier |
+| KYC-012 | Compliance Reporting | Risk scores included in compliance reports |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after KYC-001, KYC-002, KYC-004, KYC-005, KYC-006. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 12 E2E tests pass with `npx playwright test kyc-risk.spec.ts`

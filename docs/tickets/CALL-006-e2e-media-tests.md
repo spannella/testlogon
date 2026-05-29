@@ -590,149 +590,92 @@ test("78.1 -- Alice invites Bob for audio, both reach connected state", async ()
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Avoiding Flakiness
+### Unit Tests (pytest)
 
-WebRTC E2E tests are notoriously flaky. The following strategies mitigate this:
+**Test file**: `tests/test_call_6.py`
 
-**1. Generous timeouts with `test.setTimeout()`**
+**Mock setup**: moto mock for DynamoDB (call session tables). Mock RTCPeerConnection for frontend unit tests. Chromium fake media devices for E2E.
 
-ICE negotiation in loopback mode typically completes in 1-3 seconds, but can spike to 8-10 seconds under load. Use 15-second waits for connection state and 45-second overall test timeouts:
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_lifecycle_transitions` | Verify allowed state transitions succeed |
+| `test_invalid_transition_rejected` | Invalid transition returns 409 |
+| `test_authorization_check` | Non-participant returns 403 |
+| `test_idempotent_operation` | Repeated call returns same result |
+| `test_cleanup_on_end` | Resources cleaned up after call ends |
 
-```typescript
-test("78.1 -- ...", async () => {
-  test.setTimeout(45_000);  // Override the global 30s
-  // ...
-  await waitForConnectionState(page, "connected", 15_000);
-});
-```
+### Integration Tests
 
-**2. Retry-aware test design**
+Cross-service tests with real DynamoDB Local:
 
-Playwright's `retries: 1` config means tests get one retry. Design tests to be **idempotent**:
-- Use unique call IDs per invocation (`Date.now()` + random suffix).
-- Clean up DDB records in `afterAll` regardless of pass/fail (use try/finally).
-- Do not depend on state from previous tests within the same describe block (each test creates its own call).
+1. Full call lifecycle through real DDB (invite -> accept -> connect -> end)
+2. Signaling relay: offer/answer/ICE exchange between two sessions
+3. State machine transitions verified end-to-end
 
-**3. Wait for signaling delivery before asserting media**
+### E2E Tests (Playwright)
 
-The most common failure mode is asserting `connectionState === "connected"` before the signaling relay has delivered all ICE candidates. Use a polling approach with `waitForFunction` rather than a single-shot check:
+**Test file**: `frontend/e2e/webrtc-media.spec.ts`
 
-```typescript
-// BAD: race condition
-const state = await page.evaluate(() => (window as any).__rtcPeerConnection?.connectionState);
-expect(state).toBe("connected");
+**Auth pattern**: `injectAuth(page, "alice")` for caller; `injectAuth(page, "bob")` for callee; separate browser contexts for two-peer tests
 
-// GOOD: polling with timeout
-await page.waitForFunction(
-  () => (window as any).__rtcPeerConnection?.connectionState === "connected",
-  { timeout: 15_000 },
-);
-```
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Call invite creates session | POST invite -> 200 with call_id |
+| 2 | Call accept transitions state | POST accept -> state = accepted |
+| 3 | Signaling relay delivers events | POST signal -> SSE event received by peer |
+| 4 | Connected state shows overlay | Both peers reach connected; overlay visible |
+| 5 | End call cleans up resources | POST end -> state = ended; tracks stopped |
+| 6 | Call overlay shows correct UI | Ringing/connected/ended states render correctly |
+| 7 | Feature flag gates functionality | Disabled flag -> call button hidden |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-participant returns 403 | Third party -> 403 |
+| 10 | Non-existent call returns 404 | Invalid call_id -> 404 |
+| 11 | Invalid transition returns 409 | End already-ended call -> 409 |
 
-**4. Avoid `page.waitForTimeout()`**
+**Negative tests**: 401 unauthenticated, 403 non-participant, 404 non-existent call, 409 invalid transition, 422 invalid payload
 
-Hard waits are brittle. Instead:
-- Use `waitForFunction` for RTCPeerConnection state.
-- Use `waitForResponse` for signaling HTTP acknowledgements.
-- Use `locator.waitFor({ state: "visible" })` for UI assertions.
+**Edge cases**: Concurrent accept/decline, call timeout (30s), ICE restart during connected state, tab backgrounding, network offline
 
-**5. Isolate fake-media browser from regular tests**
+### Test Data Requirements
 
-By launching a separate Chromium instance with fake device flags (not modifying `playwright.config.ts`), we ensure:
-- Other test files are unaffected.
-- The fake media browser is guaranteed to have the correct flags regardless of how the global config evolves.
-- Tests can also launch a **non-fake** browser for permission-denied scenarios (section 83).
+Create DM conversation between Alice and Bob in `beforeAll`. Use `--use-fake-device-for-media-stream` Chromium flag for media tests.
 
-### 5.2 CI Considerations
+**Test users**: Alice (USER, caller), Bob (USER, callee), Root (ROOT, admin for feature flags)
 
-**Feature gate**: The WebRTC media tests should be gated on `MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true` (same pattern as the TURN credential tests in section 73 that probe `isTurnEnabled()`). At the top of the file:
+### CI/Pipeline
 
-```typescript
-test.beforeAll(async () => {
-  // Skip entire file if WebRTC direct call is not enabled
-  const flags = await fetch(`${API}/internal/feature-flags`).then(r => r.json()).catch(() => ({}));
-  if (!flags.messaging_webrtc_direct_call_enabled) {
-    test.skip(true, "WebRTC direct call feature is disabled");
-  }
-});
-```
+Serial execution (WebRTC requires sequential peer setup). `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true`. Retry-safe.
 
-**Resource cleanup**: The custom browser instance must be closed in `afterAll` to prevent Chromium zombie processes in CI:
+---
 
-```typescript
-test.afterAll(async () => {
-  await alicePage?.context().close();
-  await bobPage?.context().close();
-  await mediaBrowser?.close();
-  deleteConversation(CONVO_ID);
-});
-```
+## Dependencies & Merge Safety
 
-**Headless Chrome stability**: Chromium's headless mode fully supports WebRTC with fake devices. The `--no-sandbox` flag is required in Docker/CI environments. The `--disable-gpu` flag should NOT be added as it can disable hardware-accelerated video decoding needed for `<video>` element rendering.
+### Depends On
 
-### 5.3 Debugging Failures
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| CALL-002 | RTCPeerConnection for peer connection tests | Implemented | No -- must merge after |
+| CALL-003 | getUserMedia for media track tests | Implemented | No -- must merge after |
 
-**Screenshot on failure** (already configured globally): `screenshot: "only-on-failure"` captures the call overlay state at the moment of assertion failure.
+### Depended On By
 
-**RTCPeerConnection stats dump**: On test failure, dump the full stats report to the test attachment:
+No downstream dependents identified.
 
-```typescript
-test.afterEach(async ({ }, testInfo) => {
-  if (testInfo.status !== "passed") {
-    for (const [label, page] of [["alice", alicePage], ["bob", bobPage]]) {
-      const stats = await page.evaluate(async () => {
-        const pc = (window as any).__rtcPeerConnection;
-        if (!pc) return "no peer connection";
-        const report = await pc.getStats();
-        const entries: any[] = [];
-        report.forEach((r: any) => entries.push(r));
-        return JSON.stringify(entries, null, 2);
-      });
-      await testInfo.attach(`rtc-stats-${label}`, { body: stats, contentType: "application/json" });
-    }
-  }
-});
-```
+### Merge Strategy
 
-**Signaling event log**: On failure, query the Events table for the call_id and attach the signaling event sequence to the test report.
+Sequential after CALL-002/003. E2E test file only. No production code changes.
 
-### 5.4 Test Ordering and Dependencies
+### Merge Checklist
 
-Tests within each section are **independent** (each creates its own call). Sections can run in any order. The only shared setup is:
-- The DDB conversation record (created in `beforeAll`, cleaned in `afterAll`).
-- The custom browser instance (launched in `beforeAll`, closed in `afterAll`).
-- Auth sessions (seeded once, cached in `_sessions`).
-
-This design means individual tests can be run with `--grep` without setup failures:
-
-```bash
-npx playwright test e2e/webrtc-media.spec.ts --grep "78.1"
-```
-
-### 5.5 Known Limitations
-
-1. **Loopback only**: Both peers run on the same machine, so ICE candidates are always `host` type (127.0.0.1 or local IP). Tests cannot verify `srflx` or `relay` candidate types without a real TURN server.
-
-2. **Fake audio is not audible**: `--use-fake-device-for-media-stream` generates a 440Hz sine wave, but verifying actual audio playback requires measuring the `AudioContext` analyzer -- not practical for E2E. We verify track presence and `readyState` instead.
-
-3. **Fake video dimensions**: The fake video stream produces a 640x480 spinning color pattern. Video element dimensions may not match viewport; assert `> 0` rather than exact values.
-
-4. **SSE delivery timing**: The signaling relay delivers events via SSE (`useMessagingStream`). In dev mode with Vite proxy, SSE can buffer briefly. If `webrtc.offer` delivery is delayed, the callee won't create an answer promptly. The 15-second timeout accommodates this.
-
-5. **Single worker constraint**: All media tests run sequentially (workers: 1). This prevents port conflicts on fake media devices but means the full section takes ~2-3 minutes.
-
-### 5.6 Success Criteria
-
-The CALL-006 E2E test suite passes when:
-
-- [ ] 21 tests across 6 sections all pass on first attempt in CI.
-- [ ] No test depends on hardware camera/microphone access.
-- [ ] Tests run in headless Chromium without GUI.
-- [ ] Total execution time < 180 seconds.
-- [ ] Tests are idempotent (pass on retry without manual cleanup).
-- [ ] Existing 1070+ E2E tests remain unaffected (no config changes to `playwright.config.ts`).
+- [ ] Backend endpoint/service changes registered in `app/main.py`
+- [ ] Frontend hooks and components created/modified
+- [ ] Settings and feature flags configured
+- [ ] DDB tables added if needed (`scripts/local-ddb-init.py`)
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing call endpoints
 
 ---
 

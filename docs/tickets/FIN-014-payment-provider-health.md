@@ -758,3 +758,92 @@ ProviderHealthDashboard
 | `app/routers/billing.py` | — | Stripe billing router; registered at `app/main.py:326` |
 | `app/routers/billing_ccbill.py` | — | CCBill billing router; registered at `app/main.py:314` |
 | `app/auth/policy.py` | :63, :67 | `require_root` at `:63`, `require_admin_or_root` at `:67` |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_provider_health.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_get_provider_status_healthy`
+  - `test_get_provider_status_degraded_on_high_error_rate`
+  - `test_get_provider_status_down_on_very_high_error_rate`
+  - `test_get_health_timeline_returns_hourly_buckets`
+  - `test_toggle_provider_disable_and_enable`
+  - `test_toggle_provider_idempotent`
+  - `test_get_uptime_report_no_incidents_returns_100`
+  - `test_check_and_alert_exceeds_threshold`
+
+### Integration Tests
+
+  - Webhook stats record_delivery_stat writes to provider_health table
+  - Provider toggle disables payment initiation for that provider
+  - Incident log tracks start/end times and affected webhook count
+  - Alert threshold update persists and is applied on next health check
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/admin-provider-health.spec.ts`
+**Test count**: 19
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `provider_health` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `PROVIDER_HEALTH_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| (none) | — | This ticket has no blocking dependencies |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| (none) | — | No other tickets depend on this one |
+
+### Merge Strategy
+
+**Independent**
+
+This ticket can be merged independently of other tickets. It introduces new tables/endpoints without modifying existing ones in a breaking way.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 19 E2E tests pass with `npx playwright test admin-provider-health.spec.ts`

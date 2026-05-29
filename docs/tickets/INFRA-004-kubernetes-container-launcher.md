@@ -793,3 +793,93 @@ curl -s http://localhost:8000/ui/remote/k8s/pods/p_9f4a2b1c/logs?tail=50 \
 | `ssh_key_manager` (INFRA-002 dep) | — | — | Key injection source; does not exist yet |
 | Kubernetes Python client | — | — | Not in project dependencies; must be added for production mode |
 10. Frontend shows real-time pod status with auto-refresh and log viewer.
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_k8s_launcher.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_launch_container_mock_mode`
+  - `test_launch_container_registers_in_host_inventory`
+  - `test_launch_container_mounts_ssh_key`
+  - `test_stop_container`
+  - `test_delete_container`
+  - `test_list_containers_for_user`
+  - `test_per_user_container_limit`
+
+### Integration Tests
+
+  - Container launch creates pod and auto-registers host in remote_hosts
+  - SSH key mounted as authorized_keys secret in pod spec
+  - Container deletion removes host from inventory
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/k8s-launcher.spec.ts`
+**Test count**: 12
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `k8s_containers` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `K8S_LAUNCHER_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| INFRA-001 | Host Inventory Management | Auto-registers launched containers |
+| INFRA-002 | SSH Key Manager | Mounts SSH public key as authorized_keys |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| INFRA-005 | Compute Cost Tracking | Tracks container runtime costs |
+| INFRA-009 | Security Groups | Manages network policies for containers |
+| INFRA-012 | Admin Compute Dashboard | Aggregates container data |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after INFRA-001, INFRA-002. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 12 E2E tests pass with `npx playwright test k8s-launcher.spec.ts`

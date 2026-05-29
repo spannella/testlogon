@@ -676,156 +676,92 @@ The `stripe-mock` server on port 12111 supports the `POST /v1/refunds` endpoint.
 
 ---
 
-## 10. Testing Strategy
+## Testing Strategy
 
-### Unit Tests (`tests/test_refunds.py`)
+### Unit Tests (pytest)
 
-| Test | Description |
-|------|-------------|
-| `test_submit_refund_request` | Seed ledger entry; submit refund request; assert pending status. |
-| `test_submit_partial_refund` | Submit with amount_cents < original; assert correct amount stored. |
-| `test_submit_exceeds_amount` | Submit with amount > original; assert 400. |
-| `test_submit_outside_window` | Ledger entry 31 days old; assert 400. |
-| `test_submit_duplicate` | Submit twice for same entry; assert 409 on second. |
-| `test_submit_wrong_user` | User A submits for User B's transaction; assert 404. |
-| `test_approve_refund` | Admin approves; assert status=completed, reverse ledger entries created. |
-| `test_approve_partial` | Admin approves with lower amount; assert partial amount in ledger. |
-| `test_deny_refund` | Admin denies with notes; assert status=denied, notes stored. |
-| `test_deny_requires_notes` | Admin denies with empty notes; assert 400. |
-| `test_non_admin_approve` | Regular user tries to approve; assert 403. |
-| `test_reverse_ledger_entries` | After approval, verify CREDIT to buyer and DEBIT from seller. |
-| `test_stripe_refund_called` | After approval, verify Stripe refund API was called with correct amount. |
-| `test_customer_alert_on_approve` | After approval, verify write_alert called for customer. |
-| `test_customer_alert_on_deny` | After denial, verify write_alert called for customer. |
-| `test_audit_event_on_approve` | Verify audit_event logged with admin_user_sub. |
-| `test_audit_event_on_deny` | Verify audit_event logged with admin_user_sub. |
-| `test_dispute_webhook_creates_record` | Send mock Stripe dispute event; verify dispute row created. |
-| `test_dispute_respond` | Submit evidence; verify evidence_submitted=true. |
-| `test_list_user_refunds` | Create 3 requests; list; assert 3 items sorted by date. |
+**Test file**: `tests/test_refunds_disputes.py`
 
-### E2E Test Matrix (`frontend/e2e/refunds-disputes.spec.ts`)
+**Mock setup**: moto mock for DynamoDB (billing tables). stripe-mock on port 12111 for payment provider calls.
 
-**Section A: Refund Request API (6 tests)**
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_get_resource_by_id` | Get resource; verify all fields returned |
+| `test_list_resources` | List with pagination; verify count and order |
+| `test_update_resource` | Update fields; verify changes persisted |
+| `test_delete_or_cancel_resource` | Delete/cancel; verify status change |
+| `test_validation_rejects_invalid` | Missing/invalid fields return 400/422 |
+| `test_authorization_enforced` | Non-owner/non-admin returns 403 |
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 1 | Customer submits refund request for a tip | 201, status=pending |
-| 2 | Refund request appears in customer's list | GET /ui/refunds/requests; includes new request |
-| 3 | Duplicate refund for same transaction returns 409 | Second POST; 409 |
-| 4 | Refund for expired transaction (>30 days) returns 400 | Seed old entry; POST; 400 |
-| 5 | Refund amount exceeding original returns 400 | POST with 999999; 400 |
-| 6 | Unauthenticated request returns 401 | No session; 401 |
+### Integration Tests
 
-**Section B: Admin Refund Processing (5 tests)**
+Cross-service tests with real DynamoDB Local:
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 1 | Admin sees pending refund in queue | GET /ui/admin/refunds/queue; item present |
-| 2 | Admin approves refund -- status=completed | POST approve; GET request; status=completed |
-| 3 | Approved refund creates reverse ledger entries | Query billing table; CREDIT and DEBIT entries exist |
-| 4 | Admin denies refund with notes -- status=denied | POST deny; GET request; status=denied, admin_notes present |
-| 5 | Non-admin cannot access admin refund queue (403) | Alice GET /ui/admin/refunds/queue; 403 |
+1. Full lifecycle through real DDB
+2. Cross-service with billing ledger validation
+3. Concurrent requests handled correctly
 
-**Section C: Dispute Tracking (4 tests)**
+### E2E Tests (Playwright)
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 1 | Stripe dispute webhook creates dispute record | POST mock webhook; GET disputes; item present |
-| 2 | Dispute appears in admin dispute list | GET /ui/admin/disputes; item with correct amount and reason |
-| 3 | Admin submits evidence for dispute | POST /ui/admin/disputes/{id}/respond; 200 |
-| 4 | Dispute status updates from webhook | POST webhook with status change; GET dispute; status updated |
+**Test file**: `frontend/e2e/refunds-disputes.spec.ts`
 
-**Section D: Refund UI (5 tests)**
+**Auth pattern**: `injectAuth(page, "alice")` for customer; `injectAuth(page, "root")` for admin; CSRF header for mutations
 
-| # | Test | Assertion |
-|---|------|-----------|
-| 1 | "Request Refund" button visible on eligible billing entry | Navigate to /billing; button visible on tip entry |
-| 2 | Refund dialog submits request and shows confirmation | Click button; fill form; submit; toast confirmation |
-| 3 | Refund history page shows request with status badge | Navigate to /billing/refunds; card with pending badge |
-| 4 | Admin refund queue shows pending requests | Navigate to /admin/refunds; table with pending entry |
-| 5 | Admin approve/deny actions update status | Approve; verify status badge changes to completed |
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | API creates resource | POST returns 200/201 with ID |
+| 2 | API returns resource by ID | GET returns full resource |
+| 3 | API lists with pagination | GET list returns array |
+| 4 | API updates resource | PATCH returns updated resource |
+| 5 | UI page loads with heading | Navigate to page; heading visible |
+| 6 | UI form submits successfully | Fill form; submit; success toast |
+| 7 | UI shows validation errors | Submit invalid; error messages visible |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-owner returns 403 | Wrong user -> 403 |
+| 10 | Not found returns 404 | Invalid ID -> 404 |
+| 11 | Duplicate returns 409 | Create twice -> 409 |
+
+**Negative tests**: 401 unauthenticated, 403 non-owner/non-admin, 404 not found, 409 conflict, 422 validation
+
+**Edge cases**: Zero balance payout attempt, refund exceeding original amount, concurrent refund requests
+
+### Test Data Requirements
+
+Seed billing data via DDB `put_item` in `beforeAll`. Use unique IDs per test run.
+
+**Test users**: Alice (USER, customer), Charlie (ADMIN, queue management), Root (ROOT, admin operations)
+
+### CI/Pipeline
+
+Serial execution. `stripe-mock` on port 12111. Retry-safe.
 
 ---
 
-## 11. Monitoring & Alerting
+## Dependencies & Merge Safety
 
-### Metrics to Track
+### Depends On
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `refund_requests_total` | Counter | `status` (pending/approved/denied) | Total requests by outcome |
-| `refund_processed_cents_total` | Counter | `transaction_type` | Total refunded amount by type |
-| `refund_processing_duration_seconds` | Histogram | - | Time from approve to completion |
-| `refund_stripe_api_duration_seconds` | Histogram | - | Stripe refund API latency |
-| `refund_stripe_api_errors_total` | Counter | `error_type` | Stripe API failures |
-| `disputes_created_total` | Counter | `provider`, `reason` | Disputes received |
-| `disputes_evidence_submitted_total` | Counter | `provider` | Evidence submissions |
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| MON-002 | Billing ledger for refund amount validation | Implemented | Yes |
 
-### Alert Thresholds
+### Depended On By
 
-| Alert | Condition | Severity |
-|-------|-----------|----------|
-| Refund request spike | `refund_requests_total` > 50 in 1 hour | Warning (potential fraud) |
-| Stripe refund API failures | `refund_stripe_api_errors_total` > 5 in 5 minutes | Critical |
-| Dispute deadline approaching | Any dispute with `deadline_at - now() < 3 days` and `evidence_submitted=false` | Critical |
-| High refund volume | `refund_processed_cents_total` > $10,000 in 24 hours | Warning (finance review) |
+No downstream dependents identified.
 
----
+### Merge Strategy
 
-## 12. Open Questions & Risks
+Independent. New DDB tables (`refund_requests`, `disputes`), new service + router. Feature-flag-gated.
 
-### Unresolved Decisions
+### Merge Checklist
 
-1. **Auto-approve for small amounts**: Should refunds below a threshold (e.g., $5) be auto-approved without admin review? Pro: faster customer resolution. Con: abuse potential. Recommendation: Implement `REFUND_AUTO_APPROVE_THRESHOLD_CENTS` but default to 0 (all require manual review) for launch.
-
-2. **Creator notification on refund**: When a tip/unlock refund is approved, should the creator (who received the money) be notified that the funds are being clawed back? Pro: transparency. Con: could cause disputes between users. Recommendation: Yes, notify the creator. They need to know their balance is decreasing.
-
-3. **Partial refund UX**: Should the customer be able to request a partial refund, or only full? Recommendation: Allow partial (already in the API design). The admin can also change the amount during approval.
-
-4. **PayPal/CCBill refund integration**: This ticket focuses on Stripe. Should PayPal and CCBill refund APIs be integrated in the same ticket? Recommendation: Stripe only for v1. PayPal and CCBill refund integration as follow-up tickets.
-
-### Technical Risks
-
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| stripe-mock refund behavior differs from real Stripe | E2E tests pass but production fails | Review stripe-mock source for refund endpoint behavior; test manually with Stripe test mode |
-| Double refund (race condition) | User refunded twice for same transaction | GSI3 dedup check + ConditionExpression on PutItem |
-| Ledger imbalance after failed refund | Credit to buyer without debit from seller | Use DDB transaction (TransactWriteItems) for atomic ledger pair |
-| Dispute deadline missed | Financial penalty from payment provider | Dashboard alert for disputes with < 3 days remaining |
-
----
-
-## 13. Implementation Timeline
-
-### Phase 1: Backend Foundation (Days 1-3)
-
-| Day | Task |
-|-----|------|
-| 1 | Add tables, settings, table handles. Create `app/services/refund_requests.py` with CRUD operations (submit, list, get, update status). Create Pydantic models. |
-| 2 | Create `app/services/refund_processor.py` -- Stripe refund integration, reverse ledger entry creation (using `billing_shared.py` patterns). Implement approve/deny flows. |
-| 3 | Create `app/routers/refunds.py` with all customer + admin endpoints. Register in `app/main.py`. Wire up `write_alert()` for customer notifications and `audit_event()` for audit trail. |
-
-### Phase 2: Disputes + Webhooks (Days 4-5)
-
-| Day | Task |
-|-----|------|
-| 4 | Create `app/services/dispute_tracker.py`. Create `app/routers/dispute_webhooks.py` for Stripe dispute events. Add admin dispute endpoints to refunds router. |
-| 5 | Write comprehensive unit tests (20 tests). Test all validation rules, Stripe mock integration, ledger reversal, dedup, audit logging. |
-
-### Phase 3: Frontend (Days 6-8)
-
-| Day | Task |
-|-----|------|
-| 6 | Add "Request Refund" button to BillingHistory. Create `RefundRequestDialog.tsx`. Create `RefundHistoryPage.tsx` with request cards. Add route and sidebar link. |
-| 7 | Create `AdminRefundQueuePage.tsx` with DataTable, approve/deny dialogs. Add admin route and sidebar link. |
-| 8 | Create `AdminDisputeListPage.tsx` with DataTable and evidence submission dialog. Wire up all React Query mutations. |
-
-### Phase 4: E2E Tests + Polish (Days 9-10)
-
-| Day | Task |
-|-----|------|
-| 9 | Write E2E tests Sections A + B (refund API + admin processing). Seed billing entries for test data. |
-| 10 | Write E2E tests Sections C + D (disputes + UI). Integration testing. Bug fixes. Final code review. |
+- [ ] DDB tables `refund_requests` and `disputes` added to `local-ddb-init.py`
+- [ ] Refund service integrates with Stripe mock refund API
+- [ ] Admin refund queue endpoint registered in `main.py`
+- [ ] Frontend refund request form and admin queue page created
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing billing endpoints
 
 ---
 

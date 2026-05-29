@@ -1206,3 +1206,67 @@ No new frontend components are introduced by MON-002. The changes are entirely b
 | `app/routers/newsfeed.py` | 4807-4808 | ALREADY USING: comment tips call `write_tip_ledger()` |
 | `app/services/broadcast_tip_store.py` | 18, 149 | ALREADY USING: broadcast tips call `write_tip_ledger()` |
 <!-- NOTE: This ticket's core proposal (a centralized tip ledger service with paired debit/credit entries) has been FULLY IMPLEMENTED in app/services/tip_ledger.py. All four tipping surfaces (message, post, comment, broadcast) already use it. The ticket should be marked as Complete. -->
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_tip_ledger.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_message_tip_writes_credit_entry` | Message tip writes credit entry |
+| 2 | `test_message_tip_writes_debit_entry` | Message tip writes debit entry |
+| 3 | `test_post_tip_writes_bilateral_entries` | Post tip writes bilateral entries |
+| 4 | `test_comment_tip_writes_ledger_entry` | Comment tip writes ledger entry |
+| 5 | `test_scheduled_message_tip_deferred` | Scheduled message tip deferred |
+| 6 | `test_tip_metadata_includes_content_ref` | Tip metadata includes content ref |
+| 7 | `test_reconciliation_debits_equal_credits` | Reconciliation debits equal credits |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/tip-ledger.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~12 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+No dependencies -- this ticket can be implemented independently.
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| MON-003 | Creator Earnings Dashboard aggregates tip credits |
+
+### Merge Strategy
+**Independent -- modifies existing tip code paths to add credit ledger entries. Backward-compatible (adds entries, does not change existing behavior).**
+
+### Merge Checklist
+- [ ] Service file created/modified: `app/routers/messaging.py + app/routers/newsfeed.py (modified)`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/tip-ledger.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_tip_ledger.py`

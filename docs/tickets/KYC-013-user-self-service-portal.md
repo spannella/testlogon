@@ -1598,3 +1598,91 @@ test.beforeAll(async ({ browser }) => {
 | `/kyc` and `/kyc/status` routes | `frontend/src/App.tsx` | NOT FOUND -- new routes required |
 | Verification sidebar links | `frontend/src/components/layout/Sidebar.tsx` | NOT FOUND -- needs modification |
 | `KYC_SELF_SERVICE_PORTAL_ENABLED` feature flag | `app/core/settings.py` | NOT FOUND -- new setting required |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_kyc_self_service.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_get_verification_status`
+  - `test_get_next_tier_requirements`
+  - `test_submit_document_for_review`
+  - `test_view_submission_history`
+  - `test_resubmit_rejected_document`
+  - `test_upload_progress_tracking`
+  - `test_user_cannot_access_other_user_status`
+
+### Integration Tests
+
+  - Self-service submission creates kyc_submissions record for admin review
+  - User sees real-time status updates as admin reviews submissions
+  - Document resubmission creates new version linked to previous rejection
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/kyc-self-service.spec.ts`
+**Test count**: 12
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `kyc_submissions (user-facing views)` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `KYC_SELF_SERVICE_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| KYC-009 | Tiered Verification Levels | Users see current tier and next-tier requirements |
+| KYC-010 | Passport & National ID Scanner | Scanner integrated into upload flow |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| KYC-014 | Facial Comparison | Selfie capture integrated into self-service flow |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after KYC-009, KYC-010. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 12 E2E tests pass with `npx playwright test kyc-self-service.spec.ts`

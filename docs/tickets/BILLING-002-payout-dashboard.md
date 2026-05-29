@@ -904,177 +904,90 @@ const payoutSchema = z.object({
 
 ---
 
-## 9. Testing Plan
+## Testing Strategy
 
-### 9.1 E2E Tests
+### Unit Tests (pytest)
+
+**Test file**: `tests/test_payout_dashboard.py`
+
+**Mock setup**: moto mock for DynamoDB (billing tables). stripe-mock on port 12111 for payment provider calls.
+
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_get_resource_by_id` | Get resource; verify all fields returned |
+| `test_list_resources` | List with pagination; verify count and order |
+| `test_update_resource` | Update fields; verify changes persisted |
+| `test_delete_or_cancel_resource` | Delete/cancel; verify status change |
+| `test_validation_rejects_invalid` | Missing/invalid fields return 400/422 |
+| `test_authorization_enforced` | Non-owner/non-admin returns 403 |
+
+### Integration Tests
+
+Cross-service tests with real DynamoDB Local:
+
+1. Full lifecycle through real DDB
+2. Cross-service with billing ledger validation
+3. Concurrent requests handled correctly
+
+### E2E Tests (Playwright)
 
 **Test file**: `frontend/e2e/payout-dashboard.spec.ts`
 
-**Section 1: Balance Display (3 tests)**
+**Auth pattern**: `injectAuth(page, "alice")` for customer; `injectAuth(page, "root")` for admin; CSRF header for mutations
 
-| # | Test Title | Assertion |
-|---|-----------|-----------|
-| 1.1 | Balance cards render with correct values | Navigate to /payouts; 4 balance cards visible with `$` amounts from API |
-| 1.2 | Currency displayed as USD format | All amounts show `$X.XX` format (e.g., "$125.00") |
-| 1.3 | Minimum payout shown in request section | Text "Minimum: $10.00" visible near form |
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | API creates resource | POST returns 200/201 with ID |
+| 2 | API returns resource by ID | GET returns full resource |
+| 3 | API lists with pagination | GET list returns array |
+| 4 | API updates resource | PATCH returns updated resource |
+| 5 | UI page loads with heading | Navigate to page; heading visible |
+| 6 | UI form submits successfully | Fill form; submit; success toast |
+| 7 | UI shows validation errors | Submit invalid; error messages visible |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-owner returns 403 | Wrong user -> 403 |
+| 10 | Not found returns 404 | Invalid ID -> 404 |
+| 11 | Duplicate returns 409 | Create twice -> 409 |
 
-**Section 2: Payout Request (5 tests)**
+**Negative tests**: 401 unauthenticated, 403 non-owner/non-admin, 404 not found, 409 conflict, 422 validation
 
-| # | Test Title | Assertion |
-|---|-----------|-----------|
-| 2.1 | Submit valid payout request | Enter amount <= available; select method; click Submit; 201 response; success toast |
-| 2.2 | Amount below minimum shows validation error | Enter $5.00; see "Minimum payout is $10.00" inline error; submit button disabled |
-| 2.3 | Amount exceeding balance shows validation error | Enter amount > available; see "Insufficient available balance" error |
-| 2.4 | Duplicate request blocked (409) | Submit second request while first pending; 409 toast "already have a pending payout" |
-| 2.5 | Request form resets after success | After success toast; amount input empty; method reverts to default |
+**Edge cases**: Zero balance payout attempt, refund exceeding original amount, concurrent refund requests
 
-**Section 3: Payout History (4 tests)**
+### Test Data Requirements
 
-| # | Test Title | Assertion |
-|---|-----------|-----------|
-| 3.1 | History table shows payout entries | Table rows with payout amounts and status badges visible |
-| 3.2 | Status badges are color-coded | "requested" badge has yellow styling class |
-| 3.3 | Cancel button on pending payout works | Click Cancel; confirmation dialog; confirm; status changes to "cancelled" |
-| 3.4 | No cancel button on completed payouts | Row with "completed" status has no Cancel button |
+Seed billing data via DDB `put_item` in `beforeAll`. Use unique IDs per test run.
 
-**Section 4: Earnings (4 tests)**
+**Test users**: Alice (USER, customer), Charlie (ADMIN, queue management), Root (ROOT, admin operations)
 
-| # | Test Title | Assertion |
-|---|-----------|-----------|
-| 4.1 | Earnings summary shows breakdown categories | Category labels (Subscriptions, Tips, Unlocks, VOD, Other) visible |
-| 4.2 | Transaction table shows entries | Table rows with amount, category badge, and reason text visible |
-| 4.3 | Date range filter updates summary data | Select "Last 7 days"; API called with `from_ts` parameter |
-| 4.4 | Empty state shown for new user | User with no earnings sees "No earnings yet" message |
+### CI/Pipeline
 
-**Section 5: UI Navigation (2 tests)**
-
-| # | Test Title | Assertion |
-|---|-----------|-----------|
-| 5.1 | Payouts link visible in sidebar | Sidebar Commerce group contains "Payouts" link with Wallet icon |
-| 5.2 | Sidebar link navigates to /payouts | Click "Payouts"; URL changes to /payouts; PayoutDashboard page loads |
-
-### 9.2 Unit Tests (pytest)
-
-No new backend code -- existing payout E2E tests in `frontend/e2e/creator-payouts.spec.ts` already cover the API layer comprehensively.
-
-### 9.3 Edge Cases to Test
-
-- Creator with zero earnings: all balance cards show "$0.00", no transaction rows, pie chart shows empty state.
-- Creator with only hold-period earnings: Available shows "$0.00", Hold shows the amount, request form disabled.
-- Multiple pages of transactions: "Load more" button visible, clicking fetches next page with cursor.
-- Rapid cancel/request sequences: UI remains consistent after rapid mutations.
-- Session expiry during form submission: 401 redirects to login (handled by axios interceptor).
-- Large amounts: Verify formatting for amounts > $10,000 (commas in display).
-- Rejected payout: reject_reason text visible in expandable detail row.
+Serial execution. `stripe-mock` on port 12111. Retry-safe.
 
 ---
 
-## 10. Migration & Rollout
+## Dependencies & Merge Safety
 
-### 10.1 Feature Flag
+### Depends On
 
-No feature flag needed. This is a pure frontend addition with no backend changes. The backend endpoints are already deployed and tested.
+No upstream dependencies. This ticket is self-contained.
 
-### 10.2 Rollout Steps
+### Depended On By
 
-1. Create `frontend/src/api/endpoints/payouts.ts` with API wrappers.
-2. Add TypeScript types to `frontend/src/api/types.ts`.
-3. Create `frontend/src/pages/payouts/PayoutDashboard.tsx` page component.
-4. Add lazy import and route to `App.tsx`.
-5. Add sidebar entries to `Sidebar.tsx`, `AppShell.tsx`, `MobileNav.tsx`.
-6. Run E2E tests to verify.
+No downstream dependents identified.
 
-### 10.3 Rollback
+### Merge Strategy
 
-Remove the route from `App.tsx` and the sidebar entry from `Sidebar.tsx`. The page component and API wrappers can remain in the codebase without impact.
+Independent. Frontend-only page. Backend payout endpoints already exist and are E2E tested.
 
----
+### Merge Checklist
 
-## 11. Security Considerations
-
-### 11.1 Authentication
-
-All endpoints require `require_ui_session`. The frontend uses cookie-based auth with CSRF tokens. Non-GET requests (POST for payout request and cancel) require the `x-csrf-token` header.
-
-### 11.2 Authorization
-
-- `get_available_balance()` queries only the authenticated user's billing entries (`pk=USER#{user_sub}`).
-- `list_user_payouts()` queries only the authenticated user's payouts via `ByUserCreatedAt` GSI.
-- `cancel_payout()` verifies `item.user_id == user_id` before allowing cancellation.
-- No cross-user data exposure: each endpoint scopes queries to `session["user_sub"]`.
-
-### 11.3 Input Validation
-
-- `PayoutRequestIn.amount_cents`: `Field(ge=100)` -- minimum 100 cents ($1.00) at the Pydantic level; service layer enforces the higher `S.payout_minimum_cents` (1000 cents / $10.00).
-- `PayoutRequestIn.notes`: `Field(max_length=500)` -- prevents large payloads.
-- `PayoutRequestIn.method`: validated as string, frontend constrains to `["bank_transfer", "paypal"]`.
-
-### 11.4 Rate Limiting
-
-The payout request endpoint has implicit rate limiting via the duplicate detection (`_has_active_payout`). A user can only have one active payout at a time, preventing request spam.
-
----
-
-## 12. Performance Considerations
-
-### 12.1 DynamoDB Read Capacity
-
-| Query | RCU Estimate | Frequency |
-|-------|-------------|-----------|
-| `get_available_balance` (billing credits scan) | 5-50 RCU (depends on ledger size) | On page load, after mutations |
-| `list_user_payouts` (ByUserCreatedAt GSI) | 1-5 RCU | On page load, after mutations |
-| `get_earnings_summary` (billing credits scan) | 5-50 RCU | On page load, date range change |
-| `get_earnings_transactions` (billing credits query) | 1-5 RCU | On page load, date range change |
-
-**Concern**: `get_available_balance` scans ALL billing credits for the user (must loop through `LastEvaluatedKey` pages) to calculate the available amount. For creators with thousands of ledger entries, this could be slow (1-5 seconds). This is a known backend limitation; a future optimization would pre-compute the balance as a separate DDB item updated on each credit write.
-
-### 12.2 Pagination
-
-- Payout history: cursor-based, 25 items per page. `ListPayouts` returns `next_cursor` for the next page.
-- Earnings transactions: cursor-based, 50 items per page. Uses `ExclusiveStartKey` for DDB pagination.
-- No infinite scroll -- "Load more" button pattern to avoid excessive initial fetch.
-
-### 12.3 Caching
-
-- Balance query: `staleTime: 30_000` (30 seconds). Invalidated on payout request/cancel.
-- Payout history: `staleTime: 60_000` (60 seconds). Invalidated on payout request/cancel.
-- Earnings queries: `staleTime: 60_000` (60 seconds). New queries generated when date range changes (different query key = fresh fetch).
-
----
-
-## 13. Acceptance Criteria
-
-1. `/payouts` route renders the PayoutDashboard page with no errors.
-2. Four balance cards display available, pending, hold, and total earned amounts formatted as currency (e.g., "$125.00").
-3. Payout request form validates minimum amount ($10.00) and available balance before submission.
-4. Successful payout request returns 201, shows a success toast, and refreshes the balance and history.
-5. Payout history table displays all past requests with color-coded status badges (green/yellow/blue/orange/red/grey).
-6. Cancel button appears only on "requested" and "approved" payouts, with a confirmation dialog.
-7. Earnings breakdown shows five-category distribution (tips, subscriptions, unlocks, VOD, other) with dollar amounts.
-8. Earnings transactions table is paginated with timestamp, amount, category badge, and reason text.
-9. Date range picker filters both earnings summary and transactions.
-10. "Payouts" sidebar link appears in the Commerce group with a Wallet icon.
-11. Empty states render gracefully for new users with zero earnings.
-12. All 18 E2E tests pass.
-
----
-
-## 14. Dependencies
-
-- **MON-004 (Creator Payouts)**: Backend endpoints in `app/routers/creator_payouts.py` and service layer in `app/services/creator_payouts.py`. Already implemented and tested.
-- **MON-003 (Creator Earnings Dashboard)**: Earnings endpoints in `app/routers/creator_earnings.py` and service layer in `app/services/creator_earnings.py`. Already implemented and tested.
-- **MON-002 (Tip Ledger Integration)**: Tips written to billing ledger are the primary data source for earnings. `app/services/tip_ledger.py:87-149`.
-- **shadcn/ui**: Card, Button, Input, Select, Badge, Separator, Table components. Already installed.
-- **lucide-react**: `Wallet` icon for sidebar. Already installed.
-
----
-
-## 15. Open Questions
-
-1. **Chart library**: Should the earnings breakdown use a simple CSS-based pie chart, or should we add a dependency like Recharts? Recommendation: use a simple progress-bar style breakdown (no new dependency) for v1.
-2. **Payout method validation**: Should the method selector only show methods that the user has configured (e.g., only show PayPal if they have a PayPal account linked)? Defer to v2 -- for now, both options are always shown.
-3. **Real-time balance updates**: Should the balance auto-refresh in the background, or only on explicit user action? Current design: `refetchInterval: 30_000` provides background updates.
-4. **Mobile layout**: Should the balance cards stack vertically on mobile, or use a 2x2 grid? Recommendation: 2x2 grid on mobile, 4x1 row on desktop.
+- [ ] Route `/payouts` added to `App.tsx`
+- [ ] PayoutDashboard page component created
+- [ ] Sidebar entry added
+- [ ] React Query hooks for balance/payouts/earnings endpoints
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing payout API
 
 ---
 

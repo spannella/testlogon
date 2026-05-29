@@ -884,272 +884,100 @@ export function useBroadcastChatStream(sessionId: string, enabled = true) {
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests (`tests/test_broadcast_chat_store.py`)
+### Unit Tests (pytest)
 
-Using `moto` for DynamoDB mocking (same pattern as other service tests in `tests/`):
+**Test file**: `tests/test_broadcast_chat.py`
 
-```python
-import pytest
-from moto import mock_dynamodb
-from app.services.broadcast_chat_store import (
-    send_chat_message,
-    get_chat_history,
-    fetch_chat_messages_after,
-    delete_chat_message,
-    get_mute_status,
-    set_mute,
-)
+**Mock setup**: moto mock for DynamoDB (`BroadcastChatMessages` table). In-memory SSE queue for event delivery.
 
-@mock_dynamodb
-class TestBroadcastChatStore:
-    def setup_method(self):
-        # Create BroadcastChatMessages and BroadcastChatMutes tables
-        ...
+| Test Function | Description |
+|---|---|
+| `test_send_chat_message_stored` | Send message; query returns message with correct text, sender_id |
+| `test_chat_history_returns_last_100` | Seed 150 messages; GET returns last 100 sorted by timestamp |
+| `test_rate_limit_1_per_2_seconds` | Send 2 messages within 2s; second returns 429 |
+| `test_delete_message_by_broadcaster` | Broadcaster deletes message; message has deleted=true |
+| `test_mute_viewer_prevents_send` | Mute viewer; subsequent send returns 403 |
+| `test_sse_delivers_message_to_subscribers` | Send message; SSE stream receives chat event within 2s |
+| `test_chat_disabled_returns_403` | Disable chat for session; send returns 403 |
 
-    def test_send_message_creates_item(self):
-        result = send_chat_message("sess1", "user1", "Alice", "Hello chat!")
-        assert result["message_id"].startswith("cm_")
-        assert result["text"] == "Hello chat!"
+### Integration Tests
 
-    def test_get_history_returns_chronological_order(self):
-        for i in range(5):
-            send_chat_message("sess1", "user1", "Alice", f"msg {i}")
-        history = get_chat_history("sess1", limit=5)
-        texts = [m["text"] for m in history["messages"]]
-        assert texts == ["msg 0", "msg 1", "msg 2", "msg 3", "msg 4"]
+Cross-service tests with real DynamoDB Local:
 
-    def test_get_history_respects_limit(self):
-        for i in range(10):
-            send_chat_message("sess1", "user1", "Alice", f"msg {i}")
-        history = get_chat_history("sess1", limit=3)
-        assert len(history["messages"]) == 3
-        assert history["has_more"] is True
+1. Send message -> SSE delivery to subscriber -> verify message content matches
+2. Rate limit enforcement across rapid sends
+3. Chat history pagination with cursor-based loading
 
-    def test_delete_message_soft_deletes(self):
-        msg = send_chat_message("sess1", "user1", "Alice", "bad message")
-        delete_chat_message("sess1", msg["message_id"])
-        # Deleted messages excluded from history
-        history = get_chat_history("sess1", limit=100)
-        assert all(m["message_id"] != msg["message_id"] for m in history["messages"])
+### E2E Tests (Playwright)
 
-    def test_fetch_after_cursor(self):
-        msgs = [send_chat_message("sess1", "user1", "Alice", f"m{i}") for i in range(5)]
-        cursor = msgs[2]["sort_key"]
-        after = fetch_chat_messages_after("sess1", cursor, 50)
-        assert len(after) == 2  # msgs[3] and msgs[4]
+**Test file**: `frontend/e2e/broadcast-chat.spec.ts`
 
-    def test_mute_status_none_when_not_muted(self):
-        assert get_mute_status("sess1", "user1") is None
+**Auth pattern**: `injectAuth(page, "alice")` for viewer; `injectAuth(page, "root")` for broadcaster
 
-    def test_mute_status_returns_expiry(self):
-        set_mute("sess1", "user1", 300, "broadcaster1")
-        status = get_mute_status("sess1", "user1")
-        assert status is not None
-        assert status > int(time.time())
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Chat panel visible on live player | Navigate to watch page; chat panel with message input visible |
+| 2 | Send message appears in chat list | Type message; click send; message appears in chat scroll |
+| 3 | Chat history loads on page entry | Seed messages; navigate to page; last messages visible |
+| 4 | Broadcaster can delete message | Root deletes message; message shows '[deleted]' |
+| 5 | Muted viewer cannot send | Mute Alice; Alice's send button disabled or returns error |
+| 6 | Rate limit shows feedback | Send rapidly; rate limit toast/error appears |
+| 7 | SSE delivers real-time messages | Bob sends message; Alice sees it appear without refresh |
+| 8 | Empty chat shows placeholder | New session with no messages; 'No messages yet' placeholder |
+| 9 | Chat message shows sender name | Message displays sender_display_name |
+| 10 | Chat overlay toggle on video | Toggle overlay; messages appear as transparent overlay on player |
+| 11 | Unauthenticated chat returns 401 | No session -> POST chat returns 401 |
+| 12 | Chat for non-existent session returns 404 | POST to invalid session_id -> 404 |
 
-    def test_mute_expired_returns_none(self):
-        # Manually set muted_until to past
-        ...
-        assert get_mute_status("sess1", "user1") is None
-```
+**Negative tests**: 401 unauthenticated, 404 non-existent session, 403 muted user, 429 rate limit
 
-### 5.2 Backend Integration Tests (pytest, FastAPI TestClient)
+**Edge cases**: Rapid message sending, chat with 0 messages, very long message text (280 char limit), special characters in text
 
-```python
-class TestBroadcastChatEndpoints:
-    def test_send_requires_live_session(self, client, auth_headers):
-        # Session in draft status -> 403
-        resp = client.post(f"/broadcast/sessions/{draft_session_id}/chat",
-                          json={"text": "hello"}, headers=auth_headers)
-        assert resp.status_code == 403
+### Test Data Requirements
 
-    def test_send_message_success(self, client, auth_headers, live_session_id):
-        resp = client.post(f"/broadcast/sessions/{live_session_id}/chat",
-                          json={"text": "Great stream!"}, headers=auth_headers)
-        assert resp.status_code == 201
-        assert resp.json()["text"] == "Great stream!"
+Create live broadcast session in `beforeAll`. Seed chat messages via POST. Use unique `Date.now()` prefixed texts.
 
-    def test_rate_limit_blocks_fast_sends(self, client, auth_headers, live_session_id):
-        client.post(f"/broadcast/sessions/{live_session_id}/chat",
-                   json={"text": "msg1"}, headers=auth_headers)
-        resp = client.post(f"/broadcast/sessions/{live_session_id}/chat",
-                          json={"text": "msg2"}, headers=auth_headers)
-        assert resp.status_code == 429
-        assert "BROADCAST_CHAT_RATE_LIMITED" in resp.json()["detail"]["code"]
+**Test users**: Alice (USER, viewer/chatter), Bob (USER, second viewer), Root (ROOT, broadcaster/moderator)
 
-    def test_muted_user_cannot_send(self, client, broadcaster_headers, viewer_headers, live_session_id):
-        # Broadcaster mutes viewer
-        client.post(f"/broadcast/sessions/{live_session_id}/chat/mute",
-                   json={"target_user_id": "viewer1", "duration_seconds": 60},
-                   headers=broadcaster_headers)
-        # Viewer tries to send
-        resp = client.post(f"/broadcast/sessions/{live_session_id}/chat",
-                          json={"text": "hello"}, headers=viewer_headers)
-        assert resp.status_code == 403
-        assert "BROADCAST_CHAT_MUTED" in resp.json()["detail"]["code"]
+### CI/Pipeline
 
-    def test_delete_message_requires_broadcaster_or_admin(self, client, viewer_headers, live_session_id):
-        msg = client.post(f"/broadcast/sessions/{live_session_id}/chat",
-                         json={"text": "hi"}, headers=viewer_headers).json()
-        # Viewer cannot delete others' messages (but this is their own -- still blocked
-        # because delete is broadcaster-only)
-        # Actually: viewer deleting their own is allowed? Design decision: no,
-        # only broadcaster/admin can delete to keep moderation centralized.
-        resp = client.delete(
-            f"/broadcast/sessions/{live_session_id}/chat/{msg['message_id']}",
-            headers=viewer_headers)
-        assert resp.status_code == 403
-
-    def test_history_returns_last_100(self, client, auth_headers, live_session_id):
-        # Send 5 messages (limited for test speed)
-        for i in range(5):
-            time.sleep(0.01)  # ensure distinct timestamps
-            client.post(f"/broadcast/sessions/{live_session_id}/chat",
-                       json={"text": f"msg {i}"}, headers=auth_headers)
-        resp = client.get(f"/broadcast/sessions/{live_session_id}/chat?limit=100",
-                         headers=auth_headers)
-        assert resp.status_code == 200
-        assert len(resp.json()["messages"]) == 5
-```
-
-### 5.3 E2E Tests (`frontend/e2e/broadcast-chat.spec.ts`)
-
-Following the established E2E pattern (`e2e_admin_session_setup.py` identities, cookie
-injection, CSRF headers):
-
-**Section 90: Chat Send API (6 tests)**
-- Sends a chat message to a live session
-- Verifies 403 when session is not live (draft/stopped)
-- Verifies 429 rate limit on rapid sends (send twice within 2s)
-- Verifies message text max length (281 chars rejected)
-- Verifies empty text rejected
-- Verifies sender_display_name populated from profile
-
-**Section 91: Chat History API (4 tests)**
-- Loads last N messages in chronological order
-- Respects `limit` parameter (request 3, get 3 even if more exist)
-- Supports `before` cursor for pagination
-- Excludes deleted messages from history
-
-**Section 92: Chat Moderation API (5 tests)**
-- Broadcaster can delete any message
-- Admin/root can delete any message
-- Regular viewer cannot delete messages (403)
-- Broadcaster can mute a viewer
-- Muted viewer receives 403 with `BROADCAST_CHAT_MUTED` code
-
-**Section 93: Chat SSE Stream (4 tests)**
-- Opens SSE stream and receives new messages in real time
-- Receives `chat:delete` event when message is deleted
-- Stream returns 403 for non-live sessions
-- Stream reconnects after disconnect (verify second message received)
-
-**Section 94: Chat UI (6 tests)**
-- Chat panel visible on live player page
-- Message input sends and appears in chat list
-- Send button disabled during 2s cooldown
-- Character counter shows remaining chars (280 max)
-- Broadcaster sees delete button on messages
-- Regular viewer does not see delete button
-
-**Section 95: Chat Overlay (3 tests)**
-- Overlay toggle button works (show/hide)
-- New messages appear in overlay area with scrolling animation
-- Overlay messages disappear after animation duration
-
-### 5.4 Concurrent Viewer Simulation
-
-To validate the "within 2 seconds" delivery requirement under load, add a focused
-load test that can be run manually:
-
-```typescript
-// frontend/e2e/broadcast-chat-load.spec.ts (manual, not in CI)
-
-test.describe("Broadcast Chat Load", () => {
-  test("messages delivered to 10 concurrent viewers within 2s", async ({ browser }) => {
-    // Create 10 viewer pages, each with SSE connection
-    const viewers: Page[] = [];
-    for (let i = 0; i < 10; i++) {
-      const ctx = await browser.newContext();
-      const page = await ctx.newPage();
-      await injectAuth(page, "alice");
-      await page.goto(`/live/${liveSessionId}`);
-      viewers.push(page);
-    }
-
-    // Wait for all SSE connections to open
-    await Promise.all(viewers.map(v =>
-      v.waitForFunction(() => (window as any).__chatConnected === true)
-    ));
-
-    // Send a message from the broadcaster
-    const sendTime = Date.now();
-    await apiPost(broadcasterPage, "root", `/broadcast/sessions/${liveSessionId}/chat`, {
-      text: `Load test ${sendTime}`,
-    });
-
-    // Verify all viewers received the message within 2 seconds
-    await Promise.all(viewers.map(v =>
-      expect(v.getByText(`Load test ${sendTime}`)).toBeVisible({ timeout: 2000 })
-    ));
-
-    // Cleanup
-    for (const v of viewers) await v.close();
-  });
-});
-```
-
-### 5.5 Test Data Isolation
-
-- Each test run uses a unique broadcast session (created in `beforeAll`).
-- Chat messages are isolated to that session (PK = session_id).
-- No cross-run pollution since each session ID is a fresh UUID.
-- `afterAll` deletes the test session, which (via TTL) will eventually clean up chat
-  messages -- but since each run uses unique session IDs, stale data does not affect tests.
-
-### 5.6 Flakiness Mitigations
-
-| Risk | Mitigation |
-|------|------------|
-| Rate limit state from previous test | Each test section uses a unique session; rate limit key includes session_id |
-| SSE connection race | Wait for `": stream-open"` comment in SSE before sending test messages |
-| Timing-sensitive rate limit test | Use `time.sleep(2.1)` between sends to clear the window, verify second send succeeds |
-| Mute expiry during test | Use long duration (300s) in mute tests -- test will finish well before expiry |
-| DDB eventual consistency | Use `ConsistentRead=True` in store functions; SSE polling inherently handles eventual consistency by retrying |
-| Display name resolution | Seed a profile record for test users in `beforeAll` or tolerate fallback name |
+Serial execution. `BROADCAST_PROVIDER=local`. Retry-safe (unique message IDs).
 
 ---
 
-## Appendix A: API Reference Summary
+## Dependencies & Merge Safety
 
-| Method | Path | Auth | Purpose |
-|--------|------|------|---------|
-| POST | `/broadcast/sessions/{id}/chat` | `require_ui_session` | Send chat message |
-| GET | `/broadcast/sessions/{id}/chat` | `require_ui_session` | Load chat history |
-| GET | `/broadcast/sessions/{id}/chat/stream` | `require_ui_session` | SSE real-time stream |
-| DELETE | `/broadcast/sessions/{id}/chat/{msg_id}` | broadcaster/admin | Delete chat message |
-| POST | `/broadcast/sessions/{id}/chat/mute` | broadcaster/admin | Mute a viewer |
+### Depends On
 
-## Appendix B: SSE Event Types
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| BCAST-001 | Broadcast session management | Implemented | Yes |
+| BCAST-002 | Viewer player page for chat panel integration | Implemented | Yes |
 
-| Event | Payload | Trigger |
-|-------|---------|---------|
-| `chat:message` | Full `BroadcastChatMessageOut` JSON | New message sent |
-| `chat:delete` | `{ "message_id": "..." }` | Message deleted by moderator |
-| `chat:mute` | `{ "target_user_id": "...", "muted_until": N }` | User muted (sent only to the muted user's stream -- requires future per-user filtering or client-side check) |
+### Depended On By
 
-## Appendix C: Configuration
+| Ticket | What It Needs |
+|---|---|
+| BCAST-011 | Live chat for private session requests |
+| BCAST-012 | Private chat tiers extend chat infrastructure |
+| BCAST-013 | Tip messages in broadcast chat |
+| BCAST-014 | Lottery messages in broadcast chat |
+| BCAST-015 | Rich messaging features in chat |
 
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `DDB_BROADCAST_CHAT_MESSAGES` | `BroadcastChatMessages` | Table name |
-| `DDB_BROADCAST_CHAT_MUTES` | `BroadcastChatMutes` | Table name |
-| `BROADCAST_CHAT_RATE_LIMIT_MS` | `2000` | Min ms between messages per user per session |
-| `BROADCAST_CHAT_MAX_MESSAGE_LENGTH` | `280` | Max characters per chat message |
-| `BROADCAST_CHAT_HISTORY_DEFAULT_LIMIT` | `100` | Default messages loaded on page entry |
-| `BROADCAST_CHAT_OVERLAY_ENABLED` | `true` | Feature flag for overlay rendering |
+### Merge Strategy
+
+Independent. New DDB table (`BroadcastChatMessages`), new service (`broadcast_chat_store.py`), new SSE channel. Frontend chat panel component.
+
+### Merge Checklist
+
+- [ ] DDB table `BroadcastChatMessages` added to `scripts/local-ddb-init.py`
+- [ ] Service `broadcast_chat_store.py` created with send/list/delete/mute
+- [ ] SSE delivery via `broadcast_sse.py`
+- [ ] Chat panel component integrated into LivePlayer/BroadcastPage
+- [ ] E2E test passes in CI
+- [ ] No breaking changes to existing messaging system
 
 ## Codebase References
 

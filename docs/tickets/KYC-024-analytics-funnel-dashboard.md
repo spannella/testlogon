@@ -962,3 +962,74 @@ test("240.4 Multiple concurrent analytics queries return consistent data", async
 | `frontend/src/components/shared/ProcessingTimeHistogram.tsx` | -- | **Does not exist yet** — new component required |
 | `frontend/src/components/shared/RejectionReasonsPie.tsx` | -- | **Does not exist yet** — new component required |
 | `frontend/src/components/shared/PeriodComparisonCards.tsx` | -- | **Does not exist yet** — new component required |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_kyc_analytics.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_compute_funnel_counts_by_status` | Compute funnel counts by status |
+| 2 | `test_compute_funnel_filtered_by_tier` | Compute funnel filtered by tier |
+| 3 | `test_volume_trends_daily_granularity` | Volume trends daily granularity |
+| 4 | `test_processing_time_histogram_buckets` | Processing time histogram buckets |
+| 5 | `test_compare_periods_calculates_deltas` | Compare periods calculates deltas |
+| 6 | `test_geographic_distribution_by_country` | Geographic distribution by country |
+| 7 | `test_drop_off_analysis_between_steps` | Drop off analysis between steps |
+| 8 | `test_precompute_daily_snapshot_stores` | Precompute daily snapshot stores |
+| 9 | `test_snapshot_retrieval_from_cache` | Snapshot retrieval from cache |
+| 10 | `test_empty_date_range_returns_zeros` | Empty date range returns zeros |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/kyc-analytics.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~22 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `KYC_ANALYTICS_PRECOMPUTE_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| KYC-001 | Admin Review Dashboard for admin auth pattern | Hard |
+| KYC-008 | Risk Scoring Engine for tier segmentation | Soft |
+| KYC-012 | Compliance Reporting for data export | Soft |
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Independent -- analytics endpoints are read-only and additive. New router at /v1/kyc/analytics with no overlap. Pre-computation background task is optional.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: KYC_ANALYTICS_PRECOMPUTE_ENABLED=true
+- [ ] Service file created/modified: `app/services/kyc_analytics.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/kyc-analytics.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_kyc_analytics.py`

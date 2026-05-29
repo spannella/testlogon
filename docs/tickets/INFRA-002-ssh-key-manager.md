@@ -729,3 +729,94 @@ Key generation is rate-limited to 5 per minute per user (CPU-intensive for RSA 4
 | `ssh_keys_table_name` setting | — | — | Does not exist yet in `app/core/settings.py` |
 | `app/services/ssh_key_manager.py` | — | — | Does not exist yet |
 | `app/routers/ssh_key_manager.py` | — | — | Does not exist yet |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_ssh_keys.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_upload_rsa_key_encrypted_via_kms`
+  - `test_upload_ed25519_key`
+  - `test_generate_key_pair`
+  - `test_list_keys_returns_fingerprints`
+  - `test_delete_key_removes_record`
+  - `test_get_public_key_plaintext`
+  - `test_decrypt_private_key_via_kms`
+  - `test_associate_key_with_host`
+
+### Integration Tests
+
+  - SSH terminal auto-connect decrypts stored key via KMS for Paramiko
+  - Key upload encrypts private key blob and stores in ssh_keys table
+  - Key deletion removes DDB record and is no longer available for connect
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/ssh-keys.spec.ts`
+**Test count**: 12
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `ssh_keys` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `SSH_KEY_MANAGER_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| INFRA-001 | Host Inventory Management | Keys associated with host records |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| INFRA-003 | EC2 Instance Launcher | Public key injected into instance user-data |
+| INFRA-004 | K8s Container Launcher | Public key mounted as authorized_keys |
+| INFRA-006 | Connection Profiles | Profiles reference stored keys |
+| INFRA-011 | Multi-Hop SSH | Key used for each hop in bastion chain |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after INFRA-001. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 12 E2E tests pass with `npx playwright test ssh-keys.spec.ts`

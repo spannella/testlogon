@@ -729,3 +729,65 @@ Total impact on initial page load: ~2 KB (utilities only). The ~128 KB emoji dat
 | `frontend/src/data/emoji-data.ts` | — | **Does not exist** — `frontend/src/data/` directory does not exist; needs creation |
 | `frontend/src/utils/emoji.ts` | — | **Does not exist** — `frontend/src/utils/` directory does not exist; needs creation |
 | `frontend/src/stores/emojiStore.ts` | — | **Does not exist** — no emoji store in `frontend/src/stores/` |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_emoji_shortcodes.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_shortcode_to_unicode_mapping` | Shortcode to unicode mapping |
+| 2 | `test_shortcode_replacement_in_text` | Shortcode replacement in text |
+| 3 | `test_emoji_only_detection_1to3` | Emoji only detection 1to3 |
+| 4 | `test_skin_tone_modifier_application` | Skin tone modifier application |
+| 5 | `test_unknown_shortcode_unchanged` | Unknown shortcode unchanged |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/emoji-messages.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~12 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+No dependencies -- this ticket can be implemented independently.
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| MSG-007 | Custom Emojis extends EmojiPicker with Custom tab |
+
+### Merge Strategy
+**Independent -- new shared EmojiPicker component. No backend changes required. Shortcode replacement is client-side.**
+
+### Merge Checklist
+- [ ] Service file created/modified: `frontend/src/components/shared/EmojiPicker.tsx`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/emoji-messages.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_emoji_shortcodes.py`

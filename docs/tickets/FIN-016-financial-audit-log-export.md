@@ -1572,3 +1572,92 @@ export const deleteSchedule = (scheduleId: string) =>
 | `app/routers/admin_payouts.py` | — | Existing admin payout router |
 | `app/auth/policy.py` | :63, :67 | `require_root` at `:63`, `require_admin_or_root` at `:67` |
 | `scripts/local-ddb-init.py` | :59 | `billing` table (PK=pk, SK=sk, NO GSIs) |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_audit_export.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_export_ledger_csv_default_columns`
+  - `test_export_ledger_csv_quickbooks_format`
+  - `test_export_ledger_csv_xero_format`
+  - `test_export_ledger_csv_sha256_checksum`
+  - `test_export_ledger_csv_filter_by_entry_type`
+  - `test_export_ledger_pdf_generates_bytes`
+  - `test_create_schedule_weekly`
+  - `test_run_scheduled_exports_triggers_due_schedules`
+
+### Integration Tests
+
+  - CSV export queries billing table via GSI_LEDGER_DATE and generates valid file
+  - Export record stored in audit_exports table with SHA-256 hash
+  - Download endpoint streams file from S3 mock
+  - Scheduled report updates next_run_at after execution
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/admin-audit-export.spec.ts`
+**Test count**: 24
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `AuditExports (existing)` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `AUDIT_EXPORT_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| FIN-013 | Platform Financial Dashboard | Depends on GSI_LEDGER_DATE on billing table for date-range queries |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| (none) | — | No other tickets depend on this one |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after FIN-013. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 24 E2E tests pass with `npx playwright test admin-audit-export.spec.ts`

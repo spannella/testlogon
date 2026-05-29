@@ -795,3 +795,78 @@ class DelegateChatAuditOut(BaseModel):
 | N1 | Send without X-Managing-Creator header | 400 or treated as own account |
 | N2 | Delegate tries to delete creator's message | 403 |
 | N3 | Expired delegation tries to read | 403 after expiry |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_delegate_chat.py`
+
+| # | Test Function | Description | Mocks |
+|---|--------------|-------------|-------|
+| 1 | `test_list_creator_conversations_requires_chat_read` | 403 without chat_read permission | moto DDB |
+| 2 | `test_send_message_as_creator_attribution` | sender_id=creator, sent_by_delegate=delegate | moto DDB |
+| 3 | `test_delegate_tag_appended` | Delegate tag string appended to message text | moto DDB |
+| 4 | `test_encrypted_message_redacted` | text=null, delegate_cannot_decrypt=true for encrypted msgs | moto DDB |
+| 5 | `test_chat_respond_requires_permission` | 403 for delegate with only chat_read | moto DDB |
+| 6 | `test_delegated_messages_audit` | Audit entries with correct delegate_id | moto DDB |
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Full chat delegation: add delegate, accept, list conversations, send message | delegates, delegate_chat, messaging |
+| 2 | SSE delivers creator's messages to delegate connections | delegate_chat, broadcast_sse |
+| 3 | Permission revocation terminates delegate access mid-session | delegates, delegate_chat |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/delegates-chat.spec.ts`
+
+Tests use `injectAuth(page, identity)` for cookie-based auth and include CSRF headers (`x-csrf-token`) on all POST/PUT/DELETE requests. Negative tests cover 401 (unauthenticated), 403 (wrong role/user), 404 (not found), 409 (conflict), and 422 (validation) responses. Edge cases include duplicate operations (idempotency), concurrent access, and feature-flag-disabled behavior.
+
+**Total E2E tests**: 15
+
+### Test Data Requirements
+
+- DDB seeds: required tables created via `scripts/local-ddb-init.py`
+- Test users: Alice, Bob, Root, Charlie via `e2e_session_setup.py` / `e2e_admin_session_setup.py`
+- Feature flag: `CHAT_DELEGATION_ENABLED` in `.env.local`
+
+### CI/Pipeline
+
+- Feature flag: `CHAT_DELEGATION_ENABLED` must be enabled for tests to run
+- Serial execution: run with `--workers 1` to avoid shared state conflicts
+- Retry safety: tests use unique timestamps/UUIDs per run; safe to retry on failure
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Status | What It Provides |
+|--------|--------|-----------------|
+| DELEGATE-001 | Required | `require_delegate_permission`, `DelegationContext`, audit logging |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| DELEGATE-005 | Wraps chat delegation for API key access |
+
+### Merge Strategy
+
+**Sequential (after DELEGATE-001)** -- Changes are additive (new service files, new router, new frontend pages). Shared infrastructure files (`main.py`, `settings.py`, `tables.py`, `local-ddb-init.py`) receive only additive modifications.
+
+### Merge Checklist
+
+- [ ] `app/services/delegate_chat.py` created
+- [ ] Delegation endpoints added to `app/routers/messaging.py`
+- [ ] `managingCreatorId` added to `authStore.ts`
+- [ ] All 15 E2E tests pass
+- [ ] Feature flag `CHAT_DELEGATION_ENABLED` added to `.env.local.example`
+- [ ] All E2E tests pass
+- [ ] No regressions in existing test suite

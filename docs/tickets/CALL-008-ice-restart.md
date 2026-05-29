@@ -509,190 +509,93 @@ CALL-008 Phase 5 (auto-end)  +  Phase 6 (backoff)
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 Unit Tests: State Machine Reconnection Logic
+### Unit Tests (pytest)
 
-**File**: `frontend/src/pages/messages/callStateMachine.test.ts` (exists, 202 lines)
+**Test file**: `tests/test_call_8.py`
 
-These tests validate the state machine in isolation (no `RTCPeerConnection` needed):
+**Mock setup**: moto mock for DynamoDB (call session tables). Mock RTCPeerConnection for frontend unit tests. Chromium fake media devices for E2E.
 
-1. **CONNECTION_LOST from connected -> reconnecting**: Verify phase transition and retry count preserved.
-2. **RECONNECT_ATTEMPT within budget**: `retryCount < maxRetries` -> transitions to `outgoing_connecting`, increments retryCount.
-3. **RECONNECT_ATTEMPT exhausted**: `retryCount >= maxRetries` -> transitions to `failure`.
-4. **RECONNECT_ATTEMPT when offline**: `isOnline: false` -> transitions to `failure`.
-5. **RECONNECT_ATTEMPT when tab hidden**: `isTabVisible: false` -> transitions to `failure`.
-6. **CONNECT after reconnect**: Resets `retryCount` to 0.
-7. **NETWORK_OFFLINE during connected**: Moves to `reconnecting`.
-8. **NETWORK_ONLINE during reconnecting**: Moves to `outgoing_connecting` without incrementing retryCount.
-9. **Rapid NETWORK_OFFLINE/ONLINE cycling**: Verify state remains consistent.
-10. **CONNECTION_LOST while already reconnecting**: Stays in `reconnecting` (no-op, since reconnecting is not in the allowed source phases).
+| Test Function | Description |
+|---|---|
+| `test_create_resource` | Create primary resource; verify stored correctly |
+| `test_lifecycle_transitions` | Verify allowed state transitions succeed |
+| `test_invalid_transition_rejected` | Invalid transition returns 409 |
+| `test_authorization_check` | Non-participant returns 403 |
+| `test_idempotent_operation` | Repeated call returns same result |
+| `test_cleanup_on_end` | Resources cleaned up after call ends |
 
-### 5.2 Unit Tests: ICE Restart Hook Logic
+### Integration Tests
 
-<!-- NOTE: frontend/src/hooks/useRtcPeerConnection.test.ts does NOT exist — new implementation required -->
-**File**: `frontend/src/hooks/useRtcPeerConnection.test.ts` (proposed)
+Cross-service tests with real DynamoDB Local:
 
-Using mocked `RTCPeerConnection`:
+1. Full call lifecycle through real DDB (invite -> accept -> connect -> end)
+2. Signaling relay: offer/answer/ICE exchange between two sessions
+3. State machine transitions verified end-to-end
 
-1. **ICE disconnected -> 3s grace period -> CONNECTION_LOST**: Mock `iceConnectionState` change to `disconnected`, verify no dispatch for 3 seconds, then verify `CONNECTION_LOST` dispatched.
-2. **ICE disconnected -> connected within grace period**: No `CONNECTION_LOST` dispatched, timer cleared.
-3. **ICE failed -> immediate CONNECTION_LOST**: No grace period for `failed` state.
-4. **performIceRestart called**: Verify `createOffer({ iceRestart: true })` called, `setLocalDescription` called, signaling event sent.
-5. **TURN credentials refreshed before restart**: Verify `fetchTurnCredentials` called and `setConfiguration` updated.
-6. **Restart offer fails**: Verify `CONNECTION_LOST` re-dispatched (will trigger next retry).
-7. **Remote restart offer received**: Verify `setRemoteDescription`, `createAnswer`, `setLocalDescription`, signaling answer sent.
-8. **Remote restart offer when no PeerConnection**: Verify `FAIL` dispatched.
+### E2E Tests (Playwright)
 
-### 5.3 Integration Tests: ConversationView Call Flows
+**Test file**: `frontend/e2e/call-8.spec.ts`
 
-**File**: `frontend/src/pages/messages/ConversationView.call_flows.test.tsx` (exists, 189 lines)
+**Auth pattern**: `injectAuth(page, "alice")` for caller; `injectAuth(page, "bob")` for callee; separate browser contexts for two-peer tests
 
-Extend the existing test suite:
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | Call invite creates session | POST invite -> 200 with call_id |
+| 2 | Call accept transitions state | POST accept -> state = accepted |
+| 3 | Signaling relay delivers events | POST signal -> SSE event received by peer |
+| 4 | Connected state shows overlay | Both peers reach connected; overlay visible |
+| 5 | End call cleans up resources | POST end -> state = ended; tracks stopped |
+| 6 | Call overlay shows correct UI | Ringing/connected/ended states render correctly |
+| 7 | Feature flag gates functionality | Disabled flag -> call button hidden |
+| 8 | Unauthenticated returns 401 | No session -> 401 |
+| 9 | Non-participant returns 403 | Third party -> 403 |
+| 10 | Non-existent call returns 404 | Invalid call_id -> 404 |
+| 11 | Invalid transition returns 409 | End already-ended call -> 409 |
 
-1. **Full ICE restart cycle via CustomEvents**: Dispatch `messaging:call-event` with `event_type: "webrtc.offer"` and `payload.iceRestart: true` while in `connected` state. Verify overlay shows "Reconnecting" then "Connected" after answer exchange.
-2. **Auto-end on failure**: Verify `endCall` mutation is called when machine reaches `failure`.
-3. **Network restore triggers restart**: Simulate `offline` event -> verify "Reconnecting", then `online` event -> verify restart initiated.
+**Negative tests**: 401 unauthenticated, 403 non-participant, 404 non-existent call, 409 invalid transition, 422 invalid payload
 
-### 5.4 E2E Tests — IMPLEMENTED
+**Edge cases**: Concurrent accept/decline, call timeout (30s), ICE restart during connected state, tab backgrounding, network offline
 
-**File**: `frontend/e2e/webrtc-ice-restart.spec.ts` (exists, 777 lines)
+### Test Data Requirements
 
-Since E2E tests cannot create real WebRTC connections (no second browser with media), these tests focus on the signaling and state machine integration:
+Create DM conversation between Alice and Bob in `beforeAll`. Use `--use-fake-device-for-media-stream` Chromium flag for media tests.
 
-1. **Section: ICE restart signaling route validation**
-   - Create a call session in `connected` state via DDB seeding
-   - Send a `webrtc.offer` signaling event via the backend signaling route
-   - Verify it is delivered (event appears in recipient's Events table)
-   - Send a `webrtc.answer` back, verify delivery
+**Test users**: Alice (USER, caller), Bob (USER, callee), Root (ROOT, admin for feature flags)
 
-2. **Section: TURN credential refresh during active call**
-   - Create a call in `connected` state
-   - Issue TURN credentials (should succeed since state is `connected`)
-   - Verify credentials contain valid `ice_servers` array
+### CI/Pipeline
 
-3. **Section: Signaling rejected in terminal state**
-   - End a call (state becomes `ended`)
-   - Attempt to route `webrtc.offer` -> verify 400/409 rejection with `invalid_state` code
-
-4. **Section: UI state machine via call events**
-   - Use `page.evaluate` to dispatch `messaging:call-event` CustomEvents
-   - Verify overlay transitions: `connected` -> `reconnecting` -> `connected` (via simulated offer/answer)
-   - Verify overlay shows "Call failed to reconnect." after exhausting retries
-
-### 5.5 Manual QA Scenarios
-
-For full validation once CALL-002 provides a real `RTCPeerConnection`:
-
-| Scenario | Steps | Expected |
-|----------|-------|----------|
-| Wi-Fi to cellular | Start call on Wi-Fi, disable Wi-Fi adapter | Overlay shows "Reconnecting...", call resumes within 5-10s on cellular |
-| Brief packet loss | Simulate 5s network throttle via DevTools | No visible interruption (grace period absorbs it) |
-| Sustained loss | Simulate 30s network block | Call shows "Reconnecting...", fails after 2 retries, shows "Call failed to reconnect." |
-| Tab background (desktop) | Switch to another tab for 30s | Call continues (ICE keep-alive maintains connection) |
-| Tab background (mobile) | Background the browser app for 60s | On foreground: "Reconnecting..." -> auto-restart -> "Connected" |
-| TURN server failure | Kill TURN server mid-call | Restart attempts fetch new TURN creds, connection re-established via alternate path |
-| Both peers lose network | Both go offline simultaneously | Both enter `reconnecting`, whichever comes online first sends restart offer |
-
-### 5.6 Metrics Validation
-
-The existing metrics infrastructure in `app/metrics.py` records signaling events via `_record_signaling_metric`. After ICE restart implementation, verify:
-
-- `webrtc_signaling_event_total{outcome="success", event_type="webrtc.offer"}` increments during restart
-- `webrtc_call_duration` metric reflects the total call time (including reconnection periods)
-- A new metric `webrtc_ice_restart_total{outcome="success|failure"}` should be added to track restart success rate across the fleet
-
-### 5.7 Regression Concerns
-
-1. **Existing `CONNECT` event handling**: Ensure that `CONNECT` dispatched from ICE `connected` state does not conflict with the initial connection `CONNECT` (it doesn't -- both are accepted from `outgoing_connecting`).
-2. **Retry count reset**: After a successful restart (`CONNECT`), `retryCount` resets to 0. Verify that a subsequent failure gets the full retry budget again.
-3. **Teardown during restart**: If user clicks "Cancel" while in `outgoing_connecting` (during restart), verify `teardownCallResources` is called and `call.end` is sent.
-4. **Concurrent restart attempts**: If both peers detect failure simultaneously and both send restart offers, the "glare" scenario must be handled (per WebRTC spec: the peer with the lower session ID should roll back their offer and accept the other's).
+Serial execution (WebRTC requires sequential peer setup). `VITE_MESSAGING_WEBRTC_DIRECT_CALL_ENABLED=true`. Retry-safe.
 
 ---
 
-## 6. Error Handling Matrix
+## Dependencies & Merge Safety
 
-| Error Scenario | Behavior | User-Facing Message | Recovery Action |
-|----------------|----------|---------------------|-----------------|
-| ICE disconnected (brief) | Grace period (3s) before showing reconnecting | No message if reconnects within grace period | Auto-resolve |
-| ICE failed after retries | All restart attempts exhausted | "Call failed to reconnect." | End call; allow re-call |
-| TURN credential refresh failure | Cannot get new TURN creds | "Connection lost. Please try again." | End call; re-initiate |
-| Signaling server unavailable | Cannot send restart offer | "Reconnection failed: server unavailable." | Retry on reconnect |
-| Glare (both send offers) | Lower session ID rolls back | No user message; transparent | Auto-resolve per WebRTC spec |
-| Network returns but peer gone | Restart offer sent; no answer | "Other party left the call." | End call |
-| Browser tab suspended | ICE keep-alive paused | "Reconnecting..." on foreground | Auto-restart on foreground |
+### Depends On
 
----
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| CALL-002 | RTCPeerConnection with ICE state monitoring | Implemented | No -- must merge after |
 
-## 7. Observability & Monitoring
+### Depended On By
 
-| Metric Name | Type | Labels | Description |
-|-------------|------|--------|-------------|
-| `webrtc_ice_restart_total` | Counter | `outcome={success,failure}` | ICE restart attempts |
-| `webrtc_ice_restart_duration_ms` | Histogram | -- | Time from disconnect to reconnect |
-| `webrtc_ice_state_change_total` | Counter | `from_state`, `to_state` | ICE state transitions |
-| `webrtc_grace_period_absorbed_total` | Counter | -- | Disconnects resolved within grace period |
-| `webrtc_glare_resolution_total` | Counter | -- | Concurrent offer conflicts resolved |
-| `webrtc_turn_refresh_total` | Counter | `result={success,failure}` | TURN credential refreshes |
+| Ticket | What It Needs |
+|---|---|
+| CALL-009 | ICE restart for recording continuity |
 
-### Alerts
+### Merge Strategy
 
-| Alert | Condition | Severity |
-|-------|-----------|----------|
-| ICE restart failure rate > 30% | Rolling 1h | P2 |
-| TURN refresh failures > 5 in 10min | Spike detection | P1 |
-| Average reconnect time > 15s | Rolling 1h | P3 |
+Sequential after CALL-002. Extends peer connection hook with ICE restart logic.
 
----
+### Merge Checklist
 
-## 8. Performance Considerations
-
-| Concern | Mitigation |
-|---------|-----------|
-| Grace period too short (false UI flicker) | 3s default; configurable; debounce state changes |
-| TURN credential refresh latency | Pre-fetch new creds 60s before expiry; cache |
-| Retry backoff blocking user | Show progress ("Attempt 2 of 3..."); allow manual cancel |
-| ICE candidate gathering on restart | Use `iceRestart: true` on createOffer; reuse existing transport |
-| Memory from accumulated candidates | Clear candidate list on each restart attempt |
-
----
-
-## 9. Rollout Plan
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `ICE_RESTART_ENABLED` | `true` | Enable automatic ICE restart |
-| `ICE_RESTART_MAX_RETRIES` | `3` | Maximum restart attempts |
-| `ICE_GRACE_PERIOD_MS` | `3000` | Grace period before showing reconnecting UI |
-| `ICE_RESTART_BACKOFF_MS` | `2000` | Initial backoff between retries |
-
-### Canary
-
-1. **Week 1**: Deploy with `ICE_RESTART_MAX_RETRIES=1`. Monitor restart success rate.
-2. **Week 2**: Increase to 3 retries. Verify no infinite loops.
-3. **Week 3**: Full rollout. Monitor reconnect duration and user satisfaction.
-
----
-
-## 10. Expanded E2E Test Details
-
-### Additional Edge Cases (4 tests)
-
-| # | Test | Assertion |
-|---|------|-----------|
-| E1 | Grace period prevents UI flicker | 2s disconnect resolves; no "Reconnecting..." shown |
-| E2 | Retry counter resets after success | After 1 restart success, next failure gets full retry budget |
-| E3 | Cancel during reconnection | User clicks end; teardown called; no orphan connections |
-| E4 | Background tab returns after 2 minutes | ICE restart triggers; call reconnects |
-
-### Negative Tests (3 tests)
-
-| # | Test | Assertion |
-|---|------|-----------|
-| N1 | ICE restart disabled by flag | Set flag=false; disconnect goes straight to "Call failed" |
-| N2 | All TURN servers unreachable | Restart fails; clean termination |
-| N3 | Peer offline permanently | All retries exhaust; "Call ended" after max retries * backoff |
+- [ ] Backend endpoint/service changes registered in `app/main.py`
+- [ ] Frontend hooks and components created/modified
+- [ ] Settings and feature flags configured
+- [ ] DDB tables added if needed (`scripts/local-ddb-init.py`)
+- [ ] E2E tests pass in CI
+- [ ] No breaking changes to existing call endpoints
 
 ---
 

@@ -1875,3 +1875,88 @@ The `send_alert_email()` function is called from the alert fanout path, which ru
   "Message": "{\"notificationType\":\"Complaint\",\"complaint\":{\"feedbackId\":\"0102017890abcdef-...\",\"complaintSubType\":null,\"complainedRecipients\":[{\"emailAddress\":\"annoyed@example.com\"}],\"timestamp\":\"2026-05-27T13:00:00.000Z\",\"complaintFeedbackType\":\"abuse\"},\"mail\":{\"messageId\":\"0102017890abcdef-cafebabe\",\"timestamp\":\"2026-05-27T12:55:00.000Z\",\"source\":\"noreply@staging.example.com\",\"destination\":[\"annoyed@example.com\"]}}"
 }
 ```
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_email_delivery.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_send_logs_failure` | Logger called with exception() on SES error |
+| 2 | `test_send_returns_message_id` | Non-None string on success |
+| 3 | `test_send_disabled_returns_none` | alerts_email_enabled=False; None |
+| 4 | `test_record_sent_writes_item` | DDB item with status=sent |
+| 5 | `test_bounce_suppresses_hard` | Permanent bounce creates SUPPRESS item |
+| 6 | `test_bounce_skips_transient` | Transient bounce; no SUPPRESS item |
+| 7 | `test_complaint_suppresses` | All complainants suppressed |
+| 8 | `test_is_suppressed_true` | Correct after suppress_email() |
+| 9 | `test_is_suppressed_fails_open` | DDB error; returns False |
+| 10 | `test_ses_notification_bounce` | POST bounce JSON; 200; bounce recorded |
+
+All tests use moto-mocked DynamoDB.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Send filters suppressed addresses | alerts service + email_delivery service |
+| 2 | SES notification processes bounce and suppresses | ses_notifications router + email_delivery |
+| 3 | Admin stats aggregates across statuses | admin_email router + email_delivery service |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/email-delivery.spec.ts` -- 18 tests
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; CSRF header for mutations.
+
+Sections: 1 (delivery API, 6), 2 (SES notification webhook, 4), 3 (suppression, 3), 4 (admin UI, 5)
+
+**Negative/edge tests**: 403 for non-admin on stats, bounce auto-suppresses, complaint auto-suppresses
+
+### Test Data Requirements
+
+- DDB seeds: email_delivery table with ByStatus GSI
+- Test users: Root (admin), Alice (non-admin)
+- SES mock (moto) for send_email
+
+### CI/Pipeline
+
+- Feature flags: ALERTS_EMAIL_ENABLED=1, EMAIL_SUPPRESSION_ENABLED=1
+- Serial execution (1 worker), 1 retry per playwright.config.ts
+- Retry-safe: unique timestamps in test data
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | Standalone feature |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| PLATFORM-007 | Pattern | SMS production follows same delivery tracking pattern |
+
+### Merge Strategy
+
+**Independent** -- No prerequisites. Extends existing send_alert_email().
+
+### Merge Checklist
+
+- [ ] send_alert_email() logs errors and returns message_id
+- [ ] email_delivery DDB table with ByStatus GSI
+- [ ] SES notification webhook at /internal/ses/notifications
+- [ ] Suppression list with auto-suppress on hard bounce/complaint
+- [ ] Admin endpoints for stats/bounces/complaints/suppressed
+- [ ] EmailDeliveryPage admin dashboard
+- [ ] E2E pass: `npx playwright test e2e/email-delivery.spec.ts`

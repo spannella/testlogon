@@ -2330,6 +2330,105 @@ Tailwind `rtl:` variant handles most cases automatically when `dir="rtl"` is set
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_public_profile.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_public_profile_returns_full_data` | Public profile returns full data verified |
+| 2 | `test_not_found_returns_404` | Not found returns 404 verified |
+| 3 | `test_hidden_profile_returns_404` | Hidden profile returns 404 verified |
+| 4 | `test_follower_counts_from_profile` | Follower counts from profile verified |
+| 5 | `test_post_count_accuracy` | Post count accuracy verified |
+| 6 | `test_follow_status_when_authenticated` | Follow status when authenticated verified |
+| 7 | `test_follow_status_not_authenticated` | Follow status not authenticated verified |
+| 8 | `test_has_subscription_plans` | Has subscription plans verified |
+| 9 | `test_canonical_redirect_field` | Canonical redirect field verified |
+| 10 | `test_public_posts_visible` | Public posts visible verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Profile loads with follow status from social graph + subscription plans from subscription server
+2. Post count increments on newsfeed create and decrements on delete propagate to profile
+3. Profile discoverability state change (DEACTIVATED) immediately returns 404 on public profile endpoint
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/public-profile.spec.ts`
+**Sections**: 110-114 (27 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | GET public profile by user_sub | 200; all fields present including counts |
+| 2 | Hidden profile returns 404 | Discoverability=DEACTIVATED -> 404 |
+| 3 | Profile includes follow status for authenticated viewer | is_following=true after follow |
+| 4 | Profile posts pagination | limit=12 returns 12 items + cursor |
+| 5 | Locked posts show metadata but not content | locked=true, body_preview=null |
+| 6 | Follow button works | Click Follow; button changes to Following; count increments |
+| 7 | Posts tab shows post grid | Post cards rendered in 3-column grid |
+| 8 | About tab shows bio and location | Description, location, member since visible |
+| 9 | Post card click navigates to post detail | Navigate to /feed/{post_id} |
+| 10 | Subscribe button shown for creator with plans | Button visible |
+| 11 | Subscribe button hidden for user without plans | Button absent |
+| 12 | OG meta tags set correctly | meta[property=og:title] contains display name |
+
+**Negative tests**: 401 unauthenticated profile-posts, 404 non-existent identifier, 404 deactivated profile, 422 invalid filter param
+
+**Edge cases**: Canonical redirect when identifier != alias, zero follower counts render as 0, cover photo fallback gradient
+
+### Test Data Requirements
+
+- **DDB seeds**: Seeded profiles with display_name/follower_count/post_count in profiles table; posts in app_single_table GSI2
+- **Test users**: Alice (viewer), Bob (creator with posts and plans)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: None (profile is always accessible)
+- **Serial execution**: Profile posts tests must run after post seed completes
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| SOC-001 | Follow system for follower/following counts and follow button |
+| SOCIAL-003 | Global search for profile discovery |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| SOCIAL-005 | Leaderboard widget integration on creator profile |
+| SOCIAL-006 | Hashtag links from profile posts tab |
+
+### Merge Strategy: **Sequential**
+
+Requires SOC-001 follow counts infrastructure. Deploy after follow system is stable.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix A: URL Sharing Preview
 
 When a profile URL (`/u/alice_creator`) is shared on social media, the link preview should show:

@@ -827,6 +827,66 @@ Both Pydantic model validation (returns 422) and server-side enforcement (return
 
 ---
 
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+| Test | Description |
+|------|-------------|
+| `test_presign_returns_valid_upload_url_and_ticket` | POST with valid video content type returns `upload_url`, `ticket_id`, `key` |
+| `test_presign_rejects_non_video_content_type` | `content_type='application/pdf'` returns 400/422 |
+| `test_presign_rejects_oversized_file` | `file_size_bytes > 10GB` returns 422 (Pydantic `le=` validation) |
+| `test_presign_rejects_zero_size_file` | `file_size_bytes=0` returns 422 (Pydantic `ge=1` validation) |
+| `test_presign_requires_authentication` | No auth cookie/token returns 401 |
+| `test_presign_s3_key_follows_path_convention` | S3 key matches `vod/{user}/raw/{year}/{month}/{video_id}/{filename}` |
+| `test_presign_dev_mode_returns_mock_url` | In dev mode, `upload_url` starts with `/mock/s3/` |
+| `test_complete_with_valid_ticket_creates_asset` | After uploading to S3, complete returns video asset record with `video_id` |
+| `test_complete_validates_head_object_exists` | Complete without actual S3 upload returns error (HeadObject fails) |
+| `test_complete_rejects_expired_ticket` | Ticket older than 15 minutes returns 403 |
+| `test_complete_rejects_mismatched_key` | `key != ticket.s3_key` returns 403 |
+| `test_complete_deletes_ticket_after_success` | Ticket is removed from DDB after successful completion |
+
+**Framework**: pytest + moto (DynamoDB mock + S3 mock)
+**Test file**: `tests/test_vod_upload.py`
+
+### Integration Tests
+
+| Scenario | Services | Assertion |
+|----------|----------|-----------|
+| Valid MP4 upload (256 bytes) | vod.py + S3 mock | 200 + asset record created in VideoMetadata table |
+| Valid WebM upload | vod.py + S3 mock | 200 + correct `content_type` stored |
+| Presign then complete without S3 PUT | vod.py + S3 mock | HeadObject returns NoSuchKey; error response |
+| Two users: A presigns, B tries to complete | vod.py + sessions | 403 (ticket not found for user B) |
+
+### E2E Tests (Playwright)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Presign returns upload URL for valid video | 200; `upload_url` truthy; `key` contains `vod/` |
+| 2 | Presign rejects non-video content type | 422 (Pydantic pattern validation) |
+| 3 | Presign rejects file exceeding size limit | 422 (Pydantic `le` validation) |
+| 4 | Full presign -> PUT -> complete flow | 200; asset has `video_id`, `status` |
+| 5 | Complete rejects mismatched S3 key | 403 |
+| 6 | Complete rejects nonexistent ticket | 403 or 404 |
+| 7 | Full upload creates video record with size_bytes | `asset.size_bytes` matches uploaded file size |
+| 8 | Presign stores ticket in DynamoDB | After presign, ticket exists with correct attributes |
+
+**Auth**: `injectAuth(page, "alice")` + CSRF header via `x-csrf-token`
+**Test file**: `frontend/e2e/video-upload.spec.ts`
+
+### Test Data Requirements
+- DDB tables: `VideoMetadata` (with GSIs), `sessions`
+- S3 bucket: `video_upload_bucket` (`local-uploads`) pre-created by moto in dev mode
+- Test users: Alice (USER), Bob (USER)
+- Sessions seeded by `e2e_session_setup.py`
+
+### CI/Pipeline
+- Feature flag: None required (endpoints are additive under `/ui/videos/upload/*`)
+- Serial execution with `workers: 1`
+- Retry-safe (each test presigns a fresh ticket; no shared state between tests)
+
+---
+
 ## Appendix: File Reference
 
 | Path | Role |

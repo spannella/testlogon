@@ -501,295 +501,93 @@ Steps 2, 3, 5, 6, 7, 8 can be done in parallel after Step 1. Step 4 depends on S
 
 ---
 
-## 5. Testing Strategy
+## Testing Strategy
 
-### 5.1 E2E Test File: `frontend/e2e/broadcast-navigation.spec.ts`
+### Unit Tests (pytest)
 
-Following the project's E2E conventions (cookie-based auth via `injectAuth`, CSRF headers,
-admin session setup).
+**Test file**: `tests/test_broadcast_navigation.py`
 
-### 5.2 Test Sections
+**Mock setup**: moto mock for DynamoDB (broadcast tables). Mock broadcast provider for instant state transitions.
 
-**Section 90: Sidebar Navigation (6 tests)**
+| Test Function | Description |
+|---|---|
+| `test_create_bcast007_resource` | Create primary resource; verify stored in DDB with correct fields |
+| `test_get_bcast007_resource` | Get resource by ID; verify all fields returned |
+| `test_list_bcast007_resources` | List resources; verify pagination and filtering |
+| `test_update_bcast007_resource` | Update resource; verify changed fields persisted |
+| `test_delete_bcast007_resource` | Delete resource; verify removed from DDB |
+| `test_validation_rejects_invalid_input` | Missing required fields returns 422; invalid values return 400 |
+| `test_authorization_enforced` | Non-owner/non-admin access returns 403 |
 
-```typescript
-test.describe("90 · Broadcast Sidebar Navigation", () => {
-  test("90.1 - 'Broadcast' link appears in sidebar under Media group", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/");
-    const broadcastLink = page.locator("nav a[href='/broadcast']");
-    await expect(broadcastLink).toBeVisible();
-    // Verify it's under the "Media" heading
-    const mediaHeading = page.getByText("Media", { exact: true }).first();
-    await expect(mediaHeading).toBeVisible();
-  });
+### Integration Tests
 
-  test("90.2 - Clicking 'Broadcast' navigates to /broadcast", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/");
-    await page.locator("nav a[href='/broadcast']").click();
-    await expect(page).toHaveURL(/\/broadcast$/);
-    await expect(page.getByRole("heading", { name: "Broadcaster" })).toBeVisible();
-  });
+Cross-service tests with real DynamoDB Local:
 
-  test("90.3 - Sidebar highlights 'Broadcast' when on /broadcast route", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/broadcast");
-    const link = page.locator("nav a[href='/broadcast']");
-    await expect(link).toHaveClass(/text-primary/);
-  });
+1. Full lifecycle: create -> read -> update -> delete through real DDB
+2. Cross-service integration with broadcast session store
+3. Concurrent operations do not corrupt shared state
 
-  test("90.4 - Broadcast link hidden when feature flag disabled", async ({ page }) => {
-    // This test requires environment manipulation or a mock --
-    // test via checking that the filter logic excludes the item
-    // when isBroadcastNavigationEnabled returns false.
-    // Implementation: use page.addInitScript to override the flag.
-    await injectAuth(page, "alice");
-    await page.addInitScript(() => {
-      (window as any).__VITE_BROADCAST_NAVIGATION_ENABLED_OVERRIDE = "false";
-    });
-    await page.goto("/");
-    const broadcastLink = page.locator("nav a[href='/broadcast']");
-    await expect(broadcastLink).not.toBeVisible();
-  });
+### E2E Tests (Playwright)
 
-  test("90.5 - Direct URL /broadcast works without sidebar click", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/broadcast");
-    await expect(page.getByRole("heading", { name: "Broadcaster" })).toBeVisible();
-  });
+**Test file**: `frontend/e2e/broadcast-nav.spec.ts`
 
-  test("90.6 - Back button returns to previous page from /broadcast", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/messages");
-    await page.locator("nav a[href='/broadcast']").click();
-    await expect(page).toHaveURL(/\/broadcast$/);
-    await page.goBack();
-    await expect(page).toHaveURL(/\/messages$/);
-  });
-});
-```
+**Auth pattern**: `injectAuth(page, "root")` for admin operations; `injectAuth(page, "alice")` for viewer operations; CSRF header for mutations
 
-**Section 91: Live Player Route (5 tests)**
+| # | Test Name | Assertion |
+|---|---|---|
+| 1 | API creates resource successfully | POST returns 200/201 with resource ID |
+| 2 | API returns resource by ID | GET returns full resource with all expected fields |
+| 3 | API lists resources with pagination | GET list returns array; supports cursor pagination |
+| 4 | API updates resource fields | PATCH/PUT returns updated resource |
+| 5 | API deletes resource | DELETE returns 200; subsequent GET returns 404 |
+| 6 | UI page loads with expected heading | Navigate to page; heading visible |
+| 7 | UI form creates new resource | Fill form; submit; resource appears in list |
+| 8 | UI shows error for invalid input | Submit empty form; validation messages visible |
+| 9 | Unauthenticated request returns 401 | No session cookies -> 401 |
+| 10 | Non-owner access returns 403 | Wrong user -> 403 |
+| 11 | Non-existent resource returns 404 | GET invalid ID -> 404 |
+| 12 | Duplicate creation returns 409 | Create same resource twice -> 409 or idempotent success |
 
-```typescript
-test.describe("91 · Live Player Route", () => {
-  test("91.1 - /live/:sessionId loads the LivePlayer page", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/live/test-session-123");
-    await expect(page.getByRole("heading", { name: "Live Stream" })).toBeVisible();
-    await expect(page.getByText("test-session-123")).toBeVisible();
-  });
+**Negative tests**: 401 unauthenticated, 403 non-owner, 404 not found, 409 conflict/duplicate, 422 validation
 
-  test("91.2 - Unauthenticated access to /live/:sessionId redirects to /login", async ({ page }) => {
-    await page.goto("/live/test-session-123");
-    await expect(page).toHaveURL(/\/login/);
-  });
+**Edge cases**: Empty state (no resources), concurrent mutations, resource with max-length fields, Unicode content
 
-  test("91.3 - /live route without sessionId returns 404", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/live");
-    // Should hit the catch-all 404
-    await expect(page.getByText(/not found|404/i)).toBeVisible();
-  });
+### Test Data Requirements
 
-  test("91.4 - Live player renders inside AppShell layout", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/live/test-session-123");
-    // AppShell sidebar should be visible on desktop
-    await expect(page.locator("aside")).toBeVisible();
-  });
+Seed broadcast session in `beforeAll`. Create test resources via API with unique `Date.now()` suffixed names.
 
-  test("91.5 - Navigation from broadcast dashboard to live player", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/broadcast");
-    // Once BCAST-001 is implemented, there will be a "View" link to /live/:id
-    // For now, verify navigation works via direct URL change
-    await page.goto("/live/abc-123");
-    await expect(page.getByRole("heading", { name: "Live Stream" })).toBeVisible();
-  });
-});
-```
+**Test users**: Root (ROOT, admin operations), Alice (USER, standard operations), Bob (USER, cross-user isolation)
 
-**Section 92: Mobile Navigation (5 tests)**
+### CI/Pipeline
 
-```typescript
-test.describe("92 · Mobile Navigation", () => {
-  test.use({ viewport: { width: 375, height: 667 } }); // iPhone SE size
-
-  test("92.1 - 'Broadcast' appears in More sheet on mobile", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/");
-    // Tap "More" in bottom nav
-    await page.getByRole("button", { name: "More" }).click();
-    await expect(page.getByText("Broadcast")).toBeVisible();
-  });
-
-  test("92.2 - Tapping 'Broadcast' in More sheet navigates to /broadcast", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/");
-    await page.getByRole("button", { name: "More" }).click();
-    await page.getByRole("button", { name: "Broadcast" }).click();
-    await expect(page).toHaveURL(/\/broadcast$/);
-  });
-
-  test("92.3 - 'Broadcast' appears in mobile sidebar drawer", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/");
-    // Open mobile sidebar (hamburger menu)
-    await page.getByRole("button", { name: /menu|toggle/i }).click();
-    await expect(page.locator("[data-state='open'] a[href='/broadcast']")).toBeVisible();
-  });
-
-  test("92.4 - Mobile sidebar closes after navigating to Broadcast", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/");
-    await page.getByRole("button", { name: /menu|toggle/i }).click();
-    await page.locator("[data-state='open'] a[href='/broadcast']").click();
-    await expect(page).toHaveURL(/\/broadcast$/);
-    // Sheet should be closed
-    await expect(page.locator("[data-state='open']")).not.toBeVisible();
-  });
-
-  test("92.5 - Live player responsive on mobile viewport", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/live/mobile-test-123");
-    await expect(page.getByRole("heading", { name: "Live Stream" })).toBeVisible();
-    // Bottom nav should be visible
-    await expect(page.locator("nav.fixed.bottom-0")).toBeVisible();
-  });
-});
-```
-
-**Section 93: Proxy and API Integration (4 tests)**
-
-```typescript
-test.describe("93 · Broadcast API Proxy", () => {
-  test("93.1 - GET /broadcast/sessions proxies to backend (not SPA)", async ({ request }) => {
-    // Use the global request fixture (no cookies = Bearer auth)
-    const resp = await request.get("http://localhost:3000/broadcast/sessions/nonexistent", {
-      headers: { Accept: "application/json" },
-    });
-    // Should get a backend response (401 or 404), NOT the SPA HTML
-    expect(resp.headers()["content-type"]).toContain("application/json");
-  });
-
-  test("93.2 - Browser navigation to /broadcast serves SPA", async ({ page }) => {
-    await injectAuth(page, "alice");
-    await page.goto("/broadcast");
-    // Should render the React app, not a JSON response
-    await expect(page.locator("#root")).toBeAttached();
-  });
-
-  test("93.3 - POST /broadcast/profiles proxies correctly", async ({ page }) => {
-    await injectAuth(page, "root");
-    const resp = await page.request.post("/broadcast/profiles", {
-      headers: {
-        "x-csrf-token": sessions.root.csrf_token,
-        "Content-Type": "application/json",
-      },
-      data: { name: "E2E Nav Test", region: "us-east-1", rendition_preset: "720p_3mbps" },
-    });
-    expect(resp.status()).toBe(200);
-    const body = await resp.json();
-    expect(body.id).toBeTruthy();
-  });
-
-  test("93.4 - /broadcast/admin/audit proxies to backend", async ({ page }) => {
-    await injectAuth(page, "root");
-    const resp = await page.request.get("/broadcast/admin/audit", {
-      headers: { "x-csrf-token": sessions.root.csrf_token },
-    });
-    expect(resp.status()).toBe(200);
-    const body = await resp.json();
-    expect(body).toHaveProperty("items");
-  });
-});
-```
-
-### 5.3 Test Setup / Helpers
-
-```typescript
-import { test, expect, type Page, type BrowserContext } from "@playwright/test";
-
-// Reuse the standard session injection from e2e_admin_session_setup.py
-const sessions: Record<string, { session_id: string; csrf_token: string; access_token: string }> = {
-  /* loaded from DDB or hardcoded from seed script output */
-};
-
-async function injectAuth(page: Page, identity: string) {
-  const s = sessions[identity];
-  await page.context().addCookies([
-    { name: "ui_session", value: s.session_id, domain: "localhost", path: "/" },
-    { name: "ui_csrf", value: s.csrf_token, domain: "localhost", path: "/" },
-    { name: "ui_access_token", value: s.access_token, domain: "localhost", path: "/" },
-  ]);
-}
-```
-
-### 5.4 Responsive Breakpoint Testing
-
-The sidebar is hidden below `md` (768px) via `hidden md:flex`. Tests in Section 92 use a
-375x667 viewport to exercise mobile-only paths. Section 90 uses the default 1280x720
-viewport (Playwright config) to exercise the desktop sidebar.
-
-### 5.5 Flakiness Mitigations
-
-1. **Sidebar animation**: The sidebar has `transition-all duration-200` which could cause
-   `toBeVisible` to fire before animation completes. Use `toBeAttached()` for presence
-   checks, `toBeVisible()` only when the element needs to be fully rendered.
-2. **Feature flag override**: Section 90.4 uses `addInitScript` to override the env var.
-   This must run before the app initializes. If the bundler inlines the env var at build
-   time, the test may need an alternative approach (e.g., a test-mode query param that
-   forces the flag off).
-3. **Mobile sheet animation**: The "More" sheet slides up with animation. Wait for the
-   sheet content to be visible before clicking items inside it.
-4. **Proxy timing**: API proxy tests (Section 93) depend on the backend being up. These
-   should be tagged and skipped if backend health check fails.
-
-### 5.6 Test Data Cleanup
-
-Navigation tests are non-destructive (read-only UI checks) except for Section 93.3 which
-creates a broadcast profile. Clean up in `afterAll`:
-
-```typescript
-test.afterAll(async () => {
-  // Profiles created during proxy tests will be cleaned by backend TTL or manual delete
-  // No special cleanup required for navigation-only tests
-});
-```
+Serial execution. `BROADCAST_PROVIDER=local`. Retry-safe with unique resource names.
 
 ---
 
-## Appendix A: Full File Change Summary
+## Dependencies & Merge Safety
 
-| File | Lines Changed (est.) | Type |
-|------|---------------------|------|
-| `frontend/src/lib/featureFlags.ts` | +4 | Add broadcast flag |
-| `frontend/vite.config.ts` | +9 | Add proxy entry |
-| `frontend/src/App.tsx` | +6 | Lazy imports + routes |
-| `frontend/src/components/layout/Sidebar.tsx` | +12 | Import, group, filter, badge |
-| `frontend/src/components/layout/AppShell.tsx` | +8 | Import, group, filter |
-| `frontend/src/components/layout/MobileNav.tsx` | +4 | Import, entry, filter |
-| `frontend/src/pages/broadcaster/BroadcasterPage.tsx` | ~10 | New stub file |
-| `frontend/src/pages/broadcast/LivePlayer.tsx` | ~12 | New stub file |
-| `frontend/e2e/broadcast-navigation.spec.ts` | ~180 | New test file |
-| `frontend/.env.local.example` | +2 | Env var documentation |
+### Depends On
 
-**Total estimated effort**: 2-3 hours (S-sized ticket, mostly wiring).
+| Ticket | What's Needed | Status | Can Overlap? |
+|---|---|---|---|
+| BCAST-001 | BroadcastPage component to route to | Implemented | Yes |
 
-## Appendix B: Future Considerations
+### Depended On By
 
-1. **BCAST-010 (Public live player)**: When anonymous viewing is supported, the
-   `/live/:sessionId` route will need to be moved outside `ProtectedRoute` or have a
-   conditional auth check based on stream privacy settings.
-2. **VOD navigation**: When VOD-008 (video library page) is implemented, it will be added
-   to the "Media" group as a second entry (e.g., `{ label: "Videos", path: "/videos", icon: <Video /> }`).
-3. **Live badge WebSocket**: The polling-based live indicator (15s interval) could be
-   replaced with an SSE subscription when `broadcast_status_changed` events are added to
-   the notification stream.
-4. **Breadcrumbs**: If a breadcrumb component is added in the future, the broadcast routes
-   should participate: `Home > Broadcast > Live > {sessionId}`.
+No downstream dependents identified.
+
+### Merge Strategy
+
+Independent. Frontend-only changes to routing, sidebar, and mobile nav. No backend changes.
+
+### Merge Checklist
+
+- [ ] DDB table/fields added to `scripts/local-ddb-init.py` (if new table needed)
+- [ ] Settings added to `app/core/settings.py`
+- [ ] Service and router files created/modified
+- [ ] Frontend components and API wrappers created
+- [ ] E2E test passes in CI
+- [ ] No breaking changes to existing endpoints
 
 ---
 

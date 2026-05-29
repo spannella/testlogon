@@ -871,6 +871,91 @@ None. No new npm packages or Python libraries required.
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_dark_mode_sync.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_save_theme_preference_to_profile` | Save theme preference to profile verified |
+| 2 | `test_load_theme_preference_on_login` | Load theme preference on login verified |
+| 3 | `test_system_preference_detection` | System preference detection verified |
+| 4 | `test_manual_override_persists` | Manual override persists verified |
+| 5 | `test_sync_across_tabs` | Sync across tabs verified |
+| 6 | `test_default_theme_for_new_users` | Default theme for new users verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Save dark mode preference -> logout -> login on new device -> preference restored from profile
+2. System preference changes -> theme auto-switches (when set to system)
+3. Manual override persists across browser sessions via localStorage + server sync
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/dark-mode-sync.spec.ts`
+**Sections**: 1-3 (10 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Toggle dark mode persists | Click toggle; reload; dark mode still active |
+| 2 | System preference sync | Emulate prefers-color-scheme; theme matches |
+| 3 | Theme saved to server profile | PUT profile; GET profile returns saved theme |
+| 4 | Theme restored on login | Login; theme matches server preference |
+| 5 | Default theme for new user | New session; system theme applied |
+| 6 | Manual override over system | Set manual dark; system change ignored |
+
+**Negative tests**: 422 invalid theme value, 401 unauthenticated save
+
+**Edge cases**: Conflicting localStorage vs server preference, SSR/pre-render with no preference
+
+### Test Data Requirements
+
+- **DDB seeds**: User profile with theme_preference field
+- **Test users**: Alice
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: None
+- **Serial execution**: Tab sync test requires multiple browser contexts
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| Theme system (existing) | themeStore in frontend/src/stores/themeStore.ts |
+
+### Depended On By
+
+No downstream tickets depend on this feature.
+
+### Merge Strategy: **Independent**
+
+Self-contained UI preference feature. No backend schema changes.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix: Codebase Citations
 
 | Claim | File | Line(s) | Status |

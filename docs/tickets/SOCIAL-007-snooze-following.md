@@ -902,6 +902,96 @@ test.beforeAll(async ({ browser }) => {
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_snooze.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_snooze_sets_snoozed_until` | Snooze sets snoozed until verified |
+| 2 | `test_snooze_requires_active_follow` | Snooze requires active follow verified |
+| 3 | `test_unsnooze_clears_snoozed_until` | Unsnooze clears snoozed until verified |
+| 4 | `test_snoozed_list_returns_active_snoozes` | Snoozed list returns active snoozes verified |
+| 5 | `test_expired_snooze_auto_restores` | Expired snooze auto restores verified |
+| 6 | `test_feed_filters_snoozed_users_posts` | Feed filters snoozed users posts verified |
+| 7 | `test_snooze_does_not_unfollow` | Snooze does not unfollow verified |
+| 8 | `test_snooze_duration_validation` | Snooze duration validation verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Snooze Bob for 7 days -> GET /feed excludes Bob's posts -> after expiry posts reappear
+2. Notification suppression: Bob posts while snoozed by Alice -> Alice receives no alert
+3. Snooze does not affect follower/following counts
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/snooze.spec.ts`
+**Sections**: 1-3 (12 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Snooze a followed user | 200; snoozed_until set |
+| 2 | Snoozed user's posts hidden from feed | GET /feed excludes snoozed user |
+| 3 | Unsnooze restores posts in feed | GET /feed includes user again |
+| 4 | Snoozed list shows snoozed users | GET /snoozed returns list with expiry |
+| 5 | Snooze non-followed user returns 400 | 400; must follow first |
+| 6 | Snooze duration picker works | Select 7 days; snoozed_until = now + 7*86400 |
+| 7 | Snooze auto-expires | After expiry; posts reappear in feed |
+| 8 | Snooze button on profile page | Button visible; click opens duration picker |
+
+**Negative tests**: 400 snooze non-followed user, 400 invalid duration (<1 or >365 days), 404 user not found, 409 already snoozed
+
+**Edge cases**: Snooze then unfollow (snooze removed), snooze with custom duration, boundary: snoozed_until exactly at current time
+
+### Test Data Requirements
+
+- **DDB seeds**: Alice follows Bob; posts from Bob in feed; follow records in app_single_table
+- **Test users**: Alice (snoozer), Bob (snoozed)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: None (core follow enhancement)
+- **Serial execution**: Auto-expiry test may need time-based mocking or fast-forward
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| SOC-001 | Follow system — follow records to add snoozed_until field |
+| Newsfeed (existing) | Feed query needs to filter snoozed users' posts |
+
+### Depended On By
+
+No downstream tickets depend on this feature.
+
+### Merge Strategy: **Sequential**
+
+Requires SOC-001 follow system records. Adds snoozed_until attribute to follow items.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Codebase References
 
 | Claim | File | Line(s) | Status |

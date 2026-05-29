@@ -1559,3 +1559,74 @@ BroadcastChat (modified)
 | `frontend/src/pages/broadcast/BroadcastChat.tsx` | -- | Exists, needs SSE `chat:product_link` handler |
 | `frontend/src/pages/broadcast/ChatOverlay.tsx` | -- | Exists, needs compact product link rendering |
 ```
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_broadcast_chat_product_link.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_send_product_link_message` | Send product link message |
+| 2 | `test_product_link_rate_limit` | Product link rate limit |
+| 3 | `test_product_link_in_history` | Product link in history |
+| 4 | `test_text_defaults_to_text_kind` | Text defaults to text kind |
+| 5 | `test_description_truncated_200` | Description truncated 200 |
+| 6 | `test_rate_limit_independent_from_text` | Rate limit independent from text |
+| 7 | `test_product_link_no_image` | Product link no image |
+| 8 | `test_backward_compatible_no_kind` | Backward compatible no kind |
+| 9 | `test_mixed_messages_in_history` | Mixed messages in history |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/broadcast-chat-products.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~18 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `BROADCAST_CHAT_PRODUCT_LINKS_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | What It Provides | Hard/Soft |
+|--------|-----------------|-----------|
+| LCOM-001 | Broadcast Product Shelf for shelf item lookup | Hard |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| LCOM-003 | Quick-Buy 'Buy Now' button on ProductLinkCard |
+| LCOM-004 | Exclusive Pricing shown on product link cards |
+
+### Merge Strategy
+**Sequential -- requires LCOM-001 merged first. Product links reference shelf items; endpoint validates item is on shelf.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: BROADCAST_CHAT_PRODUCT_LINKS_ENABLED=true
+- [ ] Service file created/modified: `app/services/broadcast_chat_store.py (extended)`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/broadcast-chat-products.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_broadcast_chat_product_link.py`

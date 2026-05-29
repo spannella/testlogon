@@ -825,3 +825,86 @@ Every action performed via delegation writes an audit entry with:
 | `frontend/src/components/layout/AppShell.tsx` | — | Needs mobile sidebar entry | EXISTS (modify) |
 | `frontend/src/components/layout/MobileNav.tsx` | — | Needs MORE_LINKS entry | EXISTS (modify) |
 | `frontend/e2e/delegates-management.spec.ts` | — | E2E tests | NOT YET CREATED |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_delegates.py`
+
+| # | Test Function | Description | Mocks |
+|---|--------------|-------------|-------|
+| 1 | `test_add_delegate_creates_record` | Delegate record created with correct pk/sk and permissions | moto DDB |
+| 2 | `test_add_delegate_self_rejected` | 400 when creator delegates to themselves | moto DDB |
+| 3 | `test_add_delegate_duplicate_rejected` | 409 on duplicate delegate relationship | moto DDB |
+| 4 | `test_delegate_limit_enforced` | 400 when exceeding max_delegates setting | moto DDB |
+| 5 | `test_respond_invite_accept` | Status transitions to active, accepted_at set | moto DDB |
+| 6 | `test_respond_invite_decline` | Delegate record deleted on decline | moto DDB |
+| 7 | `test_update_permissions` | Permission list updated and audit entry written | moto DDB |
+| 8 | `test_revoke_delegate` | Delegate record deleted and audit entry created | moto DDB |
+| 9 | `test_check_permission_valid` | True for active delegate with required permission | moto DDB |
+| 10 | `test_check_permission_missing` | False for delegate without required permission | moto DDB |
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | Full delegation lifecycle: add, accept, update permissions, revoke | delegates, profile |
+| 2 | Creator settings enforce require_acceptance and max_delegates | delegates, settings |
+| 3 | Audit log records all delegation events with correct actor/details | delegates, audit |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/delegates-management.spec.ts`
+
+Tests use `injectAuth(page, identity)` for cookie-based auth and include CSRF headers (`x-csrf-token`) on all POST/PUT/DELETE requests. Negative tests cover 401 (unauthenticated), 403 (wrong role/user), 404 (not found), 409 (conflict), and 422 (validation) responses. Edge cases include duplicate operations (idempotency), concurrent access, and feature-flag-disabled behavior.
+
+**Total E2E tests**: 16
+
+### Test Data Requirements
+
+- DDB seeds: required tables created via `scripts/local-ddb-init.py`
+- Test users: Alice, Bob, Root, Charlie via `e2e_session_setup.py` / `e2e_admin_session_setup.py`
+- Feature flag: `None (always available)` in `.env.local`
+
+### CI/Pipeline
+
+- Feature flag: `None (always available)` must be enabled for tests to run
+- Serial execution: run with `--workers 1` to avoid shared state conflicts
+- Retry safety: tests use unique timestamps/UUIDs per run; safe to retry on failure
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Status | What It Provides |
+|--------|--------|-----------------|
+| (none) | -- | This ticket has no upstream ticket dependencies |
+
+### Depended On By
+
+| Ticket | What It Needs |
+|--------|--------------|
+| DELEGATE-002 | Permission checks and DelegationContext |
+| DELEGATE-003 | Permission checks and audit logging |
+| DELEGATE-004 | Permission checks and audit logging |
+| DELEGATE-005 | Delegation scope validation on API keys |
+
+### Merge Strategy
+
+**Independent** -- Changes are additive (new service files, new router, new frontend pages). Shared infrastructure files (`main.py`, `settings.py`, `tables.py`, `local-ddb-init.py`) receive only additive modifications.
+
+### Merge Checklist
+
+- [ ] `delegates` DDB table created in `local-ddb-init.py` with GSI1 and GSI2
+- [ ] `T.delegates` added to `app/core/tables.py`
+- [ ] `delegates_router` registered in `app/main.py`
+- [ ] Frontend route `/delegates` added to `App.tsx`
+- [ ] All 16 E2E tests pass
+- [ ] Feature flag `None (always available)` added to `.env.local.example`
+- [ ] All E2E tests pass
+- [ ] No regressions in existing test suite

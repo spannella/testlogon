@@ -773,3 +773,95 @@ let privateGroupId: string;
 | `app/core/settings.py` | — | `profile_table_name` for user profile lookups |
 | `scripts/local-ddb-init.py` | — | No `user_groups` table exists yet — new table required |
 | `app/main.py` | — | No group router registered yet — new registration required |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_user_groups.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_create_group_sets_creator_as_admin`
+  - `test_join_public_group_instant_active`
+  - `test_join_private_group_pending_approval`
+  - `test_approve_join_request_sets_active`
+  - `test_reject_join_request_sets_rejected`
+  - `test_promote_member_to_moderator`
+  - `test_remove_member_by_admin`
+  - `test_admin_succession_to_oldest_moderator`
+  - `test_admin_succession_to_oldest_member`
+
+### Integration Tests
+
+  - Group creation writes META and MEMBER records to user_groups table
+  - Leave as admin triggers succession and updates member role
+  - Discovery endpoint lists only public groups matching search query
+  - Invitation creates pending membership with invite notification
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/user-groups.spec.ts`
+**Test count**: 15
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `user_groups` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `USER_GROUPS_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| (none) | — | This ticket has no blocking dependencies |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| GROUP-002 | Group Page & Newsfeed | Requires group membership verification |
+| GROUP-003 | Group Advertising & Fundraising | Requires group admin role check |
+| GROUP-004 | Group Treasury Management | Requires group membership verification |
+
+### Merge Strategy
+
+**Independent**
+
+This ticket can be merged independently of other tickets. It introduces new tables/endpoints without modifying existing ones in a breaking way.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 15 E2E tests pass with `npx playwright test user-groups.spec.ts`

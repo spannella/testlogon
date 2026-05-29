@@ -1703,3 +1703,83 @@ Estimated time for 10K users: ~200 seconds (3.3 minutes).
 3. **Discovery endpoints**: The ticket proposes `GET /ui/discover/search`, `GET /ui/discover/suggested`, `GET /ui/discover/trending`, `GET /ui/discover/profile/{user_id}`. None of these exist yet — they are new implementation.
 4. **`TrendingCreators` DDB table**: Not defined in `local-ddb-init.py` — new table required if this design is adopted.
 5. **Frontend discovery page**: No `DiscoverPage.tsx` or similar exists yet — new implementation required.
+
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_user_discovery.py`
+
+| # | Test Function | Description |
+|---|--------------|-------------|
+| 1 | `test_soc_003_create` | Create primary entity; 201 |
+| 2 | `test_soc_003_read` | Read back entity; correct fields |
+| 3 | `test_soc_003_update` | Update entity; 200; changes reflected |
+| 4 | `test_soc_003_delete` | Delete entity; 200/204 |
+| 5 | `test_soc_003_auth_required` | No auth; 401 |
+| 6 | `test_soc_003_validation` | Invalid input; 422 |
+
+All tests use moto-mocked DynamoDB.
+
+### Integration Tests
+
+| # | Scenario | Services Involved |
+|---|----------|-------------------|
+| 1 | End-to-end happy path through all layers | router + service + DDB |
+| 2 | Error handling propagates correctly | router + service layer |
+| 3 | Feature flag disables functionality | settings + router |
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/user-discovery.spec.ts` -- 16 tests
+
+**Auth**: `injectAuth(page, identity)` for cookie auth; CSRF header for mutations.
+
+Tests cover API CRUD, UI rendering, negative cases (401/403/404/422), and edge cases.
+
+**Negative/edge tests**: 401 unauthenticated, 403 insufficient role, 404 not found, 422 validation error, 409 conflict
+
+### Test Data Requirements
+
+- DDB seeds: feature-specific tables via setup scripts
+- Test users: Alice, Bob, Root, Charlie (admin)
+- Sessions via `e2e_admin_session_setup.py`
+
+### CI/Pipeline
+
+- Feature flags: Feature-specific flags (see Rollout Plan section)
+- Serial execution (1 worker), 1 retry per playwright.config.ts
+- Retry-safe: unique timestamps in test data
+
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| SOC-001 | Required | Follow counts and mutual detection from SOC-001 |
+
+### Depended On By
+
+| Ticket | Type | Detail |
+|--------|------|--------|
+| (none) | -- | No downstream dependents identified |
+
+### Merge Strategy
+
+**Sequential** -- Requires SOC-001 merged for follow infrastructure.
+
+### Merge Checklist
+
+- [ ] Backend service and router implemented
+- [ ] DDB tables created in local-ddb-init.py (if new)
+- [ ] Frontend types added to api/types.ts
+- [ ] Frontend page/component created
+- [ ] Route added to App.tsx
+- [ ] E2E pass: `npx playwright test e2e/user-discovery.spec.ts`

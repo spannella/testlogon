@@ -1061,6 +1061,66 @@ For the developer implementing this ticket:
 
 ---
 
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+| Test | Description |
+|------|-------------|
+| `test_execute_rendition_success_parses_progress` | Mock FFmpeg stdout with 5 progress frames; verify `progress_samples` has 5 entries with correct `out_time_us` |
+| `test_execute_rendition_failure_captures_stderr` | Mock FFmpeg to emit "No such file or directory"; verify `_classify_error()` returns `source_not_found` (non-retryable) |
+| `test_execute_rendition_timeout_sends_sigterm_then_sigkill` | Mock hanging FFmpeg with `timeout_seconds=1`; verify `terminate()` then `kill()` called |
+| `test_execute_rendition_cancel_event_terminates_process` | Set cancel event after 0.5s; verify process terminated early |
+| `test_validate_and_augment_args_injects_progress_flag` | Verify output contains `-progress pipe:1` and `-nostdin` |
+| `test_validate_and_augment_args_rejects_null_bytes` | Args with `\x00` raise `ValueError` |
+| `test_patch_args_for_vod_replaces_live_flags` | Verify `-hls_flags independent_segments`, `-hls_list_size 0`, `-hls_playlist_type vod` |
+| `test_inject_rate_control_adds_maxrate_bufsize` | Input `-b:v 3500k` produces `-maxrate 4200k -bufsize 7000k` |
+| `test_classify_error_all_patterns` | Each entry in `_ERROR_PATTERNS` returns correct code and retryable flag |
+| `test_output_validation_catches_missing_segments` | Output dir with playlist but no `.ts` files raises `OutputValidationError` |
+
+**Framework**: pytest + moto (mocked `asyncio.create_subprocess_exec`)
+**Test file**: `tests/test_ffmpeg_executor.py`
+
+### Integration Tests
+
+| Scenario | Services | Assertion |
+|----------|----------|-----------|
+| Full single-rendition 360p transcode | `ffmpeg_executor.py` + real FFmpeg | Exit code 0; `360p/index.m3u8` exists with `#EXTINF` entries; `#EXT-X-ENDLIST` present |
+| Dynamic text watermark | `ffmpeg_executor.py` + `ffmpeg_abr_pipeline.py` | FFmpeg args include `drawtext` filter; output succeeds |
+| Invalid input returns nonzero exit | `ffmpeg_executor.py` | Nonexistent file path; `success == False`; classified as `source_not_found` |
+| Progress callback receives increasing values | `ffmpeg_executor.py` | Percentages monotonically non-decreasing; final near 100% |
+| Cancel event mid-transcode | `ffmpeg_executor.py` | Process terminates before completing |
+
+### E2E Tests (Playwright)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Submit transcode job with single rendition | Job transitions to `completed` with `progress_pct=100` |
+| 2 | Submit job and poll progress updates | `progress_pct` increases over time; `current_rendition` set |
+| 3 | Cancel running job mid-transcode | FFmpeg process terminated; `status=cancelled` |
+| 4 | Submit job with invalid source | `status=failed`; `error_code` indicates `source_not_found` |
+| 5 | Submit multi-rendition job | `renditions_completed` list grows; master playlist references all renditions |
+| 6 | Submit job with watermark | Job completes without error; output segments exist |
+| 7 | Job failure triggers retry | After retryable failure, `attempt` incremented; job re-enters pending |
+| 8 | Max retries exhausted produces terminal failure | After `max_attempts` failures, `status=failed` |
+
+**Auth**: `injectAuth(page, "alice")` + CSRF header
+**Test file**: `frontend/e2e/vod-pipeline.spec.ts`
+
+### Test Data Requirements
+- FFmpeg binary on PATH (installed by `scripts/setup_ubuntu.sh`)
+- Test fixture: `tests/fixtures/test_video_2s.mp4` (2-second, 320x240, ~30KB; generated with `ffmpeg -f lavfi`)
+- DDB tables: `TranscodeJobs`, `VideoMetadata`
+- Test users: Alice (USER)
+
+### CI/Pipeline
+- Feature flag: `TRANSCODE_WORKER_ENABLED=true`
+- Serial execution with `workers: 1`
+- Integration tests skip gracefully if `ffmpeg` not on PATH (`pytest.mark.skipif`)
+- Retry-safe (each test submits fresh jobs; scratch dirs cleaned in `finally`)
+
+---
+
 ## Appendix A: FFmpeg Progress Protocol Reference
 
 When invoked with `-progress <url>` (where `<url>` is `pipe:1` for stdout), FFmpeg emits a block of key=value lines every ~500ms:

@@ -812,3 +812,93 @@ test("158.7 Concurrent extractions for same file are idempotent", async () => {
 | Extraction settings (table name, provider) | `app/core/settings.py` | NOT FOUND -- new settings required |
 | Extraction endpoints in KYC router | `app/routers/kyc_cases.py` | NOT FOUND -- new endpoints required |
 | `frontend/src/pages/admin/KycCaseDetailPage.tsx` extraction panel | `frontend/src/pages/admin/` | NOT FOUND -- page does not exist yet (KYC-001 dependency) |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_kyc_documents.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_upload_document_image`
+  - `test_extract_document_fields_ocr_mock`
+  - `test_validate_document_expiry`
+  - `test_detect_document_type`
+  - `test_store_document_encrypted`
+  - `test_get_document_metadata`
+  - `test_delete_expired_document`
+
+### Integration Tests
+
+  - Document upload stores encrypted image in S3 and metadata in DDB
+  - OCR extraction populates name, DOB, document number fields
+  - Admin review shows extracted fields alongside document image
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/kyc-documents.spec.ts`
+**Test count**: 12
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `kyc_documents` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `KYC_DOC_VERIFICATION_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| KYC-001 | Admin KYC Review Dashboard | Documents reviewed through admin dashboard |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| KYC-004 | Proof of Residency | Shares document upload infrastructure |
+| KYC-006 | Sanctions & PEP Screening | Extracted name/DOB used for screening |
+| KYC-008 | Risk Scoring Engine | Document verification status feeds risk score |
+| KYC-010 | Passport & National ID Scanner | Extends document OCR capabilities |
+
+### Merge Strategy
+
+**Sequential**
+
+Merge after KYC-001. This ticket depends on tables/services introduced by those tickets.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 12 E2E tests pass with `npx playwright test kyc-documents.spec.ts`

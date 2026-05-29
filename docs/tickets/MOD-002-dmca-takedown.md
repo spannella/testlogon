@@ -1743,3 +1743,70 @@ Section 512(f) provides remedies against anyone who "knowingly materially misrep
 | `app/services/dmca_content_operations.py` | — | ALREADY EXISTS: DMCA content operation logic |
 | `scripts/local-ddb-init.py` | 437 | EXISTS: `UserEnforcementHistory` table definition |
 | `app/auth/policy.py` | 84 | EXISTS: `require_admin_scope()` for admin auth |
+
+---
+
+## Testing Strategy
+
+### Unit Tests (`tests/test_dmca_takedown.py`)
+**Framework**: pytest + moto (DynamoDB/S3 mock)
+
+| # | Test Function | What It Verifies |
+|---|--------------|-----------------|
+| 1 | `test_submit_claim_stores_record` | Submit claim stores record |
+| 2 | `test_expeditious_removal_on_valid_claim` | Expeditious removal on valid claim |
+| 3 | `test_notify_content_creator` | Notify content creator |
+| 4 | `test_counter_notice_starts_waiting` | Counter notice starts waiting |
+| 5 | `test_waiting_period_10_days` | Waiting period 10 days |
+| 6 | `test_restore_after_waiting_no_lawsuit` | Restore after waiting no lawsuit |
+| 7 | `test_repeat_infringer_tracking` | Repeat infringer tracking |
+| 8 | `test_strikes_policy_enforcement` | Strikes policy enforcement |
+| 9 | `test_claim_requires_sworn_statement` | Claim requires sworn statement |
+| 10 | `test_audit_log_all_transitions` | Audit log all transitions |
+
+### Integration Tests
+
+1. Full endpoint flow: create, read, update, delete with FastAPI TestClient + mocked DDB
+2. Auth enforcement: verify 401 without session, 403 for wrong role
+3. Validation: 422 for malformed requests, 404 for missing resources
+4. Cross-service: verify DDB writes are consistent across tables
+5. SSE/real-time: verify events published on mutations (where applicable)
+
+### E2E Tests (`frontend/e2e/dmca-takedown.spec.ts`)
+**Auth**: `injectAuth(page, identity)` for cookie auth; `apiPost(page, identity, path, body)` for CSRF-protected requests.
+
+**Total**: ~18 tests covering API CRUD, auth enforcement (401/403), validation (422), negative cases (404/409), and UI interactions.
+
+**Negative/Edge Tests**: 401 without auth, 403 for wrong role, 404 for missing resources, 409 for conflicts, 422 for validation errors.
+
+### Test Data Requirements
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- Session seeding: `python3 e2e_admin_session_setup.py` before test run
+
+### CI/Pipeline
+- Feature flags: `DMCA_WORKFLOW_ENABLED=true`
+- Tests run serially (single Playwright worker, `workers: 1`)
+- Retry safety: 1 retry configured; tests use unique timestamps (`Date.now()`) for isolation
+- Run: `cd frontend && npx playwright test e2e/<spec-file>`
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+No dependencies -- this ticket can be implemented independently.
+
+### Depended On By
+
+No downstream dependents identified.
+
+### Merge Strategy
+**Independent -- new DDB table and router. No overlap with existing moderation ticket system. Legally distinct workflow.**
+
+### Merge Checklist
+- [ ] Feature flags configured in `.env.local`: DMCA_WORKFLOW_ENABLED=true
+- [ ] Service file created/modified: `app/services/dmca_service.py`
+- [ ] No endpoint prefix conflicts with existing routers
+- [ ] E2E tests pass: `cd frontend && npx playwright test frontend/e2e/dmca-takedown.spec.ts`
+- [ ] Unit tests pass: `.venv/bin/pytest tests/test_dmca_takedown.py`

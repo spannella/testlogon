@@ -2181,3 +2181,95 @@ ORDER BY trigger_count DESC
 | `app/core/time.py` | — | `now_ts()` Unix timestamp helper |
 | `scripts/local-ddb-init.py` | :59 | `billing` table definition (PK=pk, SK=sk, no GSIs) |
 | `app/core/settings.py` | :321 | `billing_table_name` setting |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_fraud_detection.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_velocity_check_under_limit_passes`
+  - `test_velocity_check_over_limit_triggers`
+  - `test_large_amount_check_triggers`
+  - `test_new_account_check_triggers`
+  - `test_chargeback_check_triggers`
+  - `test_compute_risk_score_components`
+  - `test_evaluate_transaction_flag_action`
+  - `test_evaluate_transaction_block_action`
+  - `test_freeze_user_sets_frozen_true`
+  - `test_unfreeze_user_sets_frozen_false`
+
+### Integration Tests
+
+  - evaluate_transaction called in billing tip endpoint flags high-risk tx
+  - Freeze user blocks new tip/unlock/deposit requests
+  - Flag review updates GSI from FLAGS#PENDING to FLAGS#RESOLVED
+  - Fraud case lifecycle open -> investigating -> resolved
+  - Risk score history records each recomputation
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/admin-fraud.spec.ts`
+**Test count**: 32
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `fraud_detection` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `FRAUD_DETECTION_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| (none) | — | This ticket has no blocking dependencies |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| FIN-017 | Bulk Payout/Refund Tools | Checks user frozen status before payout approval |
+
+### Merge Strategy
+
+**Feature-flag-gated**
+
+Can be merged at any time behind the `FRAUD_DETECTION_ENABLED` feature flag. The flag defaults to `false` in production until validated, allowing safe incremental rollout.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 32 E2E tests pass with `npx playwright test admin-fraud.spec.ts`

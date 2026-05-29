@@ -1222,6 +1222,100 @@ These additional tests cover concurrency and boundary conditions:
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_syndicate_subscriptions.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_create_bundle_plan` | Create bundle plan verified |
+| 2 | `test_subscribe_to_bundle` | Subscribe to bundle verified |
+| 3 | `test_bundle_entitlement_for_all_members` | Bundle entitlement for all members verified |
+| 4 | `test_cancel_bundle_subscription` | Cancel bundle subscription verified |
+| 5 | `test_new_member_join_expands_entitlements` | New member join expands entitlements verified |
+| 6 | `test_member_leave_revokes_entitlement` | Member leave revokes entitlement verified |
+| 7 | `test_non_admin_cannot_create_bundle_plan` | Non admin cannot create bundle plan verified |
+| 8 | `test_update_bundle_plan_price` | Update bundle plan price verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Create bundle plan -> subscriber subscribes -> has_active_subscription returns true for every syndicate member
+2. Creator joins syndicate -> existing bundle subscribers gain access to new creator's content
+3. Creator leaves syndicate -> bundle subscribers lose access to that creator only
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/syndicate-subscriptions.spec.ts`
+**Sections**: 1-4 (12 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Create bundle plan | 201; plan with plan_type=syndicate_bundle |
+| 2 | Subscribe to bundle | 200; access to all member creators |
+| 3 | Entitlement check passes for bundle member | has_active_subscription=true |
+| 4 | Cancel bundle | 200; access until period end |
+| 5 | Non-admin cannot create plan | 403 |
+| 6 | Member join expands entitlements | New member content accessible to subscribers |
+| 7 | Member leave revokes access | Left member content no longer accessible |
+| 8 | Bundle details show member list | GET bundle returns member profiles |
+
+**Negative tests**: 403 non-admin create plan, 404 syndicate not found, 400 invalid price, 409 already subscribed, 400 subscribe to archived syndicate
+
+**Edge cases**: Bundle with 1 member (valid but degenerate), subscriber joins then creator leaves mid-period, plan price update during active subscriptions
+
+### Test Data Requirements
+
+- **DDB seeds**: Syndicate with 3 members (from SYND-001); subscription plans in subscriptions table; billing records
+- **Test users**: Alice (admin), Bob/Charlie (members), Dave (subscriber)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: SYNDICATES_ENABLED=true
+- **Serial execution**: Must run after SYND-001 syndicate creation tests
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| SYND-001 | Syndicate membership infrastructure — list_members, get_syndicate |
+| Subscription server (existing) | Plan CRUD and subscription lifecycle |
+| Subscription access (existing) | has_active_subscription entitlement check |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| SYND-003 | Revenue splitting processes bundle payments |
+| SYND-004 | Treasury funds advertising from bundle revenue |
+
+### Merge Strategy: **Sequential**
+
+Requires SYND-001 for membership. Extends subscription server with plan_type=syndicate_bundle.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Codebase References
 
 | Claim | File | Line(s) | Status |

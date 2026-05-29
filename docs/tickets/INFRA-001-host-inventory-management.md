@@ -753,3 +753,96 @@ Host records may contain internal IP addresses or DNS names that reveal infrastr
 | `remote_hosts_table_name` setting | — | — | Does not exist yet in `app/core/settings.py` |
 | `app/services/remote_hosts.py` | — | — | Does not exist yet |
 | `app/routers/remote_hosts.py` | — | — | Does not exist yet |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_remote_hosts.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_create_host_entry`
+  - `test_list_hosts_for_user`
+  - `test_update_host_entry`
+  - `test_delete_host_entry`
+  - `test_search_hosts_by_label`
+  - `test_import_csv_hosts`
+  - `test_host_group_assignment`
+  - `test_last_connected_timestamp_update`
+
+### Integration Tests
+
+  - Host creation writes record to remote_hosts DDB table
+  - VNC session _resolve_target checks host inventory for user-defined targets
+  - SSH terminal pre-fills connection from host record
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/remote-hosts.spec.ts`
+**Test count**: 14
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `remote_hosts` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `REMOTE_HOSTS_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| (none) | — | This ticket has no blocking dependencies |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| INFRA-002 | SSH Key Manager | Host records reference key_id for auto-connect |
+| INFRA-003 | EC2 Instance Launcher | Launched instances auto-register in host inventory |
+| INFRA-004 | K8s Container Launcher | Launched containers auto-register in host inventory |
+| INFRA-006 | Connection Profiles | Profiles reference hosts from inventory |
+| INFRA-010 | SSH Session Recording | Session recordings linked to host records |
+| INFRA-011 | Multi-Hop SSH | Bastion chain references hosts from inventory |
+
+### Merge Strategy
+
+**Independent**
+
+This ticket can be merged independently of other tickets. It introduces new tables/endpoints without modifying existing ones in a breaking way.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 14 E2E tests pass with `npx playwright test remote-hosts.spec.ts`

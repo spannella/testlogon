@@ -871,6 +871,67 @@ test("Regular user cannot access admin listing", async ({ page }) => {
 
 ---
 
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+| Test | Description |
+|------|-------------|
+| `test_list_own_videos_returns_only_own` | Insert videos for user A and B; list for A returns only A's videos |
+| `test_list_own_videos_newest_first` | Videos with different `created_at` returned in descending order |
+| `test_list_own_videos_pagination` | Insert 5 videos; `limit=2` returns 2 items + cursor; follow cursor to exhaust all |
+| `test_list_own_videos_filter_by_status` | Mixed statuses; filter `status=encoding` returns only matching |
+| `test_list_own_videos_excludes_deleted` | Deleted video not in results even without explicit filter |
+| `test_list_public_videos` | Only `published + public` videos returned; `published + private` and `encoding + public` excluded |
+| `test_get_video_owner_can_access_any_status` | Owner accesses their video regardless of status/visibility |
+| `test_get_video_non_owner_private_403` | Non-owner gets 403 for private video |
+| `test_get_video_generates_playback_token` | Published video with `hls_manifest_url` returns non-null `playback_token` |
+| `test_update_video_owner_only` | Non-owner PATCH returns 403; owner PATCH succeeds |
+
+**Framework**: pytest + moto (DynamoDB mock)
+**Test file**: `tests/test_video_listing.py`
+
+### Integration Tests
+
+| Scenario | Services | Assertion |
+|----------|----------|-----------|
+| List endpoint with seeded videos | `video_listing.py` + FastAPI test client | GET `/ui/videos` returns items with correct fields |
+| Pagination round-trip | `video_listing.py` | Create 5 videos; paginate with `limit=2`; all 5 reachable |
+| PATCH updates title | `video_listing.py` + `video_metadata_store.py` | Response has new title; `updated_at` advanced |
+| DELETE sets status | `video_listing.py` + `video_metadata_store.py` | GET after DELETE shows `status=deleted` |
+| Admin endpoint requires admin role | `video_listing.py` | Regular user gets 403 on admin listing |
+
+### E2E Tests (Playwright)
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Alice creates a video, lists it, gets details | Full CRUD round-trip; video in list and detail responses |
+| 2 | Alice updates video title | PATCH with new title; GET confirms change |
+| 3 | Alice deletes video, no longer in listing | DELETE; subsequent list excludes deleted video |
+| 4 | Pagination returns correct pages with cursor | Create 5 videos; list with `limit=2`; follow cursors |
+| 5 | Published public videos appear in public listing | Transition video to published; visible in `/ui/videos/public` |
+| 6 | Private videos do not appear in public listing | Private video NOT in public listing |
+| 7 | Non-owner cannot access private video | Bob requests Alice's private video; 403 |
+| 8 | Non-owner CAN access published public video | Bob requests Alice's published+public video; 200 |
+| 9 | Root can list videos by status | GET `/ui/videos/admin/by-status/pending_review`; 200 |
+| 10 | Regular user cannot access admin listing | Alice GETs admin endpoint; 403 |
+
+**Auth**: `injectAuth(page, identity)` + CSRF header for mutations
+**Test file**: `frontend/e2e/video-listing.spec.ts`
+
+### Test Data Requirements
+- DDB tables: `VideoMetadata` (with GSIs `ByOwnerCreatedAt`, `ByStatusCreatedAt`, `ByGalleryPublished`)
+- Video records seeded via `video_metadata_store.create_video()` in `beforeAll`
+- Test users: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN)
+
+### CI/Pipeline
+- Feature flag: None required (endpoints are additive under `/ui/videos`)
+- Serial execution with `workers: 1`
+- Retry-safe (each test creates fresh video records with unique IDs)
+- CSRF validation enforced on PATCH and DELETE endpoints
+
+---
+
 ## Appendix: File Change Summary
 
 <!-- NOTE: All files listed as "New" below ALREADY EXIST. -->

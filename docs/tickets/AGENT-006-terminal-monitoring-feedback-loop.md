@@ -829,3 +829,134 @@ Feedback timeouts are enforced by a background task running every 60 seconds. Ti
 | `agent_workers` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — requires AGENT-002 |
 | `agent_feedback` DDB table | `scripts/local-ddb-init.py` | — | Does NOT exist yet — new table proposed in this ticket |
 | Settings singleton | `app/core/settings.py` | 1-1494 | Frozen `Settings` dataclass; singleton `S` |
+
+---
+
+## Testing Strategy
+
+
+### Unit Tests (pytest)
+
+
+**Test file**: `tests/test_agent_monitoring.py`
+
+
+**Mock setup**: moto for DynamoDB tables, `unittest.mock.patch` for external services (S3, Cognito, Stripe mock). All DDB tables created in-memory via moto `@mock_dynamodb` decorator.
+
+
+| Test Function | Verifies |
+|---|---|
+| `test_create_agent_monitoring` | Creates record with correct fields and generated ID |
+| `test_create_agent_monitoring_validation` | Rejects invalid input (missing required fields, out-of-range values) |
+| `test_get_agent_monitoring_found` | Returns correct record by ID |
+| `test_get_agent_monitoring_not_found` | Returns None for non-existent ID |
+| `test_list_agent_monitoring` | Returns all records for the given scope/owner |
+| `test_update_agent_monitoring` | Updates mutable fields and sets updated_at |
+| `test_delete_agent_monitoring` | Removes record; subsequent get returns None |
+| `test_agent_monitoring_owner_check` | Rejects operations from non-owner users |
+| `test_agent_monitoring_admin_only` | Admin/root endpoints reject USER role with 403 |
+| `test_agent_monitoring_concurrent_write` | Conditional update prevents stale overwrites |
+
+### Integration Tests
+
+
+Cross-service tests with real DDB (moto), verifying end-to-end flows:
+
+
+1. Full CRUD lifecycle: create -> read -> update -> delete with real DDB (moto)
+2. Authorization enforcement: non-owner access returns 403/404
+3. Admin review/approval workflow with role-gated endpoints
+4. Concurrent write safety: conditional updates prevent stale overwrites
+5. Edge case: empty list returns `[]` not error; missing optional fields use defaults
+
+### E2E Tests (Playwright)
+
+
+**Test file**: `frontend/e2e/agent-monitoring.spec.ts`
+
+
+**Auth setup**:
+- Cookie auth: `injectAuth(page, "alice")` for UI session tests
+- CSRF header: `headers: { "x-csrf-token": sessions[identity].csrf_token }`
+- Bearer auth: global `request` fixture for API-only tests (bypasses CSRF)
+- Admin auth: `injectAuth(page, "root")` for admin endpoints
+
+| # | Test | Key Assertion |
+|---|------|--------------|
+| 1 | Create resource via API | `expect(response.status()).toBe(201)` with correct fields |
+| 2 | List resources returns array | `expect(response.status()).toBe(200)`; array length > 0 |
+| 3 | Get single resource by ID | `expect(response.status()).toBe(200)`; fields match |
+| 4 | Update resource | `expect(response.status()).toBe(200)`; GET confirms change |
+| 5 | Delete resource | `expect(response.status()).toBe(200)`; subsequent GET 404 |
+| 6 | Non-owner access blocked | `expect(response.status()).toBe(403)` or `toBe(404)` |
+| 7 | Admin endpoint blocked for USER | `expect(response.status()).toBe(403)` |
+| 8 | Unauthenticated request | `expect(response.status()).toBe(401)` |
+| 9 | Invalid input rejected | `expect(response.status()).toBe(422)` |
+| 10 | Duplicate/conflict handled | `expect(response.status()).toBe(409)` or idempotent 200 |
+| 11 | UI page loads correctly | `page.getByRole("heading", { name: expectedTitle })` visible |
+| 12 | UI create flow works | Click create -> fill form -> submit -> new item in list |
+| 13 | UI status badges display | `page.getByText("Active")` or `page.getByText("Pending")` |
+| 14 | Concurrent operations safe | Parallel requests both succeed or one gets 409 |
+| 15 | Edge case: empty state | Empty list shows placeholder text, not error |
+
+### Test Data Requirements
+
+
+**Test users**: Alice = USER (primary actor), Bob = USER (secondary/viewer), Root = ROOT (admin reviewer), Charlie = ADMIN (scoped admin)
+
+
+**DDB seed data**:
+
+
+| Table | PK/SK Pattern | Notes |
+|-------|--------------|-------|
+| `AgentLogs` | See DDB schema in technical design section | Created by `scripts/local-ddb-init.py` |
+
+### CI/Pipeline
+
+
+- **Feature flags**: None required for dev/test
+- **Execution**: E2E tests run serially (1 worker, Chromium only) per `playwright.config.ts`; pytest can run in parallel
+- **Retry safety**: All tests are idempotent; unique `TS = Date.now()` suffixed identifiers prevent cross-run collisions
+- **Prerequisite**: `just restart` to create DDB tables and seed E2E sessions before running
+
+## Dependencies & Merge Safety
+
+
+### Depends On
+
+
+| Ticket | What's Needed | Status | Can Overlap? |
+|--------|--------------|--------|-------------|
+| AGENT-003 | Agent framework (status) | Pending | No |
+| AGENT-002 | Worker provisioning (terminal) | Pending | No |
+
+### Depended On By
+
+
+| Ticket | What It Needs From This |
+|--------|------------------------|
+| AGENT-007 | Monitoring for PR/ticket integration |
+| AGENT-008 through AGENT-018 | Monitoring for specialized agents |
+
+### Merge Strategy
+
+
+**Sequential (after AGENT-003)**
+
+
+- Must merge after: AGENT-003, AGENT-002
+- Branch from `main` after dependencies are merged
+- Can begin development in parallel but must rebase before merge
+- DDB table creation is additive (no migration needed for new tables)
+
+### Merge Checklist
+
+
+- [ ] DDB table(s) added to `scripts/local-ddb-init.py`: `AgentLogs`
+- [ ] Settings added to `app/core/settings.py` + `app/core/tables.py`: `agent_logs_table_name`
+- [ ] `.env.local` updated with any new environment variables
+- [ ] Router registered in `app/main.py` (from `app/routers/agent_workers.py`)
+- [ ] All E2E tests passing (`just e2e` or targeted spec file)
+- [ ] No breaking changes to existing endpoints or UI components
+- [ ] `just restart` succeeds with new table definitions

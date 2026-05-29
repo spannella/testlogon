@@ -1065,3 +1065,92 @@ Integration tests mock the `lookup_country` function to return a controlled coun
 
 1. **`broadcast_sessions` table has PK=`session_id` only, NO sort key** (local-ddb-init.py:513). The ticket incorrectly claimed PK=broadcast_id, SK=session_id in the access patterns table (section 5.5) and content metadata list (section 5.1).
 2. All other file references (`client_ip_from_request`, `trusted_proxy_cidrs`, `VideoMetadataModel`, `CatalogItemPatchIn`) are verified correct.
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_geo_blocking.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_lookup_country_localhost_returns_none`
+  - `test_lookup_country_cache_hit`
+  - `test_lookup_country_cache_expiry`
+  - `test_check_geo_access_no_restriction_allows_all`
+  - `test_check_geo_access_allow_match_passes`
+  - `test_check_geo_access_allow_no_match_raises_403`
+  - `test_check_geo_access_block_match_raises_403`
+  - `test_check_geo_access_platform_override`
+  - `test_check_geo_access_fail_open_dev`
+
+### Integration Tests
+
+  - Video detail endpoint enforces geo-check from video metadata fields
+  - PATCH /ui/videos/{id}/geo updates geo_mode and geo_countries in DDB
+  - Platform-level GEO_PLATFORM_BLOCK_COUNTRIES overrides per-content allow list
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/geo-blocking.spec.ts`
+**Test count**: 15
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `No new tables (fields on existing video_metadata, broadcast_sessions, shopping_catalog)` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `GEO_BLOCKING_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| (none) | — | This ticket has no blocking dependencies |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| (none) | — | No other tickets depend on this one |
+
+### Merge Strategy
+
+**Feature-flag-gated**
+
+Can be merged at any time behind the `GEO_BLOCKING_ENABLED` feature flag. The flag defaults to `false` in production until validated, allowing safe incremental rollout.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 15 E2E tests pass with `npx playwright test geo-blocking.spec.ts`

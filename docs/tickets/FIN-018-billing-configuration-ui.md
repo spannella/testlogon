@@ -1301,3 +1301,92 @@ In dev mode (single uvicorn worker), cache invalidation is instant — `update_b
 | `app/services/creator_payouts.py` | — | Currently uses env-var-based minimum payout |
 | `app/routers/admin_payouts.py` | 103 total | Admin payout router at `/v1/admin/payouts`; registered at `app/main.py:112,435` |
 | `app/auth/policy.py` | :63, :67 | `require_root` at `:63`, `require_admin_or_root` at `:67` |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_billing_config.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_get_billing_config_defaults`
+  - `test_get_billing_config_from_ddb`
+  - `test_get_billing_config_cache_hit`
+  - `test_update_billing_config_writes_audit`
+  - `test_update_billing_config_invalidates_cache`
+  - `test_get_fee_bps_maps_entry_type`
+  - `test_preview_impact_fee_change`
+  - `test_preview_impact_no_changes`
+
+### Integration Tests
+
+  - Fee lookup in billing_shared uses DDB config instead of env var
+  - Audit log entry created with old/new values on every config change
+  - Cache refreshes after TTL expiry and reads updated DDB values
+  - Impact preview queries 7-day billing ledger for volume projection
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/admin-billing-config.spec.ts`
+**Test count**: 22
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `billing_config` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `BILLING_CONFIG_DDB_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| (none) | — | This ticket has no blocking dependencies |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| (none) | — | No other tickets depend on this one |
+
+### Merge Strategy
+
+**Feature-flag-gated**
+
+Can be merged at any time behind the `BILLING_CONFIG_DDB_ENABLED` feature flag. The flag defaults to `false` in production until validated, allowing safe incremental rollout.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 22 E2E tests pass with `npx playwright test admin-billing-config.spec.ts`

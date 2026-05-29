@@ -731,3 +731,92 @@ financial_dashboard_enabled: bool = os.environ.get("FINANCIAL_DASHBOARD_ENABLED"
 | `app/services/tip_ledger.py` | :115, :136 | Entry types `debit` and `credit` for tips |
 | `app/routers/subscription_server.py` | :228 | Entry type `subscription_charge` |
 | `app/services/ad_placement.py` | :307 | Entry type `ad_revenue_credit` |
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_financial_dashboard.py`
+
+Mock external dependencies with `moto` (DynamoDB) and `unittest.mock`. All tests run without the dev stack.
+
+  - `test_get_kpis_with_seeded_rollups`
+  - `test_get_kpis_empty_date_range_returns_zeroes`
+  - `test_get_trends_daily_granularity`
+  - `test_get_trends_weekly_aggregation`
+  - `test_get_provider_breakdown_percentages_sum_to_100`
+  - `test_get_top_creators_sorted_descending`
+  - `test_compute_daily_rollup_aggregates_ledger`
+  - `test_export_summary_csv_format`
+
+### Integration Tests
+
+  - Daily rollup scans billing ledger entries via GSI_LEDGER_DATE
+  - KPI query reads pre-computed rollup data across date range
+  - CSV export generates valid file with checksum and metadata footer
+  - Non-admin role returns 403 on all financial dashboard endpoints
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/admin-financials.spec.ts`
+**Test count**: 20
+
+**Auth pattern**: Use `injectAuth(page, "root")` for admin endpoints; use `injectAuth(page, "alice")` for user-level endpoints. All POST/PATCH/DELETE requests include `x-csrf-token` header matching the session's CSRF token.
+
+**Negative tests**:
+- 401: Unauthenticated request returns 401
+- 403: Non-admin/non-owner access returns 403
+- 404: Non-existent resource returns 404
+- 409: Conflict on duplicate or already-processed resource
+- 422: Invalid input (bad field values, missing required fields)
+
+**Edge cases**:
+- Empty result sets return 200 with empty arrays (not 404)
+- Pagination cursor works correctly across pages
+- Concurrent requests do not produce inconsistent state
+
+### Test Data Requirements
+
+- **DDB seeds**: Seed `financial_rollups` table with test records in `beforeAll`
+- **Test users**: Alice (USER), Bob (USER), Root (ROOT), Charlie (ADMIN) from `e2e_admin_session_setup.py`
+- **Cleanup**: Tests use unique timestamps/IDs per run to avoid cross-run interference
+
+### CI/Pipeline Considerations
+
+- **Feature flag**: `FINANCIAL_DASHBOARD_ENABLED=true` must be set in test environment
+- **Serial execution**: E2E tests run with `workers: 1` to avoid shared-state conflicts
+- **Retry safety**: All tests are idempotent; retries do not produce duplicate records
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket | Title | Why |
+|--------|-------|-----|
+| (none) | — | This ticket has no blocking dependencies |
+
+### Depended On By
+
+| Ticket | Title | Impact |
+|--------|-------|--------|
+| FIN-016 | Financial Audit Log Export | Uses GSI_LEDGER_DATE from billing table |
+
+### Merge Strategy
+
+**Independent**
+
+This ticket can be merged independently of other tickets. It introduces new tables/endpoints without modifying existing ones in a breaking way.
+
+### Merge Checklist
+
+- [ ] All new DDB tables added to `scripts/local-ddb-init.py` with correct `attr_types` for numeric GSI keys
+- [ ] New settings added to `app/core/settings.py` and `.env.local.example`
+- [ ] New table handles added to `app/core/tables.py`
+- [ ] Router registered in `app/main.py`
+- [ ] Pydantic models added to `app/models.py`
+- [ ] TypeScript types added to `frontend/src/api/types.ts`
+- [ ] Route added to `frontend/src/App.tsx`
+- [ ] Feature flag defaults to `true` in `.env.local.example`
+- [ ] E2E session setup updated if new test identities needed
+- [ ] `just restart` completes cleanly with new tables
+- [ ] All 20 E2E tests pass with `npx playwright test admin-financials.spec.ts`

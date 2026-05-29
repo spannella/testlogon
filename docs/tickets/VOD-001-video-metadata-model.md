@@ -1284,6 +1284,110 @@ Once frontend pages are built (out of scope for VOD-001), add Playwright E2E tes
 
 ---
 
+
+---
+
+## Testing Strategy
+
+### Unit Tests (pytest)
+
+**File**: `tests/test_video_metadata.py`
+
+| # | Function | Assertion |
+|---|----------|-----------|
+| 1 | `test_create_video_metadata` | Create video metadata verified |
+| 2 | `test_get_video_metadata` | Get video metadata verified |
+| 3 | `test_update_video_metadata` | Update video metadata verified |
+| 4 | `test_delete_video_metadata` | Delete video metadata verified |
+| 5 | `test_list_videos_by_creator` | List videos by creator verified |
+| 6 | `test_video_metadata_validation` | Video metadata validation verified |
+| 7 | `test_video_status_transitions` | Video status transitions verified |
+| 8 | `test_video_tags_stored` | Video tags stored verified |
+
+**Mocking**: All DynamoDB tables mocked via `moto`; profile lookups patched via `unittest.mock.patch`.
+
+### Integration Tests
+
+1. Create video -> upload to S3 -> metadata status transitions from processing to ready
+2. List videos by creator with pagination and tag filtering
+3. Delete video -> metadata soft-deleted -> S3 object marked for cleanup
+
+### E2E Tests (Playwright)
+
+**File**: `frontend/e2e/video-metadata.spec.ts`
+**Sections**: 1-3 (12 tests)
+
+**Auth pattern**: `injectAuth(page, identity)` for cookie auth; `x-csrf-token` header for POST/PUT/DELETE mutations.
+
+| # | Test | Assertion |
+|---|------|-----------|
+| 1 | Create video metadata | 201; video_id returned |
+| 2 | Get video metadata | 200; all fields present |
+| 3 | Update video title | 200; title changed |
+| 4 | Delete video | 200; subsequent GET returns 404 |
+| 5 | List creator videos | 200; paginated list |
+| 6 | Filter by tag | Only matching videos returned |
+| 7 | Status transition | processing -> ready |
+| 8 | Invalid metadata rejected | 422 for missing required fields |
+
+**Negative tests**: 404 non-existent video, 403 non-owner update, 422 invalid status transition, 401 unauthenticated
+
+**Edge cases**: Video with no tags, very long title (max 200), concurrent metadata updates
+
+### Test Data Requirements
+
+- **DDB seeds**: video_metadata table created by local-ddb-init.py; test video records
+- **Test users**: Alice (creator), Bob (viewer)
+
+### CI/Pipeline Considerations
+
+- **Feature flags**: VOD_ENABLED=true
+- **Serial execution**: Table creation must precede all VOD tests
+- **Retry safety**: All tests are idempotent; use unique per-run identifiers (`TS` suffix) to avoid cross-run conflicts.
+
+---
+
+## Dependencies & Merge Safety
+
+### Depends On
+
+| Ticket/Component | Reason |
+|------------------|--------|
+| DynamoDB (existing) | New video_metadata table via local-ddb-init.py |
+
+### Depended On By
+
+| Ticket | Reason |
+|--------|--------|
+| VOD-008 | Player page reads video metadata |
+| VOD-009 | Routes and nav link to video metadata |
+| VOD-010 | DRM encryption reads video metadata |
+| VOD-011 | E2E tests validate video metadata CRUD |
+| VOD-012 | MP4 download reads download permissions from metadata |
+| VOD-013 | Video sharing reads metadata for preview |
+| VOD-014 | File manager bridge reads video metadata |
+| VOD-015 | Clipping reads source video metadata |
+| VOD-016 | Concatenation reads source video metadata |
+| VOD-017 | Gallery hub queries video metadata |
+| VOD-018 | Ad tier reads access tier from metadata |
+| VOD-019 | View-once/rental reads access rules from metadata |
+| VOD-020 | Watermarked downloads read metadata |
+| VOD-021 | Subtitles attach to video metadata |
+
+### Merge Strategy: **Sequential**
+
+Foundation for entire VOD system. Must merge first. Creates video_metadata DDB table.
+
+### Merge Checklist
+
+- [ ] All unit tests pass (`just test`)
+- [ ] All E2E tests pass (`just e2e`)
+- [ ] Feature flag defaults to enabled in `.env.local.example`
+- [ ] No breaking changes to existing API contracts
+- [ ] DynamoDB table/GSI changes added to `scripts/local-ddb-init.py`
+- [ ] Frontend types in `api/types.ts` match backend `models.py`
+- [ ] New routes registered in `app/main.py` and `frontend/src/App.tsx`
+
 ## Appendix: File Change Summary
 
 <!-- NOTE: This feature is ALREADY IMPLEMENTED. All files below have been created/modified. -->
